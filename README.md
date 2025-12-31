@@ -1,9 +1,16 @@
-# XWebAgent Chrome Extension
-A Chrome extension that makes browsing **Safe**, **Fun**, and **Efficient**.
+<p align="center">
+  <img src="icons/icon128.png" width="128" height="128" alt="XWebAgent Icon" />
+</p>
+<h1 align="center">XWebAgent Extension – A Chrome extension that makes browsing 
+<b>Safe</b> 🛡️, <b>Fun</b> 😄, and <b>Efficient</b> 🚀</h1>
 
 ## Features
-
+It works great with 
+<img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="18" alt="Chrome"> 
+, 
+<img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="18" alt="Edge">.
 ### 🔍 Read - Find Information
+
 - Ask questions about any page
 - Extract specific information
 
@@ -20,6 +27,15 @@ A Chrome extension that makes browsing **Safe**, **Fun**, and **Efficient**.
 - Explicit content blocking (for U18)
 - Large purchase warnings
 - Suspicious domain alerts
+
+## Examples
+Example Site: https://en.wikipedia.org/wiki/Stranger_Things
+
+Prompt: Highlight the title
+<p align="center">
+  <img src="examples/example.png" alt="XWebAgent Icon" />
+</p>
+Result: The title "Stranger Things" are highlighted in Yellow.
 
 ## Installation
 
@@ -49,7 +65,7 @@ OR,
 ## Usage
 
 ### Ask Anything
-Type a question in the popup to find information on the current page.
+Type a question in the chat box to find information on the current page.
 
 ## Project Structure
 
