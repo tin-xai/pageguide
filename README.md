@@ -5,14 +5,9 @@
 <b>Safe</b> 🛡️, <b>Fun</b> 😄, and <b>Efficient</b> 🚀</h1>
 
 ## Features
-It works great with 
-<img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="18" alt="Chrome"> 
-, 
-<img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="18" alt="Edge">.
-
-| 🔍 Read | ✨ Write | 🎯 Guide | 🛡️ Guardian |
-|-|-|-|-|
-|Extract information| Highlight links | Guided tasks <br> Visual cues | Phishing <br> U18 blocking <br> Domains |
+| 🔍 Read | ✨ Write | 🎯 Guide | 🛡️ Guardian |Support|
+|-|-|-|-|-|
+|Extract information| Highlight links | Guided tasks <br> Visual cues | Phishing <br> U18 blocking <br> Domains |<img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="18" alt="Edge"> <br><img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="18" alt="Chrome"> |
 
 ## Examples
 Example Site: https://en.wikipedia.org/wiki/Stranger_Things
