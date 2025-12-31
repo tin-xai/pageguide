@@ -12,7 +12,7 @@ It works great with
 
 | 🔍 Read | ✨ Write | 🎯 Guide | 🛡️ Guardian |
 |-|-|-|-|
-|Extract information| Highlight links | Guided tasks · Visual cues | Phishing · U18 blocking · Purchases · Domains |
+|Extract information| Highlight links | Guided tasks <br> Visual cues | Phishing <br> U18 blocking <br> Domains |
 
 ## Examples
 Example Site: https://en.wikipedia.org/wiki/Stranger_Things
