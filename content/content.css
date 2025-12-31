@@ -1,0 +1,414 @@
+/* XWebAgent Content Script Styles */
+
+/* Guide highlight effect */
+.xwebagent-guide-highlight {
+  outline: 3px solid #00ff88 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.5) !important;
+  animation: xwebagent-pulse 1.5s ease-in-out infinite !important;
+}
+
+@keyframes xwebagent-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(0, 255, 136, 0.5); }
+  50% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.8); }
+}
+
+/* Tooltip */
+.xwebagent-tooltip {
+  position: fixed;
+  background: #1a1a2e;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 12px;
+  z-index: 999999;
+  max-width: 250px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(0, 217, 255, 0.3);
+}
+
+.xwebagent-tooltip::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 20px;
+  border-width: 0 6px 6px 6px;
+  border-style: solid;
+  border-color: transparent transparent #1a1a2e transparent;
+}
+
+/* Arrow indicator */
+.xwebagent-arrow {
+  position: fixed;
+  pointer-events: none;
+  z-index: 999998;
+}
+
+/* Warning overlay */
+.xwebagent-warning-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 999997;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.xwebagent-warning-box {
+  background: #1a1a2e;
+  border: 2px solid #ff4444;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 400px;
+  text-align: center;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.xwebagent-warning-box h2 {
+  color: #ff4444;
+  margin-bottom: 12px;
+}
+
+.xwebagent-warning-box button {
+  margin: 8px;
+  padding: 10px 20px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.xwebagent-warning-box .btn-danger {
+  background: #ff4444;
+  color: white;
+}
+
+.xwebagent-warning-box .btn-safe {
+  background: #00ff88;
+  color: #000;
+}
+
+/* Blurred explicit content */
+.xwebagent-blurred {
+  filter: blur(20px) !important;
+  transition: filter 0.3s;
+}
+
+.xwebagent-blurred:hover {
+  filter: blur(10px) !important;
+}
+
+/* Element index labels */
+.xwebagent-index-label {
+  position: absolute;
+  background: #00d9ff;
+  color: #000;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: bold;
+  font-family: monospace;
+  z-index: 999996;
+  pointer-events: none;
+}
+
+/* ===== CHAT PANEL ===== */
+#xwebagent-chat-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 380px;
+  height: 100vh;
+  background: linear-gradient(180deg, #0d0d1a 0%, #1a1a2e 100%);
+  border-left: 1px solid rgba(0, 217, 255, 0.2);
+  z-index: 999990;
+  display: flex;
+  flex-direction: column;
+  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  box-shadow: -5px 0 30px rgba(0, 0, 0, 0.5);
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#xwebagent-chat-panel.open {
+  transform: translateX(0);
+}
+
+/* Chat Header */
+.xwebagent-chat-header {
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(0, 217, 255, 0.1) 0%, rgba(0, 255, 136, 0.05) 100%);
+  border-bottom: 1px solid rgba(0, 217, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.xwebagent-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.xwebagent-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+}
+
+.xwebagent-header-text h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #00d9ff, #00ff88);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.xwebagent-header-text p {
+  margin: 2px 0 0 0;
+  font-size: 10px;
+  color: #888;
+}
+
+.xwebagent-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.xwebagent-settings-btn,
+.xwebagent-close-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #888;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.xwebagent-settings-btn:hover {
+  background: rgba(0, 217, 255, 0.2);
+  color: #00d9ff;
+}
+
+.xwebagent-close-btn:hover {
+  background: rgba(255, 100, 100, 0.2);
+  color: #ff6666;
+}
+
+/* Chat Messages Container */
+.xwebagent-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.xwebagent-chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.xwebagent-chat-messages::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.xwebagent-chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(0, 217, 255, 0.3);
+  border-radius: 3px;
+}
+
+/* Message Bubbles */
+.xwebagent-message {
+  max-width: 85%;
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  animation: xwebagent-message-in 0.3s ease-out;
+}
+
+@keyframes xwebagent-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.xwebagent-message.user {
+  align-self: flex-end;
+  background: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%);
+  color: #000;
+  border-bottom-right-radius: 4px;
+}
+
+.xwebagent-message.assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e0e0e0;
+  border-bottom-left-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.xwebagent-message.system {
+  align-self: center;
+  background: rgba(0, 255, 136, 0.1);
+  color: #00ff88;
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(0, 255, 136, 0.2);
+}
+
+.xwebagent-message.error {
+  align-self: center;
+  background: rgba(255, 100, 100, 0.1);
+  color: #ff6666;
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 100, 100, 0.2);
+}
+
+/* Typing Indicator */
+.xwebagent-typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  border-bottom-left-radius: 4px;
+  align-self: flex-start;
+}
+
+.xwebagent-typing span {
+  width: 8px;
+  height: 8px;
+  background: #00d9ff;
+  border-radius: 50%;
+  animation: xwebagent-typing-dot 1.4s infinite;
+}
+
+.xwebagent-typing span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.xwebagent-typing span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes xwebagent-typing-dot {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Chat Input Area */
+.xwebagent-chat-input-area {
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.xwebagent-quick-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.xwebagent-quick-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #aaa;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.xwebagent-quick-btn:hover {
+  background: rgba(0, 217, 255, 0.15);
+  border-color: rgba(0, 217, 255, 0.3);
+  color: #00d9ff;
+}
+
+.xwebagent-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.xwebagent-chat-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 24px;
+  padding: 12px 18px;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.xwebagent-chat-input::placeholder {
+  color: #666;
+}
+
+.xwebagent-chat-input:focus {
+  border-color: rgba(0, 217, 255, 0.5);
+  box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
+}
+
+.xwebagent-send-btn {
+  background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
+  border: none;
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  transition: all 0.2s;
+}
+
+.xwebagent-send-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(0, 217, 255, 0.4);
+}
+
+.xwebagent-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Push page content when panel is open */
+body.xwebagent-panel-open {
+  margin-right: 380px !important;
+  transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
