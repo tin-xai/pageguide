@@ -1,0 +1,16 @@
+# API Keys - DO NOT COMMIT
+config.js
+keys.py
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.zip
+
