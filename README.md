@@ -9,24 +9,10 @@ It works great with
 <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="18" alt="Chrome"> 
 , 
 <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="18" alt="Edge">.
-### 🔍 Read - Find Information
 
-- Ask questions about any page
-- Extract specific information
-
-### ✨ Write - Enhance Pages
-- Highlight links
-
-### 🎯 Guide - Step-by-Step Help
-- Get guided through complex tasks
-- Visual highlighting of next steps
-- Form filling assistance
-
-### 🛡️ Guardian - Stay Safe
-- Phishing detection on login pages
-- Explicit content blocking (for U18)
-- Large purchase warnings
-- Suspicious domain alerts
+| 🔍 Read | ✨ Write | 🎯 Guide | 🛡️ Guardian |
+|-|-|-|-|
+|Extract information| Highlight links | Guided tasks · Visual cues | Phishing · U18 blocking · Purchases · Domains |
 
 ## Examples
 Example Site: https://en.wikipedia.org/wiki/Stranger_Things
