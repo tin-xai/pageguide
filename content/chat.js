@@ -16,7 +16,7 @@ function createChatPanel() {
   panel.innerHTML = `
     <div class="xwebagent-chat-header">
       <div class="xwebagent-header-left">
-        <img src="${chrome.runtime.getURL('icons/icon_based.png')}" alt="XWebAgent" class="xwebagent-logo">
+        <img src="${chrome.runtime.getURL('icons/icon128.png')}" alt="XWebAgent" class="xwebagent-logo">
         <div class="xwebagent-header-text">
           <h2>XWebAgent</h2>
           <p>AI Web Assistant - Safe, Fun, Efficient</p>
