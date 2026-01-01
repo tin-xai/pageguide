@@ -2,6 +2,21 @@
 // Handles communication with Gemini LLM
 
 /**
+ * Safe wrapper for chrome.runtime.sendMessage
+ * Handles "Extension context invalidated" error gracefully
+ */
+async function safeSendMessage(message) {
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (e) {
+    if (e.message?.includes('Extension context invalidated')) {
+      return { error: '🔄 Extension was updated. Please refresh the page (F5).' };
+    }
+    throw e;
+  }
+}
+
+/**
  * Handle user questions about the page
  */
 async function handleAsk(query) {
@@ -18,7 +33,7 @@ async function handleAsk(query) {
   const pageHTML = getSimplifiedHTML(10000);
   
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await safeSendMessage({
       action: 'callLLM',
       systemPrompt: PROMPTS.ASK,
       messages: [{
@@ -59,7 +74,7 @@ async function handleStylingCommand(query) {
   const pageStructure = getPageStructure();
   
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await safeSendMessage({
       action: 'callLLM',
       systemPrompt: PROMPTS.STYLING,
       messages: [{

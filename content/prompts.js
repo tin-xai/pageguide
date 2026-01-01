@@ -1,7 +1,9 @@
 // XWebAgent - LLM Prompts
 // All prompts used for Gemini API calls
 
-const PROMPTS = {
+// Guard against double-loading
+if (typeof PROMPTS !== 'undefined') { /* already loaded */ }
+else var PROMPTS = {
   // System prompt for answering questions
   ASK: `You are a helpful web assistant. Answer questions concisely based on the page content provided.`,
 
@@ -31,7 +33,8 @@ EXAMPLES:
 };
 
 // Keywords for detecting styling commands
-const STYLING_KEYWORDS = {
+if (typeof STYLING_KEYWORDS !== 'undefined') { /* already loaded */ }
+else var STYLING_KEYWORDS = {
   style: ['highlight', 'border', 'box', 'color', 'red', 'blue', 'green', 'yellow', 
     'outline', 'underline', 'bold', 'hide', 'show', 'blur', 'enlarge', 'style', 
     'background', 'circle', 'mark'],

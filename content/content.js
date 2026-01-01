@@ -1,13 +1,24 @@
 // XWebAgent Content Script - Main Entry Point
 // Initializes the extension and handles message routing
 
-console.log('🤖 XWebAgent loaded');
+// Prevent double-loading
+if (!window._xwebagentLoaded) {
+  window._xwebagentLoaded = true;
+  console.log('🤖 XWebAgent loaded');
 
-// ===== Message Handler =====
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  handleMessage(request).then(sendResponse);
-  return true; // Keep channel open for async
-});
+  // ===== Message Handler =====
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    handleMessage(request).then(sendResponse);
+    return true;
+  });
+
+  // ===== Initialize =====
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', createChatPanel);
+  } else {
+    createChatPanel();
+  }
+}
 
 async function handleMessage(request) {
   switch (request.action) {
@@ -21,11 +32,4 @@ async function handleMessage(request) {
     default:
       return { error: 'Unknown action' };
   }
-}
-
-// ===== Initialize =====
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', createChatPanel);
-} else {
-  createChatPanel();
 }

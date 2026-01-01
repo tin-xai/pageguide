@@ -1,9 +1,9 @@
 // XWebAgent - Chat Panel UI
 // Handles the chat interface and user interactions
 
-// State
-let chatMessages = [];
-let chatPanelOpen = false;
+// State (guarded against double-loading)
+if (typeof chatMessages === 'undefined') var chatMessages = [];
+if (typeof chatPanelOpen === 'undefined') var chatPanelOpen = false;
 
 /**
  * Create the chat panel UI
@@ -52,7 +52,11 @@ function createChatPanel() {
   // Attach event listeners
   document.getElementById('xwebagent-close').addEventListener('click', toggleChatPanel);
   document.getElementById('xwebagent-settings').addEventListener('click', () => {
-    chrome.runtime.sendMessage({ action: 'openOptions' });
+    try {
+      chrome.runtime.sendMessage({ action: 'openOptions' });
+    } catch (e) {
+      alert('Extension was updated. Please refresh the page.');
+    }
   });
   document.getElementById('xwebagent-send').addEventListener('click', sendChatMessage);
   document.getElementById('xwebagent-input').addEventListener('keypress', e => {

@@ -2,26 +2,32 @@
 // Functions for modifying page CSS and element styles
 
 /**
+ * Check if element is part of XWebAgent UI (should not be styled)
+ */
+function isXWebAgentElement(el) {
+  if (!el) return false;
+  // Only check if inside our chat panel
+  return el.closest('#xwebagent-chat-panel') !== null;
+}
+
+/**
  * Apply styling from LLM response
  */
 function applyStyling(styling) {
   let count = 0;
-  
-  // Inject raw CSS if provided
-  if (styling.css) {
-    injectCSS(styling.css);
-  }
   
   // Text-based search and style
   if (styling.textSearch) {
     count = highlightTextContent(styling.textSearch, styling.inlineStyles || {});
   }
   
-  // CSS selector-based styling
+  // CSS selector-based styling (using inline styles to avoid affecting our UI)
   if (styling.selector) {
     try {
       const elements = document.querySelectorAll(styling.selector);
       elements.forEach(el => {
+        // Skip XWebAgent elements
+        if (isXWebAgentElement(el)) return;
         applyInlineStyles(el, styling.inlineStyles || {});
         count++;
       });
@@ -30,11 +36,17 @@ function applyStyling(styling) {
     }
   }
   
+  // Inject raw CSS only if no selector/textSearch (fallback)
+  if (styling.css && !styling.selector && !styling.textSearch) {
+    injectCSS(styling.css);
+  }
+  
   return count;
 }
 
 /**
  * Find elements containing specific text and apply styles
+ * Excludes XWebAgent UI elements
  */
 function highlightTextContent(searchText, styles = {}) {
   const searchLower = searchText.toLowerCase();
@@ -47,7 +59,10 @@ function highlightTextContent(searchText, styles = {}) {
   while (walker.nextNode()) {
     if (walker.currentNode.textContent.toLowerCase().includes(searchLower)) {
       const parent = walker.currentNode.parentElement;
-      if (parent && !['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(parent.tagName)) {
+      // Skip script/style tags AND XWebAgent elements
+      if (parent && 
+          !['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(parent.tagName) &&
+          !isXWebAgentElement(parent)) {
         elements.add(parent);
       }
     }
@@ -97,32 +112,40 @@ function injectCSS(css) {
 
 /**
  * Quick style presets (no AI needed)
+ * Uses inline styles to avoid affecting XWebAgent UI
  */
 function applyQuickStyle(type) {
-  const styles = {
+  const presets = {
     images: { 
       selector: 'img', 
-      css: 'img { outline: 3px solid red !important; outline-offset: 2px !important; }' 
+      styles: { outline: '3px solid red', outlineOffset: '2px' }
     },
     links: { 
       selector: 'a', 
-      css: 'a { background: yellow !important; color: black !important; }' 
+      styles: { backgroundColor: 'yellow', color: 'black' }
     },
     buttons: { 
       selector: 'button, [role="button"], input[type="submit"]', 
-      css: 'button, [role="button"], input[type="submit"] { outline: 3px solid lime !important; }' 
+      styles: { outline: '3px solid lime', outlineOffset: '2px' }
     },
     headings: { 
-      selector: 'h1,h2,h3,h4,h5,h6', 
-      css: 'h1,h2,h3,h4,h5,h6 { color: #00d9ff !important; }' 
+      selector: 'h1, h2, h3, h4, h5, h6', 
+      styles: { color: '#00d9ff' }
     }
   };
   
-  const s = styles[type];
-  if (!s) return { count: 0 };
+  const preset = presets[type];
+  if (!preset) return { count: 0 };
   
-  injectCSS(s.css);
-  return { count: document.querySelectorAll(s.selector).length };
+  let count = 0;
+  document.querySelectorAll(preset.selector).forEach(el => {
+    // Skip XWebAgent elements
+    if (isXWebAgentElement(el)) return;
+    applyInlineStyles(el, preset.styles);
+    count++;
+  });
+  
+  return { count };
 }
 
 /**
