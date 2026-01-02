@@ -1,8 +1,94 @@
 // XWebAgent - Utility Functions
-// Comprehensive page content extraction
+// Uses accessibility-inspired approach to find ALL interactive/content elements
 
 // Store element references globally
 window._xwebagentIndex = window._xwebagentIndex || {};
+
+/**
+ * Get the accessible role of an element (approximates AXTree)
+ */
+function getAccessibleRole(el) {
+  // Explicit ARIA role takes precedence
+  const ariaRole = el.getAttribute('role');
+  if (ariaRole) return ariaRole;
+  
+  // Implicit roles based on tag
+  const tag = el.tagName.toLowerCase();
+  const roleMap = {
+    'a': el.hasAttribute('href') ? 'link' : null,
+    'button': 'button',
+    'input': getInputRole(el),
+    'select': 'combobox',
+    'textarea': 'textbox',
+    'img': 'image',
+    'h1': 'heading', 'h2': 'heading', 'h3': 'heading',
+    'h4': 'heading', 'h5': 'heading', 'h6': 'heading',
+    'p': 'paragraph',
+    'li': 'listitem',
+    'ul': 'list', 'ol': 'list',
+    'table': 'table',
+    'tr': 'row',
+    'td': 'cell', 'th': 'columnheader',
+    'nav': 'navigation',
+    'main': 'main',
+    'article': 'article',
+    'aside': 'complementary',
+    'footer': 'contentinfo',
+    'header': 'banner',
+    'form': 'form',
+    'dialog': 'dialog',
+  };
+  
+  return roleMap[tag] || null;
+}
+
+function getInputRole(el) {
+  const type = (el.type || 'text').toLowerCase();
+  const inputRoles = {
+    'button': 'button',
+    'submit': 'button',
+    'reset': 'button',
+    'checkbox': 'checkbox',
+    'radio': 'radio',
+    'range': 'slider',
+    'search': 'searchbox',
+  };
+  return inputRoles[type] || 'textbox';
+}
+
+/**
+ * Get accessible name of an element (what screen readers announce)
+ */
+function getAccessibleName(el) {
+  // aria-label takes precedence
+  const ariaLabel = el.getAttribute('aria-label');
+  if (ariaLabel) return ariaLabel;
+  
+  // aria-labelledby
+  const labelledBy = el.getAttribute('aria-labelledby');
+  if (labelledBy) {
+    const labelEl = document.getElementById(labelledBy);
+    if (labelEl) return labelEl.textContent?.trim();
+  }
+  
+  // For inputs, check associated label
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+    const label = document.querySelector(`label[for="${el.id}"]`);
+    if (label) return label.textContent?.trim();
+  }
+  
+  // For images, use alt text
+  if (el.tagName === 'IMG') {
+    return el.alt || el.title || '';
+  }
+  
+  // For buttons/links, use text content
+  const text = el.textContent?.trim();
+  if (text) return text;
+  
+  // Fallback to title or placeholder
+  return el.title || el.placeholder || '';
+}
 
 /**
  * Check if element is part of XWebAgent UI
@@ -30,229 +116,126 @@ function isInViewport(el) {
 }
 
 /**
- * Get ALL page content as text
- * Includes: headings, paragraphs, links, buttons, inputs, lists, tables, etc.
+ * Get ALL page content as text using accessibility approach
+ * Walks entire DOM and extracts accessible names
  */
-function getVisibleText(maxLength = 15000) {
+function getVisibleText(maxLength = 20000) {
   const lines = [];
-  
-  // Comprehensive selectors - everything that might have content
-  // const selectors = [
-  //   // Text content
-  //   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  //   'p', 'span', 'div',
-  //   'li', 'dt', 'dd',
-  //   'td', 'th', 'caption',
-  //   'blockquote', 'pre', 'code',
-  //   'figcaption', 'label',
-  //   // Interactive elements
-  //   'a', 'button',
-  //   'input', 'textarea', 'select',
-  // ];
-  const selectors = [
-    // Headings first
-    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    // Main content
-    'p',
-    'article',    // ← ADD
-    'section',    // ← ADD
-    // Interactive - important for actions
-    'button', 'a[href]',
-    '[role="button"]',     // ← ADD
-    '[role="link"]',       // ← ADD
-    '[onclick]',           // ← ADD (elements with click handlers)
-    'input', 'textarea', 'select',
-    // Lists
-    'li',
-    // Tables
-    'td', 'th',
-    // Media
-    'img[alt]',   // ← ADD
-    // Other content
-    'figcaption', 'blockquote', 'label',
-  ];
-  
   const seen = new Set();
   
-  document.querySelectorAll(selectors.join(',')).forEach(el => {
+  // Walk ALL elements
+  const allElements = document.body.querySelectorAll('*');
+  
+  for (const el of allElements) {
     // Skip our UI
-    if (isXWebAgentElement(el)) return;
+    if (isXWebAgentElement(el)) continue;
     
-    // Skip hidden elements
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') return;
+    // Skip hidden
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+    } catch (e) { continue; }
     
-    // Get text content
-    let text = '';
-    const tag = el.tagName.toLowerCase();
+    // Get accessible role and name
+    const role = getAccessibleRole(el);
+    if (!role) continue;
     
-    if (tag === 'input') {
-      const type = el.type || 'text';
-      const placeholder = el.placeholder || '';
-      const value = el.value || '';
-      text = `[input:${type}] ${placeholder} ${value}`.trim();
-    } else if (tag === 'select') {
-      const selected = el.options[el.selectedIndex];
-      text = `[select] ${selected ? selected.text : ''}`;
-    } else if (tag === 'textarea') {
-      text = `[textarea] ${el.value || el.placeholder || ''}`;
-    } else if (tag === 'button') {
-      text = `[button] ${el.innerText || ''}`.trim();
-    } else if (tag === 'a') {
-      text = el.innerText?.trim() || '';
-      if (text && el.href) text = `${text} (link)`;
+    let name = getAccessibleName(el);
+    if (!name || name.length < 2) continue;
+    
+    // Clean up
+    name = name.replace(/\s+/g, ' ').trim();
+    
+    // Skip duplicates
+    if (seen.has(name)) continue;
+    seen.add(name);
+    
+    // Format based on role for better LLM understanding
+    if (role === 'button') {
+      lines.push(`[Button: ${name}]`);
+    } else if (role === 'link') {
+      lines.push(`${name} (link)`);
+    } else if (role === 'textbox' || role === 'searchbox') {
+      lines.push(`[Input: ${name}]`);
+    } else if (role === 'image') {
+      lines.push(`[Image: ${name}]`);
     } else {
-      text = (el.innerText || '').trim();
+      lines.push(name);
     }
-    
-    // Clean up whitespace
-    text = text.replace(/\s+/g, ' ').trim();
-    
-    // Skip empty, too short, or duplicates
-    if (text.length < 2) return;
-    if (seen.has(text)) return;
-    seen.add(text);
-    
-    lines.push(text);
-  });
+  }
   
   let result = lines.join('\n');
   return result.length > maxLength ? result.slice(0, maxLength) + '...' : result;
 }
 
 /**
- * Create indexed list of ALL interactive and content elements
+ * Create indexed list of ALL elements using accessibility-inspired approach
+ * No predefined selectors - walks entire DOM and uses accessible roles
  * Returns: { indexText, indexMap, count }
  */
-function createPageIndex(maxItems = 150) {
+function createPageIndex(maxItems = 200) {
   const indexMap = {};
   const indexLines = [];
   let idx = 1;
   
-  // ALL element types we want to index
-  const selectors = [
-    // Headings first
-    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    
-    // Main content
-    'p',
-    'article',        // ← ADD: Semantic articles
-    'section',        // ← ADD: Semantic sections
-    
-    // Interactive - important for actions
-    'button', 
-    'a[href]',
-    '[role="button"]',      // ← ADD: Divs/spans acting as buttons
-    '[role="link"]',        // ← ADD: Divs/spans acting as links
-    '[onclick]',            // ← ADD: Elements with click handlers
-    'input', 'textarea', 'select',
-    
-    // Lists
-    'li',
-    
-    // Tables
-    'td', 'th',
-    
-    // Media
-    'img[alt]',       // ← ADD: Images with alt text (context)
-    
-    // Other content
-    'figcaption', 'blockquote', 'label',
-  ];
-  
   const seen = new Set();
   const seenText = new Set();
   
-  for (const selector of selectors) {
+  // Walk ALL elements in the DOM
+  const allElements = document.body.querySelectorAll('*');
+  
+  for (const el of allElements) {
     if (idx > maxItems) break;
     
-    const elements = document.querySelectorAll(selector);
-    for (const el of elements) {
-      if (idx > maxItems) break;
-      
-      // Skip our UI
-      if (isXWebAgentElement(el)) continue;
-      
-      // Skip already indexed elements
-      if (seen.has(el)) continue;
-      seen.add(el);
-      
-      // Skip hidden
+    // Skip our UI
+    if (isXWebAgentElement(el)) continue;
+    
+    // Skip already seen
+    if (seen.has(el)) continue;
+    
+    // Skip hidden elements
+    try {
       const style = window.getComputedStyle(el);
       if (style.display === 'none' || style.visibility === 'hidden') continue;
-      
-      // Check if element has cursor:pointer (clickable)
-      const isClickable = style.cursor === 'pointer' || 
-      el.onclick || 
-      el.hasAttribute('onclick') ||
-      el.getAttribute('role') === 'button' ||
-      el.getAttribute('role') === 'link';
-      // Mark interactive elements in the index
-      if (isClickable && !isXWebAgentElement(el)) {
-        // Index this clickable element
-        seen.add(el);
-        const textClickable = (el.innerText || '').trim().slice(0, 100);
-        if (textClickable.length > 1) {
-          indexMap[idx] = el;
-          indexLines.push(`[${idx}] (clickable) ${textClickable}`);
-          idx++;
-        }
-      }
-
-      // Get element info
-      const tag = el.tagName.toLowerCase();
-      let text = '';
-      let type = tag;
-      
-      if (tag === 'input') {
-        const inputType = el.type || 'text';
-        text = el.placeholder || el.value || el.name || '';
-        type = `input:${inputType}`;
-      } else if (tag === 'select') {
-        const selected = el.options[el.selectedIndex];
-        text = selected ? selected.text : (el.name || '');
-        type = 'select';
-      } else if (tag === 'textarea') {
-        text = el.placeholder || el.value?.slice(0, 50) || el.name || '';
-        type = 'textarea';
-      } else if (tag === 'button') {
-        text = (el.innerText || el.value || '').trim();
-        type = 'button';
-      } else if (tag === 'a') {
-        text = (el.innerText || '').trim();
-        type = 'link';
-        // Skip edit links, cite links
-        const href = el.href || '';
-        if (href.includes('#cite') || href.includes('action=edit') || 
-            text === 'edit' || text === '[edit]') continue;
-      } else {
-        text = (el.innerText || '').trim();
-      }
-      
-      // Clean whitespace
-      text = text.replace(/\s+/g, ' ').trim();
-      
-      // Skip empty
-      if (text.length < 1) continue;
-      
-      // Skip duplicates by text
-      if (seenText.has(text)) continue;
-      seenText.add(text);
-      
-      // Store element
-      indexMap[idx] = el;
-      
-      // Truncate for display
-      const maxLen = (tag === 'p') ? 300 : 120;
-      const displayText = text.length > maxLen ? text.slice(0, maxLen) + '...' : text;
-      
-      indexLines.push(`[${idx}] (${type}) ${displayText}`);
-      idx++;
-    }
+      if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+    } catch (e) { continue; }
+    
+    // Get accessible role - if no role, skip (not interesting)
+    const role = getAccessibleRole(el);
+    if (!role) continue;
+    
+    // Get accessible name
+    let name = getAccessibleName(el);
+    if (!name || name.length < 2) continue;
+    
+    // Clean up
+    name = name.replace(/\s+/g, ' ').trim();
+    
+    // Skip duplicates
+    if (seenText.has(name)) continue;
+    
+    // Skip common noise
+    if (name === 'edit' || name === '[edit]' || name.includes('#cite')) continue;
+    
+    seen.add(el);
+    seenText.add(name);
+    
+    // Store element
+    indexMap[idx] = el;
+    
+    // Truncate long text
+    const maxLen = (role === 'paragraph' || role === 'article') ? 300 : 120;
+    const displayText = name.length > maxLen ? name.slice(0, maxLen) + '...' : name;
+    
+    // Format: [idx] (role) text
+    indexLines.push(`[${idx}] (${role}) ${displayText}`);
+    idx++;
   }
   
   // Store globally
   window._xwebagentIndex = indexMap;
+  
+  console.log('🤖 Indexed', idx - 1, 'elements using accessibility approach');
   
   return {
     indexText: indexLines.join('\n'),
