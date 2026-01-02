@@ -87,8 +87,11 @@ function toggleChatPanel() {
 
 /**
  * Add a message to the chat
+ * @param {string} content - Message text
+ * @param {string} type - Message type (user, assistant, system, error)
+ * @param {boolean} clickable - If true, clicking scrolls to highlights
  */
-function addChatMessage(content, type = 'assistant') {
+function addChatMessage(content, type = 'assistant', clickable = false) {
   const container = document.getElementById('xwebagent-messages');
   if (!container) return;
   
@@ -97,7 +100,21 @@ function addChatMessage(content, type = 'assistant') {
   
   const msg = document.createElement('div');
   msg.className = `xwebagent-message ${type}`;
-  msg.textContent = content;
+  
+  if (clickable) {
+    // Make message clickable to scroll to highlights
+    msg.classList.add('xwebagent-clickable');
+    msg.innerHTML = `${content} <span class="xwebagent-scroll-hint">👆 Click to scroll</span>`;
+    
+    let clickIndex = 0;
+    msg.addEventListener('click', () => {
+      scrollToHighlight(clickIndex);
+      clickIndex++;
+    });
+  } else {
+    msg.textContent = content;
+  }
+  
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
   
@@ -141,20 +158,21 @@ async function sendChatMessage() {
   showTyping();
   
   try {
-    if (detectStylingCommand(query)) {
-      const result = await handleStylingCommand(query);
-      hideTyping();
-      addChatMessage(
-        result.success ? `✨ ${result.description}` : `❌ ${result.error}`,
-        result.success ? 'system' : 'error'
-      );
+    // Unified approach: handleAsk answers AND highlights
+    const result = await handleAsk(query);
+    hideTyping();
+    
+    if (result.success) {
+      let message = result.answer;
+      // Add highlight count if any elements were highlighted
+      if (result.highlightCount > 0) {
+        message += ` ✨ (${result.highlightCount} highlighted)`;
+      }
+      // Make clickable if there are highlights to scroll to
+      const hasHighlights = result.hasHighlights || result.highlightCount > 0;
+      addChatMessage(message, 'assistant', hasHighlights);
     } else {
-      const result = await handleAsk(query);
-      hideTyping();
-      addChatMessage(
-        result.success ? result.answer : `❌ ${result.error}`,
-        result.success ? 'assistant' : 'error'
-      );
+      addChatMessage(`❌ ${result.error}`, 'error');
     }
   } catch (e) {
     hideTyping();

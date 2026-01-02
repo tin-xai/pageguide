@@ -4,41 +4,42 @@
 // Guard against double-loading
 if (typeof PROMPTS !== 'undefined') { /* already loaded */ }
 else var PROMPTS = {
-  // System prompt for answering questions
-  ASK: `You are a helpful web assistant. Answer questions concisely based on the page content provided.`,
+  // Unified prompt - answers from visible text, highlights from index
+  ANSWER_AND_HIGHLIGHT: `You are a web assistant. You will receive:
+1. VISIBLE SCREEN TEXT - the actual text the user can see
+2. INDEXED ELEMENTS - numbered elements for highlighting
 
-  // System prompt for styling commands
-  STYLING: `You are a CSS expert that modifies web pages based on user requests.
-
-IMPORTANT: Return ONLY valid JSON in this exact format:
+Return JSON:
 {
-  "action": "style",
-  "selector": "CSS selector for elements (img, a, button, etc.) - OPTIONAL",
-  "textSearch": "text to find and highlight (e.g., 'Netflix') - OPTIONAL", 
-  "inlineStyles": {"color": "red", "outline": "3px solid red", "backgroundColor": "yellow"},
-  "description": "Brief description of what you did"
+  "answer": "Your answer based on the visible text",
+  "highlights": [{"index": N, "text": "exact text"}]
 }
 
 RULES:
-- Use "selector" when targeting element types (images, buttons, links, headings)
-- Use "textSearch" when targeting elements containing specific words/phrases
-- ALWAYS include "inlineStyles" with camelCase CSS properties
-- Common inlineStyles: color, backgroundColor, fontWeight, outline, outlineOffset, border, textDecoration
+1. Answer based on VISIBLE SCREEN TEXT (this is what the user sees)
+2. For highlights, find matching content in INDEXED ELEMENTS and use that index number
+3. "text" should be the exact phrase to highlight within that indexed element
+4. If you can't find an index for the answer, use "highlights": []
 
 EXAMPLES:
-- "red boxes around images" → {"action":"style", "selector": "img", "inlineStyles": {"outline": "3px solid red", "outlineOffset": "2px"}, "description": "Added red boxes around images"}
-- "make Netflix red" → {"action":"style", "textSearch": "Netflix", "inlineStyles": {"color": "red", "fontWeight": "bold"}, "description": "Made Netflix text red"}
-- "highlight all links" → {"action":"style", "selector": "a", "inlineStyles": {"backgroundColor": "yellow", "color": "black"}, "description": "Highlighted all links"}
-- "make buttons blue" → {"action":"style", "selector": "button", "inlineStyles": {"backgroundColor": "blue", "color": "white"}, "description": "Made buttons blue"}`
+
+VISIBLE TEXT: "The show was released on Netflix on July 15, 2016. The second and third seasons followed in October 2017 and July 2019."
+INDEXED: [3] (p) The show was released on Netflix on July 15, 2016. The second and third seasons followed in October 2017 and July 2019...
+
+Q: "When were seasons 2 and 3 released?"
+→ {"answer":"Season 2 was released in October 2017 and Season 3 in July 2019","highlights":[{"index":3,"text":"October 2017"},{"index":3,"text":"July 2019"}]}
+
+Q: "Show me all images"
+→ {"answer":"Highlighting all images","highlights":[],"selector":"img"}`
 };
 
-// Keywords for detecting styling commands
-if (typeof STYLING_KEYWORDS !== 'undefined') { /* already loaded */ }
-else var STYLING_KEYWORDS = {
-  style: ['highlight', 'border', 'box', 'color', 'red', 'blue', 'green', 'yellow', 
-    'outline', 'underline', 'bold', 'hide', 'show', 'blur', 'enlarge', 'style', 
-    'background', 'circle', 'mark'],
-  action: ['create', 'add', 'put', 'draw', 'make', 'change', 'set', 'highlight', 
-    'mark', 'apply', 'give', 'wrap']
+// Element selectors for "element" type highlighting
+if (typeof ELEMENT_SELECTORS !== 'undefined') { /* already loaded */ }
+else var ELEMENT_SELECTORS = {
+  images: 'img',
+  links: 'a',
+  buttons: 'button, [role="button"], input[type="submit"]',
+  headings: 'h1, h2, h3, h4, h5, h6',
+  inputs: 'input, textarea, select'
 };
 
