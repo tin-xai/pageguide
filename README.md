@@ -75,3 +75,9 @@ XWebAgent-Extension/
     ├── icon48.png
     └── icon128.png
 ```
+
+
+## New features in V2
+1. The LLM reads (almost) everything on the website.
+
+2. Scroll to the highlighted location.
