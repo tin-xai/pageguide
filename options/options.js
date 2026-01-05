@@ -25,7 +25,7 @@ async function loadSettings() {
   
   // Load Gemini settings
   document.getElementById('geminiApiKey').value = settings.geminiApiKey || '';
-  document.getElementById('geminiModel').value = settings.geminiModel || 'gemini-2.0-flash-exp';
+  document.getElementById('geminiModel').value = settings.geminiModel || 'gemini-2.5-flash';
   
   // Load OpenRouter settings
   document.getElementById('openrouterApiKey').value = settings.openrouterApiKey || '';

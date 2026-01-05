@@ -4,6 +4,21 @@
 // Store element references globally
 window._xwebagentIndex = window._xwebagentIndex || {};
 
+
+function isElementInteractive(el) {
+  // Has click handler
+  if (el.onclick || el.hasAttribute('onclick')) return true;
+  
+  // Cursor pointer
+  const style = window.getComputedStyle(el);
+  if (style.cursor === 'pointer') return true;
+  
+  // Has tabindex (focusable)
+  if (el.hasAttribute('tabindex') && el.tabIndex >= 0) return true;
+  
+  return false;
+}
+
 /**
  * Get the accessible role of an element (approximates AXTree)
  */
@@ -37,9 +52,24 @@ function getAccessibleRole(el) {
     'header': 'banner',
     'form': 'form',
     'dialog': 'dialog',
+    'section': 'region',
+    'time': 'time',
+    'mark': 'mark',
+    'code': 'code',
+    'pre': 'code',
+    'summary': 'button',  // <details><summary> is clickable
+    'menu': 'menu',
+    'menuitem': 'menuitem',
+    'option': 'option',
+    'label': 'label',  // ← Important for form context
   };
   
-  return roleMap[tag] || null;
+  if (roleMap[tag]) return roleMap[tag]; // If role is already defined, return it
+  if (isElementInteractive(el)) {
+    return 'button'; // Treat as button
+  }
+
+  return null;
 }
 
 function getInputRole(el) {
@@ -72,10 +102,15 @@ function getAccessibleName(el) {
   }
   
   // For inputs, check associated label
-  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-    const label = document.querySelector(`label[for="${el.id}"]`);
-    if (label) return label.textContent?.trim();
-  }
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) {
+    const parentLabel = el.closest('label');
+    if (parentLabel) return parentLabel.textContent?.trim();
+  
+    if (el.id) {
+      const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (label) return label.textContent?.trim();
+    }
+  }  
   
   // For images, use alt text
   if (el.tagName === 'IMG') {
@@ -124,9 +159,10 @@ function getVisibleText(maxLength = 20000) {
   const seen = new Set();
   
   // Walk ALL elements
-  const allElements = document.body.querySelectorAll('*');
-  
-  for (const el of allElements) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+
+  let el;
+  while ((el = walker.nextNode())) {
     // Skip our UI
     if (isXWebAgentElement(el)) continue;
     
@@ -181,12 +217,28 @@ function createPageIndex(maxItems = 200) {
   const seen = new Set();
   const seenText = new Set();
   
-  // Walk ALL elements in the DOM
-  const allElements = document.body.querySelectorAll('*');
+  // ⭐ Use TreeWalker instead of querySelectorAll('*')
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_ELEMENT,
+    {
+      acceptNode: (node) => {
+        // Skip our UI
+        if (isXWebAgentElement(node)) return NodeFilter.FILTER_REJECT;
+        
+        // Skip hidden
+        const style = window.getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden') {
+          return NodeFilter.FILTER_REJECT;
+        }
+        
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
   
-  for (const el of allElements) {
-    if (idx > maxItems) break;
-    
+  let el;
+  while ((el = walker.nextNode()) && idx <= maxItems) {
     // Skip our UI
     if (isXWebAgentElement(el)) continue;
     
@@ -211,8 +263,8 @@ function createPageIndex(maxItems = 200) {
     // Clean up
     name = name.replace(/\s+/g, ' ').trim();
     
-    // Skip duplicates
-    if (seenText.has(name)) continue;
+    // Only skip duplicates for non-interactive elements
+    if (!isElementInteractive(el) && seenText.has(name)) continue;
     
     // Skip common noise
     if (name === 'edit' || name === '[edit]' || name.includes('#cite')) continue;
