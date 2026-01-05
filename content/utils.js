@@ -181,9 +181,9 @@ function getVisibleText(maxLength = 20000) {
     
     // Clean up
     name = name.replace(/\s+/g, ' ').trim();
-    
-    // Skip duplicates
-    if (seen.has(name)) continue;
+
+    // Only skip duplicates for non-interactive elements
+    if (!isElementInteractive(el) && seen.has(name)) continue;
     seen.add(name);
     
     // Format based on role for better LLM understanding
