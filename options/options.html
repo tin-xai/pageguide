@@ -19,7 +19,7 @@
     }
     
     .container {
-      max-width: 500px;
+      max-width: 540px;
       margin: 0 auto;
     }
     
@@ -117,6 +117,53 @@
       text-decoration: underline;
     }
     
+    /* Provider selector tabs */
+    .provider-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    
+    .provider-tab {
+      flex: 1;
+      padding: 12px 16px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      color: #888;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    
+    .provider-tab:hover {
+      background: rgba(255,255,255,0.08);
+      color: #aaa;
+    }
+    
+    .provider-tab.active {
+      background: linear-gradient(135deg, rgba(0,217,255,0.2), rgba(0,255,136,0.2));
+      border-color: #00d9ff;
+      color: #00d9ff;
+    }
+    
+    .provider-tab .icon {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+    
+    /* Provider config sections */
+    .provider-config {
+      display: none;
+    }
+    
+    .provider-config.active {
+      display: block;
+    }
+    
     .btn-row {
       display: flex;
       gap: 12px;
@@ -176,11 +223,28 @@
       border: 1px solid rgba(255, 100, 100, 0.2);
     }
     
+    .status.info {
+      display: block;
+      background: rgba(255,255,255,0.05);
+      color: #aaa;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    
     .version {
       text-align: center;
       color: #444;
       font-size: 12px;
       margin-top: 24px;
+    }
+
+    .current-provider {
+      text-align: center;
+      padding: 8px 16px;
+      background: rgba(0,217,255,0.1);
+      border-radius: 8px;
+      font-size: 12px;
+      color: #00d9ff;
+      margin-bottom: 16px;
     }
   </style>
 </head>
@@ -193,18 +257,81 @@
     </header>
     
     <div class="section">
-      <h2>🔑 API Configuration</h2>
-      <div class="form-group">
-        <label for="apiKey">Google Gemini API Key</label>
-        <input type="password" id="apiKey" placeholder="Enter your API key...">
-        <small>Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a></small>
+      <h2>🤖 LLM Provider</h2>
+      <div id="currentProvider" class="current-provider">Current: Gemini</div>
+      
+      <div class="provider-tabs">
+        <div class="provider-tab active" data-provider="gemini">
+          <span class="icon">✨</span>
+          Gemini
+        </div>
+        <div class="provider-tab" data-provider="openrouter">
+          <span class="icon">🌐</span>
+          OpenRouter
+        </div>
+        <div class="provider-tab" data-provider="openai">
+          <span class="icon">🧠</span>
+          OpenAI
+        </div>
       </div>
-      <div class="form-group">
-        <label for="model">AI Model</label>
-        <select id="model">
-          <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Latest)</option>
-        </select>
+      
+      <!-- Gemini Config -->
+      <div class="provider-config active" id="config-gemini">
+        <div class="form-group">
+          <label for="geminiApiKey">Gemini API Key</label>
+          <input type="password" id="geminiApiKey" placeholder="Enter your Gemini API key...">
+          <small>Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a></small>
+        </div>
+        <div class="form-group">
+          <label for="geminiModel">Model</label>
+          <select id="geminiModel">
+            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash</option>
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+            <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+            <option value="gemini-3-flash-preview">Gemini 3.0 Flash</option>
+            <option value="gemini-3-pro-preview">Gemini 3.0 Pro</option>
+          </select>
+        </div>
       </div>
+      
+      <!-- OpenRouter Config -->
+      <div class="provider-config" id="config-openrouter">
+        <div class="form-group">
+          <label for="openrouterApiKey">OpenRouter API Key</label>
+          <input type="password" id="openrouterApiKey" placeholder="Enter your OpenRouter API key...">
+          <small>Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a></small>
+        </div>
+        <div class="form-group">
+          <label for="openrouterModel">Model</label>
+          <select id="openrouterModel">
+            <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+            <option value="anthropic/claude-3-haiku">Claude 3 Haiku (Fast)</option>
+            <option value="openai/gpt-4o">GPT-4o</option>
+            <option value="openai/gpt-4o-mini">GPT-4o Mini (Fast)</option>
+            <option value="google/gemini-pro-1.5">Gemini 1.5 Pro</option>
+            <option value="meta-llama/llama-3.1-70b-instruct">Llama 3.1 70B</option>
+          </select>
+        </div>
+      </div>
+      
+      <!-- OpenAI Config -->
+      <div class="provider-config" id="config-openai">
+        <div class="form-group">
+          <label for="openaiApiKey">OpenAI API Key</label>
+          <input type="password" id="openaiApiKey" placeholder="Enter your OpenAI API key...">
+          <small>Get a key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a></small>
+        </div>
+        <div class="form-group">
+          <label for="openaiModel">Model</label>
+          <select id="openaiModel">
+            <option value="gpt-4o">GPT-4o (Best)</option>
+            <option value="gpt-4o-mini">GPT-4o Mini (Fast)</option>
+            <option value="gpt-4-turbo">GPT-4 Turbo</option>
+            <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+          </select>
+        </div>
+      </div>
+      
       <div class="btn-row">
         <button type="button" id="testApiBtn" class="secondary">🧪 Test Connection</button>
       </div>
