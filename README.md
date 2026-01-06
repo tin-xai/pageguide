@@ -4,7 +4,15 @@
 <h1 align="center">XWebAgent Extension – A Chrome extension that makes browsing 
 <b>Safe</b> 🛡️, <b>Fun</b> 😄, and <b>Efficient</b> 🚀</h1>
 
-## Features
+
+## TODO 🎯
+
+1. [ ] Make LLMs highlight/localize information (given any general question format e.g. What? where? How?..)
+2. [ ] Let LLMs decide on the highlighting colors by itself (because this should depend on the webpage and the element being highlighted)
+3. [ ] Make LLMs able to guide users step by step through some task (e.g. add some item to cart, or change my password, add a new payment card, etc...)
+
+
+## General Features (future)
 <div align="center">
 
 | 🔍 Read | ✨ Write | 🎯 Guide | 🛡️ Guardian |Support|
