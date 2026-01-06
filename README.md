@@ -7,10 +7,15 @@
 
 ## TODO 🎯
 
-1. [ ] Make LLMs highlight/localize information (given any general question format e.g. What? where? How?..)
-2. [ ] Let LLMs decide on the highlighting colors by itself (because this should depend on the webpage and the element being highlighted)
-3. [ ] Make LLMs able to guide users step by step through some task (e.g. add some item to cart, or change my password, add a new payment card, etc...)
+### Core 
 
+1. [ ] Make LLMs highlight/localize information (given any general question format e.g. What? where? How?..)
+2. [ ] Make LLMs able to guide users step by step through some task (e.g. add some item to cart, or change my password, add a new payment card, etc...)
+
+### Visual
+
+1. [ ] Let LLMs decide on the highlighting colors by itself (because this should depend on the webpage and the element being highlighted)
+2. [ ] Explore other ways to highlight/localize information e.g. CSS5 can do a lot of animation. This makes it easier to see the highlighted content.
 
 ## General Features (future)
 <div align="center">
