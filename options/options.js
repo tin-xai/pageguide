@@ -29,7 +29,7 @@ async function loadSettings() {
   
   // Load OpenRouter settings
   document.getElementById('openrouterApiKey').value = settings.openrouterApiKey || '';
-  document.getElementById('openrouterModel').value = settings.openrouterModel || 'anthropic/claude-3.5-sonnet';
+  document.getElementById('openrouterModel').value = settings.openrouterModel || 'google/gemini-2.5-flash';
   
   // Load OpenAI settings
   document.getElementById('openaiApiKey').value = settings.openaiApiKey || '';
