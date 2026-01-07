@@ -29,18 +29,9 @@ function createChatPanel() {
     </div>
     
     <div class="xwebagent-chat-messages" id="xwebagent-messages">
-      <div class="xwebagent-message system">
-        👋 Hi! I can help you find information or style elements on this page.
-      </div>
     </div>
     
     <div class="xwebagent-chat-input-area">
-      <div class="xwebagent-quick-actions">
-        <button class="xwebagent-quick-btn" data-action="summarize">📝 Summarize</button>
-        <button class="xwebagent-quick-btn" data-action="links">🔗 Links</button>
-        <button class="xwebagent-quick-btn" data-action="images">🖼️ Images</button>
-        <button class="xwebagent-quick-btn" data-action="reset">🧹 Reset</button>
-      </div>
       <div class="xwebagent-input-row">
         <input type="text" class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything...">
         <button class="xwebagent-send-btn" id="xwebagent-send">➤</button>
@@ -158,11 +149,21 @@ async function sendChatMessage() {
   showTyping();
   
   try {
-    // Unified approach: handleAsk answers AND highlights
-    const result = await handleAsk(query);
+    // Smart routing: action commands go to agent, info queries to ask
+    const result = await handleSmartQuery(query);
     hideTyping();
     
     if (result.success) {
+      // Check if this was an agent action
+      if (result.action && result.action !== null) {
+        // Show thought process if available
+        if (result.thought) {
+          addChatMessage(`💭 ${result.thought}`, 'system');
+        }
+        // Show action that was performed
+        addChatMessage(`⚡ ${result.action}`, 'action');
+      }
+      
       let message = result.answer;
       // Add highlight count if any elements were highlighted
       if (result.highlightCount > 0) {
