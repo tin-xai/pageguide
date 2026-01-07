@@ -38,6 +38,8 @@ const CONTENT_SCRIPTS = [
   'content/prompts.js',
   'content/utils.js', 
   'content/styling.js',
+  'content/actions.js',
+  'content/protection.js',  // Dark pattern & ad protection
   'content/api.js',
   'content/chat.js',
   'content/content.js'
