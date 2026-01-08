@@ -11,7 +11,7 @@
 
 1. [x] Highlight/localize information (given any general question format e.g. What? where? How?..)
 2. [x] Guide users step by step through some task (e.g. add some item to cart, or change my password, add a new payment card, etc...)
-3. [ ] Hide what (posts, articles, emails, etc...) users don't want to see (e.g. ads or political posts or 18+ or whatever the request)
+3. [ ] Hide/filter what (posts, articles, emails, etc...) users don't want to see (e.g. ads or political posts or 18+ or whatever the request)
 
 ### B. Visual
 
