@@ -20,7 +20,7 @@
 
 ### C. Infrastructure
 
-1. [ ] Figure out how to auto update Chrome extension upon git push or pull requests, so we don't have to upload everytime.
+1. [ ] Figure out how to auto update Chrome extension upon git push or pull requests, so we don't have to upload everytime. ➡️ _ANH_ working on this.
 
 ### D. Automated testing
 
