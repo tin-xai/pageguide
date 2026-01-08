@@ -198,7 +198,6 @@ async function restoreSessionOnLoad() {
       if (panel) {
         chatPanelOpen = true;
         panel.classList.add('open');
-        document.body.classList.add('xwebagent-panel-open');
       }
     }
     
@@ -218,7 +217,6 @@ function toggleChatPanel() {
   
   chatPanelOpen = !chatPanelOpen;
   panel.classList.toggle('open', chatPanelOpen);
-  document.body.classList.toggle('xwebagent-panel-open', chatPanelOpen);
   
   if (chatPanelOpen) {
     setTimeout(() => document.getElementById('xwebagent-input')?.focus(), 300);

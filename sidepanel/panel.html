@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XWebAgent</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div class="xwebagent-panel">
+    <div class="xwebagent-chat-header">
+      <div class="xwebagent-header-left">
+        <img src="../icons/icon128.png" alt="XWebAgent" class="xwebagent-logo">
+        <div class="xwebagent-header-text">
+          <h2>XWebAgent</h2>
+          <p>AI Web Assistant - Safe, Fun, Efficient</p>
+        </div>
+      </div>
+      <div class="xwebagent-header-right">
+        <button class="xwebagent-settings-btn" id="xwebagent-settings" title="Settings">⚙️</button>
+      </div>
+    </div>
+    
+    <div class="xwebagent-chat-messages" id="xwebagent-messages">
+    </div>
+    
+    <div class="xwebagent-chat-input-area">
+      <div class="xwebagent-quick-actions">
+        <button class="xwebagent-quick-btn" data-action="safety" title="Scan for dark patterns & ads">🛡️ Safety</button>
+        <button class="xwebagent-quick-btn" data-action="hideAds" title="Hide ads">🚫 Ads</button>
+        <button class="xwebagent-quick-btn" data-action="reset" title="Clear all markings">🧹 Clear</button>
+        <button class="xwebagent-quick-btn" data-action="clearHistory" title="Clear chat history">🗑️ History</button>
+      </div>
+      <div class="xwebagent-input-row">
+        <input type="text" class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything...">
+        <button class="xwebagent-send-btn" id="xwebagent-send">➤</button>
+      </div>
+    </div>
+  </div>
+  
+  <script src="panel.js"></script>
+</body>
+</html>

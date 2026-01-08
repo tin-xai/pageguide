@@ -84,9 +84,12 @@ function scrollToHighlight(index = 0) {
 /**
  * Main handler for all user queries
  * Uses indexed approach: create page index, send to LLM, highlight by index
+ * @param {string} query - User's query
+ * @param {Array} history - Conversation history [{role, content}, ...]
  */
-async function handleAsk(query) {
+async function handleAsk(query, history = []) {
   console.log('🤖 Processing query:', query);
+  console.log('🤖 History length:', history.length);
   
   // Step 1: Get visible text and create index
   const visibleText = getVisibleText(Infinity);
@@ -98,6 +101,16 @@ async function handleAsk(query) {
   console.log('🤖 Created page index with', pageIndex.count, 'items');
   
   const pageTitle = document.title;
+  
+  // Build conversation history string
+  let historyText = '';
+  if (history.length > 0) {
+    historyText = '\n=== CONVERSATION HISTORY ===\n';
+    history.slice(-6).forEach(msg => { // Keep last 6 messages (3 exchanges)
+      historyText += `${msg.role.toUpperCase()}: ${msg.content}\n`;
+    });
+    historyText += '\n';
+  }
   
   try {
     // Step 2: Send text, index, and background info to LLM
@@ -114,11 +127,11 @@ ${visibleText}
 
 === INDEXED ELEMENTS (for highlighting) ===
 ${pageIndex.indexText}
-
-=== QUESTION ===
+${historyText}
+=== CURRENT QUESTION ===
 ${query}
 
-Choose highlight colors that CONTRAST with the ${pageBg.isDark ? 'dark' : 'light'} background.`
+Choose highlight colors that CONTRAST with the ${pageBg.isDark ? 'dark' : 'light'} background.${history.length > 0 ? ' Use conversation history for context if relevant.' : ''}`
       }]
     });
     
@@ -210,13 +223,21 @@ function processLLMResponse(content) {
  * Clear all existing highlights
  */
 function clearHighlights() {
-  // Remove highlight classes
-  document.querySelectorAll('[class*="xwebagent-highlight"]').forEach(el => {
-    // Get all classes that start with xwebagent-highlight
-    const classes = Array.from(el.classList).filter(c => c.startsWith('xwebagent-highlight'));
+  // Clear highlights array
+  window._xwebagentHighlights = [];
+  
+  // Remove ALL xwebagent highlight-related classes
+  document.querySelectorAll('[class*="xwebagent-highlight"], [class*="xwebagent-guide"]').forEach(el => {
+    const classes = Array.from(el.classList).filter(c => 
+      c.startsWith('xwebagent-highlight') || c.startsWith('xwebagent-guide')
+    );
     classes.forEach(c => el.classList.remove(c));
     el.style.removeProperty('--xwebagent-color');
     el.removeAttribute('data-xwebagent-styled');
+    // Also remove inline styles that might have been added
+    el.style.removeProperty('background-color');
+    el.style.removeProperty('outline');
+    el.style.removeProperty('box-shadow');
   });
   
   // Unwrap highlight spans
@@ -227,6 +248,8 @@ function clearHighlights() {
       parent.normalize();
     }
   });
+  
+  console.log('🧹 All highlights cleared');
 }
 
 /**
@@ -714,7 +737,18 @@ function setupActionListener(actionType) {
       
       removeActionListener();
       
-      // Dispatch event to continue guidance
+      // Continue guidance and send result to side panel
+      const result = await continueGuidance();
+      if (result) {
+        try {
+          // Send to side panel via runtime message
+          chrome.runtime.sendMessage({ action: 'guideStep', result });
+        } catch (e) {
+          console.log('🎯 Could not send to panel:', e.message);
+        }
+      }
+      
+      // Also dispatch event for injected chat panel (backwards compatibility)
       window.dispatchEvent(new CustomEvent('xwebagent-continue-guide'));
     }
   };
@@ -751,8 +785,10 @@ async function continueGuidance() {
 
 /**
  * Smart handler that routes to info, action, guide, or protection mode
+ * @param {string} query - User's query
+ * @param {Array} history - Conversation history [{role, content}, ...]
  */
-async function handleSmartQuery(query) {
+async function handleSmartQuery(query, history = []) {
   // Check for protection/safety queries first
   if (typeof isProtectionQuery === 'function' && isProtectionQuery(query)) {
     const result = await handleProtectionQuery(query);
@@ -769,8 +805,8 @@ async function handleSmartQuery(query) {
     return handleAgentTask(query);
   }
   
-  // Default to Q&A with highlighting
-  return handleAsk(query);
+  // Default to Q&A with highlighting (pass history for context)
+  return handleAsk(query, history);
 }
 
 /**
