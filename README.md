@@ -18,9 +18,9 @@
 1. [x] Let LLMs decide on the highlighting colors by itself (because this should depend on the webpage and the element being highlighted)
 2. [x] Explore other ways to highlight/localize information e.g. CSS5 can do a lot of animation. This makes it easier to see the highlighted content.
 
-### C. Testing for official 
+### C. Testing before official release
 
-After we are done with creating experimental features (go crazy to see how far we can go; what all kinds of useful features we can implement), THEN, we should set up proper tests for serious development of this "open-source" project.
+_After we are done with creating experimental features (go crazy to see how far we can go; what all kinds of useful features we can implement), THEN, we should set up proper tests for serious development of this "open-source" project._
 
 1. [ ] Set up End-to-End feature tests (using Playwright)
 
