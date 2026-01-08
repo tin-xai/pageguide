@@ -20,7 +20,7 @@
 
 ### C. Testing before official release
 
-_After we are done with creating experimental features (go crazy to see how far we can go; what all kinds of useful features we can implement), THEN, we should set up proper tests for serious development of this "open-source" project._
+_After we are done with creating experimental features (go crazy to see how far we can go; what all kinds of useful features we can implement), THEN, we should set up proper tests for serious development of this open-source project (so that the community can contribute). See ideas [here](https://chatgpt.com/share/695f226e-7ca0-8007-a234-1ec09ea912fd)_
 
 1. [ ] Set up End-to-End feature tests (using Playwright)
 
