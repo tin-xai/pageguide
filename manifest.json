@@ -7,8 +7,12 @@
     "activeTab",
     "storage",
     "scripting",
-    "tabs"
+    "tabs",
+    "sidePanel"
   ],
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
   "host_permissions": [
     "<all_urls>"
   ],
@@ -49,7 +53,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/icon128.png"],
+      "resources": ["icons/*"],
       "matches": ["<all_urls>"]
     }
   ]

@@ -45,34 +45,55 @@ const CONTENT_SCRIPTS = [
   'content/content.js'
 ];
 
-// ===== Extension Icon Click =====
+// Track if side panel is open
+let sidePanelOpen = false;
+
+// ===== Extension Icon Click - Toggle Side Panel =====
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id || !tab.url?.startsWith('http')) return;
+  if (!tab.id) return;
   
   try {
-    await chrome.tabs.sendMessage(tab.id, { action: 'toggleChatPanel' });
-  } catch (e) {
-    // Inject content scripts if not loaded
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: CONTENT_SCRIPTS
-      });
-      await chrome.scripting.insertCSS({
-        target: { tabId: tab.id },
-        files: ['content/content.css']
-      });
-      setTimeout(() => {
-        chrome.tabs.sendMessage(tab.id, { action: 'toggleChatPanel' });
-      }, 100);
-    } catch (err) {
-      console.error('Could not inject:', err);
+    if (sidePanelOpen) {
+      // Close the panel by sending message to it
+      try {
+        await chrome.runtime.sendMessage({ action: 'closePanel' });
+      } catch (e) {
+        // Panel might already be closed
+      }
+      sidePanelOpen = false;
+    } else {
+      // Open the side panel
+      await chrome.sidePanel.open({ tabId: tab.id });
+      sidePanelOpen = true;
+      
+      // Inject content scripts if on a valid page
+      if (tab.url?.startsWith('http')) {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: CONTENT_SCRIPTS
+          });
+          await chrome.scripting.insertCSS({
+            target: { tabId: tab.id },
+            files: ['content/content.css']
+          });
+        } catch (err) {
+          // Scripts might already be injected
+        }
+      }
     }
+  } catch (err) {
+    console.error('Could not toggle side panel:', err);
   }
 });
 
 // ===== Message Handler =====
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'panelClosed') {
+    sidePanelOpen = false;
+    sendResponse({ success: true });
+    return true;
+  }
   if (request.action === 'callLLM') {
     callLLM(request.messages, request.systemPrompt)
       .then(sendResponse)
@@ -137,7 +158,7 @@ async function callGemini(messages, systemPrompt, settings) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: userContent }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 }
       })
     });
     

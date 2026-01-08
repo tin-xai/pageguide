@@ -497,11 +497,7 @@
   transform: none;
 }
 
-/* Push page content when panel is open */
-body.xwebagent-panel-open {
-  margin-right: 380px !important;
-  transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
+/* Panel overlays page - no shifting needed */
 
 /* ===== HIGHLIGHT ANIMATIONS ===== */
 
