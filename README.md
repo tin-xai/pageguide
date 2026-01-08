@@ -22,7 +22,7 @@
 
 1. [ ] Figure out how to auto update Chrome extension upon git push or pull requests, so we don't have to upload everytime.
 
-### D. Tests before official release
+### D. Automated testing
 
 _After we are done with creating experimental features (go crazy to see how far we can go; what all kinds of useful features we can implement), THEN, we should set up proper tests for serious development of this open-source project (so that the community can contribute). See ideas [here](https://chatgpt.com/share/695f226e-7ca0-8007-a234-1ec09ea912fd)_
 
