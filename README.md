@@ -12,8 +12,9 @@
 1. [x] Highlight/localize information (given any general question format e.g. What? where? How?..)
 2. [x] Guide users step by step through some task (e.g. add some item to cart, or change my password, add a new payment card, etc...)
 3. [ ] Hide/filter what (posts, articles, emails, etc...) users don't want to see (e.g. ads or political posts or 18+ or whatever the request)
+4. [ ] Figure out whether the AI extension right now can "see" images on an HTML page. Test sending a screenshot of the page to LLMs to see if it fix the issues with interpreting images or icons.
 
-### B. Visual
+### B. Visual aids
 
 1. [x] Let LLMs decide on the highlighting colors by itself (because this should depend on the webpage and the element being highlighted)
 2. [x] Explore other ways to highlight/localize information e.g. CSS5 can do a lot of animation. This makes it easier to see the highlighted content.
