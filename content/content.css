@@ -285,6 +285,71 @@
   border: 1px solid rgba(255, 100, 100, 0.2);
 }
 
+/* Action message - shows executed actions */
+.xwebagent-message.action {
+  align-self: center;
+  background: linear-gradient(135deg, rgba(255, 200, 0, 0.15), rgba(255, 150, 0, 0.15));
+  color: #ffcc00;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 200, 0, 0.3);
+}
+
+/* Guide message - step-by-step instructions */
+.xwebagent-message.guide {
+  align-self: flex-start;
+  background: linear-gradient(135deg, rgba(110, 72, 255, 0.15), rgba(59, 130, 246, 0.15));
+  color: #e0e0e0;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(110, 72, 255, 0.3);
+  max-width: 90%;
+}
+
+.xwebagent-guide-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.xwebagent-step-badge {
+  background: linear-gradient(135deg, #6e48ff, #3b82f6);
+  color: white;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.xwebagent-step-text {
+  flex: 1;
+  line-height: 1.5;
+}
+
+.xwebagent-next-hint {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #a0a0a0;
+}
+
+.xwebagent-guide-waiting {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #6bcfff;
+  animation: xwebagent-waiting-pulse 2s ease-in-out infinite;
+}
+
+@keyframes xwebagent-waiting-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
 /* Clickable answer message - scroll to highlight */
 .xwebagent-message.xwebagent-clickable {
   cursor: pointer;
@@ -436,5 +501,320 @@
 body.xwebagent-panel-open {
   margin-right: 380px !important;
   transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ===== HIGHLIGHT ANIMATIONS ===== */
+
+/* Pulse - Gentle pulsing glow */
+.xwebagent-highlight-pulse {
+  animation: xwebagent-pulse 2s ease-in-out infinite;
+}
+
+@keyframes xwebagent-pulse {
+  0%, 100% { 
+    box-shadow: 0 0 5px var(--xwebagent-color, #ffd93d);
+    opacity: 1;
+  }
+  50% { 
+    box-shadow: 0 0 25px var(--xwebagent-color, #ffd93d), 0 0 50px var(--xwebagent-color, #ffd93d);
+    opacity: 0.9;
+  }
+}
+
+/* Spotlight - Bright spotlight effect */
+.xwebagent-highlight-spotlight {
+  animation: xwebagent-spotlight 1.5s ease-out forwards;
+  position: relative;
+}
+
+@keyframes xwebagent-spotlight {
+  0% {
+    box-shadow: 0 0 0 0 var(--xwebagent-color, #ffd93d);
+    background-color: transparent;
+  }
+  30% {
+    box-shadow: 0 0 60px 20px var(--xwebagent-color, #ffd93d);
+  }
+  100% {
+    box-shadow: 0 0 20px 5px var(--xwebagent-color, #ffd93d);
+    background-color: color-mix(in srgb, var(--xwebagent-color, #ffd93d) 25%, transparent);
+  }
+}
+
+/* Shimmer - Moving gradient */
+.xwebagent-highlight-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--xwebagent-color, #ffd93d) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: xwebagent-shimmer 2s linear infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+@keyframes xwebagent-shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+/* Shimmer for block elements */
+.xwebagent-highlight-shimmer-block {
+  position: relative;
+  overflow: hidden;
+}
+
+.xwebagent-highlight-shimmer-block::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--xwebagent-color, #ffd93d) 40%, transparent),
+    transparent
+  );
+  animation: xwebagent-shimmer-move 2s linear infinite;
+}
+
+@keyframes xwebagent-shimmer-move {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+/* Bounce - Bouncing attention */
+.xwebagent-highlight-bounce {
+  animation: xwebagent-bounce 1s ease infinite;
+}
+
+@keyframes xwebagent-bounce {
+  0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-10px); }
+  60% { transform: translateY(-5px); }
+}
+
+/* Rainbow - Color cycling border */
+.xwebagent-highlight-rainbow {
+  animation: xwebagent-rainbow 3s linear infinite;
+  border: 3px solid transparent;
+  border-radius: 4px;
+}
+
+@keyframes xwebagent-rainbow {
+  0% { border-color: #ff6b6b; box-shadow: 0 0 15px #ff6b6b; }
+  16% { border-color: #ffd93d; box-shadow: 0 0 15px #ffd93d; }
+  33% { border-color: #6bcf63; box-shadow: 0 0 15px #6bcf63; }
+  50% { border-color: #4ecdc4; box-shadow: 0 0 15px #4ecdc4; }
+  66% { border-color: #6bcfff; box-shadow: 0 0 15px #6bcfff; }
+  83% { border-color: #a855f7; box-shadow: 0 0 15px #a855f7; }
+  100% { border-color: #ff6b6b; box-shadow: 0 0 15px #ff6b6b; }
+}
+
+/* Underline - Animated underline */
+.xwebagent-highlight-underline {
+  position: relative;
+  text-decoration: none !important;
+}
+
+.xwebagent-highlight-underline::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: var(--xwebagent-color, #ffd93d);
+  animation: xwebagent-underline 0.5s ease-out forwards, xwebagent-underline-pulse 2s ease-in-out 0.5s infinite;
+  transform-origin: left;
+}
+
+@keyframes xwebagent-underline {
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+
+@keyframes xwebagent-underline-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Glow - Steady glowing outline */
+.xwebagent-highlight-glow {
+  outline: 3px solid var(--xwebagent-color, #ffd93d);
+  outline-offset: 3px;
+  box-shadow: 
+    0 0 10px var(--xwebagent-color, #ffd93d),
+    0 0 20px var(--xwebagent-color, #ffd93d),
+    inset 0 0 10px color-mix(in srgb, var(--xwebagent-color, #ffd93d) 20%, transparent);
+  animation: xwebagent-glow 2s ease-in-out infinite;
+}
+
+@keyframes xwebagent-glow {
+  0%, 100% { 
+    box-shadow: 
+      0 0 10px var(--xwebagent-color, #ffd93d),
+      0 0 20px var(--xwebagent-color, #ffd93d);
+  }
+  50% { 
+    box-shadow: 
+      0 0 20px var(--xwebagent-color, #ffd93d),
+      0 0 40px var(--xwebagent-color, #ffd93d),
+      0 0 60px var(--xwebagent-color, #ffd93d);
+  }
+}
+
+/* Focus Ring - Draws attention with expanding ring */
+.xwebagent-highlight-ring {
+  position: relative;
+}
+
+.xwebagent-highlight-ring::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--xwebagent-color, #ffd93d);
+  border-radius: 8px;
+  transform: translate(-50%, -50%);
+  animation: xwebagent-ring 1.5s ease-out infinite;
+}
+
+@keyframes xwebagent-ring {
+  0% {
+    width: 100%;
+    height: 100%;
+    opacity: 1;
+  }
+  100% {
+    width: 150%;
+    height: 150%;
+    opacity: 0;
+  }
+}
+
+/* Arrow pointer - Points to element */
+.xwebagent-highlight-arrow::before {
+  content: '👉';
+  position: absolute;
+  left: -30px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 20px;
+  animation: xwebagent-arrow 1s ease-in-out infinite;
+}
+
+@keyframes xwebagent-arrow {
+  0%, 100% { transform: translateY(-50%) translateX(0); }
+  50% { transform: translateY(-50%) translateX(5px); }
+}
+
+/* Base highlight style - always applied */
+.xwebagent-highlight {
+  border-radius: 3px;
+  padding: 1px 3px;
+  margin: 0 1px;
+  transition: all 0.3s ease;
+}
+
+/* ===== PROTECTION / DARK PATTERN BADGES ===== */
+
+.xwebagent-dark-pattern-badge {
+  position: absolute;
+  top: -12px;
+  right: -8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  white-space: nowrap;
+  z-index: 10000;
+  animation: xwebagent-badge-pop 0.3s ease-out;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes xwebagent-badge-pop {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.xwebagent-dark-pattern-badge[data-severity="danger"] {
+  background: linear-gradient(135deg, #ff4757, #ff6b81);
+  color: white;
+}
+
+.xwebagent-dark-pattern-badge[data-severity="warning"] {
+  background: linear-gradient(135deg, #ffa502, #ff7f50);
+  color: #000;
+}
+
+.xwebagent-dark-pattern-badge[data-severity="info"] {
+  background: linear-gradient(135deg, #1e90ff, #00d9ff);
+  color: white;
+}
+
+.xwebagent-dp-icon {
+  font-size: 14px;
+}
+
+.xwebagent-dp-label {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xwebagent-dp-info {
+  cursor: help;
+  opacity: 0.7;
+  font-size: 12px;
+}
+
+.xwebagent-dp-info:hover {
+  opacity: 1;
+}
+
+/* Protection scan animation */
+@keyframes xwebagent-scan {
+  0% { 
+    box-shadow: 0 0 0 0 rgba(30, 144, 255, 0.4);
+  }
+  70% { 
+    box-shadow: 0 0 0 10px rgba(30, 144, 255, 0);
+  }
+  100% { 
+    box-shadow: 0 0 0 0 rgba(30, 144, 255, 0);
+  }
+}
+
+[data-xwebagent-marked] {
+  animation: xwebagent-scan 2s ease-out;
+}
+
+/* Hidden/Blurred ads overlay */
+[data-xwebagent-hidden]::after {
+  content: '🛡️ Ad blocked by XWebAgent';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  pointer-events: none;
+  z-index: 10001;
 }
 
