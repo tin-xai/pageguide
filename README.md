@@ -7,15 +7,22 @@
 
 ## TODO 🎯
 
-### Core 
+### Most important core features
 
-1. [x] Make LLMs highlight/localize information (given any general question format e.g. What? where? How?..)
-2. [x] Make LLMs able to guide users step by step through some task (e.g. add some item to cart, or change my password, add a new payment card, etc...)
+1. [x] Highlight/localize information (given any general question format e.g. What? where? How?..)
+2. [x] Guide users step by step through some task (e.g. add some item to cart, or change my password, add a new payment card, etc...)
+3. [ ] Hide what (posts, articles, emails, etc...) users don't want to see (e.g. ads or political posts or 18+ or whatever the request)
 
 ### Visual
 
 1. [x] Let LLMs decide on the highlighting colors by itself (because this should depend on the webpage and the element being highlighted)
 2. [x] Explore other ways to highlight/localize information e.g. CSS5 can do a lot of animation. This makes it easier to see the highlighted content.
+
+### Testing for official 
+
+After we are done with creating experimental features (go crazy to see how far we can go; what all kinds of useful features we can implement), THEN, we should set up proper tests for serious development of this "open-source" project.
+
+1. [ ] Set up End-to-End feature tests (using Playwright)
 
 ## General Features (future)
 <div align="center">
