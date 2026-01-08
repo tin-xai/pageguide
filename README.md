@@ -29,6 +29,9 @@ _After we are done with creating experimental features (go crazy to see how far 
 
 1. [ ] Set up End-to-End feature tests (using Playwright)
 
+### E. Adding History to the Chatbot
+1. [ ] The entire chat history should be sent to Gemini. Then, users can click on Clear to clear the entire chat history and start again fresh with a new question.
+
 ## General Features (future)
 <div align="center">
 
