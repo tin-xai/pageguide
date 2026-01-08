@@ -18,7 +18,11 @@
 1. [x] Let LLMs decide on the highlighting colors by itself (because this should depend on the webpage and the element being highlighted)
 2. [x] Explore other ways to highlight/localize information e.g. CSS5 can do a lot of animation. This makes it easier to see the highlighted content.
 
-### C. Testing before official release
+### C. Infrastructure
+
+1. [ ] Figure out how to auto update Chrome extension upon git push or pull requests, so we don't have to upload everytime.
+
+### D. Tests before official release
 
 _After we are done with creating experimental features (go crazy to see how far we can go; what all kinds of useful features we can implement), THEN, we should set up proper tests for serious development of this open-source project (so that the community can contribute). See ideas [here](https://chatgpt.com/share/695f226e-7ca0-8007-a234-1ec09ea912fd)_
 
