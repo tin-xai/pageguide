@@ -267,6 +267,43 @@ Choose highlight colors that CONTRAST with the ${pageBg.isDark ? 'dark' : 'light
         }
       }
       
+      // Handle expand request
+      if (result.needsExpand) {
+        console.log('📦 LLM requested content expansion');
+        
+        // Call the expandContent action (defined in actions.js)
+        if (typeof actionExpandContent === 'function') {
+          const expandResult = await actionExpandContent(2); // Max 2 clicks
+          console.log('📦 Expand result:', expandResult);
+          
+          if (expandResult.success && expandResult.clickCount > 0) {
+            // Wait for content to load
+            await new Promise(r => setTimeout(r, 500));
+            
+            // Re-run the query with the expanded content
+            const expandedQueryResult = await handleAsk(query, history, scrollAttempts);
+            
+            // Add expansion info to the result
+            expandedQueryResult.expandedContent = true;
+            expandedQueryResult.expandClickCount = expandResult.clickCount;
+            
+            return expandedQueryResult;
+          } else {
+            // No expand buttons found, return original answer
+            return {
+              success: true,
+              answer: result.answer || 'No "See more" or "Show more" buttons found on this page.',
+              highlightCount: 0,
+              hasHighlights: false,
+              expandAttempted: true,
+              expandFound: false
+            };
+          }
+        } else {
+          console.warn('📦 actionExpandContent function not available');
+        }
+      }
+      
       return result;
     }
     
@@ -305,6 +342,17 @@ function processLLMResponseWithScroll(content) {
         answer: result.answer || 'Searching...',
         needsScroll: true,
         scrollDirection: result.scrollDirection || 'down',
+        highlightCount: 0,
+        hasHighlights: false
+      };
+    }
+    
+    // Check for expand request
+    if (result.needsExpand) {
+      return {
+        success: true,
+        answer: result.answer || 'Expanding content...',
+        needsExpand: true,
         highlightCount: 0,
         hasHighlights: false
       };

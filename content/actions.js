@@ -60,6 +60,11 @@ const AVAILABLE_ACTIONS = [
     name: 'wait',
     description: 'Wait for a specified time',
     args: [{ name: 'ms', type: 'number', description: 'Milliseconds to wait' }]
+  },
+  {
+    name: 'expandContent',
+    description: 'Click "See more", "Show more", "Load more" buttons to expand hidden content (max 2 times)',
+    args: [{ name: 'maxClicks', type: 'number', description: 'Maximum expand clicks (default 2)' }]
   }
 ];
 
@@ -113,6 +118,9 @@ async function executeAction(actionName, args = {}) {
       
       case 'wait':
         return await actionWait(args.ms);
+      
+      case 'expandcontent':
+        return await actionExpandContent(args.maxClicks);
       
       default:
         return { success: false, message: `Unknown action: ${actionName}` };
@@ -343,6 +351,144 @@ async function actionWait(ms) {
   const waitTime = Math.min(ms || 1000, 10000); // Max 10 seconds
   await sleep(waitTime);
   return { success: true, message: `Waited ${waitTime}ms` };
+}
+
+/**
+ * Expand content by clicking "See more", "Show more", "Load more" buttons
+ * Limited to maxClicks to avoid infinite expansion
+ */
+async function actionExpandContent(maxClicks = 2) {
+  const MAX_EXPAND_CLICKS = Math.min(maxClicks || 2, 5); // Cap at 5 to be safe
+  
+  // Common patterns for expand buttons (case insensitive)
+  const EXPAND_PATTERNS = [
+    /^see\s*more$/i,
+    /^show\s*more$/i,
+    /^load\s*more$/i,
+    /^view\s*more$/i,
+    /^read\s*more$/i,
+    /^more\s*results?$/i,
+    /^show\s*all$/i,
+    /^view\s*all$/i,
+    /^expand$/i,
+    /^expand\s*all$/i,
+    /^\+\s*more$/i,
+    /^see\s*\d+\s*more$/i,      // "See 10 more"
+    /^show\s*\d+\s*more$/i,     // "Show 10 more"
+    /^load\s*\d+\s*more$/i,     // "Load 10 more"
+    /^view\s*\d+\s*more$/i,     // "View 5 more"
+    /^more$/i,
+    /^…$/,                       // Ellipsis button
+    /^\.\.\.$/,                  // Three dots
+  ];
+  
+  // Selector for potential expand buttons
+  const EXPAND_SELECTORS = [
+    'button',
+    '[role="button"]',
+    'a',
+    '[class*="more"]',
+    '[class*="expand"]',
+    '[class*="load"]',
+    '[data-testid*="more"]',
+    '[data-testid*="expand"]',
+    '[aria-label*="more"]',
+    '[aria-label*="show"]',
+    '[aria-label*="expand"]',
+  ];
+  
+  let clickCount = 0;
+  const clickedElements = new Set();
+  const expandedContent = [];
+  
+  console.log('🤖 Starting content expansion (max', MAX_EXPAND_CLICKS, 'clicks)...');
+  
+  for (let attempt = 0; attempt < MAX_EXPAND_CLICKS; attempt++) {
+    // Find all potential expand buttons
+    const candidates = document.querySelectorAll(EXPAND_SELECTORS.join(', '));
+    let foundButton = null;
+    
+    for (const el of candidates) {
+      // Skip if already clicked
+      if (clickedElements.has(el)) continue;
+      
+      // Skip hidden elements
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      if (el.offsetWidth === 0 || el.offsetHeight === 0) continue;
+      
+      // Skip our own UI
+      if (isXWebAgentElement && isXWebAgentElement(el)) continue;
+      
+      // Get text content
+      const text = (el.textContent || el.getAttribute('aria-label') || '').trim();
+      
+      // Check if text matches expand patterns
+      const matchesPattern = EXPAND_PATTERNS.some(pattern => pattern.test(text));
+      
+      // Also check class names and aria-labels for expand hints
+      const classNames = (el.className || '').toLowerCase();
+      const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+      const hasExpandClass = /\b(more|expand|load-more|show-more|see-more|view-more)\b/.test(classNames);
+      const hasExpandAria = /\b(more|expand|load|show|see)\b/.test(ariaLabel);
+      
+      if (matchesPattern || hasExpandClass || hasExpandAria) {
+        // Make sure it's visible in viewport or scroll to it
+        if (!isInViewport(el)) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await sleep(300);
+        }
+        
+        foundButton = el;
+        break;
+      }
+    }
+    
+    if (!foundButton) {
+      console.log('🤖 No more expand buttons found after', clickCount, 'clicks');
+      break;
+    }
+    
+    // Mark as clicked before clicking (to avoid double-clicking same element)
+    clickedElements.add(foundButton);
+    
+    const buttonText = (foundButton.textContent || '').trim().substring(0, 30);
+    console.log('🤖 Found expand button:', buttonText);
+    
+    // Highlight the button
+    highlightElement(foundButton, 'click');
+    await sleep(300);
+    
+    // Click the button
+    try {
+      foundButton.click();
+      clickCount++;
+      expandedContent.push(buttonText || 'expand button');
+      
+      console.log('🤖 Clicked expand button', clickCount, '/', MAX_EXPAND_CLICKS);
+      
+      // Wait for content to load
+      await sleep(1000);
+      
+    } catch (error) {
+      console.error('🤖 Error clicking expand button:', error);
+      break;
+    }
+  }
+  
+  if (clickCount === 0) {
+    return { 
+      success: false, 
+      message: 'No "See more" or "Show more" buttons found on this page' 
+    };
+  }
+  
+  return { 
+    success: true, 
+    message: `Expanded content ${clickCount} time(s): ${expandedContent.join(', ')}`,
+    clickCount,
+    expandedContent
+  };
 }
 
 // ===== Helper Functions =====

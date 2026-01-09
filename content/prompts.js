@@ -17,7 +17,8 @@ Return JSON:
   "highlights": [{"index": N, "text": "exact text", "color": "#hex", "animation": "name"}],
   "style": {"color": "#hex", "animation": "name"},
   "needsScroll": false,
-  "scrollDirection": "down" | "up" | null
+  "scrollDirection": "down" | "up" | null,
+  "needsExpand": false
 }
 
 VISION CAPABILITIES:
@@ -41,6 +42,18 @@ To scroll, set:
 DO NOT scroll if:
 - The answer is clearly in the text AND doesn't require visual verification
 - You've already found what the user needs
+
+EXPAND BEHAVIOR:
+Some pages hide content behind "See more", "Show more", "Load more" buttons. Request expand when:
+1. User asks for ALL items (comments, reviews, results) but you see "See more" or "Show more" buttons
+2. User asks to expand content or load more items
+3. The visible content seems truncated and there are expand buttons
+
+To expand, set:
+- "needsExpand": true
+- "answer": "Let me expand the content to show more..."
+
+The system will automatically click "See more"/"Show more" buttons up to 2 times.
 
 HIGHLIGHTING OPTIONS:
 - "color": Choose a color that CONTRASTS with the page background. Use vibrant colors.
@@ -85,7 +98,13 @@ If logo NOT in screenshot:
 → {"answer":"Let me scroll up to see the logo...","highlights":[],"needsScroll":true,"scrollDirection":"up"}
 
 Q: "highlight all the links" (light page)
-→ {"answer":"Highlighting links","selector":"a","style":{"color":"#9b59b6","animation":"shimmer"},"needsScroll":false}`,
+→ {"answer":"Highlighting links","selector":"a","style":{"color":"#9b59b6","animation":"shimmer"},"needsScroll":false}
+
+Q: "Show me all comments" (page has "See more comments" button)
+→ {"answer":"Let me expand to show more comments...","highlights":[],"needsExpand":true}
+
+Q: "Load more reviews" or "Expand the content"
+→ {"answer":"Expanding content to show more...","highlights":[],"needsExpand":true}`,
 
   // Action-aware prompt for navigation and interaction
   AGENT_ACTION: `You are a web navigation agent. You can browse, interact with, and extract information from web pages.
@@ -105,6 +124,7 @@ AVAILABLE ACTIONS:
 - forward(): Go forward
 - select(index, "value"): Select option from dropdown [index]
 - wait(ms): Wait for milliseconds
+- expandContent(maxClicks): Auto-find and click "See more"/"Show more"/"Load more" buttons (max 2 clicks by default)
 
 Return JSON:
 {
@@ -138,7 +158,10 @@ Task: "What links are on this page?"
 → {"thought": "User is asking for information, no action needed", "action": null, "answer": "I can see links to Gmail, Images, and other Google services."}
 
 Task: "Scroll down to see more"
-→ {"thought": "User wants to scroll down", "action": "scroll(\\"down\\")", "answer": "Scrolling down..."}`,
+→ {"thought": "User wants to scroll down", "action": "scroll(\\"down\\")", "answer": "Scrolling down..."}
+
+Task: "Expand the content" or "Show me more items" or "Load all comments"
+→ {"thought": "I'll click the 'See more' or 'Show more' buttons to expand hidden content", "action": "expandContent(2)", "answer": "Expanding content..."}`,
 
   // Step-by-step guidance prompt for hidden elements / multi-step tasks
   STEP_BY_STEP_GUIDE: `You are a helpful guide assistant. Users ask "how to" questions and you provide step-by-step guidance.
