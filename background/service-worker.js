@@ -95,7 +95,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'callLLM') {
-    callLLM(request.messages, request.systemPrompt)
+    callLLM(request.messages, request.systemPrompt, request.imageBase64)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'captureScreenshot') {
+    captureScreenshot(request.tabId)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -107,8 +113,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// ===== Screenshot Capture =====
+async function captureScreenshot(tabId) {
+  try {
+    // Get the current active tab if no tabId provided
+    if (!tabId) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = tab?.id;
+    }
+    
+    if (!tabId) {
+      return { error: 'No active tab found' };
+    }
+    
+    // Capture the visible area of the tab
+    const dataUrl = await chrome.tabs.captureVisibleTab(null, {
+      format: 'jpeg',
+      quality: 80  // Good balance between quality and size
+    });
+    
+    // Remove the data URL prefix to get just the base64
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    
+    console.log('📸 Screenshot captured, size:', Math.round(base64.length / 1024), 'KB');
+    
+    return { 
+      success: true, 
+      imageBase64: base64,
+      format: 'jpeg'
+    };
+  } catch (error) {
+    console.error('📸 Screenshot error:', error);
+    return { error: `Screenshot failed: ${error.message}` };
+  }
+}
+
 // ===== Main LLM Router =====
-async function callLLM(messages, systemPrompt) {
+async function callLLM(messages, systemPrompt, imageBase64 = null) {
   let settings;
   try {
     settings = await chrome.storage.sync.get([
@@ -125,18 +166,18 @@ async function callLLM(messages, systemPrompt) {
   
   switch (provider) {
     case 'gemini':
-      return callGemini(messages, systemPrompt, settings);
+      return callGemini(messages, systemPrompt, settings, imageBase64);
     case 'openrouter':
-      return callOpenRouter(messages, systemPrompt, settings);
+      return callOpenRouter(messages, systemPrompt, settings, imageBase64);
     case 'openai':
-      return callOpenAI(messages, systemPrompt, settings);
+      return callOpenAI(messages, systemPrompt, settings, imageBase64);
     default:
       return { error: `Unknown provider: ${provider}` };
   }
 }
 
 // ===== Gemini API Call =====
-async function callGemini(messages, systemPrompt, settings) {
+async function callGemini(messages, systemPrompt, settings, imageBase64 = null) {
   const config = CONFIG.providers.gemini;
   const apiKey = (settings.geminiApiKey || config.defaultApiKey).trim();
   
@@ -153,12 +194,26 @@ async function callGemini(messages, systemPrompt, settings) {
       userContent += messages[messages.length - 1].content;
     }
     
+    // Build parts array - text first, then image if provided
+    const parts = [{ text: userContent }];
+    
+    // Add image if provided (for vision capabilities)
+    if (imageBase64) {
+      console.log('🖼️ Adding image to Gemini request');
+      parts.push({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: imageBase64
+        }
+      });
+    }
+    
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: userContent }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 }
+        contents: [{ role: 'user', parts: parts }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
       })
     });
     
@@ -180,7 +235,7 @@ async function callGemini(messages, systemPrompt, settings) {
 }
 
 // ===== OpenRouter API Call =====
-async function callOpenRouter(messages, systemPrompt, settings) {
+async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = null) {
   const config = CONFIG.providers.openrouter;
   const apiKey = (settings.openrouterApiKey || config.defaultApiKey).trim();
   
@@ -197,7 +252,19 @@ async function callOpenRouter(messages, systemPrompt, settings) {
       userContent += messages[messages.length - 1].content;
     }
     
-    const chatMessages = [{ role: 'user', content: userContent }];
+    // Build content array for multimodal (text + image)
+    let content;
+    if (imageBase64) {
+      console.log('🖼️ Adding image to OpenRouter request');
+      content = [
+        { type: 'text', text: userContent },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
+      ];
+    } else {
+      content = userContent;
+    }
+    
+    const chatMessages = [{ role: 'user', content: content }];
     
     const response = await fetch(config.endpoint, {
       method: 'POST',
@@ -233,7 +300,7 @@ async function callOpenRouter(messages, systemPrompt, settings) {
 }
 
 // ===== OpenAI API Call =====
-async function callOpenAI(messages, systemPrompt, settings) {
+async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) {
   const config = CONFIG.providers.openai;
   const apiKey = (settings.openaiApiKey || config.defaultApiKey).trim();
   
@@ -250,7 +317,19 @@ async function callOpenAI(messages, systemPrompt, settings) {
       userContent += messages[messages.length - 1].content;
     }
     
-    const chatMessages = [{ role: 'user', content: userContent }];
+    // Build content array for multimodal (text + image)
+    let content;
+    if (imageBase64) {
+      console.log('🖼️ Adding image to OpenAI request');
+      content = [
+        { type: 'text', text: userContent },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: 'high' } }
+      ];
+    } else {
+      content = userContent;
+    }
+    
+    const chatMessages = [{ role: 'user', content: content }];
     
     const response = await fetch(config.endpoint, {
       method: 'POST',

@@ -82,14 +82,71 @@ function scrollToHighlight(index = 0) {
 }
 
 /**
- * Main handler for all user queries
- * Uses indexed approach: create page index, send to LLM, highlight by index
+ * Capture screenshot of current viewport
+ * @returns {Promise<string|null>} Base64 image data or null
+ */
+async function captureScreenshot() {
+  try {
+    console.log('📸 Capturing screenshot...');
+    const response = await safeSendMessage({ action: 'captureScreenshot' });
+    
+    if (response?.error) {
+      console.warn('📸 Screenshot failed:', response.error);
+      return null;
+    }
+    
+    if (response?.imageBase64) {
+      console.log('📸 Screenshot captured successfully');
+      return response.imageBase64;
+    }
+    
+    return null;
+  } catch (e) {
+    console.warn('📸 Screenshot error:', e);
+    return null;
+  }
+}
+
+/**
+ * Scroll the viewport in a direction
+ * @param {string} direction - 'up' or 'down'
+ * @returns {boolean} Whether scroll was successful
+ */
+function scrollViewport(direction) {
+  const scrollAmount = window.innerHeight * 0.8; // 80% of viewport height
+  const beforeScroll = window.scrollY;
+  
+  if (direction === 'down') {
+    window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+  } else if (direction === 'up') {
+    window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
+  }
+  
+  // Check if scroll position actually changed (with small delay for smooth scroll)
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const afterScroll = window.scrollY;
+      const didScroll = Math.abs(afterScroll - beforeScroll) > 10;
+      console.log('📜 Scrolled', direction, '- Position changed:', didScroll);
+      resolve(didScroll);
+    }, 500);
+  });
+}
+
+/**
+ * Main handler for all user queries with vision support
+ * Uses indexed approach: create page index, capture screenshot, send to LLM, highlight by index
+ * Supports automatic scrolling if content not found in current viewport
  * @param {string} query - User's query
  * @param {Array} history - Conversation history [{role, content}, ...]
+ * @param {number} scrollAttempts - Number of scroll attempts made (internal use)
  */
-async function handleAsk(query, history = []) {
+async function handleAsk(query, history = [], scrollAttempts = 0) {
+  const MAX_SCROLL_ATTEMPTS = 5; // Maximum times to scroll before giving up
+  
   console.log('🤖 Processing query:', query);
   console.log('🤖 History length:', history.length);
+  console.log('🤖 Scroll attempt:', scrollAttempts);
   
   // Step 1: Get visible text and create index
   const visibleText = getVisibleText(Infinity);
@@ -100,7 +157,16 @@ async function handleAsk(query, history = []) {
   console.log('🤖 Page background:', pageBg);
   console.log('🤖 Created page index with', pageIndex.count, 'items');
   
+  // Step 2: Capture screenshot for vision
+  const screenshot = await captureScreenshot();
+  const hasVision = screenshot !== null;
+  console.log('🤖 Vision enabled:', hasVision);
+  
   const pageTitle = document.title;
+  const scrollY = window.scrollY;
+  const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+  const scrollPercent = maxScroll > 0 ? Math.round((scrollY / maxScroll) * 100) : 0;
+  const viewportInfo = `Viewport: ${window.innerWidth}x${window.innerHeight} | Scroll: ${scrollY}px of ${maxScroll}px (${scrollPercent}% down the page)`;
   
   // Build conversation history string
   let historyText = '';
@@ -113,16 +179,21 @@ async function handleAsk(query, history = []) {
   }
   
   try {
-    // Step 2: Send text, index, and background info to LLM
+    // Step 3: Send text, index, screenshot, and background info to LLM
     const response = await safeSendMessage({
       action: 'callLLM',
       systemPrompt: PROMPTS.ANSWER_AND_HIGHLIGHT,
+      imageBase64: screenshot,  // Include screenshot for vision
       messages: [{
         role: 'user',
         content: `Page: ${pageTitle}
+${viewportInfo}
 PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'} (${pageBg.rgb})
 
-=== VISIBLE SCREEN TEXT ===
+📸 SCREENSHOT: ${hasVision ? 'Attached - shows ONLY the current viewport (what user sees now)' : 'Not available'}
+📄 TEXT BELOW: Contains ALL text from the entire page (may include content not visible in screenshot)
+
+=== FULL PAGE TEXT (AXTree) ===
 ${visibleText}
 
 === INDEXED ELEMENTS (for highlighting) ===
@@ -131,6 +202,7 @@ ${historyText}
 === CURRENT QUESTION ===
 ${query}
 
+IMPORTANT: The screenshot shows only the current viewport. If you need to see something visually (icons, images, layout) that's not in the screenshot, set needsScroll: true.
 Choose highlight colors that CONTRAST with the ${pageBg.isDark ? 'dark' : 'light'} background.${history.length > 0 ? ' Use conversation history for context if relevant.' : ''}`
       }]
     });
@@ -141,7 +213,61 @@ Choose highlight colors that CONTRAST with the ${pageBg.isDark ? 'dark' : 'light
     
     if (response?.content) {
       console.log('🤖 LLM Raw Response:', response.content);
-      return processLLMResponse(response.content);
+      
+      // Parse and check if scrolling is needed
+      const result = processLLMResponseWithScroll(response.content);
+      
+      // Handle scroll request
+      if (result.needsScroll) {
+        // Check if we've hit the max scroll attempts
+        if (scrollAttempts >= MAX_SCROLL_ATTEMPTS) {
+          console.log('📜 Max scroll attempts reached (', MAX_SCROLL_ATTEMPTS, ')');
+          return {
+            success: true,
+            answer: `🔍 I've scrolled through the page ${scrollAttempts} times but couldn't find what you're looking for visually. ${result.answer || "The content might not be visible on this page."}`,
+            highlightCount: 0,
+            hasHighlights: false,
+            maxScrollReached: true
+          };
+        }
+        
+        console.log('📜 LLM requested scroll:', result.scrollDirection, '(attempt', scrollAttempts + 1, 'of', MAX_SCROLL_ATTEMPTS, ')');
+        
+        // Perform scroll
+        const didScroll = await scrollViewport(result.scrollDirection || 'down');
+        
+        if (didScroll) {
+          // Wait a bit for page to settle after scroll
+          await new Promise(r => setTimeout(r, 300));
+          
+          // Recursively call with incremented scroll attempts
+          const scrollResult = await handleAsk(query, history, scrollAttempts + 1);
+          
+          // Prepend scroll message if we found something after scrolling
+          if (scrollResult.success && !scrollResult.needsScroll) {
+            scrollResult.scrolledToFind = true;
+            scrollResult.scrollAttempts = scrollAttempts + 1;
+          }
+          
+          return scrollResult;
+        } else {
+          // Can't scroll anymore (reached end of page)
+          const direction = result.scrollDirection || 'down';
+          const reachedMsg = direction === 'down' ? 'bottom' : 'top';
+          console.log('📜 Reached', reachedMsg, 'of page, cannot scroll further');
+          
+          return {
+            success: true,
+            answer: `📄 I've reached the ${reachedMsg} of the page. ${result.answer || "I couldn't find what you're looking for visually on this page."}`,
+            highlightCount: 0,
+            hasHighlights: false,
+            reachedEnd: true,
+            scrollAttempts: scrollAttempts
+          };
+        }
+      }
+      
+      return result;
     }
     
     return { success: false, error: 'No response from AI' };
@@ -152,9 +278,9 @@ Choose highlight colors that CONTRAST with the ${pageBg.isDark ? 'dark' : 'light
 }
 
 /**
- * Process LLM response: parse JSON, apply indexed highlighting with LLM-chosen styles
+ * Process LLM response with scroll detection
  */
-function processLLMResponse(content) {
+function processLLMResponseWithScroll(content) {
   // Clear previous highlights
   clearHighlights();
   window._xwebagentHighlights = [];
@@ -171,6 +297,18 @@ function processLLMResponse(content) {
     
     const result = JSON.parse(jsonStr);
     console.log('🤖 Parsed result:', result);
+    
+    // Check for scroll request
+    if (result.needsScroll) {
+      return {
+        success: true,
+        answer: result.answer || 'Searching...',
+        needsScroll: true,
+        scrollDirection: result.scrollDirection || 'down',
+        highlightCount: 0,
+        hasHighlights: false
+      };
+    }
     
     let highlightCount = 0;
     
@@ -205,7 +343,8 @@ function processLLMResponse(content) {
       success: true,
       answer: result.answer || 'Done',
       highlightCount,
-      hasHighlights: window._xwebagentHighlights.length > 0
+      hasHighlights: window._xwebagentHighlights.length > 0,
+      needsScroll: false
     };
     
   } catch (e) {
@@ -214,7 +353,8 @@ function processLLMResponse(content) {
       success: true,
       answer: content,
       highlightCount: 0,
-      hasHighlights: false
+      hasHighlights: false,
+      needsScroll: false
     };
   }
 }
@@ -515,46 +655,6 @@ async function processAgentResponse(content) {
   }
 }
 
-/**
- * Detect if query is an action command vs information request
- */
-function isActionQuery(query) {
-  const actionPatterns = [
-    /^(click|tap|press)\s/i,
-    /^(go\s+to|navigate\s+to|open|visit)\s/i,
-    /^(type|enter|input|write)\s/i,
-    /^(scroll|swipe)\s/i,
-    /^(search\s+for|find\s+and\s+click)\s/i,
-    /^(submit|send)\s/i,
-    /^(select|choose|pick)\s/i,
-    /^(back|forward|refresh|reload)\s*$/i,
-    /^(hover|mouseover)\s/i,
-  ];
-  
-  return actionPatterns.some(pattern => pattern.test(query.trim()));
-}
-
-/**
- * Detect if query is a "how to" question
- */
-function isHowToQuery(query) {
-  const howToPatterns = [
-    /^how\s+(do\s+i|can\s+i|to)\s/i,
-    /^where\s+(is|can\s+i\s+find|do\s+i)\s/i,
-    /^tell\s+me\s+how\s+to\s/i,
-    /^show\s+me\s+how\s+to\s/i,
-    /^guide\s+me\s/i,
-    /^help\s+me\s+(to\s+)?(find|do|report|delete|change|edit)/i,
-    /\?\s*$/  // Ends with question mark
-  ];
-  
-  // Also check for common action words that need guidance
-  const actionWords = /(report|delete|block|mute|subscribe|unsubscribe|settings|preferences|account|profile|logout|sign\s*out)/i;
-  
-  return howToPatterns.some(p => p.test(query.trim())) || 
-         (actionWords.test(query) && query.includes('?'));
-}
-
 // ===== STEP-BY-STEP GUIDANCE SYSTEM =====
 
 // Store guidance session state
@@ -784,15 +884,16 @@ async function continueGuidance() {
 }
 
 /**
- * Smart handler that routes to info, action, guide, or protection mode
- * @param {string} query - User's query
- * @param {Array} history - Conversation history [{role, content}, ...]
+ * Smart handler that routes queries to the right feature
  */
 async function handleSmartQuery(query, history = []) {
-  // Check for protection/safety queries first
+  // Check for protection/hide queries first (simple keyword check)
   if (typeof isProtectionQuery === 'function' && isProtectionQuery(query)) {
-    const result = await handleProtectionQuery(query);
-    if (result) return result;
+    console.log('🎯 Protection query detected');
+    if (typeof handleProtectionQuery === 'function') {
+      const result = await handleProtectionQuery(query);
+      if (result) return result;
+    }
   }
   
   // Check for "how to" questions
@@ -805,8 +906,39 @@ async function handleSmartQuery(query, history = []) {
     return handleAgentTask(query);
   }
   
-  // Default to Q&A with highlighting (pass history for context)
+  // Default to Q&A with highlighting
   return handleAsk(query, history);
+}
+
+// Legacy functions kept for backwards compatibility
+function isActionQuery(query) {
+  const actionPatterns = [
+    /^(click|tap|press)\s/i,
+    /^(go\s+to|navigate\s+to|open|visit)\s/i,
+    /^(type|enter|input|write)\s/i,
+    /^(scroll|swipe)\s/i,
+    /^(search\s+for|find\s+and\s+click)\s/i,
+    /^(submit|send)\s/i,
+    /^(select|choose|pick)\s/i,
+    /^(back|forward|refresh|reload)\s*$/i,
+    /^(hover|mouseover)\s/i,
+  ];
+  return actionPatterns.some(pattern => pattern.test(query.trim()));
+}
+
+function isHowToQuery(query) {
+  const howToPatterns = [
+    /^how\s+(do\s+i|can\s+i|to)\s/i,
+    /^where\s+(is|can\s+i\s+find|do\s+i)\s/i,
+    /^tell\s+me\s+how\s+to\s/i,
+    /^show\s+me\s+how\s+to\s/i,
+    /^guide\s+me\s/i,
+    /^help\s+me\s+(to\s+)?(find|do|report|delete|change|edit)/i,
+    /\?\s*$/
+  ];
+  const actionWords = /(report|delete|block|mute|subscribe|unsubscribe|settings|preferences|account|profile|logout|sign\s*out)/i;
+  return howToPatterns.some(p => p.test(query.trim())) || 
+         (actionWords.test(query) && query.includes('?'));
 }
 
 /**
