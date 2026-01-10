@@ -304,14 +304,51 @@ function getIndexedElement(idx) {
 }
 
 /**
- * Find all links on the page (for quick actions)
+ * Get random highlight style (color + animation)
+ * Automatically picks contrasting colors based on page background
  */
-function findLinks(limit = 20) {
-  return Array.from(document.querySelectorAll('a[href]'))
-    .filter(a => !isXWebAgentElement(a))
-    .slice(0, limit)
-    .map(a => ({
-      text: (a.innerText || '').slice(0, 50) || a.href.slice(0, 50),
-      href: a.href
-    }));
+function getRandomHighlightStyle(isDarkPage = false) {
+  // Colors that contrast with dark backgrounds
+  const darkPageColors = ['#00ff88', '#ff6b6b', '#ffd93d', '#6bcfff', '#ff85c0', '#a29bfe'];
+  // Colors that contrast with light backgrounds  
+  const lightPageColors = ['#ff4757', '#2ed573', '#1e90ff', '#9b59b6', '#e84393', '#00b894'];
+  
+  // Animation options
+  const animations = ['pulse', 'spotlight', 'shimmer', 'bounce', 'glow', 'underline'];
+  
+  const colors = isDarkPage ? darkPageColors : lightPageColors;
+  const color = colors[Math.floor(Math.random() * colors.length)];
+  const animation = animations[Math.floor(Math.random() * animations.length)];
+  
+  return { color, animation };
+}
+
+/**
+ * Reset all custom styles applied by XWebAgent
+ */
+function resetCustomStyles() {
+  let count = 0;
+  
+  // Remove injected style tag
+  const style = document.getElementById('xwebagent-custom-style');
+  if (style) style.remove();
+  
+  // Remove highlight spans (unwrap them back to text)
+  document.querySelectorAll('span.xwebagent-highlight').forEach(span => {
+    const text = document.createTextNode(span.textContent);
+    span.parentNode.replaceChild(text, span);
+    count++;
+  });
+  
+  // Reset inline styles on marked elements
+  const styledProps = ['color', 'backgroundColor', 'fontWeight', 'outline', 
+    'outlineOffset', 'border', 'textDecoration', 'boxShadow'];
+  
+  document.querySelectorAll('[data-xwebagent-styled]').forEach(el => {
+    styledProps.forEach(prop => el.style[prop] = '');
+    el.removeAttribute('data-xwebagent-styled');
+    count++;
+  });
+  
+  return { success: true, count };
 }

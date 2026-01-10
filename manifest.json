@@ -34,11 +34,9 @@
       "js": [
         "content/prompts.js",
         "content/utils.js",
-        "content/styling.js",
         "content/actions.js",
         "content/protection.js",
         "content/api.js",
-        "content/chat.js",
         "content/content.js"
       ],
       "css": ["content/content.css"],

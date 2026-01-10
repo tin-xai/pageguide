@@ -1,25 +1,8 @@
-// XWebAgent - Web Protection Module (Simplified)
+// XWebAgent - Web Protection Module
 // Detects and hides unsafe content using LLM
 
 /**
- * Check if query is asking to hide/scan content
- */
-function isProtectionQuery(query) {
-  const q = query.toLowerCase();
-  return q.includes('hide') || 
-         q.includes('block') || 
-         q.includes('blur') ||
-         q.includes('scan') || 
-         q.includes('safe') ||
-         q.includes('detect') ||
-         q.includes('18+') ||
-         q.includes('nsfw') ||
-         q.includes('adult') ||
-         q.includes('ads');
-}
-
-/**
- * Main handler for protection queries
+ * Main handler for protection queries (routed by LLM coordinator)
  */
 async function handleProtectionQuery(query) {
   console.log('🛡️ Protection query:', query);
@@ -34,37 +17,15 @@ async function handleProtectionQuery(query) {
     const resp = await safeSendMessage({ action: 'captureScreenshot' });
     if (resp?.imageBase64) screenshot = resp.imageBase64;
   } catch (e) {}
-  
-  // Ask LLM to find content to hide
-  const prompt = `You are a content filter. Find content on this page that the user wants to hide.
-
-USER REQUEST: "${query}"
-
-Look for:
-- 18+ / Adult / NSFW content (age warnings, adult labels, NSFW tags)
-- Ads / Sponsored content
-- Ragebait / Clickbait
-- Political content
-- Any specific content the user mentions
-
-Return JSON:
-{
-  "found": [
-    {"index": N, "reason": "why this matches", "snippet": "text preview"}
-  ],
-  "message": "What you found or didn't find"
-}
-
-If nothing matches, return {"found": [], "message": "No matching content found"}`;
 
   try {
     const response = await safeSendMessage({
       action: 'callLLM',
-      systemPrompt: prompt,
+      systemPrompt: PROMPTS.PROTECTION,
       imageBase64: screenshot,
       messages: [{
         role: 'user',
-        content: `PAGE: ${document.title}\n\n${visibleText}\n\nINDEXED ELEMENTS:\n${pageIndex.indexText}`
+        content: `USER REQUEST: "${query}"\n\nPAGE: ${document.title}\n\n${visibleText}\n\nINDEXED ELEMENTS:\n${pageIndex.indexText}`
       }]
     });
     

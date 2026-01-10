@@ -143,19 +143,6 @@ async function sendToContentScript(message) {
 }
 
 /**
- * Clear conversation history
- */
-function clearHistory() {
-  conversationHistory = [];
-  const container = document.getElementById('xwebagent-messages');
-  if (container) {
-    container.innerHTML = '';
-  }
-  chatMessages = [];
-  addMessage('🧹 Chat history cleared. Starting fresh!', 'system');
-}
-
-/**
  * Send a chat message
  */
 async function sendMessage() {
@@ -183,6 +170,17 @@ async function sendMessage() {
     hideTyping();
     
     if (result && result.success) {
+      // Show routing decision
+      if (result.routedTo) {
+        const confidence = Math.round((result.routeConfidence || 0) * 100);
+        const handlerEmoji = {
+          'ask': '💬',
+          'guide': '📋',
+          'protection': '🛡️'
+        }[result.routedTo] || '🎯';
+        addMessage(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}% - ${result.routeReason})`, 'system');
+      }
+      
       // Add assistant response to history
       if (result.answer) {
         conversationHistory.push({ role: 'assistant', content: result.answer });
@@ -190,12 +188,6 @@ async function sendMessage() {
       
       if (result.isGuide) {
         addGuideStep(result);
-      } else if (result.action && result.action !== null) {
-        if (result.thought) {
-          addMessage(`💭 ${result.thought}`, 'system');
-        }
-        addMessage(`⚡ ${result.action}`, 'action');
-        addMessage(result.answer, 'assistant', result.hasHighlights);
       } else {
         let message = result.answer;
         if (result.highlightCount > 0) {
@@ -224,52 +216,21 @@ async function sendMessage() {
  * Handle quick action buttons
  */
 async function handleQuickAction(action) {
-  showTyping();
-  
-  try {
-    switch (action) {
-      case 'safety':
-        addMessage('🛡️ Scanning for dark patterns & ads...', 'user');
-        const safetyResult = await sendToContentScript({ action: 'applySafety' });
-        hideTyping();
-        if (safetyResult && safetyResult.success) {
-          addMessage(safetyResult.report, 'assistant');
-        } else {
-          addMessage(safetyResult?.error || 'Could not scan page', 'error');
-        }
-        break;
-        
-      case 'hideAds':
-        addMessage('🚫 Hiding ads...', 'user');
-        const adsResult = await sendToContentScript({ action: 'hideAds' });
-        hideTyping();
-        if (adsResult && adsResult.success) {
-          addMessage(
-            adsResult.count > 0 
-              ? `🛡️ Blurred ${adsResult.count} ads on this page`
-              : '✅ No ads detected',
-            'system'
-          );
-        } else {
-          addMessage(adsResult?.error || 'Could not hide ads', 'error');
-        }
-        break;
-        
-      case 'reset':
-        addMessage('Clear all markings', 'user');
-        await sendToContentScript({ action: 'reset' });
-        hideTyping();
-        addMessage('🧹 Cleared all highlights and markings', 'system');
-        break;
-        
-      case 'clearHistory':
-        hideTyping();
-        clearHistory();
-        break;
+  if (action === 'reset') {
+    try {
+      // Clear highlights on page
+      await sendToContentScript({ action: 'reset' });
+    } catch (e) {
+      // Page might not have content script loaded
     }
-  } catch (e) {
-    hideTyping();
-    addMessage(`Error: ${e.message}`, 'error');
+    
+    // Clear chat and history
+    conversationHistory = [];
+    chatMessages = [];
+    const container = document.getElementById('xwebagent-messages');
+    if (container) container.innerHTML = '';
+    
+    addMessage('🧹 Cleared chat and highlights', 'system');
   }
 }
 

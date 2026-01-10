@@ -202,8 +202,7 @@ ${historyText}
 === CURRENT QUESTION ===
 ${query}
 
-IMPORTANT: The screenshot shows only the current viewport. If you need to see something visually (icons, images, layout) that's not in the screenshot, set needsScroll: true.
-Choose highlight colors that CONTRAST with the ${pageBg.isDark ? 'dark' : 'light'} background.${history.length > 0 ? ' Use conversation history for context if relevant.' : ''}`
+IMPORTANT: The screenshot shows only the current viewport. If you need to see something visually (icons, images, layout) that's not in the screenshot, set needsScroll: true.${history.length > 0 ? ' Use conversation history for context if relevant.' : ''}`
       }]
     });
     
@@ -360,24 +359,22 @@ function processLLMResponseWithScroll(content) {
     
     let highlightCount = 0;
     
-    // Get global style if provided
-    const globalStyle = result.style || {};
+    // Get page background for random style selection
+    const pageBg = getPageBackground();
     
     // Handle element selector (for "show me images" etc.)
     if (result.selector) {
-      highlightCount = applyElementHighlight(result.selector, globalStyle);
+      const style = getRandomHighlightStyle(pageBg.isDark);
+      highlightCount = applyElementHighlight(result.selector, style);
     }
     
-    // Handle indexed highlights with individual styles
+    // Handle indexed highlights with random styles
     if (result.highlights && Array.isArray(result.highlights)) {
       console.log('🤖 LLM requested highlights:', result.highlights);
       result.highlights.forEach(h => {
         if (h.index) {
-          // Each highlight can have its own color and animation
-          const style = {
-            color: h.color || globalStyle.color || '#ffd93d',
-            animation: h.animation || globalStyle.animation || 'pulse'
-          };
+          // Get random style for each highlight (fun variety!)
+          const style = getRandomHighlightStyle(pageBg.isDark);
           console.log('🤖 Applying highlight:', h.index, h.text, style);
           const count = applyIndexedHighlight(h.index, h.text, style);
           highlightCount += count;
@@ -598,111 +595,6 @@ function applyElementHighlight(selector, style = {}) {
   return count;
 }
 
-// Legacy function for backwards compatibility
-async function handleStylingCommand(query) {
-  return handleAsk(query);
-}
-
-// ===== AGENT MODE - Navigation & Actions =====
-
-/**
- * Handle agent mode - can perform actions on the page
- * @param {string} task - User's task/command
- * @returns {Promise<{success, answer, action, thought}>}
- */
-async function handleAgentTask(task) {
-  console.log('🤖 Agent processing task:', task);
-  
-  // Create page index for element references
-  const pageIndex = createPageIndex(150);
-  const currentUrl = window.location.href;
-  const pageTitle = document.title;
-  
-  console.log('🤖 Page index created with', pageIndex.count, 'elements');
-  
-  try {
-    const response = await safeSendMessage({
-      action: 'callLLM',
-      systemPrompt: PROMPTS.AGENT_ACTION,
-      messages: [{
-        role: 'user',
-        content: `CURRENT URL: ${currentUrl}
-PAGE TITLE: ${pageTitle}
-
-=== PAGE INDEX ===
-${pageIndex.indexText}
-
-=== USER TASK ===
-${task}
-
-Respond with JSON: {"thought": "...", "action": "actionName(args)" or null, "answer": "..."}`
-      }]
-    });
-    
-    if (response?.error) {
-      return { success: false, error: response.error };
-    }
-    
-    if (response?.content) {
-      console.log('🤖 Agent Raw Response:', response.content);
-      return processAgentResponse(response.content);
-    }
-    
-    return { success: false, error: 'No response from AI' };
-  } catch (e) {
-    console.error('🤖 Agent error:', e);
-    return { success: false, error: e.message };
-  }
-}
-
-/**
- * Process agent LLM response and execute actions
- */
-async function processAgentResponse(content) {
-  try {
-    // Clean up JSON
-    let jsonStr = content.trim()
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/i, '')
-      .replace(/\s*```$/i, '');
-    
-    const match = jsonStr.match(/\{[\s\S]*\}/);
-    if (match) jsonStr = match[0];
-    
-    const result = JSON.parse(jsonStr);
-    console.log('🤖 Agent parsed result:', result);
-    
-    let actionResult = null;
-    
-    // Execute action if present
-    if (result.action && result.action !== 'null' && result.action !== null) {
-      const parsed = parseAction(result.action);
-      if (parsed) {
-        console.log('🤖 Executing action:', parsed.name, parsed.args);
-        actionResult = await executeAction(parsed.name, parsed.args);
-        console.log('🤖 Action result:', actionResult);
-      }
-    }
-    
-    return {
-      success: true,
-      thought: result.thought || '',
-      action: result.action,
-      answer: result.answer || actionResult?.message || 'Done',
-      actionResult
-    };
-    
-  } catch (e) {
-    console.error('🤖 Agent parse error:', e, 'Content:', content);
-    return {
-      success: true,
-      answer: content,
-      thought: '',
-      action: null
-    };
-  }
-}
-
 // ===== STEP-BY-STEP GUIDANCE SYSTEM =====
 
 // Store guidance session state
@@ -806,13 +698,11 @@ function processGuideResponse(content) {
     clearHighlights();
     window._xwebagentHighlights = [];
     
-    // Apply highlight for this step
+    // Apply highlight for this step with random style
     let highlightCount = 0;
     if (result.highlight && result.highlight.index) {
-      const style = {
-        color: result.highlight.color || '#ff6b6b',
-        animation: result.highlight.animation || 'bounce'
-      };
+      const pageBg = getPageBackground();
+      const style = getRandomHighlightStyle(pageBg.isDark);
       highlightCount = applyIndexedHighlight(
         result.highlight.index, 
         result.highlight.text,
@@ -889,15 +779,11 @@ function setupActionListener(actionType) {
       const result = await continueGuidance();
       if (result) {
         try {
-          // Send to side panel via runtime message
           chrome.runtime.sendMessage({ action: 'guideStep', result });
         } catch (e) {
           console.log('🎯 Could not send to panel:', e.message);
         }
       }
-      
-      // Also dispatch event for injected chat panel (backwards compatibility)
-      window.dispatchEvent(new CustomEvent('xwebagent-continue-guide'));
     }
   };
   
@@ -990,39 +876,35 @@ async function handleSmartQuery(query, history = []) {
   const route = await routeQuery(query);
   console.log('🎯 Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
   
+  let result;
+  
   switch (route.handler) {
     case 'protection':
       if (typeof handleProtectionQuery === 'function') {
-        const result = await handleProtectionQuery(query);
-        if (result) return result;
+        result = await handleProtectionQuery(query);
+        if (result) break;
       }
       // Fall through to ask if protection handler not available
-      return handleAsk(query, history);
+      result = await handleAsk(query, history);
+      break;
     
     case 'guide':
-      return handleStepByStepGuide(query);
-    
-    case 'agent':
-      return handleAgentTask(query);
+      result = await handleStepByStepGuide(query);
+      break;
     
     case 'ask':
     default:
-      return handleAsk(query, history);
+      result = await handleAsk(query, history);
+      break;
   }
+  
+  // Add routing info to result
+  if (result) {
+    result.routedTo = route.handler;
+    result.routeConfidence = route.confidence;
+    result.routeReason = route.reason;
+  }
+  
+  return result;
 }
 
-// Legacy regex patterns removed - now using LLM-based routing via routeQuery()
-
-/**
- * Cancel active guidance session
- */
-function cancelGuidance() {
-  const guidance = window._xwebagentGuidance;
-  guidance.active = false;
-  guidance.question = '';
-  guidance.currentStep = 0;
-  guidance.previousSteps = [];
-  guidance.waitingForAction = null;
-  removeActionListener();
-  clearHighlights();
-}
