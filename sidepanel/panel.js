@@ -98,6 +98,43 @@ function addGuideStep(result) {
 }
 
 /**
+ * Add an ask step message (for scroll/expand actions)
+ */
+function addAskStep(result) {
+  const container = document.getElementById('xwebagent-messages');
+  if (!container) return;
+  
+  hideTyping();
+  
+  const msg = document.createElement('div');
+  msg.className = 'xwebagent-message ask-step';
+  
+  // Different icons for different action types
+  const actionIcon = result.actionType === 'scroll' ? '📜' : '📦';
+  const actionHint = result.actionType === 'scroll' 
+    ? '⏳ Auto-scrolling in 2 seconds...' 
+    : '👆 Click the highlighted button';
+  
+  msg.innerHTML = `
+    <div class="xwebagent-ask-step">
+      <span class="xwebagent-action-icon">${actionIcon}</span>
+      <span class="xwebagent-step-text">${result.answer}</span>
+    </div>
+    <div class="xwebagent-action-hint">${actionHint}</div>
+  `;
+  
+  if (result.hasHighlights) {
+    msg.classList.add('xwebagent-clickable');
+    msg.addEventListener('click', () => {
+      sendToContentScript({ action: 'scrollToHighlight' });
+    });
+  }
+  
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
  * Show typing indicator
  */
 function showTyping() {
@@ -181,13 +218,16 @@ async function sendMessage() {
         addMessage(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}% - ${result.routeReason})`, 'system');
       }
       
-      // Add assistant response to history
-      if (result.answer) {
+      // Add assistant response to history (but not for intermediate steps)
+      if (result.answer && !result.isAskStep) {
         conversationHistory.push({ role: 'assistant', content: result.answer });
       }
       
       if (result.isGuide) {
         addGuideStep(result);
+      } else if (result.isAskStep) {
+        // Ask mode step (scroll/expand needed)
+        addAskStep(result);
       } else {
         let message = result.answer;
         if (result.highlightCount > 0) {
@@ -239,6 +279,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'guideStep') {
     hideTyping();
     addGuideStep(message.result);
+  } else if (message.action === 'askStep') {
+    // Ask mode step (scroll/expand)
+    hideTyping();
+    addAskStep(message.result);
+  } else if (message.action === 'askComplete') {
+    // Ask mode complete with final answer
+    hideTyping();
+    if (message.result?.error) {
+      addMessage(`❌ ${message.result.error}`, 'error');
+    } else if (message.result?.answer) {
+      const hasHighlights = message.result.hasHighlights || message.result.highlightCount > 0;
+      let answerText = message.result.answer;
+      if (message.result.highlightCount > 0) {
+        answerText += ` ✨ (${message.result.highlightCount} highlighted)`;
+      }
+      addMessage(answerText, 'assistant', hasHighlights);
+    }
+  } else if (message.action === 'showTyping') {
+    // Show typing indicator when guidance is continuing
+    showTyping();
   } else if (message.action === 'addMessage') {
     addMessage(message.content, message.type, message.clickable);
   } else if (message.action === 'closePanel') {

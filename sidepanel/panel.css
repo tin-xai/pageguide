@@ -231,6 +231,35 @@ body {
   50% { opacity: 1; }
 }
 
+/* Ask step message (for scroll/expand actions) */
+.xwebagent-message.ask-step {
+  align-self: flex-start;
+  background: linear-gradient(135deg, rgba(255, 170, 0, 0.15), rgba(255, 100, 50, 0.15));
+  color: #e0e0e0;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 170, 0, 0.3);
+  max-width: 90%;
+}
+
+.xwebagent-ask-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.xwebagent-action-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.xwebagent-action-hint {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #ffaa00;
+  animation: waiting-pulse 2s ease-in-out infinite;
+}
+
 /* Clickable message */
 .xwebagent-message.xwebagent-clickable {
   cursor: pointer;

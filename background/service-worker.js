@@ -37,11 +37,13 @@ const CONFIG = {
 const CONTENT_SCRIPTS = [
   'content/prompts.js',
   'content/utils.js', 
-  'content/styling.js',
   'content/actions.js',
   'content/protection.js',  // Dark pattern & ad protection
+  'content/api-core.js',
+  'content/api-highlight.js',
+  'content/api-ask.js',
+  'content/api-guide.js',
   'content/api.js',
-  'content/chat.js',
   'content/content.js'
 ];
 

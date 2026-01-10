@@ -36,6 +36,10 @@
         "content/utils.js",
         "content/actions.js",
         "content/protection.js",
+        "content/api-core.js",
+        "content/api-highlight.js",
+        "content/api-ask.js",
+        "content/api-guide.js",
         "content/api.js",
         "content/content.js"
       ],
