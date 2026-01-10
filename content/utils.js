@@ -217,25 +217,31 @@ function createPageIndex(maxItems = 200) {
   const seen = new Set();
   const seenText = new Set();
   
-  // ⭐ Use TreeWalker instead of querySelectorAll('*')
-  const walker = document.createTreeWalker(
-    document.body,
-    NodeFilter.SHOW_ELEMENT,
-    {
-      acceptNode: (node) => {
-        // Skip our UI
-        if (isXWebAgentElement(node)) return NodeFilter.FILTER_REJECT;
-        
-        // Skip hidden
-        const style = window.getComputedStyle(node);
-        if (style.display === 'none' || style.visibility === 'hidden') {
-          return NodeFilter.FILTER_REJECT;
+  // Helper to walk a root element
+  function walkRoot(root) {
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      {
+        acceptNode: (node) => {
+          // Skip our UI
+          if (isXWebAgentElement(node)) return NodeFilter.FILTER_REJECT;
+          
+          // Skip hidden
+          const style = window.getComputedStyle(node);
+          if (style.display === 'none' || style.visibility === 'hidden') {
+            return NodeFilter.FILTER_REJECT;
+          }
+          
+          return NodeFilter.FILTER_ACCEPT;
         }
-        
-        return NodeFilter.FILTER_ACCEPT;
       }
-    }
-  );
+    );
+    return walker;
+  }
+  
+  // Walk main document body
+  const walker = walkRoot(document.body);
   
   let el;
   while ((el = walker.nextNode()) && idx <= maxItems) {
@@ -284,10 +290,73 @@ function createPageIndex(maxItems = 200) {
     idx++;
   }
   
+  // Second pass: Look for popup/overlay containers that might have menus
+  // YouTube, Google, and many SPAs render popups in special containers
+  const popupSelectors = [
+    '[role="menu"]',
+    '[role="dialog"]',
+    '[role="listbox"]',
+    'ytd-popup-container',
+    'ytd-menu-popup-renderer',
+    'tp-yt-iron-dropdown',
+    '[class*="popup"]',
+    '[class*="dropdown"]',
+    '[class*="menu"][style*="display: block"]',
+    '[class*="menu"][style*="visibility: visible"]',
+    '[aria-expanded="true"]',
+    '.MuiMenu-paper',
+    '.MuiPopover-paper',
+    '[data-radix-popper-content-wrapper]'
+  ];
+  
+  const processElement = (el) => {
+    if (idx > maxItems) return;
+    if (isXWebAgentElement(el)) return;
+    if (seen.has(el)) return;
+    
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+    } catch (e) { return; }
+    
+    const role = getAccessibleRole(el);
+    if (!role) return;
+    
+    let name = getAccessibleName(el);
+    if (!name || name.length < 2) return;
+    name = name.replace(/\s+/g, ' ').trim();
+    
+    if (!isElementInteractive(el) && seenText.has(name)) return;
+    if (name === 'edit' || name === '[edit]' || name.includes('#cite')) return;
+    
+    seen.add(el);
+    seenText.add(name);
+    indexMap[idx] = el;
+    
+    const maxLen = (role === 'paragraph' || role === 'article') ? 300 : 120;
+    const displayText = name.length > maxLen ? name.slice(0, maxLen) + '...' : name;
+    indexLines.push(`[${idx}] (${role}) ${displayText}`);
+    idx++;
+  };
+  
+  // Find popup containers and their children
+  popupSelectors.forEach(selector => {
+    try {
+      document.querySelectorAll(selector).forEach(popup => {
+        // Process the popup itself
+        processElement(popup);
+        // Process all children with roles
+        popup.querySelectorAll('[role], button, a, [tabindex]').forEach(processElement);
+      });
+    } catch (e) { /* invalid selector */ }
+  });
+  
   // Store globally
   window._xwebagentIndex = indexMap;
   
-  console.log('🤖 Indexed', idx - 1, 'elements using accessibility approach');
+  console.log('🤖 Indexed', idx - 1, 'elements (including popups)');
+  console.log('🤖 Index keys stored:', Object.keys(indexMap).slice(0, 10), '...');
   
   return {
     indexText: indexLines.join('\n'),
