@@ -932,62 +932,86 @@ async function continueGuidance() {
 }
 
 /**
- * Smart handler that routes queries to the right feature
+ * Route query using LLM-based coordinator
+ * @param {string} query - User's query
+ * @returns {Promise<{handler: string, confidence: number, reason: string}>}
+ */
+async function routeQuery(query) {
+  console.log('🎯 Routing query:', query);
+  
+  try {
+    const response = await safeSendMessage({
+      action: 'callLLM',
+      systemPrompt: PROMPTS.ROUTER,
+      messages: [{
+        role: 'user',
+        content: `Query: "${query}"\n\nClassify this query and return JSON only.`
+      }]
+    });
+    
+    if (response?.error) {
+      console.warn('🎯 Router error, falling back to ask:', response.error);
+      return { handler: 'ask', confidence: 0.5, reason: 'Router error, using default' };
+    }
+    
+    if (response?.content) {
+      // Parse JSON response
+      let jsonStr = response.content.trim()
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '');
+      
+      const match = jsonStr.match(/\{[\s\S]*\}/);
+      if (match) jsonStr = match[0];
+      
+      const result = JSON.parse(jsonStr);
+      console.log('🎯 Router decision:', result);
+      
+      return {
+        handler: result.handler || 'ask',
+        confidence: result.confidence || 0.5,
+        reason: result.reason || ''
+      };
+    }
+    
+    return { handler: 'ask', confidence: 0.5, reason: 'No response from router' };
+    
+  } catch (e) {
+    console.error('🎯 Router parse error:', e);
+    return { handler: 'ask', confidence: 0.5, reason: 'Parse error, using default' };
+  }
+}
+
+/**
+ * Smart handler that routes queries using LLM coordinator
  */
 async function handleSmartQuery(query, history = []) {
-  // Check for protection/hide queries first (simple keyword check)
-  if (typeof isProtectionQuery === 'function' && isProtectionQuery(query)) {
-    console.log('🎯 Protection query detected');
-    if (typeof handleProtectionQuery === 'function') {
-      const result = await handleProtectionQuery(query);
-      if (result) return result;
-    }
-  }
+  // Route the query using LLM
+  const route = await routeQuery(query);
+  console.log('🎯 Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
   
-  // Check for "how to" questions
-  if (isHowToQuery(query)) {
-    return handleStepByStepGuide(query);
+  switch (route.handler) {
+    case 'protection':
+      if (typeof handleProtectionQuery === 'function') {
+        const result = await handleProtectionQuery(query);
+        if (result) return result;
+      }
+      // Fall through to ask if protection handler not available
+      return handleAsk(query, history);
+    
+    case 'guide':
+      return handleStepByStepGuide(query);
+    
+    case 'agent':
+      return handleAgentTask(query);
+    
+    case 'ask':
+    default:
+      return handleAsk(query, history);
   }
-  
-  // Check for action commands
-  if (isActionQuery(query)) {
-    return handleAgentTask(query);
-  }
-  
-  // Default to Q&A with highlighting
-  return handleAsk(query, history);
 }
 
-// Legacy functions kept for backwards compatibility
-function isActionQuery(query) {
-  const actionPatterns = [
-    /^(click|tap|press)\s/i,
-    /^(go\s+to|navigate\s+to|open|visit)\s/i,
-    /^(type|enter|input|write)\s/i,
-    /^(scroll|swipe)\s/i,
-    /^(search\s+for|find\s+and\s+click)\s/i,
-    /^(submit|send)\s/i,
-    /^(select|choose|pick)\s/i,
-    /^(back|forward|refresh|reload)\s*$/i,
-    /^(hover|mouseover)\s/i,
-  ];
-  return actionPatterns.some(pattern => pattern.test(query.trim()));
-}
-
-function isHowToQuery(query) {
-  const howToPatterns = [
-    /^how\s+(do\s+i|can\s+i|to)\s/i,
-    /^where\s+(is|can\s+i\s+find|do\s+i)\s/i,
-    /^tell\s+me\s+how\s+to\s/i,
-    /^show\s+me\s+how\s+to\s/i,
-    /^guide\s+me\s/i,
-    /^help\s+me\s+(to\s+)?(find|do|report|delete|change|edit)/i,
-    /\?\s*$/
-  ];
-  const actionWords = /(report|delete|block|mute|subscribe|unsubscribe|settings|preferences|account|profile|logout|sign\s*out)/i;
-  return howToPatterns.some(p => p.test(query.trim())) || 
-         (actionWords.test(query) && query.includes('?'));
-}
+// Legacy regex patterns removed - now using LLM-based routing via routeQuery()
 
 /**
  * Cancel active guidance session
