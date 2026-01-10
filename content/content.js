@@ -25,6 +25,15 @@ async function handleMessage(request) {
       if (typeof resetCustomStyles === 'function') resetCustomStyles();
       if (typeof clearMarkings === 'function') clearMarkings();
       if (typeof clearHighlights === 'function') clearHighlights();
+      if (typeof clearGuidanceState === 'function') clearGuidanceState();
+      // Also reset in-memory guidance state
+      if (window._xwebagentGuidance) {
+        window._xwebagentGuidance.active = false;
+        window._xwebagentGuidance.question = '';
+        window._xwebagentGuidance.currentStep = 0;
+        window._xwebagentGuidance.previousSteps = [];
+        window._xwebagentGuidance.waitingForAction = null;
+      }
       return { success: true };
     
     case 'scrollToHighlight':
