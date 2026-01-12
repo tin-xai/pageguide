@@ -27,7 +27,7 @@ async function handleAsk(query, history = []) {
   try {
     result = await handleAskWithHighlight(query, pageContent, pageIndex);
     if (result.success && result.answer) {
-      // Hide SoM when task completes
+      // Hide SoM when task completes successfully
       cleanupSom();
       return result;
     }
@@ -35,14 +35,10 @@ async function handleAsk(query, history = []) {
     console.log('🤖 Error:', error);
   }
   
-  // Fallback: simple answer without highlighting
-  console.log('🤖 Falling back to simple answer...');
-  result = await handleSimpleAsk(query, pageContent);
-  
-  // Hide SoM when task completes
+  // Clean up SoM on failure
   cleanupSom();
   
-  return result;
+  return result || { success: false, error: 'Failed to process query' };
 }
 
 /**
@@ -85,39 +81,6 @@ async function handleAskWithHighlight(query, pageContent, pageIndex) {
 }
 
 /**
- * Simple ask without highlighting (fallback)
- */
-async function handleSimpleAsk(query, pageContent) {
-  const prompt = PROMPTS.SIMPLE_ANSWER_PROMPT.replace('{pageContent}', pageContent).replace('{question}', query);
-  
-  const response = await safeSendMessage({
-    action: 'callLLM',
-    systemPrompt: '',
-    messages: [{ role: 'user', content: prompt }]
-  });
-  
-  if (response?.error) {
-    console.log('🤖 Simple answer error:', response.error);
-    return { success: false, error: response.error, answer: "Could not answer the question" };
-  }
-  
-  const answer = response?.content?.trim();
-  if (!answer) {
-    console.log('🤖 Simple answer no answer');
-    return { success: false, error: 'No answer from AI', answer: "Could not answer the question" };
-  }
-  
-  console.log('🤖 Simple answer:', answer);
-  
-  return {
-    success: true,
-    answer: answer,
-    highlightCount: 0,
-    hasHighlights: false
-  };
-}
-
-/**
  * Extract [N:"text"] citations from answer and apply highlights
  * @param {string} answer - Answer text with [N:"text"] citations
  * @returns {number} Number of elements highlighted
@@ -141,10 +104,12 @@ function applyHighlightsFromCitations(answer) {
   }
   
   console.log('🤖 Found', matchesWithText.length, 'citations with text,', matchesSimple.length, 'simple citations');
+  console.log('🤖 Available indices in _xwebagentIndex:', Object.keys(window._xwebagentIndex || {}).length);
   
   const pageBg = getPageBackground();
   const highlightedElements = new Set();
   const seenIndices = new Set();
+  const failedIndices = [];
   let count = 0;
   
   // Process citations with text first (higher priority)
@@ -156,9 +121,11 @@ function applyHighlightsFromCitations(answer) {
     if (seenIndices.has(index)) continue;
     seenIndices.add(index);
     
-    const element = getIndexedElement(index);
+    let element = getIndexedElement(index);
+    
     if (!element) {
-      console.log('🤖 Index', index, 'not found in _xwebagentIndex');
+      console.log('🤖 Index', index, 'not found and text search failed');
+      failedIndices.push(index);
       continue;
     }
     
@@ -192,6 +159,7 @@ function applyHighlightsFromCitations(answer) {
     const element = getIndexedElement(index);
     if (!element) {
       console.log('🤖 Index', index, 'not found in _xwebagentIndex');
+      failedIndices.push(index);
       continue;
     }
     
@@ -217,6 +185,10 @@ function applyHighlightsFromCitations(answer) {
     count++;
     
     console.log('🤖 Highlighted [' + index + '] ✓');
+  }
+  
+  if (failedIndices.length > 0) {
+    console.warn('🤖 Failed to highlight indices:', failedIndices);
   }
   
   // Scroll to first highlight

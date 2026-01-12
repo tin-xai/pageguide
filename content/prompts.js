@@ -78,18 +78,6 @@ Answer: The film was released on July 16, 2010 [12:"July 16, 2010"].
 
 Now answer the question with citations:`,
 
-  /**
-   * Simple answer prompt (no highlighting) - used as fallback
-   */
-  SIMPLE_ANSWER_PROMPT: `You are a helpful web assistant. Answer the user's question based on the page content provided.
-
-PAGE CONTENT:
-{pageContent}
-
-QUESTION: {question}
-
-Answer concisely and accurately. If the information is not on the page, say so.`,
-
   // Step-by-step guidance prompt for hidden elements / multi-step tasks
   STEP_BY_STEP_GUIDE: `You are a helpful guide assistant. Users ask "how to" questions and you provide step-by-step guidance.
 
