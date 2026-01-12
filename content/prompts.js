@@ -58,17 +58,23 @@ QUESTION: {question}
 
 INSTRUCTIONS:
 1. Answer the question based on the page content
-2. Use [N] citations inline to reference specific elements from the PAGE INDEX
+2. Use [N:"text"] citations inline to reference specific elements from the PAGE INDEX
+   - N is the index number from PAGE INDEX
+   - "text" is the EXACT text snippet to highlight (copy from the page content)
 3. Each citation should point to an element that supports that part of your answer
-4. For lists of items, cite each one: "The cast includes John [12], Jane [15], and Bob [18]"
+4. For lists of items, cite each one with the specific text to highlight
 5. Use ONE citation per item (if same text has multiple indices, pick the link)
+6. The "text" should be a short, specific phrase (not the entire element text)
 
 EXAMPLE:
 Question: "Who directed this movie?"
-Answer: The movie was directed by Christopher Nolan [45].
+Answer: The movie was directed by Christopher Nolan [45:"Christopher Nolan"].
 
 Question: "Who are the main actors?"
-Answer: The main actors are Leonardo DiCaprio [23], Tom Hardy [27], and Ellen Page [31].
+Answer: The main actors are Leonardo DiCaprio [23:"Leonardo DiCaprio"], Tom Hardy [27:"Tom Hardy"], and Ellen Page [31:"Ellen Page"].
+
+Question: "When was this released?"
+Answer: The film was released on July 16, 2010 [12:"July 16, 2010"].
 
 Now answer the question with citations:`,
 

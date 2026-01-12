@@ -36,6 +36,46 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 /**
+ * Parse citations in text and make them clickable
+ * Converts [N:"text"] to clickable spans
+ */
+function parseCitations(text) {
+  // Pattern: [N:"text"] or [N:'text'] or [N]
+  const citationPattern = /\[(\d+)(?::\s*["']([^"']+)["'])?\]/g;
+  
+  let lastIndex = 0;
+  let result = '';
+  let match;
+  
+  while ((match = citationPattern.exec(text)) !== null) {
+    // Add text before the citation
+    result += escapeHtml(text.slice(lastIndex, match.index));
+    
+    const index = match[1];
+    const citationText = match[2] ? `${index}:"${match[2]}"` : index;
+    
+    // Create clickable citation
+    result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll to element ${index}">[${escapeHtml(citationText)}]</span>`;
+    
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Add remaining text
+  result += escapeHtml(text.slice(lastIndex));
+  
+  return result;
+}
+
+/**
+ * Escape HTML special characters
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+/**
  * Add a message to the chat
  */
 function addMessage(content, type = 'assistant', clickable = false) {
@@ -49,9 +89,24 @@ function addMessage(content, type = 'assistant', clickable = false) {
   
   if (clickable) {
     msg.classList.add('xwebagent-clickable');
-    msg.innerHTML = `${content} <span class="xwebagent-scroll-hint">👆 Click to scroll</span>`;
-    msg.addEventListener('click', () => {
-      sendToContentScript({ action: 'scrollToHighlight' });
+    // Parse citations to make them clickable
+    const parsedContent = parseCitations(content);
+    msg.innerHTML = `${parsedContent} <span class="xwebagent-scroll-hint">👆 Click citation to scroll</span>`;
+    
+    // Add click handler for citations
+    msg.querySelectorAll('.xwebagent-citation').forEach(citation => {
+      citation.addEventListener('click', (e) => {
+        e.stopPropagation(); // Don't trigger parent click
+        const index = parseInt(citation.dataset.index, 10);
+        sendToContentScript({ action: 'scrollToIndex', index });
+      });
+    });
+    
+    // Click on message (not citation) scrolls to first highlight
+    msg.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('xwebagent-citation')) {
+        sendToContentScript({ action: 'scrollToHighlight' });
+      }
     });
   } else {
     msg.textContent = content;

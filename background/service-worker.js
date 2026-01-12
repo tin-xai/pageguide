@@ -3,6 +3,25 @@
 
 console.log('🤖 XWebAgent Service Worker started');
 
+// ===== Keep-Alive Mechanism =====
+// Prevents service worker from going inactive during long LLM calls
+let keepAliveInterval = null;
+
+function startKeepAlive() {
+  if (keepAliveInterval) return;
+  keepAliveInterval = setInterval(() => {
+    // Simple operation to keep service worker alive
+    chrome.runtime.getPlatformInfo(() => {});
+  }, 20000); // Every 20 seconds
+}
+
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+}
+
 // Load API keys from config.js
 try {
   importScripts('../config.js');
@@ -160,6 +179,9 @@ async function captureScreenshot(tabId) {
 
 // ===== Main LLM Router =====
 async function callLLM(messages, systemPrompt, imageBase64 = null) {
+  // Start keep-alive to prevent service worker from going inactive
+  startKeepAlive();
+  
   let settings;
   try {
     settings = await chrome.storage.sync.get([
@@ -169,21 +191,34 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
       'openaiApiKey', 'openaiModel'
     ]);
   } catch (e) {
+    stopKeepAlive();
     return { error: 'Failed to load settings' };
   }
   
   const provider = settings.provider || CONFIG.defaultProvider;
   
-  switch (provider) {
-    case 'gemini':
-      return callGemini(messages, systemPrompt, settings, imageBase64);
-    case 'openrouter':
-      return callOpenRouter(messages, systemPrompt, settings, imageBase64);
-    case 'openai':
-      return callOpenAI(messages, systemPrompt, settings, imageBase64);
-    default:
-      return { error: `Unknown provider: ${provider}` };
+  let result;
+  try {
+    switch (provider) {
+      case 'gemini':
+        result = await callGemini(messages, systemPrompt, settings, imageBase64);
+        break;
+      case 'openrouter':
+        result = await callOpenRouter(messages, systemPrompt, settings, imageBase64);
+        break;
+      case 'openai':
+        result = await callOpenAI(messages, systemPrompt, settings, imageBase64);
+        break;
+      default:
+        result = { error: `Unknown provider: ${provider}` };
+    }
+  } catch (e) {
+    result = { error: `LLM call failed: ${e.message}` };
   }
+  
+  // Stop keep-alive after LLM call completes
+  stopKeepAlive();
+  return result;
 }
 
 // ===== Gemini API Call =====

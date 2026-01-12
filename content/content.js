@@ -40,6 +40,13 @@ async function handleMessage(request) {
       if (typeof scrollToHighlight === 'function') scrollToHighlight(0);
       return { success: true };
     
+    case 'scrollToIndex':
+      if (typeof scrollToIndex === 'function') {
+        const scrolled = scrollToIndex(request.index);
+        return { success: scrolled };
+      }
+      return { success: false, error: 'Scroll function not loaded' };
+    
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {
         return await continueGuidance();

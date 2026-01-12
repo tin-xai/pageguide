@@ -286,6 +286,28 @@ body {
   opacity: 1;
 }
 
+/* Clickable citations in answers */
+.xwebagent-citation {
+  display: inline-block;
+  background: linear-gradient(135deg, rgba(0, 217, 255, 0.2), rgba(0, 255, 136, 0.15));
+  color: #00d9ff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(0, 217, 255, 0.3);
+  margin: 0 2px;
+}
+
+.xwebagent-citation:hover {
+  background: linear-gradient(135deg, rgba(0, 217, 255, 0.4), rgba(0, 255, 136, 0.3));
+  color: #fff;
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 217, 255, 0.3);
+}
+
 /* Typing Indicator */
 .xwebagent-typing {
   display: flex;

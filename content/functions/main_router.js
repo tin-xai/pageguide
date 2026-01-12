@@ -9,16 +9,41 @@
 
 /**
  * Safe wrapper for chrome.runtime.sendMessage
- * Handles "Extension context invalidated" error gracefully
+ * Handles common Chrome extension messaging errors gracefully
+ * Includes timeout to prevent hanging on SPAs (X, ChatGPT, Claude, etc.)
  */
-async function safeSendMessage(message) {
+async function safeSendMessage(message, timeoutMs = 60000) {
   try {
-    return await chrome.runtime.sendMessage(message);
+    // Create a timeout promise
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout')), timeoutMs);
+    });
+    
+    // Race between the actual message and timeout
+    const response = await Promise.race([
+      chrome.runtime.sendMessage(message),
+      timeoutPromise
+    ]);
+    
+    return response;
   } catch (e) {
-    if (e.message?.includes('Extension context invalidated')) {
+    const errorMsg = e.message || '';
+    
+    // Handle common Chrome extension errors
+    if (errorMsg.includes('Extension context invalidated')) {
       return { error: '🔄 Extension was updated. Please refresh the page (F5).' };
     }
-    throw e;
+    if (errorMsg.includes('message channel closed') || 
+        errorMsg.includes('Receiving end does not exist')) {
+      return { error: '🔄 Connection lost. Please refresh the page (F5).' };
+    }
+    if (errorMsg.includes('timeout')) {
+      return { error: '⏱️ Request timed out. Please try again.' };
+    }
+    
+    // Return error instead of throwing to prevent unhandled rejections
+    console.error('🤖 safeSendMessage error:', e);
+    return { error: `Error: ${errorMsg || 'Unknown error'}` };
   }
 }
 

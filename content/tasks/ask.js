@@ -118,8 +118,8 @@ async function handleSimpleAsk(query, pageContent) {
 }
 
 /**
- * Extract [N] citations from answer and apply highlights
- * @param {string} answer - Answer text with [N] citations
+ * Extract [N:"text"] citations from answer and apply highlights
+ * @param {string} answer - Answer text with [N:"text"] citations
  * @returns {number} Number of elements highlighted
  */
 function applyHighlightsFromCitations(answer) {
@@ -127,23 +127,62 @@ function applyHighlightsFromCitations(answer) {
   clearHighlights();
   window._xwebagentHighlights = [];
   
-  // Find all [N] patterns
-  const citationPattern = /\[(\d+)\]/g;
-  const matches = [...answer.matchAll(citationPattern)];
+  // Find all [N:"text"] patterns (with text) and [N] patterns (without text, for backwards compatibility)
+  // Pattern: [N:"text"] or [N:'text'] or [N]
+  const citationWithTextPattern = /\[(\d+):\s*["']([^"']+)["']\]/g;
+  const citationSimplePattern = /\[(\d+)\](?!:)/g;
   
-  if (matches.length === 0) {
+  const matchesWithText = [...answer.matchAll(citationWithTextPattern)];
+  const matchesSimple = [...answer.matchAll(citationSimplePattern)];
+  
+  if (matchesWithText.length === 0 && matchesSimple.length === 0) {
     console.log('🤖 No citations found in answer');
     return 0;
   }
   
-  console.log('🤖 Found', matches.length, 'citations');
+  console.log('🤖 Found', matchesWithText.length, 'citations with text,', matchesSimple.length, 'simple citations');
   
   const pageBg = getPageBackground();
   const highlightedElements = new Set();
   const seenIndices = new Set();
   let count = 0;
   
-  for (const match of matches) {
+  // Process citations with text first (higher priority)
+  for (const match of matchesWithText) {
+    const index = parseInt(match[1], 10);
+    const textToHighlight = match[2];
+    
+    // Skip duplicate indices
+    if (seenIndices.has(index)) continue;
+    seenIndices.add(index);
+    
+    const element = getIndexedElement(index);
+    if (!element) {
+      console.log('🤖 Index', index, 'not found in _xwebagentIndex');
+      continue;
+    }
+    
+    console.log('🤖 Found element for [' + index + ':"' + textToHighlight + '"]:', element.tagName, element.textContent?.slice(0, 30));
+    
+    // Skip if already highlighted or parent/child is highlighted
+    if (isAlreadyHighlighted(element, highlightedElements)) {
+      console.log('🤖 Skipping', index, '- overlapping element');
+      continue;
+    }
+    
+    // Apply highlight with specific text
+    const style = getRandomHighlightStyle(pageBg.isDark);
+    const highlighted = applyIndexedHighlight(index, textToHighlight, style);
+    
+    if (highlighted > 0) {
+      highlightedElements.add(element);
+      count += highlighted;
+      console.log('🤖 Highlighted [' + index + ':"' + textToHighlight + '"] ✓');
+    }
+  }
+  
+  // Process simple citations (fallback, highlights entire element)
+  for (const match of matchesSimple) {
     const index = parseInt(match[1], 10);
     
     // Skip duplicate indices
@@ -164,7 +203,7 @@ function applyHighlightsFromCitations(answer) {
       continue;
     }
     
-    // Apply highlight with inline styles as backup
+    // Apply highlight to entire element (no specific text)
     const style = getRandomHighlightStyle(pageBg.isDark);
     applyAnimatedHighlight(element, style.color, style.animation);
     

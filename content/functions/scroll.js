@@ -30,6 +30,41 @@ function scrollToHighlight(index = 0) {
 }
 
 /**
+ * Scroll to an element by its page index number
+ * @param {number} index - The index from the page index (e.g., 324, 721)
+ */
+function scrollToIndex(index) {
+  const element = getIndexedElement(index);
+  
+  if (!element) {
+    console.log('🤖 Index', index, 'not found in _xwebagentIndex');
+    return false;
+  }
+  
+  console.log('🤖 Scrolling to index', index, ':', element.tagName, element.textContent?.slice(0, 30));
+  
+  // Scroll to the element
+  element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  
+  // Flash effect to highlight it temporarily
+  const originalOutline = element.style.outline;
+  const originalOutlineOffset = element.style.outlineOffset;
+  const originalBg = element.style.backgroundColor;
+  
+  element.style.outline = '4px solid #ffd93d';
+  element.style.outlineOffset = '2px';
+  element.style.backgroundColor = 'rgba(255, 217, 61, 0.3)';
+  
+  setTimeout(() => {
+    element.style.outline = originalOutline;
+    element.style.outlineOffset = originalOutlineOffset;
+    element.style.backgroundColor = originalBg;
+  }, 1500);
+  
+  return true;
+}
+
+/**
  * Scroll the viewport in a direction
  * @param {string} direction - 'up' or 'down'
  * @returns {Promise<boolean>} Whether scroll was successful
