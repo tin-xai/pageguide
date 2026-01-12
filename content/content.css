@@ -537,23 +537,36 @@
   }
 }
 
-/* Shimmer - Moving gradient */
+/* Shimmer - Moving highlight sweep */
 .xwebagent-highlight-shimmer {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  background-color: color-mix(in srgb, var(--xwebagent-color, #ffd93d) 20%, transparent);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.xwebagent-highlight-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
   background: linear-gradient(
     90deg,
-    transparent 0%,
-    var(--xwebagent-color, #ffd93d) 50%,
-    transparent 100%
+    transparent,
+    color-mix(in srgb, var(--xwebagent-color, #ffd93d) 60%, white),
+    transparent
   );
-  background-size: 200% 100%;
-  animation: xwebagent-shimmer 2s linear infinite;
-  -webkit-background-clip: text;
-  background-clip: text;
+  animation: xwebagent-shimmer 1.5s ease-in-out infinite;
+  pointer-events: none;
 }
 
 @keyframes xwebagent-shimmer {
-  0% { background-position: 200% center; }
-  100% { background-position: -200% center; }
+  0% { left: -50%; }
+  100% { left: 100%; }
 }
 
 /* Shimmer for block elements */
