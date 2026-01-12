@@ -48,8 +48,8 @@ function getRandomHighlightStyle(isDarkPage = false) {
   // Colors that contrast with light backgrounds  
   const lightPageColors = ['#ff4757', '#2ed573', '#1e90ff', '#9b59b6', '#e84393', '#00b894'];
   
-  // Animation options
-  const animations = ['pulse', 'spotlight', 'shimmer', 'bounce', 'glow', 'underline'];
+  // Animation options (removed underline)
+  const animations = ['pulse', 'spotlight', 'shimmer', 'bounce', 'glow'];
   
   const colors = isDarkPage ? darkPageColors : lightPageColors;
   const color = colors[Math.floor(Math.random() * colors.length)];
@@ -285,4 +285,230 @@ function applyElementHighlight(selector, style = {}) {
   return count;
 }
 
-console.log('🎨 api-highlight.js loaded');
+/**
+ * Check if element or its parent/child is already highlighted
+ */
+function isAlreadyHighlighted(element, highlightedElements) {
+  if (highlightedElements.has(element)) return true;
+  
+  // Check parents
+  let parent = element.parentElement;
+  while (parent) {
+    if (highlightedElements.has(parent)) return true;
+    parent = parent.parentElement;
+  }
+  
+  // Check children
+  for (const highlighted of highlightedElements) {
+    if (element.contains(highlighted)) return true;
+  }
+  
+  return false;
+}
+
+// ===== SET OF MARKS (SoM) =====
+// Visual overlay showing indexed elements with their numbers
+
+/**
+ * Check if SoM is enabled in settings
+ */
+async function isSomEnabled() {
+  try {
+    const settings = await chrome.storage.sync.get(['somEnabled']);
+    return settings.somEnabled === true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Show Set of Marks - numbered labels on all indexed elements
+ * @param {object} pageIndex - The page index from createPageIndex()
+ */
+function showSetOfMarks(pageIndex) {
+  // Remove existing SoM first
+  hideSetOfMarks();
+  
+  const indexMap = pageIndex?.indexMap || window._xwebagentIndex || {};
+  const container = document.createElement('div');
+  container.id = 'xwebagent-som-container';
+  container.style.cssText = 'position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; z-index: 999999;';
+  
+  // Color palette for variety
+  const colors = [
+    '#e74c3c', // red
+    '#9b59b6', // purple
+    '#3498db', // blue
+    '#27ae60', // green
+    '#f39c12', // orange
+    '#1abc9c', // teal
+    '#e91e63', // pink
+    '#00bcd4', // cyan
+  ];
+  
+  let count = 0;
+  
+  for (const [idx, element] of Object.entries(indexMap)) {
+    try {
+      const rect = element.getBoundingClientRect();
+      
+      // Skip elements not in viewport or too small
+      if (rect.width < 5 || rect.height < 5) continue;
+      if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+      if (rect.right < 0 || rect.left > window.innerWidth) continue;
+      
+      // Pick color based on index for consistency
+      const colorIndex = parseInt(idx) % colors.length;
+      const bgColor = colors[colorIndex];
+      
+      // Calculate absolute positions
+      const top = rect.top + window.scrollY;
+      const left = rect.left + window.scrollX;
+      
+      // Create bounding box around the element
+      const box = document.createElement('div');
+      box.className = 'xwebagent-som-box';
+      box.dataset.somIndex = idx;
+      box.style.cssText = `
+        position: absolute;
+        top: ${top}px;
+        left: ${left}px;
+        width: ${rect.width}px;
+        height: ${rect.height}px;
+        border: 2px solid ${bgColor};
+        background: ${bgColor}15;
+        z-index: 999998;
+        pointer-events: none;
+        box-sizing: border-box;
+      `;
+      container.appendChild(box);
+      
+      // Create mark label - positioned at top-right of element
+      const mark = document.createElement('div');
+      mark.className = 'xwebagent-som-mark';
+      mark.dataset.somIndex = idx;
+      mark.textContent = idx;
+      
+      mark.style.cssText = `
+        position: absolute;
+        top: ${top}px;
+        left: ${left + rect.width}px;
+        background: ${bgColor};
+        color: white;
+        font-size: 9px;
+        font-weight: bold;
+        font-family: monospace;
+        padding: 1px 3px;
+        border-radius: 3px;
+        z-index: 999999;
+        pointer-events: none;
+        line-height: 1.2;
+        white-space: nowrap;
+      `;
+      
+      container.appendChild(mark);
+      count++;
+    } catch (e) {
+      // Element might not be visible
+    }
+  }
+  
+  document.body.appendChild(container);
+  console.log('🏷️ SoM shown with', count, 'marks');
+  
+  return count;
+}
+
+/**
+ * Hide/remove Set of Marks
+ */
+function hideSetOfMarks() {
+  const container = document.getElementById('xwebagent-som-container');
+  if (container) {
+    container.remove();
+    console.log('🏷️ SoM hidden');
+  }
+}
+
+/**
+ * Update SoM positions (call on scroll/resize)
+ */
+function updateSetOfMarks() {
+  const container = document.getElementById('xwebagent-som-container');
+  if (!container) return;
+  
+  const indexMap = window._xwebagentIndex || {};
+  
+  // Update marks
+  container.querySelectorAll('.xwebagent-som-mark').forEach(mark => {
+    const idx = mark.dataset.somIndex;
+    const element = indexMap[idx];
+    if (element) {
+      const rect = element.getBoundingClientRect();
+      const top = rect.top + window.scrollY;
+      const left = rect.left + window.scrollX;
+      
+      mark.style.top = `${top}px`;
+      mark.style.left = `${left + rect.width}px`;
+      
+      // Hide if out of viewport
+      const hidden = rect.bottom < 0 || rect.top > window.innerHeight ||
+                     rect.right < 0 || rect.left > window.innerWidth;
+      mark.style.display = hidden ? 'none' : '';
+    }
+  });
+  
+  // Update boxes
+  container.querySelectorAll('.xwebagent-som-box').forEach(box => {
+    const idx = box.dataset.somIndex;
+    const element = indexMap[idx];
+    if (element) {
+      const rect = element.getBoundingClientRect();
+      const top = rect.top + window.scrollY;
+      const left = rect.left + window.scrollX;
+      
+      box.style.top = `${top}px`;
+      box.style.left = `${left}px`;
+      box.style.width = `${rect.width}px`;
+      box.style.height = `${rect.height}px`;
+      
+      // Hide if out of viewport
+      const hidden = rect.bottom < 0 || rect.top > window.innerHeight ||
+                     rect.right < 0 || rect.left > window.innerWidth;
+      box.style.display = hidden ? 'none' : '';
+    }
+  });
+}
+
+/**
+ * Show SoM if enabled in settings
+ */
+async function showSomIfEnabled(pageIndex) {
+  const enabled = await isSomEnabled();
+  if (enabled) {
+    showSetOfMarks(pageIndex);
+    
+    // Update on scroll
+    const scrollHandler = () => updateSetOfMarks();
+    window.addEventListener('scroll', scrollHandler, { passive: true });
+    
+    // Store handler for cleanup
+    window._xwebagentSomScrollHandler = scrollHandler;
+  }
+  return enabled;
+}
+
+/**
+ * Cleanup SoM (call when task completes)
+ */
+function cleanupSom() {
+  hideSetOfMarks();
+  
+  // Remove scroll listener
+  if (window._xwebagentSomScrollHandler) {
+    window.removeEventListener('scroll', window._xwebagentSomScrollHandler);
+    window._xwebagentSomScrollHandler = null;
+  }
+}
+
+console.log('🎨 highlight.js loaded');

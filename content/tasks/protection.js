@@ -11,6 +11,9 @@ async function handleProtectionQuery(query) {
   const pageIndex = createPageIndex(Infinity);
   const visibleText = getVisibleText(Infinity);
   
+  // Show SoM if enabled
+  await showSomIfEnabled(pageIndex);
+  
   // Capture screenshot
   let screenshot = null;
   try {
@@ -30,10 +33,12 @@ async function handleProtectionQuery(query) {
     });
     
     if (response?.error) {
+      cleanupSom();
       return { success: true, answer: `Error: ${response.error}`, isProtection: true };
     }
     
     if (!response?.content) {
+      cleanupSom();
       return { success: true, answer: 'Could not analyze page', isProtection: true };
     }
     
@@ -47,11 +52,13 @@ async function handleProtectionQuery(query) {
       if (match) json = match[0];
       result = JSON.parse(json);
     } catch (e) {
+      cleanupSom();
       return { success: true, answer: response.content, isProtection: true };
     }
     
     // Nothing found
     if (!result.found || result.found.length === 0) {
+      cleanupSom();
       return { 
         success: true, 
         answer: `✅ ${result.message || 'No matching content found on this page.'}`,
@@ -65,6 +72,7 @@ async function handleProtectionQuery(query) {
     
     if (confirmed) {
       hideContent(result.found);
+      cleanupSom();
       return {
         success: true,
         answer: `🛡️ Hidden ${result.found.length} items.`,
@@ -72,6 +80,7 @@ async function handleProtectionQuery(query) {
       };
     } else {
       clearMarkings();
+      cleanupSom();
       return {
         success: true,
         answer: `Found ${result.found.length} items. Content remains visible.`,
@@ -81,6 +90,7 @@ async function handleProtectionQuery(query) {
     
   } catch (e) {
     console.error('🛡️ Error:', e);
+    cleanupSom();
     return { success: true, answer: `Error: ${e.message}`, isProtection: true };
   }
 }

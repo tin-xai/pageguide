@@ -151,6 +151,9 @@ async function handleStepByStepGuide(question, continueFromStep = false) {
   const pageIndex = createPageIndex(Infinity);
   const pageBg = getPageBackground();
   
+  // Show SoM if enabled
+  await showSomIfEnabled(pageIndex);
+  
   console.log('🎯 Page index refreshed with', pageIndex.count, 'elements');
   
   try {
@@ -243,6 +246,9 @@ async function processGuideResponse(content) {
     // Update guidance state
     guidance.waitingForAction = result.waitFor;
     
+    // Clean up SoM after step is processed (will show again on next step)
+    cleanupSom();
+    
     if (result.isLastStep) {
       guidance.previousSteps.push(`Step ${result.step}: ${result.instruction} ✓`);
       guidance.active = false;
@@ -273,6 +279,7 @@ async function processGuideResponse(content) {
     console.error('🎯 Guide parse error:', e);
     guidance.active = false;
     await clearGuidanceState();
+    cleanupSom();
     return {
       success: true,
       answer: content,
