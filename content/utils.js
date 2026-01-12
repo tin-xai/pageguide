@@ -24,28 +24,18 @@ function isElementInteractive(el) {
  * (Wikipedia citations, edit links, footnotes, etc.)
  */
 function isNoiseElement(el, name) {
-  // Skip [edit] links
-  if (name === 'edit' || name === '[edit]') return true;
-  
-  // Skip citation references like [1], [99], [100]
-  if (/^\[\d+\]$/.test(name)) return true;
-  
-  // Skip elements with cite/reference classes (Wikipedia)
-  const className = el.className || '';
-  if (className.includes('reference') || className.includes('cite')) return true;
-  
-  // Skip links to citations/footnotes
-  const href = el.getAttribute('href') || '';
-  if (href.includes('#cite') || href.includes('#ref') || href.includes('#note')) return true;
-  
-  // Skip superscript citation containers
-  if (el.tagName === 'SUP' && el.querySelector('a[href*="cite"]')) return true;
-  
-  // Skip very short numeric-only text (likely footnote numbers)
-  if (/^\d+$/.test(name) && name.length <= 3) return true;
-  
-  // Skip common Wikipedia noise
-  if (name.includes('#cite') || name.includes('↑') || name === '^') return true;
+  // Only check href if element is a link
+  if (el.tagName === 'A') {
+    const href = el.getAttribute('href') || '';
+    if (href.includes('#cite') || 
+        href.includes('#ref') || 
+        href.includes('#note') ||
+        href.startsWith('#cite_') ||
+        href.startsWith('#ref-') ||
+        href.match(/^\[\d+\]$/)) { // matches [1], [2], etc.
+      return true;
+    }
+  }
   
   return false;
 }
@@ -304,7 +294,7 @@ function createPageIndex(maxItems = 200) {
     if (!isElementInteractive(el) && seenText.has(name)) continue;
     
     // Skip common noise elements
-    // if (isNoiseElement(el, name)) continue;
+    if (isNoiseElement(el, name)) continue;
     
     seen.add(el);
     seenText.add(name);
