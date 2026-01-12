@@ -37,7 +37,6 @@ const CONFIG = {
 const CONTENT_SCRIPTS = [
   'content/prompts.js',
   'content/utils.js', 
-  'content/actions.js',
   'content/protection.js',  // Dark pattern & ad protection
   'content/api-core.js',
   'content/api-highlight.js',
@@ -106,6 +105,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     captureScreenshot(request.tabId)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'getVisionSetting') {
+    chrome.storage.sync.get(['visionEnabled'])
+      .then(settings => {
+        // Default to true if not set
+        sendResponse({ visionEnabled: settings.visionEnabled !== false });
+      })
+      .catch(err => sendResponse({ visionEnabled: true, error: err.message }));
     return true;
   }
   if (request.action === 'openOptions') {

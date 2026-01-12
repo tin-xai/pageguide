@@ -16,7 +16,8 @@ async function loadSettings() {
     'provider',
     'geminiApiKey', 'geminiModel',
     'openrouterApiKey', 'openrouterModel',
-    'openaiApiKey', 'openaiModel'
+    'openaiApiKey', 'openaiModel',
+    'visionEnabled'
   ]);
   
   // Set current provider
@@ -34,6 +35,9 @@ async function loadSettings() {
   // Load OpenAI settings
   document.getElementById('openaiApiKey').value = settings.openaiApiKey || '';
   document.getElementById('openaiModel').value = settings.openaiModel || 'gpt-4o';
+  
+  // Load Vision setting (default: enabled)
+  document.getElementById('visionEnabled').checked = settings.visionEnabled !== false;
 }
 
 // Update UI to show selected provider
@@ -68,7 +72,8 @@ async function saveSettings() {
     openrouterApiKey: document.getElementById('openrouterApiKey').value.trim(),
     openrouterModel: document.getElementById('openrouterModel').value,
     openaiApiKey: document.getElementById('openaiApiKey').value.trim(),
-    openaiModel: document.getElementById('openaiModel').value
+    openaiModel: document.getElementById('openaiModel').value,
+    visionEnabled: document.getElementById('visionEnabled').checked
   };
   
   await chrome.storage.sync.set(settings);

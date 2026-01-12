@@ -8,6 +8,21 @@
 // - api-guide.js: Guidance functionality (handleStepByStepGuide, etc.)
 
 /**
+ * Safe wrapper for chrome.runtime.sendMessage
+ * Handles "Extension context invalidated" error gracefully
+ */
+async function safeSendMessage(message) {
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (e) {
+    if (e.message?.includes('Extension context invalidated')) {
+      return { error: '🔄 Extension was updated. Please refresh the page (F5).' };
+    }
+    throw e;
+  }
+}
+
+/**
  * Route query using LLM-based coordinator
  * @param {string} query - User's query
  * @returns {Promise<{handler: string, confidence: number, reason: string}>}

@@ -1,4 +1,4 @@
-// XWebAgent - Utility Functions
+// XWebAgent - DOM Manipulator
 // Uses accessibility-inspired approach to find ALL interactive/content elements
 
 // Store element references globally
@@ -371,3 +371,5 @@ function createPageIndex(maxItems = 200) {
 function getIndexedElement(idx) {
   return window._xwebagentIndex[idx] || null;
 }
+
+console.log('🔧 dom_manipulator.js loaded');

@@ -2,6 +2,93 @@
 // All highlighting related functionality
 
 /**
+ * Detect the approximate background color of the page
+ */
+function getPageBackground() {
+  const body = document.body;
+  const html = document.documentElement;
+  
+  // Try to get computed background
+  const bodyBg = window.getComputedStyle(body).backgroundColor;
+  const htmlBg = window.getComputedStyle(html).backgroundColor;
+  
+  // Parse RGB values
+  const parseRgb = (color) => {
+    const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+      return { r: parseInt(match[1]), g: parseInt(match[2]), b: parseInt(match[3]) };
+    }
+    return null;
+  };
+  
+  let bg = parseRgb(bodyBg) || parseRgb(htmlBg);
+  
+  // Default to white if transparent/not found
+  if (!bg || (bg.r === 0 && bg.g === 0 && bg.b === 0 && bodyBg.includes('0)'))) {
+    bg = { r: 255, g: 255, b: 255 };
+  }
+  
+  // Calculate luminance to determine if dark or light
+  const luminance = (0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b) / 255;
+  
+  return {
+    rgb: `rgb(${bg.r}, ${bg.g}, ${bg.b})`,
+    isDark: luminance < 0.5,
+    luminance: luminance.toFixed(2)
+  };
+}
+
+/**
+ * Get random highlight style (color + animation)
+ * Automatically picks contrasting colors based on page background
+ */
+function getRandomHighlightStyle(isDarkPage = false) {
+  // Colors that contrast with dark backgrounds
+  const darkPageColors = ['#00ff88', '#ff6b6b', '#ffd93d', '#6bcfff', '#ff85c0', '#a29bfe'];
+  // Colors that contrast with light backgrounds  
+  const lightPageColors = ['#ff4757', '#2ed573', '#1e90ff', '#9b59b6', '#e84393', '#00b894'];
+  
+  // Animation options
+  const animations = ['pulse', 'spotlight', 'shimmer', 'bounce', 'glow', 'underline'];
+  
+  const colors = isDarkPage ? darkPageColors : lightPageColors;
+  const color = colors[Math.floor(Math.random() * colors.length)];
+  const animation = animations[Math.floor(Math.random() * animations.length)];
+  
+  return { color, animation };
+}
+
+/**
+ * Reset all custom styles applied by XWebAgent
+ */
+function resetCustomStyles() {
+  let count = 0;
+  
+  // Remove injected style tag
+  const style = document.getElementById('xwebagent-custom-style');
+  if (style) style.remove();
+  
+  // Remove highlight spans (unwrap them back to text)
+  document.querySelectorAll('span.xwebagent-highlight').forEach(span => {
+    const text = document.createTextNode(span.textContent);
+    span.parentNode.replaceChild(text, span);
+    count++;
+  });
+  
+  // Reset inline styles on marked elements
+  const styledProps = ['color', 'backgroundColor', 'fontWeight', 'outline', 
+    'outlineOffset', 'border', 'textDecoration', 'boxShadow'];
+  
+  document.querySelectorAll('[data-xwebagent-styled]').forEach(el => {
+    styledProps.forEach(prop => el.style[prop] = '');
+    el.removeAttribute('data-xwebagent-styled');
+    count++;
+  });
+  
+  return { success: true, count };
+}
+
+/**
  * Clear all existing highlights
  */
 function clearHighlights() {

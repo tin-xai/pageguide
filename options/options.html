@@ -250,7 +250,92 @@
       width: 22px;
       height: 22px;
       vertical-align: middle;
-}
+    }
+    
+    /* Toggle Switch Styles */
+    .toggle-group {
+      margin-bottom: 16px;
+    }
+    
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      padding: 12px 0;
+    }
+    
+    .toggle-info {
+      flex: 1;
+      padding-right: 16px;
+    }
+    
+    .toggle-title {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      color: #e8e8e8;
+      margin-bottom: 4px;
+    }
+    
+    .toggle-desc {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      line-height: 1.4;
+    }
+    
+    .toggle-switch {
+      position: relative;
+      width: 48px;
+      height: 26px;
+      flex-shrink: 0;
+    }
+    
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 26px;
+      transition: all 0.3s ease;
+    }
+    
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 2px;
+      bottom: 2px;
+      background: #888;
+      border-radius: 50%;
+      transition: all 0.3s ease;
+    }
+    
+    .toggle-switch input:checked + .toggle-slider {
+      background: linear-gradient(135deg, rgba(0,217,255,0.3), rgba(0,255,136,0.3));
+      border-color: #00d9ff;
+    }
+    
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translateX(22px);
+      background: linear-gradient(135deg, #00d9ff, #00ff88);
+    }
+    
+    .toggle-switch input:focus + .toggle-slider {
+      box-shadow: 0 0 8px rgba(0, 217, 255, 0.3);
+    }
 
   </style>
 </head>
@@ -344,6 +429,23 @@
         <button type="button" id="testApiBtn" class="secondary">🧪 Test Connection</button>
       </div>
       <div id="testResult" class="status"></div>
+    </div>
+    
+    <!-- Vision Mode Section -->
+    <div class="section">
+      <h2>👁️ Vision Mode</h2>
+      <div class="toggle-group">
+        <label class="toggle-label">
+          <div class="toggle-info">
+            <span class="toggle-title">Enable Vision (Screenshot)</span>
+            <span class="toggle-desc">When enabled, the agent will capture and analyze screenshots for better visual understanding of the page.</span>
+          </div>
+          <div class="toggle-switch">
+            <input type="checkbox" id="visionEnabled" checked>
+            <span class="toggle-slider"></span>
+          </div>
+        </label>
+      </div>
     </div>
     
     <button class="primary" id="saveBtn" style="width: 100%;">💾 Save Settings</button>
