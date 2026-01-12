@@ -45,77 +45,44 @@ Query: "Summarize this page"
 → {"handler": "ask", "confidence": 0.9, "reason": "Information request about page content"}`,
 
 
-  // Unified prompt - answers from visible text, highlights from index, with optional vision
-  ANSWER_AND_HIGHLIGHT: `You are a web assistant with vision capabilities. You will receive:
-1. VISIBLE SCREEN TEXT - the actual text the user can see
-2. INDEXED ELEMENTS - numbered elements for highlighting
-3. PAGE BACKGROUND - approximate background color of the page
-4. SCREENSHOT - (if provided) an image of the current viewport
+  // Answer with inline citations - single prompt approach
+  ANSWER_AND_HIGHLIGHT: `You are a helpful web assistant. Answer the user's question based on the page content, using inline citations.
 
-Return JSON:
-{
-  "answer": "Your answer based on the visible text AND screenshot",
-  "highlights": [{"index": N, "text": "exact text to highlight"}],
-  "selector": "optional CSS selector to highlight multiple elements",
-  "needsScroll": false,
-  "scrollDirection": "down" | "up" | null,
-  "needsExpand": false
-}
+PAGE CONTENT:
+{pageContent}
 
-VISION CAPABILITIES:
-- You receive BOTH: full page text (AXTree) AND a screenshot of the CURRENT VIEWPORT only
-- The screenshot shows only what's currently visible on screen (not the whole page)
-- Use the screenshot to understand: icons, images, charts, visual layout, colors, logos
-- The text may contain info not visible in the screenshot (content above/below viewport)
+PAGE INDEX (use these numbers for citations):
+{pageIndex}
 
-SCROLL BEHAVIOR:
-The screenshot only shows the current viewport. Request scroll when:
-1. You need to VISUALLY SEE something that's mentioned in the text but not in the screenshot
-2. The user asks about icons, images, colors, or visual elements you can't see
-3. You need to verify visual context for elements mentioned in the text
-4. The answer requires seeing a different part of the page
+QUESTION: {question}
 
-To scroll, set:
-- "needsScroll": true
-- "scrollDirection": "down" (to see below) or "up" (to see above)
-- "answer": "Let me scroll to see [what you're looking for]..."
+INSTRUCTIONS:
+1. Answer the question based on the page content
+2. Use [N] citations inline to reference specific elements from the PAGE INDEX
+3. Each citation should point to an element that supports that part of your answer
+4. For lists of items, cite each one: "The cast includes John [12], Jane [15], and Bob [18]"
+5. Use ONE citation per item (if same text has multiple indices, pick the link)
 
-DO NOT scroll if:
-- The answer is clearly in the text AND doesn't require visual verification
-- You've already found what the user needs
+EXAMPLE:
+Question: "Who directed this movie?"
+Answer: The movie was directed by Christopher Nolan [45].
 
-EXPAND BEHAVIOR:
-Some pages hide content behind "See more", "Show more", "Load more" buttons. Request expand when:
-1. User asks for ALL items (comments, reviews, results) but you see "See more" or "Show more" buttons
-2. User asks to expand content or load more items
-3. The visible content seems truncated and there are expand buttons
+Question: "Who are the main actors?"
+Answer: The main actors are Leonardo DiCaprio [23], Tom Hardy [27], and Ellen Page [31].
 
-To expand, set:
-- "needsExpand": true
-- "answer": "Let me expand the content to show more..."
+Now answer the question with citations:`,
 
-The system will automatically click "See more"/"Show more" buttons up to 2 times.
+  /**
+   * Simple answer prompt (no highlighting) - used as fallback
+   */
+  SIMPLE_ANSWER_PROMPT: `You are a helpful web assistant. Answer the user's question based on the page content provided.
 
-RULES:
-1. Answer based on BOTH visible text AND screenshot image
-2. Use index numbers from INDEXED ELEMENTS for highlighting
-3. If you see something in the screenshot but can't find it in the text, describe what you see
-4. For icons/images: describe what you visually see in the screenshot
+PAGE CONTENT:
+{pageContent}
 
-EXAMPLES:
+QUESTION: {question}
 
-Q: "When were seasons 2 and 3 released?"
-→ {"answer":"Season 2: October 2017, Season 3: July 2019","highlights":[{"index":3,"text":"October 2017"},{"index":5,"text":"July 2019"}],"needsScroll":false}
-
-Q: "What icon is next to the settings?"
-If visible: → {"answer":"There's a gear/cog icon ⚙️ next to Settings","highlights":[{"index":5,"text":"Settings"}],"needsScroll":false}
-If not visible: → {"answer":"Let me scroll to see...","highlights":[],"needsScroll":true,"scrollDirection":"down"}
-
-Q: "highlight all the links"
-→ {"answer":"Highlighting all links","selector":"a","needsScroll":false}
-
-Q: "Show me all comments" (has "See more" button)
-→ {"answer":"Let me expand to show more...","highlights":[],"needsExpand":true}`,
+Answer concisely and accurately. If the information is not on the page, say so.`,
 
   // Step-by-step guidance prompt for hidden elements / multi-step tasks
   STEP_BY_STEP_GUIDE: `You are a helpful guide assistant. Users ask "how to" questions and you provide step-by-step guidance.
