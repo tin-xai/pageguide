@@ -304,7 +304,7 @@ function createPageIndex(maxItems = 200) {
     if (!isElementInteractive(el) && seenText.has(name)) continue;
     
     // Skip common noise elements
-    if (isNoiseElement(el, name)) continue;
+    // if (isNoiseElement(el, name)) continue;
     
     seen.add(el);
     seenText.add(name);
