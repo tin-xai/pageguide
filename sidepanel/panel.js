@@ -37,7 +37,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 /**
  * Parse citations in text and make them clickable
- * Converts [N:"text"] to clickable spans
+ * Converts [N:"text"] or [N] to clickable spans showing the text (not the number)
+ * For [N:"text"] format, removes duplicate text if it appears before the citation
+ * For [N] format, extracts the preceding phrase as the clickable text
  */
 function parseCitations(text) {
   // Pattern: [N:"text"] or [N:'text'] or [N]
@@ -48,14 +50,49 @@ function parseCitations(text) {
   let match;
   
   while ((match = citationPattern.exec(text)) !== null) {
-    // Add text before the citation
-    result += escapeHtml(text.slice(lastIndex, match.index));
-    
     const index = match[1];
-    const citationText = match[2] ? `${index}:"${match[2]}"` : index;
+    const explicitText = match[2]; // Text from [N:"text"] format
     
-    // Create clickable citation
-    result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll to element ${index}">[${escapeHtml(citationText)}]</span>`;
+    if (explicitText) {
+      // Has explicit text: [N:"text"] format
+      let textBefore = text.slice(lastIndex, match.index);
+      
+      // Check if the explicit text already appears right before the citation (avoid duplication)
+      // e.g., "Queen's University [498:"Queen's University"]" -> just show "Queen's University" once
+      const explicitLower = explicitText.toLowerCase().trim();
+      const beforeLower = textBefore.toLowerCase();
+      
+      if (beforeLower.trimEnd().endsWith(explicitLower)) {
+        // Text appears before citation - remove the duplicate and make it clickable
+        const dupStart = textBefore.toLowerCase().lastIndexOf(explicitLower);
+        const textBeforeDup = textBefore.slice(0, dupStart);
+        result += escapeHtml(textBeforeDup);
+        result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(explicitText)}</span>`;
+      } else {
+        // Text doesn't appear before - just add the citation as clickable
+        result += escapeHtml(textBefore);
+        result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(explicitText)}</span>`;
+      }
+    } else {
+      // No explicit text: [N] format - extract preceding phrase
+      const textBefore = text.slice(lastIndex, match.index);
+      
+      // Find the last phrase before the citation (after comma, period, or other delimiter)
+      const phraseMatch = textBefore.match(/(?:^|[,.:;])\s*([^,.:;]+?)\s*$/);
+      
+      if (phraseMatch && phraseMatch[1].trim()) {
+        // Found a phrase - make it clickable and remove the citation number
+        const phrase = phraseMatch[1].trim();
+        const textBeforePhrase = textBefore.slice(0, textBefore.lastIndexOf(phrase));
+        
+        result += escapeHtml(textBeforePhrase);
+        result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(phrase)}</span>`;
+      } else {
+        // No clear phrase found - show text before and a small superscript number
+        result += escapeHtml(textBefore);
+        result += `<span class="xwebagent-citation xwebagent-citation-sup" data-index="${index}" title="Click to scroll"><sup>${index}</sup></span>`;
+      }
+    }
     
     lastIndex = match.index + match[0].length;
   }

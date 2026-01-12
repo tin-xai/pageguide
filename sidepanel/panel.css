@@ -288,24 +288,36 @@ body {
 
 /* Clickable citations in answers */
 .xwebagent-citation {
-  display: inline-block;
-  background: linear-gradient(135deg, rgba(0, 217, 255, 0.2), rgba(0, 255, 136, 0.15));
+  display: inline;
+  background: linear-gradient(135deg, rgba(0, 217, 255, 0.15), rgba(0, 255, 136, 0.1));
   color: #00d9ff;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  padding: 2px 4px;
+  border-radius: 3px;
   cursor: pointer;
   transition: all 0.2s ease;
-  border: 1px solid rgba(0, 217, 255, 0.3);
-  margin: 0 2px;
+  border-bottom: 1px dashed rgba(0, 217, 255, 0.5);
 }
 
 .xwebagent-citation:hover {
-  background: linear-gradient(135deg, rgba(0, 217, 255, 0.4), rgba(0, 255, 136, 0.3));
+  background: linear-gradient(135deg, rgba(0, 217, 255, 0.3), rgba(0, 255, 136, 0.2));
   color: #fff;
-  transform: scale(1.05);
-  box-shadow: 0 2px 8px rgba(0, 217, 255, 0.3);
+  border-bottom-color: #00d9ff;
+}
+
+/* Superscript citation number (fallback when no phrase found) */
+.xwebagent-citation-sup {
+  background: none;
+  padding: 0;
+  border: none;
+  border-bottom: none;
+  color: #00d9ff;
+  font-size: 10px;
+  vertical-align: super;
+}
+
+.xwebagent-citation-sup:hover {
+  background: none;
+  color: #00ff88;
 }
 
 /* Typing Indicator */

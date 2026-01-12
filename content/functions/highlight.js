@@ -179,9 +179,10 @@ function applyAnimatedHighlight(element, color, animation) {
 /**
  * Highlight specific text within a specific element only
  * Uses LLM-chosen color and animation
+ * Strategy: First try to find child elements (links, spans) that match, then fall back to text nodes
  */
 function highlightTextInElement(element, searchText, color = '#ffd93d', animation = 'pulse') {
-  const searchLower = searchText.toLowerCase();
+  const searchLower = searchText.toLowerCase().trim();
   let count = 0;
   
   // Try exact match first, then try key parts (for dates like "October 27, 2017" -> try "October 2017")
@@ -199,60 +200,95 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
     searchVariants.push(yearMatch[0]);
   }
   
-  // Walk through text nodes within this element only
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  const textNodes = [];
+  console.log('🔍 Searching for:', searchVariants, 'in element:', element.tagName);
   
-  while (walker.nextNode()) {
-    const node = walker.currentNode;
-    const nodeTextLower = node.textContent.toLowerCase();
-    
-    for (const variant of searchVariants) {
-      if (nodeTextLower.includes(variant)) {
-        textNodes.push({ node, searchTerm: variant });
-        break;
+  // STRATEGY 1: Find child elements (links, spans, etc.) that contain the text
+  // This is better because it highlights the actual semantic element
+  const childSelectors = ['a', 'span', 'strong', 'em', 'b', 'i', 'mark', 'time'];
+  for (const selector of childSelectors) {
+    const children = element.querySelectorAll(selector);
+    for (const child of children) {
+      const childText = child.textContent?.toLowerCase().trim();
+      for (const variant of searchVariants) {
+        if (childText === variant || (childText && childText.includes(variant) && childText.length < variant.length + 20)) {
+          // Found a matching child element - highlight it directly
+          console.log('🎯 Found matching child element:', child.tagName, child.textContent?.slice(0, 30));
+          applyAnimatedHighlight(child, color, animation);
+          
+          // Also add inline styles for visibility
+          child.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
+          child.style.borderRadius = '3px';
+          child.style.padding = '1px 4px';
+          
+          window._xwebagentHighlights.push(child);
+          count++;
+          break;
+        }
       }
+      if (count > 0) break; // Found one, don't highlight duplicates
+    }
+    if (count > 0) break;
+  }
+  
+  // STRATEGY 2: If no child elements matched, try text node wrapping
+  if (count === 0) {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const nodeTextLower = node.textContent.toLowerCase();
+      
+      for (const variant of searchVariants) {
+        if (nodeTextLower.includes(variant)) {
+          textNodes.push({ node, searchTerm: variant });
+          break;
+        }
+      }
+    }
+    
+    console.log('🤖 Found', textNodes.length, 'text nodes to highlight');
+    
+    // Process text nodes (limit to first match to avoid over-highlighting)
+    const maxHighlights = 1;
+    for (const { node: textNode, searchTerm } of textNodes) {
+      if (count >= maxHighlights) break;
+      
+      const text = textNode.textContent;
+      const lowerText = text.toLowerCase();
+      const idx = lowerText.indexOf(searchTerm);
+      
+      if (idx === -1) continue;
+      
+      // Split and wrap
+      const before = text.slice(0, idx);
+      const match = text.slice(idx, idx + searchTerm.length);
+      const after = text.slice(idx + searchTerm.length);
+      
+      // Create highlight span with LLM-chosen style
+      const span = document.createElement('span');
+      span.className = `xwebagent-highlight xwebagent-highlight-${animation}`;
+      span.style.setProperty('--xwebagent-color', color);
+      span.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
+      span.style.borderRadius = '3px';
+      span.style.padding = '1px 4px';
+      span.setAttribute('data-xwebagent-styled', 'true');
+      span.textContent = match;
+      
+      const fragment = document.createDocumentFragment();
+      if (before) fragment.appendChild(document.createTextNode(before));
+      fragment.appendChild(span);
+      if (after) fragment.appendChild(document.createTextNode(after));
+      
+      textNode.parentNode.replaceChild(fragment, textNode);
+      
+      // Store reference for scrolling
+      window._xwebagentHighlights.push(span);
+      count++;
     }
   }
   
-  console.log('🤖 Found', textNodes.length, 'text nodes to highlight');
-  
-  // Process text nodes
-  textNodes.forEach(({ node: textNode, searchTerm }) => {
-    const text = textNode.textContent;
-    const lowerText = text.toLowerCase();
-    const idx = lowerText.indexOf(searchTerm);
-    
-    if (idx === -1) return;
-    
-    // Split and wrap
-    const before = text.slice(0, idx);
-    const match = text.slice(idx, idx + searchTerm.length);
-    const after = text.slice(idx + searchTerm.length);
-    
-    // Create highlight span with LLM-chosen style
-    const span = document.createElement('span');
-    span.className = `xwebagent-highlight xwebagent-highlight-${animation}`;
-    span.style.setProperty('--xwebagent-color', color);
-    span.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
-    span.style.borderRadius = '3px';
-    span.style.padding = '1px 4px';
-    span.setAttribute('data-xwebagent-styled', 'true');
-    span.textContent = match;
-    
-    const fragment = document.createDocumentFragment();
-    if (before) fragment.appendChild(document.createTextNode(before));
-    fragment.appendChild(span);
-    if (after) fragment.appendChild(document.createTextNode(after));
-    
-    textNode.parentNode.replaceChild(fragment, textNode);
-    
-    // Store reference for scrolling
-    window._xwebagentHighlights.push(span);
-    count++;
-  });
-  
-  // If no text nodes matched, highlight the whole element
+  // STRATEGY 3: If still nothing matched, highlight the whole element
   if (count === 0) {
     console.log('🤖 No text match, highlighting whole element');
     applyAnimatedHighlight(element, color, animation);
