@@ -17,7 +17,8 @@ async function loadSettings() {
     'geminiApiKey', 'geminiModel',
     'openrouterApiKey', 'openrouterModel',
     'openaiApiKey', 'openaiModel',
-    'visionEnabled'
+    'visionEnabled',
+    'somEnabled'
   ]);
   
   // Set current provider
@@ -38,6 +39,9 @@ async function loadSettings() {
   
   // Load Vision setting (default: enabled)
   document.getElementById('visionEnabled').checked = settings.visionEnabled !== false;
+  
+  // Load SoM setting (default: disabled)
+  document.getElementById('somEnabled').checked = settings.somEnabled === true;
 }
 
 // Update UI to show selected provider
@@ -73,7 +77,8 @@ async function saveSettings() {
     openrouterModel: document.getElementById('openrouterModel').value,
     openaiApiKey: document.getElementById('openaiApiKey').value.trim(),
     openaiModel: document.getElementById('openaiModel').value,
-    visionEnabled: document.getElementById('visionEnabled').checked
+    visionEnabled: document.getElementById('visionEnabled').checked,
+    somEnabled: document.getElementById('somEnabled').checked
   };
   
   await chrome.storage.sync.set(settings);
