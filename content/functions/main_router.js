@@ -1,12 +1,5 @@
 // XWebAgent - API Router (Main Entry Point)
 // Routes queries to appropriate handlers: ask, guide, protection
-// 
-// Dependencies (loaded before this file):
-// - api-core.js: Core utilities (safeSendMessage, scrollViewport, etc.)
-// - api-highlight.js: Highlight functions (clearHighlights, applyIndexedHighlight, etc.)
-// - api-ask.js: Ask functionality (handleAsk, processLLMResponseWithScroll, etc.)
-// - api-guide.js: Guidance functionality (handleStepByStepGuide, etc.)
-
 /**
  * Safe wrapper for chrome.runtime.sendMessage
  * Handles common Chrome extension messaging errors gracefully
