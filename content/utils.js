@@ -20,6 +20,37 @@ function isElementInteractive(el) {
 }
 
 /**
+ * Check if element is noise that should be skipped in indexing
+ * (Wikipedia citations, edit links, footnotes, etc.)
+ */
+function isNoiseElement(el, name) {
+  // Skip [edit] links
+  if (name === 'edit' || name === '[edit]') return true;
+  
+  // Skip citation references like [1], [99], [100]
+  if (/^\[\d+\]$/.test(name)) return true;
+  
+  // Skip elements with cite/reference classes (Wikipedia)
+  const className = el.className || '';
+  if (className.includes('reference') || className.includes('cite')) return true;
+  
+  // Skip links to citations/footnotes
+  const href = el.getAttribute('href') || '';
+  if (href.includes('#cite') || href.includes('#ref') || href.includes('#note')) return true;
+  
+  // Skip superscript citation containers
+  if (el.tagName === 'SUP' && el.querySelector('a[href*="cite"]')) return true;
+  
+  // Skip very short numeric-only text (likely footnote numbers)
+  if (/^\d+$/.test(name) && name.length <= 3) return true;
+  
+  // Skip common Wikipedia noise
+  if (name.includes('#cite') || name.includes('↑') || name === '^') return true;
+  
+  return false;
+}
+
+/**
  * Get the accessible role of an element (approximates AXTree)
  */
 function getAccessibleRole(el) {
@@ -272,8 +303,8 @@ function createPageIndex(maxItems = 200) {
     // Only skip duplicates for non-interactive elements
     if (!isElementInteractive(el) && seenText.has(name)) continue;
     
-    // Skip common noise
-    if (name === 'edit' || name === '[edit]' || name.includes('#cite')) continue;
+    // Skip common noise elements
+    if (isNoiseElement(el, name)) continue;
     
     seen.add(el);
     seenText.add(name);

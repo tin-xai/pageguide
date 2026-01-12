@@ -33,7 +33,7 @@
       "matches": ["<all_urls>"],
       "js": [
         "content/prompts.js",
-        "content/dom_manipulator.js",
+        "content/utils.js",
         "content/functions/scroll.js",
         "content/functions/capture_screenshot.js",
         "content/functions/highlight.js",
