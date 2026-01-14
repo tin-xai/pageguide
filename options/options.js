@@ -64,7 +64,7 @@ function updateProviderUI(provider) {
   // Clear test result
   const resultDiv = document.getElementById('testResult');
   resultDiv.className = 'status';
-  resultDiv.style.display = 'none';
+  resultDiv.style.display = '';
 }
 
 // Save settings
