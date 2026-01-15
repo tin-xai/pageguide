@@ -42,8 +42,12 @@ document.addEventListener('DOMContentLoaded', async () => {
  * For [N] format, extracts the preceding phrase as the clickable text
  */
 function parseCitations(text) {
-  // Pattern: [N:"text"] or [N:'text'] or [N:text] (no quotes) or [N]
-  const citationPattern = /\[(\d+)(?::\s*["']?([^"'\]]+?)["']?)?\]/g;
+  // Match citations with various quote styles:
+  // [N:"text"] - double quoted (text can contain apostrophes)
+  // [N:'text'] - single quoted (text can contain double quotes)
+  // [N:text] - unquoted
+  // [N] - just index
+  const citationPattern = /\[(\d+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
   
   let lastIndex = 0;
   let result = '';
@@ -51,7 +55,8 @@ function parseCitations(text) {
   
   while ((match = citationPattern.exec(text)) !== null) {
     const index = match[1];
-    const explicitText = match[2]; // Text from [N:"text"] format
+    // Text could be in group 2 (double quoted), 3 (single quoted), or 4 (unquoted)
+    const explicitText = match[2] || match[3] || match[4];
     
     if (explicitText) {
       // Has explicit text: [N:"text"] format
