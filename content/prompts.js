@@ -15,7 +15,7 @@ AVAILABLE HANDLERS:
 ROUTING RULES:
 - "guide": User wants to LEARN how to do something in steps (e.g., "how do I report this video?", "where can I find settings?", "help me delete my account")
 - "protection": User mentions ads, privacy, dark patterns, safety, or wants to hide/block something (e.g., "hide the ads", "scan for dark patterns", "protect my privacy")
-- "ask": Everything else - questions about the page, finding information, showing/highlighting elements (e.g., "what is this page about?", "find the price", "show me images", "where is the login button?")
+- "ask": Questions about the page, finding information, showing/highlighting elements (e.g., "what is this page about?", "find the price", "show me images", "where is the login button?")
 
 Return JSON only:
 {
