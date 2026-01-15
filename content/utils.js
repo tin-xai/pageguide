@@ -175,6 +175,7 @@ function isInViewport(el) {
 /**
  * Get ALL page content as text using accessibility approach
  * Walks entire DOM and extracts accessible names
+ * Falls back to innerText for SPAs with minimal accessible content
  */
 function getVisibleText(maxLength = 20000) {
   const lines = [];
@@ -223,6 +224,28 @@ function getVisibleText(maxLength = 20000) {
   }
   
   let result = lines.join('\n');
+  
+  // Fallback for SPAs: if we got very little content, use innerText
+  // This handles React/Vue/Angular apps where accessibility tree is sparse
+  if (result.length < 200) {
+    console.log('🤖 Sparse accessible content, falling back to innerText');
+    
+    // Get raw innerText, clean it up
+    let innerTextContent = document.body.innerText || '';
+    
+    // Remove excessive whitespace
+    innerTextContent = innerTextContent
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .join('\n');
+    
+    // If innerText is more useful, use it
+    if (innerTextContent.length > result.length) {
+      result = '[Page text (SPA fallback)]:\n' + innerTextContent;
+    }
+  }
+  
   return result.length > maxLength ? result.slice(0, maxLength) + '...' : result;
 }
 
@@ -374,10 +397,52 @@ function createPageIndex(maxItems = 200) {
     } catch (e) { /* invalid selector */ }
   });
   
+  // SPA Fallback: If we found very few elements, try broader selectors
+  // This helps with React/Vue/Angular apps that may not have proper accessibility
+  if (idx < 10) {
+    console.log('🤖 Few elements found, trying SPA fallback selectors');
+    
+    // Common interactive elements in SPAs
+    const spaSelectors = [
+      'button', 'a', 'input', 'textarea', 'select',
+      '[onclick]', '[data-testid]', '[data-cy]',
+      'svg', 'img[alt]',
+      'h1', 'h2', 'h3', 'h4', 'p',
+      'span[class]', 'div[class*="button"]', 'div[class*="btn"]',
+      '[class*="icon"]', '[class*="menu"]', '[class*="nav"]'
+    ];
+    
+    spaSelectors.forEach(selector => {
+      if (idx > maxItems) return;
+      try {
+        document.querySelectorAll(selector).forEach(el => {
+          if (idx > maxItems) return;
+          if (seen.has(el)) return;
+          if (isXWebAgentElement(el)) return;
+          
+          let name = el.textContent?.trim() || el.getAttribute('aria-label') || 
+                     el.getAttribute('alt') || el.getAttribute('title') || '';
+          name = name.replace(/\s+/g, ' ').trim();
+          
+          if (name.length < 2 || name.length > 200) return;
+          if (seenText.has(name)) return;
+          
+          seen.add(el);
+          seenText.add(name);
+          indexMap[idx] = el;
+          
+          const tag = el.tagName.toLowerCase();
+          indexLines.push(`[${idx}] (${tag}) ${name.slice(0, 100)}`);
+          idx++;
+        });
+      } catch (e) { /* invalid selector */ }
+    });
+  }
+  
   // Store globally
   window._xwebagentIndex = indexMap;
   
-  console.log('🤖 Indexed', idx - 1, 'elements (including popups)');
+  console.log('🤖 Indexed', idx - 1, 'elements (including fallbacks)');
   console.log('🤖 Index keys stored:', Object.keys(indexMap).slice(0, 10), '...');
   
   return {

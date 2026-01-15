@@ -144,6 +144,12 @@ async function handleAskWithVision(query) {
   let pageIndex = createPageIndex(500);
   console.log('👁️ Initial page index count:', pageIndex.count);
   
+  // Handle minimal content pages (like empty SPAs)
+  const hasMinimalContent = pageIndex.count < 5;
+  if (hasMinimalContent) {
+    console.log('👁️ Minimal page content detected, relying more on visual analysis');
+  }
+  
   // Show Set of Marks if enabled
   await showSomIfEnabled(pageIndex);
   
@@ -172,12 +178,17 @@ async function handleAskWithVision(query) {
     }
     
     // Build the navigation prompt
+    // If page has minimal content, tell the agent to rely on visual analysis
+    const pageIndexContent = pageIndex.count > 0 
+      ? pageIndex.indexText 
+      : '(No indexable elements found - rely on visual analysis of the screenshot)';
+    
     const prompt = PROMPTS.VISION_NAVIGATE
       .replace('{step}', step.toString())
       .replace('{maxSteps}', maxSteps.toString())
       .replace('{previousActions}', previousActions.length > 0 ? previousActions.join(' → ') : 'none')
       .replace('{scrollPosition}', getScrollPosition())
-      .replace('{pageIndex}', pageIndex.indexText)
+      .replace('{pageIndex}', pageIndexContent)
       .replace('{question}', query);
     
     // Send to LLM
@@ -345,10 +356,22 @@ async function handleAsk(query, history = []) {
  * Ask with highlighting (main approach)
  */
 async function handleAskWithHighlight(query, pageContent, pageIndex) {
+  // Check if we have enough content to work with
+  if (pageContent.length < 50 && pageIndex.count < 3) {
+    console.log('🤖 Very minimal page content detected');
+    return {
+      success: true,
+      answer: "This page appears to have minimal readable content. It might be a Single Page Application (SPA) that loads content dynamically, or the main content hasn't loaded yet. Try waiting a moment and asking again, or scroll to load more content.",
+      highlightCount: 0,
+      hasHighlights: false,
+      minimalContent: true
+    };
+  }
+  
   // Build prompt with page content and index
   const prompt = PROMPTS.ANSWER_AND_HIGHLIGHT
-    .replace('{pageContent}', pageContent)
-    .replace('{pageIndex}', pageIndex.indexText)
+    .replace('{pageContent}', pageContent || '(No text content found)')
+    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)')
     .replace('{question}', query);
   
   // Single LLM call

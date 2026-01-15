@@ -254,12 +254,24 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
       });
     }
     
+    console.log('🤖 Gemini request - prompt length:', userContent.length, 'has image:', !!imageBase64);
+    
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: parts }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+        generationConfig: { 
+          temperature: 0.1, 
+          maxOutputTokens: 4096 
+        },
+        // Be more permissive with safety to avoid unnecessary blocks
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
+        ]
       })
     });
     
@@ -271,7 +283,24 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
     
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) {
-      return { error: 'Empty response from Gemini' };
+      // Log more details for debugging
+      console.warn('🤖 Gemini empty response. Full data:', JSON.stringify(data).slice(0, 500));
+      
+      // Check for safety blocks or other issues
+      const finishReason = data.candidates?.[0]?.finishReason;
+      const safetyRatings = data.candidates?.[0]?.safetyRatings;
+      
+      if (finishReason === 'SAFETY') {
+        return { error: 'Response blocked by safety filters' };
+      }
+      if (finishReason === 'RECITATION') {
+        return { error: 'Response blocked due to recitation' };
+      }
+      if (data.promptFeedback?.blockReason) {
+        return { error: `Prompt blocked: ${data.promptFeedback.blockReason}` };
+      }
+      
+      return { error: `Empty response from Gemini (reason: ${finishReason || 'unknown'})` };
     }
     
     return { content: text };
