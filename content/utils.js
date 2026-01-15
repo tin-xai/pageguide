@@ -94,7 +94,8 @@ function getAccessibleRole(el) {
 }
 
 function getInputRole(el) {
-  const type = (el.type || 'text').toLowerCase();
+  // Ensure type is a string (el.type can be an object on SVG/custom elements)
+  const type = (typeof el.type === 'string' ? el.type : 'text').toLowerCase();
   const inputRoles = {
     'button': 'button',
     'submit': 'button',

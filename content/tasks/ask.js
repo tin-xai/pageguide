@@ -11,9 +11,9 @@
 async function handleAsk(query, history = []) {
   console.log('🤖 handleAsk:', query);
   
-  // Get page content and index
-  const pageContent = getVisibleText(Infinity); 
-  const pageIndex = createPageIndex(Infinity);    
+  // Get page content and index (limit to prevent performance issues on large pages)
+  const pageContent = getVisibleText(50000); 
+  const pageIndex = createPageIndex(500);    
   
   console.log('🤖 Page content length:', pageContent.length);
   console.log('🤖 Page index count:', pageIndex.count);

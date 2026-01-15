@@ -8,7 +8,12 @@ if (!window._xwebagentLoaded) {
 
   // ===== Message Handler =====
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    handleMessage(request).then(sendResponse);
+    handleMessage(request)
+      .then(sendResponse)
+      .catch(err => {
+        console.error('🤖 Message handler error:', err);
+        sendResponse({ success: false, error: err.message || 'Unknown error' });
+      });
     return true;
   });
 }

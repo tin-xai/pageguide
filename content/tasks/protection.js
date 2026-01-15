@@ -8,8 +8,8 @@ async function handleProtectionQuery(query) {
   console.log('🛡️ Protection query:', query);
   
   // Get page content
-  const pageIndex = createPageIndex(Infinity);
-  const visibleText = getVisibleText(Infinity);
+  const pageIndex = createPageIndex(500);
+  const visibleText = getVisibleText(50000);
   
   // Show SoM if enabled
   await showSomIfEnabled(pageIndex);
