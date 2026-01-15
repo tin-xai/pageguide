@@ -413,6 +413,11 @@ function applyHighlightsFromCitations(answer) {
   clearHighlights();
   window._xwebagentHighlights = [];
   
+  // Normalize curly/smart quotes to straight quotes
+  const normalizedAnswer = answer
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'");
+  
   // Find all citation patterns:
   // [N:"text"] or [N:'text'] - with quotes (text may contain apostrophes/quotes)
   // [N:text] - without quotes
@@ -423,13 +428,13 @@ function applyHighlightsFromCitations(answer) {
   const unquotedPattern = /\[(\d+):\s*([^\]"']+)\]/g;     // [N:text]
   const citationSimplePattern = /\[(\d+)\](?!:)/g;        // [N]
   
-  // Collect all matches
+  // Collect all matches from normalized answer
   const matchesWithText = [
-    ...answer.matchAll(doubleQuotedPattern),
-    ...answer.matchAll(singleQuotedPattern),
-    ...answer.matchAll(unquotedPattern)
+    ...normalizedAnswer.matchAll(doubleQuotedPattern),
+    ...normalizedAnswer.matchAll(singleQuotedPattern),
+    ...normalizedAnswer.matchAll(unquotedPattern)
   ];
-  const matchesSimple = [...answer.matchAll(citationSimplePattern)];
+  const matchesSimple = [...normalizedAnswer.matchAll(citationSimplePattern)];
   
   if (matchesWithText.length === 0 && matchesSimple.length === 0) {
     console.log('🤖 No citations found in answer');

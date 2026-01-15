@@ -42,12 +42,20 @@ document.addEventListener('DOMContentLoaded', async () => {
  * For [N] format, extracts the preceding phrase as the clickable text
  */
 function parseCitations(text) {
+  // Normalize curly/smart quotes to straight quotes first
+  const normalizedText = text
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'");
+  
   // Match citations with various quote styles:
   // [N:"text"] - double quoted (text can contain apostrophes)
   // [N:'text'] - single quoted (text can contain double quotes)
   // [N:text] - unquoted
   // [N] - just index
   const citationPattern = /\[(\d+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
+  
+  // Use normalized text for parsing
+  text = normalizedText;
   
   let lastIndex = 0;
   let result = '';
