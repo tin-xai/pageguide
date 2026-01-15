@@ -148,7 +148,7 @@ async function handleStepByStepGuide(question, continueFromStep = false) {
   console.log('🎯 Guidance step', guidance.currentStep, 'for:', guidance.question);
   
   // Get fresh page index (DOM may have changed after user action)
-  const pageIndex = createPageIndex(500);
+  const pageIndex = createPageIndex(5000);
   const pageBg = getPageBackground();
   
   // Show SoM if enabled

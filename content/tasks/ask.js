@@ -310,7 +310,7 @@ async function handleAsk(query, history = []) {
   // Otherwise, use text-based approach
   // Get page content and index (limit to prevent performance issues on large pages)
   const pageContent = getVisibleText(50000); 
-  const pageIndex = createPageIndex(500);    
+  const pageIndex = createPageIndex(5000);    
   
   console.log('🤖 Page content length:', pageContent.length);
   console.log('🤖 Page index count:', pageIndex.count);
@@ -391,13 +391,21 @@ function applyHighlightsFromCitations(answer) {
   window._xwebagentHighlights = [];
   
   // Find all citation patterns:
-  // [N:"text"] or [N:'text'] - with quotes
-  // [N:text] - without quotes (LLMs sometimes omit quotes)
+  // [N:"text"] or [N:'text'] - with quotes (text may contain apostrophes/quotes)
+  // [N:text] - without quotes
   // [N] - simple index only
-  const citationWithTextPattern = /\[(\d+):\s*["']?([^"'\]]+?)["']?\]/g;
-  const citationSimplePattern = /\[(\d+)\](?!:)/g;
+  // Use separate patterns for double-quoted, single-quoted, and unquoted
+  const doubleQuotedPattern = /\[(\d+):\s*"([^"]+)"\]/g;  // [N:"text"]
+  const singleQuotedPattern = /\[(\d+):\s*'([^']+)'\]/g;  // [N:'text']
+  const unquotedPattern = /\[(\d+):\s*([^\]"']+)\]/g;     // [N:text]
+  const citationSimplePattern = /\[(\d+)\](?!:)/g;        // [N]
   
-  const matchesWithText = [...answer.matchAll(citationWithTextPattern)];
+  // Collect all matches
+  const matchesWithText = [
+    ...answer.matchAll(doubleQuotedPattern),
+    ...answer.matchAll(singleQuotedPattern),
+    ...answer.matchAll(unquotedPattern)
+  ];
   const matchesSimple = [...answer.matchAll(citationSimplePattern)];
   
   if (matchesWithText.length === 0 && matchesSimple.length === 0) {
