@@ -442,3 +442,72 @@ body {
   cursor: not-allowed;
   transform: none;
 }
+
+/* Collapsible Debug Section */
+.xwebagent-debug-wrapper {
+  align-self: center;
+  width: 100%;
+  max-width: 95%;
+}
+
+.xwebagent-debug-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.xwebagent-debug-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(0, 217, 255, 0.2);
+}
+
+.xwebagent-debug-arrow {
+  color: #666;
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.xwebagent-debug-label {
+  color: #666;
+  font-size: 11px;
+}
+
+.xwebagent-debug-content {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  animation: debug-expand 0.2s ease-out;
+}
+
+@keyframes debug-expand {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.xwebagent-debug-line {
+  font-size: 11px;
+  color: #888;
+  line-height: 1.6;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.xwebagent-debug-line:not(:last-child) {
+  margin-bottom: 2px;
+}

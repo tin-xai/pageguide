@@ -156,6 +156,44 @@ function addMessage(content, type = 'assistant', clickable = false) {
 }
 
 /**
+ * Add a collapsible debug/info section
+ * Collapsed by default, click to expand
+ */
+function addCollapsibleDebug(lines) {
+  const container = document.getElementById('xwebagent-messages');
+  if (!container) return;
+  
+  const wrapper = document.createElement('div');
+  wrapper.className = 'xwebagent-debug-wrapper';
+  
+  const toggle = document.createElement('div');
+  toggle.className = 'xwebagent-debug-toggle';
+  toggle.innerHTML = `<span class="xwebagent-debug-arrow">▶</span> <span class="xwebagent-debug-label">Details</span>`;
+  
+  const content = document.createElement('div');
+  content.className = 'xwebagent-debug-content';
+  content.style.display = 'none';
+  
+  lines.forEach(line => {
+    const lineEl = document.createElement('div');
+    lineEl.className = 'xwebagent-debug-line';
+    lineEl.textContent = line;
+    content.appendChild(lineEl);
+  });
+  
+  toggle.addEventListener('click', () => {
+    const isOpen = content.style.display !== 'none';
+    content.style.display = isOpen ? 'none' : 'block';
+    toggle.querySelector('.xwebagent-debug-arrow').textContent = isOpen ? '▶' : '▼';
+  });
+  
+  wrapper.appendChild(toggle);
+  wrapper.appendChild(content);
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
  * Add a guide step message
  */
 function addGuideStep(result) {
@@ -299,7 +337,10 @@ async function sendMessage() {
     hideTyping();
     
     if (result && result.success) {
-      // Show routing decision
+      // Build debug info for collapsible section
+      const debugLines = [];
+      
+      // Routing decision
       if (result.routedTo) {
         const confidence = Math.round((result.routeConfidence || 0) * 100);
         const handlerEmoji = {
@@ -307,27 +348,32 @@ async function sendMessage() {
           'guide': '📋',
           'protection': '🛡️'
         }[result.routedTo] || '🎯';
-        addMessage(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}% - ${result.routeReason})`, 'system');
+        debugLines.push(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}%)`);
       }
       
-      // Show vision decision (for ask handler)
+      // Vision decision
       if (result.visionDecision) {
         const vd = result.visionDecision;
         const visionConfidence = Math.round((vd.confidence || 0) * 100);
         const visionEmoji = vd.needsVision ? '📸' : '📝';
-        const visionMode = vd.needsVision ? 'Vision (navigation)' : 'Text-only';
-        addMessage(`${visionEmoji} Mode: ${visionMode} (${visionConfidence}% - ${vd.reason})`, 'system');
+        const visionMode = vd.needsVision ? 'Vision' : 'Text-only';
+        debugLines.push(`${visionEmoji} Mode: ${visionMode} (${visionConfidence}%)`);
         
-        // Show vision navigation steps if used
         if (result.useVision && result.visionSteps) {
-          addMessage(`🔍 Analyzed in ${result.visionSteps} step(s)`, 'system');
+          debugLines.push(`🔍 Steps: ${result.visionSteps}`);
         }
         
-        // Show navigation actions taken
         if (result.visionActions && result.visionActions.length > 0) {
-          const actionsText = result.visionActions.slice(-3).join('\n'); // Show last 3 actions
-          addMessage(`🧭 Navigation:\n${actionsText}`, 'system');
+          debugLines.push(`🧭 Navigation:`);
+          result.visionActions.forEach(action => {
+            debugLines.push(`  • ${action}`);
+          });
         }
+      }
+      
+      // Add collapsible debug section if there's debug info
+      if (debugLines.length > 0) {
+        addCollapsibleDebug(debugLines);
       }
       
       // Add assistant response to history (but not for intermediate steps)
