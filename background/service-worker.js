@@ -52,16 +52,17 @@ const CONFIG = {
   defaultProvider: 'gemini'
 };
 
-// Content script files (in order)
+// Content script files (in order - dependencies first)
 const CONTENT_SCRIPTS = [
   'content/prompts.js',
-  'content/utils.js', 
-  'content/protection.js',  // Dark pattern & ad protection
-  'content/api-core.js',
-  'content/api-highlight.js',
-  'content/api-ask.js',
-  'content/api-guide.js',
-  'content/api.js',
+  'content/utils.js',
+  'content/functions/capture_screenshot.js',
+  'content/functions/highlight.js',
+  'content/functions/scroll.js',
+  'content/functions/main_router.js',
+  'content/tasks/protection.js',
+  'content/tasks/guide.js',
+  'content/tasks/ask.js',
   'content/content.js'
 ];
 
