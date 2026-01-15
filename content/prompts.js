@@ -149,8 +149,11 @@ VISUAL ANALYSIS NEEDED when:
 - Question refers to visual attributes (e.g., "pink chair", "red button", "person sitting")
 - Question asks about what something "looks like"
 - Question combines object + visual description (e.g., "chair with a girl sitting on it")
-- Question asks about charts, graphs, or visual data
+- Question asks about charts, graphs, diagrams, or visual data representations
 - Question asks to identify people, objects, or scenes in images
+- Question requires reading/interpreting tables, diagrams, flowcharts, or infographics
+- Question asks about spatial relationships or positions in a layout
+- Question asks to compare visual elements side-by-side
 
 TEXT-ONLY SUFFICIENT when:
 - Question asks about text content, prices, names, descriptions
@@ -190,7 +193,25 @@ Query: "Which product has the best reviews?"
 → {"needsVision": false, "confidence": 0.85, "reason": "Review ratings are text/numbers"}
 
 Query: "Can you see any leather recliners?"
-→ {"needsVision": true, "confidence": 0.9, "reason": "Material identification from images"}`,
+→ {"needsVision": true, "confidence": 0.9, "reason": "Material identification from images"}
+
+Query: "What does the chart show about sales growth?"
+→ {"needsVision": true, "confidence": 0.95, "reason": "Chart interpretation requires visual analysis"}
+
+Query: "Read the comparison table and tell me which plan is best"
+→ {"needsVision": true, "confidence": 0.9, "reason": "Table layout and visual comparison needs screenshots"}
+
+Query: "What's in the diagram on this page?"
+→ {"needsVision": true, "confidence": 0.95, "reason": "Diagram interpretation requires visual analysis"}
+
+Query: "Compare the two products shown side by side"
+→ {"needsVision": true, "confidence": 0.9, "reason": "Visual comparison of product images/layout"}
+
+Query: "What trend does the graph indicate?"
+→ {"needsVision": true, "confidence": 0.95, "reason": "Graph/trend analysis requires seeing the visualization"}
+
+Query: "How many columns are in the pricing table?"
+→ {"needsVision": true, "confidence": 0.85, "reason": "Table structure analysis needs visual inspection"}`,
 
   // Vision-based navigation agent - analyzes screenshot and decides action
   VISION_NAVIGATE: `You are a visual web navigation agent. Analyze the screenshot to answer the user's question OR decide if you need to navigate.
