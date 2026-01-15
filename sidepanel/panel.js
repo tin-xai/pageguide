@@ -42,8 +42,8 @@ document.addEventListener('DOMContentLoaded', async () => {
  * For [N] format, extracts the preceding phrase as the clickable text
  */
 function parseCitations(text) {
-  // Pattern: [N:"text"] or [N:'text'] or [N]
-  const citationPattern = /\[(\d+)(?::\s*["']([^"']+)["'])?\]/g;
+  // Pattern: [N:"text"] or [N:'text'] or [N:text] (no quotes) or [N]
+  const citationPattern = /\[(\d+)(?::\s*["']?([^"'\]]+?)["']?)?\]/g;
   
   let lastIndex = 0;
   let result = '';
@@ -308,6 +308,26 @@ async function sendMessage() {
           'protection': '🛡️'
         }[result.routedTo] || '🎯';
         addMessage(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}% - ${result.routeReason})`, 'system');
+      }
+      
+      // Show vision decision (for ask handler)
+      if (result.visionDecision) {
+        const vd = result.visionDecision;
+        const visionConfidence = Math.round((vd.confidence || 0) * 100);
+        const visionEmoji = vd.needsVision ? '📸' : '📝';
+        const visionMode = vd.needsVision ? 'Vision (navigation)' : 'Text-only';
+        addMessage(`${visionEmoji} Mode: ${visionMode} (${visionConfidence}% - ${vd.reason})`, 'system');
+        
+        // Show vision navigation steps if used
+        if (result.useVision && result.visionSteps) {
+          addMessage(`🔍 Analyzed in ${result.visionSteps} step(s)`, 'system');
+        }
+        
+        // Show navigation actions taken
+        if (result.visionActions && result.visionActions.length > 0) {
+          const actionsText = result.visionActions.slice(-3).join('\n'); // Show last 3 actions
+          addMessage(`🧭 Navigation:\n${actionsText}`, 'system');
+        }
       }
       
       // Add assistant response to history (but not for intermediate steps)

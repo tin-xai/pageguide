@@ -140,6 +140,109 @@ Q: "How do I report this video?" (Step 2, after menu opened)
 PAGE INDEX now shows: [20] (button) Report
 → {"step":2,"instruction":"Now click 'Report' to report this video","highlight":{"index":20,"text":"Report"},"waitFor":"click","isLastStep":true,"nextStepHint":"You'll see reporting options"}`,
 
+  // Vision Router - decides if question needs visual/screenshot analysis
+  VISION_ROUTER: `You are a vision requirements classifier. Decide if a question about a webpage requires VISUAL analysis (screenshots) or if TEXT-ONLY analysis is sufficient.
+
+VISUAL ANALYSIS NEEDED when:
+- Question asks about visual appearance, colors, design, layout
+- Question asks about images, photos, pictures, graphics
+- Question refers to visual attributes (e.g., "pink chair", "red button", "person sitting")
+- Question asks about what something "looks like"
+- Question combines object + visual description (e.g., "chair with a girl sitting on it")
+- Question asks about charts, graphs, or visual data
+- Question asks to identify people, objects, or scenes in images
+
+TEXT-ONLY SUFFICIENT when:
+- Question asks about text content, prices, names, descriptions
+- Question asks about links, buttons, navigation (by name)
+- Question asks for summaries or information extraction
+- Question asks "what is" or "tell me about" without visual specifics
+- Question asks about availability, stock, categories
+
+Return JSON only:
+{
+  "needsVision": true | false,
+  "confidence": 0.0-1.0,
+  "reason": "Brief explanation"
+}
+
+EXAMPLES:
+
+Query: "Do they sell a pink chair with a girl sitting on it?"
+→ {"needsVision": true, "confidence": 0.95, "reason": "Requires visual analysis of product images to identify color and person"}
+
+Query: "What is the price of the first chair?"
+→ {"needsVision": false, "confidence": 0.9, "reason": "Price is text content, no visual analysis needed"}
+
+Query: "Show me chairs under $100"
+→ {"needsVision": false, "confidence": 0.85, "reason": "Filtering by price is text-based"}
+
+Query: "Which chair has a modern minimalist design?"
+→ {"needsVision": true, "confidence": 0.9, "reason": "Design assessment requires visual analysis"}
+
+Query: "Is there a blue velvet sofa?"
+→ {"needsVision": true, "confidence": 0.95, "reason": "Color and material identification needs vision"}
+
+Query: "What brands are available?"
+→ {"needsVision": false, "confidence": 0.9, "reason": "Brand names are text content"}
+
+Query: "Which product has the best reviews?"
+→ {"needsVision": false, "confidence": 0.85, "reason": "Review ratings are text/numbers"}
+
+Query: "Can you see any leather recliners?"
+→ {"needsVision": true, "confidence": 0.9, "reason": "Material identification from images"}`,
+
+  // Vision-based navigation agent - analyzes screenshot and decides action
+  VISION_NAVIGATE: `You are a visual web navigation agent. Analyze the screenshot to answer the user's question OR decide if you need to navigate.
+
+CURRENT STATE:
+- Step: {step} of {maxSteps}
+- Previous actions: {previousActions}
+- Scroll position: {scrollPosition}
+
+PAGE INDEX (visible elements):
+{pageIndex}
+
+QUESTION: {question}
+
+YOUR TASK:
+1. Examine the screenshot carefully for visual elements that answer the question
+2. If you CAN answer → provide the answer with citations
+3. If you CANNOT answer from current view → request navigation
+
+RESPONSE FORMAT (JSON only):
+{
+  "canAnswer": true | false,
+  "answer": "Your answer with [N:\"text\"] citations (only if canAnswer=true)",
+  "action": "none" | "scroll_down" | "scroll_up" | "not_found",
+  "reason": "Why you chose this action"
+}
+
+ACTIONS:
+- "none": You found the answer (canAnswer must be true)
+- "scroll_down": Content might be below current view
+- "scroll_up": Content might be above current view  
+- "not_found": You've looked enough and the content doesn't exist on this page
+
+CITATION FORMAT:
+- Use [N:"text"] to cite elements, e.g., [45:"pink velvet chair"]
+
+EXAMPLES:
+
+Question: "Is there a pink chair with a girl sitting on it?"
+Screenshot shows: office chairs, no pink chairs visible
+→ {"canAnswer": false, "action": "scroll_down", "reason": "No pink chairs in current view, checking below"}
+
+Question: "Is there a pink chair with a girl sitting on it?"  
+Screenshot shows: pink accent chair with model sitting
+→ {"canAnswer": true, "answer": "Yes! I can see a pink accent chair [23:\"Pink Velvet Chair\"] with a woman sitting on it in the product image.", "action": "none", "reason": "Found matching product"}
+
+Question: "Do they sell red sofas?"
+After scrolling through entire page, none found
+→ {"canAnswer": true, "answer": "No, I don't see any red sofas on this page. The available sofas are in gray, blue, and beige colors.", "action": "not_found", "reason": "Scrolled through page, no red sofas"}
+
+Analyze the current screenshot and respond with JSON:`,
+
   // Protection prompt - find and hide unwanted content
   PROTECTION: `You are a content filter. Find content on this page that the user wants to hide.
 
