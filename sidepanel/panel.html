@@ -28,7 +28,19 @@
       <div class="xwebagent-quick-actions">
         <button class="xwebagent-quick-btn" data-action="reset" title="Clear chat and highlights">🧹 Clear All</button>
       </div>
+      
+      <!-- Image Preview Area (hidden by default) -->
+      <div class="xwebagent-image-preview" id="xwebagent-image-preview" style="display: none;">
+        <img id="xwebagent-preview-img" src="" alt="Uploaded image">
+        <button class="xwebagent-remove-image" id="xwebagent-remove-image" title="Remove image">✕</button>
+        <span class="xwebagent-image-label">📷 Image ready - ask about it!</span>
+      </div>
+      
       <div class="xwebagent-input-row">
+        <label class="xwebagent-upload-btn" id="xwebagent-upload-label" title="Upload image (or Ctrl+V to paste)">
+          📷
+          <input type="file" id="xwebagent-image-upload" accept="image/*" hidden>
+        </label>
         <input type="text" class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything...">
         <button class="xwebagent-send-btn" id="xwebagent-send">➤</button>
       </div>

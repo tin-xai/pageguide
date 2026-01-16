@@ -116,6 +116,16 @@ async function handleSmartQuery(query, history = []) {
       result = await handleStepByStepGuide(query);
       break;
     
+    case 'image_ask':
+      if (typeof handleImageAsk === 'function') {
+        result = await handleImageAsk(query);
+        if (result) break;
+      }
+      // Fall through to ask if image_ask handler not available or no image uploaded
+      console.log('🎯 Falling back to ask (no image or handler unavailable)');
+      result = await handleAsk(query, history);
+      break;
+    
     case 'ask':
     default:
       result = await handleAsk(query, history);

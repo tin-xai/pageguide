@@ -39,6 +39,8 @@ async function handleMessage(request) {
         window._xwebagentGuidance.previousSteps = [];
         window._xwebagentGuidance.waitingForAction = null;
       }
+      // Clear uploaded image
+      if (typeof clearUploadedImage === 'function') clearUploadedImage();
       return { success: true };
     
     case 'scrollToHighlight':
@@ -57,6 +59,20 @@ async function handleMessage(request) {
         return await continueGuidance();
       }
       return { success: false, error: 'Guidance not available' };
+    
+    case 'setUploadedImage':
+      if (typeof setUploadedImage === 'function') {
+        setUploadedImage(request.imageBase64);
+        return { success: true };
+      }
+      return { success: false, error: 'Image upload not available' };
+    
+    case 'clearUploadedImage':
+      if (typeof clearUploadedImage === 'function') {
+        clearUploadedImage();
+        return { success: true };
+      }
+      return { success: true }; // Silently succeed even if function not loaded
     
     default:
       return { error: 'Unknown action' };

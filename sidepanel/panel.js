@@ -4,6 +4,7 @@
 let chatMessages = [];
 let conversationHistory = []; // Stores {role: 'user'|'assistant', content: string}
 let currentTabId = null;
+let uploadedImageBase64 = null; // Stores the uploaded image
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -25,6 +26,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.querySelectorAll('.xwebagent-quick-btn').forEach(btn => {
     btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
   });
+  
+  // Image upload handling
+  const imageUpload = document.getElementById('xwebagent-image-upload');
+  const removeImageBtn = document.getElementById('xwebagent-remove-image');
+  
+  if (imageUpload) {
+    imageUpload.addEventListener('change', handleImageUpload);
+  }
+  
+  if (removeImageBtn) {
+    removeImageBtn.addEventListener('click', clearUploadedImage);
+  }
+  
+  // Paste image support (Ctrl+V / Cmd+V)
+  document.addEventListener('paste', handlePasteImage);
   
   // Focus input
   document.getElementById('xwebagent-input')?.focus();
@@ -323,6 +339,175 @@ async function sendToContentScript(message) {
 }
 
 /**
+ * Handle paste image (Ctrl+V / Cmd+V)
+ */
+async function handlePasteImage(event) {
+  const clipboardItems = event.clipboardData?.items;
+  if (!clipboardItems) return;
+  
+  // Look for image in clipboard
+  for (const item of clipboardItems) {
+    if (item.type.startsWith('image/')) {
+      event.preventDefault();
+      
+      const file = item.getAsFile();
+      if (!file) continue;
+      
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        addMessage('❌ Image too large. Max size is 10MB', 'error');
+        return;
+      }
+      
+      try {
+        // Convert to base64
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const base64 = e.target.result;
+          // Remove data URL prefix to get pure base64
+          uploadedImageBase64 = base64.split(',')[1];
+          
+          // Show preview
+          const preview = document.getElementById('xwebagent-image-preview');
+          const previewImg = document.getElementById('xwebagent-preview-img');
+          const uploadLabel = document.getElementById('xwebagent-upload-label');
+          
+          if (preview && previewImg) {
+            previewImg.src = base64;
+            preview.style.display = 'flex';
+          }
+          
+          // Highlight upload button to show image is attached
+          if (uploadLabel) {
+            uploadLabel.classList.add('has-image');
+          }
+          
+          // Send image to content script
+          try {
+            await sendToContentScript({ 
+              action: 'setUploadedImage', 
+              imageBase64: uploadedImageBase64 
+            });
+            console.log('🖼️ Pasted image sent to content script');
+          } catch (err) {
+            console.warn('🖼️ Could not send pasted image to content script:', err);
+          }
+          
+          // Update placeholder to hint about asking
+          const input = document.getElementById('xwebagent-input');
+          if (input) {
+            input.placeholder = 'Ask about the pasted image...';
+            input.focus();
+          }
+          
+          addMessage('📋 Image pasted! Ask me to find it on the page.', 'system');
+        };
+        
+        reader.readAsDataURL(file);
+        return; // Only handle first image
+      } catch (err) {
+        addMessage(`❌ Error pasting image: ${err.message}`, 'error');
+      }
+    }
+  }
+}
+
+/**
+ * Handle image upload
+ */
+async function handleImageUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  
+  // Validate file type
+  if (!file.type.startsWith('image/')) {
+    addMessage('❌ Please upload an image file', 'error');
+    return;
+  }
+  
+  // Validate file size (max 10MB)
+  if (file.size > 10 * 1024 * 1024) {
+    addMessage('❌ Image too large. Max size is 10MB', 'error');
+    return;
+  }
+  
+  try {
+    // Convert to base64
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      // Remove data URL prefix to get pure base64
+      uploadedImageBase64 = base64.split(',')[1];
+      
+      // Show preview
+      const preview = document.getElementById('xwebagent-image-preview');
+      const previewImg = document.getElementById('xwebagent-preview-img');
+      const uploadLabel = document.getElementById('xwebagent-upload-label');
+      
+      if (preview && previewImg) {
+        previewImg.src = base64;
+        preview.style.display = 'flex';
+      }
+      
+      // Highlight upload button to show image is attached
+      if (uploadLabel) {
+        uploadLabel.classList.add('has-image');
+      }
+      
+      // Send image to content script
+      try {
+        await sendToContentScript({ 
+          action: 'setUploadedImage', 
+          imageBase64: uploadedImageBase64 
+        });
+        console.log('🖼️ Image sent to content script');
+      } catch (err) {
+        console.warn('🖼️ Could not send image to content script:', err);
+      }
+      
+      // Update placeholder to hint about asking
+      const input = document.getElementById('xwebagent-input');
+      if (input) {
+        input.placeholder = 'Ask about the uploaded image...';
+      }
+      
+      addMessage('📷 Image uploaded! Ask me to find it on the page.', 'system');
+    };
+    
+    reader.readAsDataURL(file);
+  } catch (err) {
+    addMessage(`❌ Error uploading image: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Clear uploaded image
+ */
+async function clearUploadedImage() {
+  uploadedImageBase64 = null;
+  
+  // Hide preview
+  const preview = document.getElementById('xwebagent-image-preview');
+  const uploadLabel = document.getElementById('xwebagent-upload-label');
+  const input = document.getElementById('xwebagent-input');
+  const fileInput = document.getElementById('xwebagent-image-upload');
+  
+  if (preview) preview.style.display = 'none';
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  if (input) input.placeholder = 'Ask anything...';
+  if (fileInput) fileInput.value = '';
+  
+  // Clear from content script
+  try {
+    await sendToContentScript({ action: 'clearUploadedImage' });
+  } catch (err) {
+    console.warn('🖼️ Could not clear image in content script:', err);
+  }
+  
+  addMessage('🗑️ Image removed', 'system');
+}
+
+/**
  * Send a chat message
  */
 async function sendMessage() {
@@ -359,9 +544,23 @@ async function sendMessage() {
         const handlerEmoji = {
           'ask': '💬',
           'guide': '📋',
-          'protection': '🛡️'
+          'protection': '🛡️',
+          'image_ask': '🖼️'
         }[result.routedTo] || '🎯';
         debugLines.push(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}%)`);
+      }
+      
+      // Image ask info
+      if (result.isImageAsk) {
+        if (result.imageAskSteps) {
+          debugLines.push(`🔍 Image search steps: ${result.imageAskSteps}`);
+        }
+        if (result.imageAskActions && result.imageAskActions.length > 0) {
+          debugLines.push(`🧭 Image search navigation:`);
+          result.imageAskActions.forEach(action => {
+            debugLines.push(`  • ${action}`);
+          });
+        }
       }
       
       // Vision decision
@@ -441,7 +640,25 @@ async function handleQuickAction(action) {
     const container = document.getElementById('xwebagent-messages');
     if (container) container.innerHTML = '';
     
-    addMessage('🧹 Cleared chat and highlights', 'system');
+    // Clear uploaded image
+    uploadedImageBase64 = null;
+    const preview = document.getElementById('xwebagent-image-preview');
+    const uploadLabel = document.getElementById('xwebagent-upload-label');
+    const input = document.getElementById('xwebagent-input');
+    const fileInput = document.getElementById('xwebagent-image-upload');
+    
+    if (preview) preview.style.display = 'none';
+    if (uploadLabel) uploadLabel.classList.remove('has-image');
+    if (input) input.placeholder = 'Ask anything...';
+    if (fileInput) fileInput.value = '';
+    
+    try {
+      await sendToContentScript({ action: 'clearUploadedImage' });
+    } catch (e) {
+      // Ignore
+    }
+    
+    addMessage('🧹 Cleared chat, highlights, and uploaded image', 'system');
   }
 }
 

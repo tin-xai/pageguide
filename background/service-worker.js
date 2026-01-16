@@ -63,6 +63,7 @@ const CONTENT_SCRIPTS = [
   'content/tasks/protection.js',
   'content/tasks/guide.js',
   'content/tasks/ask.js',
+  'content/tasks/image_ask.js',
   'content/content.js'
 ];
 
@@ -117,6 +118,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === 'callLLM') {
     callLLM(request.messages, request.systemPrompt, request.imageBase64)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'callLLMWithImages') {
+    callLLMWithImages(request.messages, request.systemPrompt, request.images)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -176,6 +183,51 @@ async function captureScreenshot(tabId) {
     console.error('📸 Screenshot error:', error);
     return { error: `Screenshot failed: ${error.message}` };
   }
+}
+
+// ===== Multi-Image LLM Router =====
+// Supports multiple images for comparison tasks (e.g., image_ask)
+async function callLLMWithImages(messages, systemPrompt, images = []) {
+  // Start keep-alive to prevent service worker from going inactive
+  startKeepAlive();
+  
+  let settings;
+  try {
+    settings = await chrome.storage.sync.get([
+      'provider',
+      'geminiApiKey', 'geminiModel',
+      'openrouterApiKey', 'openrouterModel',
+      'openaiApiKey', 'openaiModel'
+    ]);
+  } catch (e) {
+    stopKeepAlive();
+    return { error: 'Failed to load settings' };
+  }
+  
+  const provider = settings.provider || CONFIG.defaultProvider;
+  
+  let result;
+  try {
+    switch (provider) {
+      case 'gemini':
+        result = await callGeminiMultiImage(messages, systemPrompt, settings, images);
+        break;
+      case 'openrouter':
+        result = await callOpenRouterMultiImage(messages, systemPrompt, settings, images);
+        break;
+      case 'openai':
+        result = await callOpenAIMultiImage(messages, systemPrompt, settings, images);
+        break;
+      default:
+        result = { error: `Unknown provider: ${provider}` };
+    }
+  } catch (e) {
+    result = { error: `LLM call failed: ${e.message}` };
+  }
+  
+  // Stop keep-alive after LLM call completes
+  stopKeepAlive();
+  return result;
 }
 
 // ===== Main LLM Router =====
@@ -402,6 +454,222 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
       ];
     } else {
       content = userContent;
+    }
+    
+    const chatMessages = [{ role: 'user', content: content }];
+    
+    const response = await fetch(config.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: chatMessages,
+        temperature: 0.1,
+        max_tokens: 1024
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      return { error: `OpenAI API error: ${data.error?.message || response.status}` };
+    }
+    
+    const text = data.choices?.[0]?.message?.content;
+    if (!text) {
+      return { error: 'Empty response from OpenAI' };
+    }
+    
+    return { content: text };
+  } catch (error) {
+    return { error: `OpenAI network error: ${error.message}` };
+  }
+}
+
+// ===== Multi-Image Gemini API Call =====
+async function callGeminiMultiImage(messages, systemPrompt, settings, images = []) {
+  const config = CONFIG.providers.gemini;
+  const apiKey = (settings.geminiApiKey || config.defaultApiKey).trim();
+  
+  if (!apiKey) {
+    return { error: 'Gemini API key not configured. Click ⚙️ Settings.' };
+  }
+  
+  const model = settings.geminiModel || config.defaultModel;
+  const url = `${config.endpoint}/${model}:generateContent?key=${apiKey}`;
+  
+  try {
+    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
+    if (messages?.length > 0) {
+      userContent += messages[messages.length - 1].content;
+    }
+    
+    // Build parts array - text first, then images
+    const parts = [{ text: userContent }];
+    
+    // Add all images with labels
+    if (images && images.length > 0) {
+      console.log(`🖼️ Adding ${images.length} images to Gemini request`);
+      for (const img of images) {
+        // Add label as text before image if provided
+        if (img.label) {
+          parts.push({ text: `[${img.label}]:` });
+        }
+        parts.push({
+          inlineData: {
+            mimeType: 'image/jpeg',
+            data: img.base64
+          }
+        });
+      }
+    }
+    
+    console.log('🤖 Gemini multi-image request - prompt length:', userContent.length, 'images:', images.length);
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: parts }],
+        generationConfig: { 
+          temperature: 0.1, 
+          maxOutputTokens: 4096 
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
+        ]
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      return { error: `API error: ${data.error?.message || response.status}` };
+    }
+    
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      const finishReason = data.candidates?.[0]?.finishReason;
+      if (finishReason === 'SAFETY') {
+        return { error: 'Response blocked by safety filters' };
+      }
+      if (data.promptFeedback?.blockReason) {
+        return { error: `Prompt blocked: ${data.promptFeedback.blockReason}` };
+      }
+      return { error: `Empty response from Gemini (reason: ${finishReason || 'unknown'})` };
+    }
+    
+    return { content: text };
+  } catch (error) {
+    return { error: `Network error: ${error.message}` };
+  }
+}
+
+// ===== Multi-Image OpenRouter API Call =====
+async function callOpenRouterMultiImage(messages, systemPrompt, settings, images = []) {
+  const config = CONFIG.providers.openrouter;
+  const apiKey = (settings.openrouterApiKey || config.defaultApiKey).trim();
+  
+  if (!apiKey) {
+    return { error: 'OpenRouter API key not configured. Click ⚙️ Settings.' };
+  }
+  
+  const model = settings.openrouterModel || config.defaultModel;
+  
+  try {
+    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
+    if (messages?.length > 0) {
+      userContent += messages[messages.length - 1].content;
+    }
+    
+    // Build content array for multimodal (text + images)
+    const content = [{ type: 'text', text: userContent }];
+    
+    if (images && images.length > 0) {
+      console.log(`🖼️ Adding ${images.length} images to OpenRouter request`);
+      for (const img of images) {
+        if (img.label) {
+          content.push({ type: 'text', text: `[${img.label}]:` });
+        }
+        content.push({ 
+          type: 'image_url', 
+          image_url: { url: `data:image/jpeg;base64,${img.base64}` } 
+        });
+      }
+    }
+    
+    const chatMessages = [{ role: 'user', content: content }];
+    
+    const response = await fetch(config.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': chrome.runtime.getURL(''),
+        'X-Title': 'XWebAgent'
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: chatMessages,
+        temperature: 0.1,
+        max_tokens: 1024
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
+    }
+    
+    const text = data.choices?.[0]?.message?.content;
+    if (!text) {
+      return { error: 'Empty response from OpenRouter' };
+    }
+    
+    return { content: text };
+  } catch (error) {
+    return { error: `OpenRouter network error: ${error.message}` };
+  }
+}
+
+// ===== Multi-Image OpenAI API Call =====
+async function callOpenAIMultiImage(messages, systemPrompt, settings, images = []) {
+  const config = CONFIG.providers.openai;
+  const apiKey = (settings.openaiApiKey || config.defaultApiKey).trim();
+  
+  if (!apiKey) {
+    return { error: 'OpenAI API key not configured. Click ⚙️ Settings.' };
+  }
+  
+  const model = settings.openaiModel || config.defaultModel;
+  
+  try {
+    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
+    if (messages?.length > 0) {
+      userContent += messages[messages.length - 1].content;
+    }
+    
+    // Build content array for multimodal (text + images)
+    const content = [{ type: 'text', text: userContent }];
+    
+    if (images && images.length > 0) {
+      console.log(`🖼️ Adding ${images.length} images to OpenAI request`);
+      for (const img of images) {
+        if (img.label) {
+          content.push({ type: 'text', text: `[${img.label}]:` });
+        }
+        content.push({ 
+          type: 'image_url', 
+          image_url: { url: `data:image/jpeg;base64,${img.base64}`, detail: 'high' } 
+        });
+      }
     }
     
     const chatMessages = [{ role: 'user', content: content }];
