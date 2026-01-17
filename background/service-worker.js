@@ -35,7 +35,7 @@ const CONFIG = {
   providers: {
     gemini: {
       endpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
-      defaultModel: 'gemini-2.0-flash-exp',
+      defaultModel: 'gemini-2.5-flash',
       defaultApiKey: (typeof CONFIG_KEYS !== 'undefined' && CONFIG_KEYS.GEMINI_KEY) || ''
     },
     openrouter: {

@@ -128,7 +128,7 @@ async function testGemini(resultDiv) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: 'Say "OK" only.' }] }],
-      generationConfig: { maxOutputTokens: 10 }
+      generationConfig: { maxOutputTokens: 500 }  // Higher for thinking models like 2.5 Pro
     })
   });
   
