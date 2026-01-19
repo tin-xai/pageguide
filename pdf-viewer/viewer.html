@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XWebAgent PDF Reader</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <!-- Upload/URL Modal -->
+  <div id="upload-modal" class="modal active">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="modal-icon">📄</span>
+        <h1>XWebAgent PDF Reader</h1>
+        <p>Load a PDF, then use the sidepanel to ask questions</p>
+      </div>
+      
+      <div class="upload-options">
+        <div class="upload-option" id="file-upload-option">
+          <input type="file" id="file-input" accept=".pdf" hidden>
+          <div class="upload-icon">📁</div>
+          <div class="upload-label">Upload PDF</div>
+          <div class="upload-hint">Click or drag & drop</div>
+        </div>
+        
+        <div class="upload-divider">
+          <span>or</span>
+        </div>
+        
+        <div class="url-input-container">
+          <div class="url-icon">🔗</div>
+          <input type="text" id="url-input" placeholder="Paste PDF URL (arxiv, Google Drive, etc.)">
+          <button id="load-url-btn">Load</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Viewer (Full screen PDF, no chat) -->
+  <div id="main-viewer" class="hidden">
+    <!-- Header -->
+    <header class="viewer-header">
+      <div class="header-left">
+        <button id="back-btn" class="icon-btn" title="Back to upload">
+          <span>←</span>
+        </button>
+        <span class="pdf-title" id="pdf-title">Document</span>
+        <span class="pdf-status" id="pdf-status"></span>
+      </div>
+      <div class="header-center">
+        <button id="zoom-out" class="icon-btn">−</button>
+        <span id="zoom-level">100%</span>
+        <button id="zoom-in" class="icon-btn">+</button>
+        <span class="separator">|</span>
+        <button id="prev-page" class="icon-btn">‹</button>
+        <span id="page-info">1 / 1</span>
+        <button id="next-page" class="icon-btn">›</button>
+      </div>
+      <div class="header-right">
+        <button id="open-sidepanel" class="sidepanel-btn" title="Open chat sidepanel">
+          💬 Ask Questions
+        </button>
+      </div>
+    </header>
+
+    <!-- PDF Panel (Full width) -->
+    <div class="pdf-panel" id="pdf-panel">
+      <div class="pdf-container" id="pdf-container">
+        <div class="pdf-loading" id="pdf-loading">
+          <div class="spinner"></div>
+          <div>Loading PDF...</div>
+        </div>
+        <div id="pdf-pages"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="../lib/pdf.min.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>
