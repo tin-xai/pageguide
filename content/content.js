@@ -30,6 +30,7 @@ async function handleMessage(request) {
       if (typeof resetCustomStyles === 'function') resetCustomStyles();
       if (typeof clearMarkings === 'function') clearMarkings();
       if (typeof clearHighlights === 'function') clearHighlights();
+      if (typeof clearPdfHighlights === 'function') clearPdfHighlights();
       if (typeof clearGuidanceState === 'function') clearGuidanceState();
       // Also reset in-memory guidance state
       if (window._xwebagentGuidance) {
@@ -53,6 +54,13 @@ async function handleMessage(request) {
         return { success: scrolled };
       }
       return { success: false, error: 'Scroll function not loaded' };
+    
+    case 'navigateToPdfPage':
+      if (typeof navigateToPdfPage === 'function') {
+        const navigated = await navigateToPdfPage(request.page, request.searchText);
+        return { success: navigated };
+      }
+      return { success: false, error: 'PDF navigation not available' };
     
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {

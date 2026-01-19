@@ -96,6 +96,21 @@ async function routeQuery(query) {
  * This is the main entry point for all user queries
  */
 async function handleSmartQuery(query, history = []) {
+  // Check if we're on a PDF page first (bypass router for PDF pages)
+  if (typeof isPdfPage === 'function' && isPdfPage()) {
+    console.log('🎯 PDF page detected, routing to pdf_ask');
+    if (typeof handlePdfAsk === 'function') {
+      const result = await handlePdfAsk(query);
+      if (result) {
+        result.routedTo = 'pdf_ask';
+        result.routeConfidence = 1.0;
+        result.routeReason = 'PDF page detected';
+        return result;
+      }
+    }
+    // Fall through to regular ask if pdf handler returns null
+  }
+  
   // Route the query using LLM
   const route = await routeQuery(query);
   console.log('🎯 Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
@@ -123,6 +138,16 @@ async function handleSmartQuery(query, history = []) {
       }
       // Fall through to ask if image_ask handler not available or no image uploaded
       console.log('🎯 Falling back to ask (no image or handler unavailable)');
+      result = await handleAsk(query, history);
+      break;
+    
+    case 'pdf_ask':
+      if (typeof handlePdfAsk === 'function') {
+        result = await handlePdfAsk(query);
+        if (result) break;
+      }
+      // Fall through to ask if pdf_ask handler returns null
+      console.log('🎯 Falling back to ask (PDF handler unavailable or not a PDF)');
       result = await handleAsk(query, history);
       break;
     

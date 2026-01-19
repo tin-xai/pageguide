@@ -11,12 +11,14 @@ AVAILABLE HANDLERS:
 1. "guide" - For step-by-step "how to" questions that need interactive guidance
 2. "protection" - For safety/privacy requests (hide ads, scan for dark patterns, block trackers)
 3. "image_ask" - For questions about an UPLOADED IMAGE (finding similar items, comparing with page content)
-4. "ask" - For questions, information lookup, finding content, highlighting elements (DEFAULT)
+4. "pdf_ask" - For questions about PDF documents (summarize, find specific content, extract info from PDFs)
+5. "ask" - For questions, information lookup, finding content, highlighting elements (DEFAULT)
 
 ROUTING RULES:
 - "guide": User wants to LEARN how to do something in steps (e.g., "how do I report this video?", "where can I find settings?", "help me delete my account")
 - "protection": User mentions ads, privacy, dark patterns, safety, or wants to hide/block something (e.g., "hide the ads", "scan for dark patterns", "protect my privacy")
 - "image_ask": User asks about their UPLOADED IMAGE - finding it on page, comparing, locating similar items (e.g., "find this product", "where is this item?", "do they have this?", "is my image on this page?", "find similar to my upload")
+- "pdf_ask": User asks about PDF content, document analysis, or mentions PDF explicitly (e.g., "what does this PDF say?", "find X in the document", "summarize this PDF", "where does it mention Y?")
 - "ask": Questions about the page, finding information, showing/highlighting elements (e.g., "what is this page about?", "find the price", "show me images", "where is the login button?")
 
 IMPORTANT: Route to "image_ask" ONLY when:
@@ -24,9 +26,15 @@ IMPORTANT: Route to "image_ask" ONLY when:
 - User says "this", "my image", "my upload", "the image I uploaded"
 - User asks to find/locate something that implies comparing with their image
 
+IMPORTANT: Route to "pdf_ask" when:
+- User is asking about document content (PDF, paper, article)
+- User mentions "PDF", "document", "paper", "page X" (referring to document pages)
+- User wants to find or extract specific information from a document
+- User asks to summarize or analyze document content
+
 Return JSON only:
 {
-  "handler": "guide" | "protection" | "image_ask" | "ask",
+  "handler": "guide" | "protection" | "image_ask" | "pdf_ask" | "ask",
   "confidence": 0.0-1.0,
   "reason": "Brief explanation of why this handler"
 }
@@ -58,7 +66,19 @@ Query: "Where can I change my password?"
 → {"handler": "guide", "confidence": 0.85, "reason": "Looking for how to do something"}
 
 Query: "Summarize this page"
-→ {"handler": "ask", "confidence": 0.9, "reason": "Information request about page content"}`,
+→ {"handler": "ask", "confidence": 0.9, "reason": "Information request about page content"}
+
+Query: "What does this PDF say about machine learning?"
+→ {"handler": "pdf_ask", "confidence": 0.95, "reason": "Question about PDF document content"}
+
+Query: "Find where it mentions the methodology"
+→ {"handler": "pdf_ask", "confidence": 0.85, "reason": "Finding specific content in a document"}
+
+Query: "Summarize this document"
+→ {"handler": "pdf_ask", "confidence": 0.9, "reason": "Document summarization request"}
+
+Query: "What's on page 5?"
+→ {"handler": "pdf_ask", "confidence": 0.9, "reason": "Asking about specific document page"}`,
 
 
   // Answer with inline citations - single prompt approach

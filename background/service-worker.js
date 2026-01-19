@@ -30,6 +30,8 @@ try {
   console.warn('🤖 config.js not found');
 }
 
+// PDF extraction is handled via offscreen document (PDF.js needs DOM)
+
 // ===== Configuration =====
 const CONFIG = {
   providers: {
@@ -58,11 +60,13 @@ const CONTENT_SCRIPTS = [
   'content/utils.js',
   'content/functions/capture_screenshot.js',
   'content/functions/highlight.js',
+  'content/functions/highlight_pdf.js',
   'content/functions/scroll.js',
   'content/functions/main_router.js',
   'content/tasks/protection.js',
   'content/tasks/guide.js',
   'content/tasks/ask.js',
+  'content/tasks/ask_pdf.js',
   'content/tasks/image_ask.js',
   'content/content.js'
 ];
@@ -134,6 +138,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
+  if (request.action === 'extractPdfText') {
+    extractPdfText(request.pdfUrl, request.maxPages || 15)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   if (request.action === 'getVisionSetting') {
     chrome.storage.sync.get(['visionEnabled'])
       .then(settings => {
@@ -148,7 +158,85 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ success: true });
     return true;
   }
+  if (request.action === 'navigateTab') {
+    // Navigate current tab to a new URL (used for PDF page navigation)
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        chrome.tabs.update(tabs[0].id, { url: request.url });
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false, error: 'No active tab' });
+      }
+    });
+    return true;
+  }
+  if (request.action === 'openSidePanel') {
+    // Open side panel from PDF viewer
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      if (tabs[0]?.id) {
+        try {
+          await chrome.sidePanel.open({ tabId: tabs[0].id });
+          sendResponse({ success: true });
+        } catch (e) {
+          sendResponse({ success: false, error: e.message });
+        }
+      }
+    });
+    return true;
+  }
 });
+
+// ===== PDF Text Extraction via Offscreen Document =====
+let creatingOffscreen = null;
+
+async function ensureOffscreenDocument() {
+  const offscreenUrl = chrome.runtime.getURL('offscreen/offscreen.html');
+  
+  // Check if offscreen document already exists
+  const existingContexts = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+    documentUrls: [offscreenUrl]
+  });
+  
+  if (existingContexts.length > 0) {
+    return;
+  }
+  
+  // Create offscreen document if not exists
+  if (creatingOffscreen) {
+    await creatingOffscreen;
+  } else {
+    creatingOffscreen = chrome.offscreen.createDocument({
+      url: offscreenUrl,
+      reasons: ['DOM_PARSER'],
+      justification: 'Parse PDF files using PDF.js which requires DOM APIs'
+    });
+    await creatingOffscreen;
+    creatingOffscreen = null;
+  }
+}
+
+async function extractPdfText(pdfUrl, maxPages = 15) {
+  console.log('📄 Extracting PDF text via offscreen document:', pdfUrl);
+  
+  try {
+    // Ensure offscreen document is ready
+    await ensureOffscreenDocument();
+    
+    // Send message to offscreen document
+    const result = await chrome.runtime.sendMessage({
+      action: 'extractPdfTextOffscreen',
+      pdfUrl: pdfUrl,
+      maxPages: maxPages
+    });
+    
+    return result;
+    
+  } catch (e) {
+    console.error('📄 PDF extraction error:', e);
+    return { error: `Failed to extract PDF: ${e.message}` };
+  }
+}
 
 // ===== Screenshot Capture =====
 async function captureScreenshot(tabId) {
