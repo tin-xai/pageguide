@@ -8,7 +8,8 @@
     "storage",
     "scripting",
     "tabs",
-    "sidePanel"
+    "sidePanel",
+    "offscreen"
   ],
   "side_panel": {
     "default_path": "sidepanel/panel.html"
@@ -37,8 +38,10 @@
         "content/functions/scroll.js",
         "content/functions/capture_screenshot.js",
         "content/functions/highlight.js",
+        "content/functions/highlight_pdf.js",
         "content/functions/main_router.js",
         "content/tasks/ask.js",
+        "content/tasks/ask_pdf.js",
         "content/tasks/guide.js",
         "content/tasks/protection.js",
         "content/tasks/image_ask.js",
@@ -56,7 +59,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*"],
+      "resources": ["icons/*", "lib/*", "pdf-viewer/*"],
       "matches": ["<all_urls>"]
     }
   ]

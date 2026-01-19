@@ -147,6 +147,94 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/* Markdown formatting in messages */
+.xwebagent-message strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+.xwebagent-message em {
+  font-style: italic;
+  color: #b8d4e8;
+}
+
+.xwebagent-message code {
+  background: rgba(0, 217, 255, 0.15);
+  color: #00d9ff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+
+.xwebagent-message pre {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.xwebagent-message pre code {
+  background: none;
+  padding: 0;
+  color: #e0e0e0;
+}
+
+.xwebagent-message h2,
+.xwebagent-message h3,
+.xwebagent-message h4 {
+  color: #fff;
+  margin: 12px 0 8px 0;
+  font-weight: 600;
+}
+
+.xwebagent-message h2 {
+  font-size: 1.3em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 6px;
+}
+
+.xwebagent-message h3 {
+  font-size: 1.15em;
+}
+
+.xwebagent-message h4 {
+  font-size: 1.05em;
+}
+
+.xwebagent-message p {
+  margin: 8px 0;
+}
+
+.xwebagent-message p:first-child {
+  margin-top: 0;
+}
+
+.xwebagent-message p:last-child {
+  margin-bottom: 0;
+}
+
+.xwebagent-message ul,
+.xwebagent-message ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.xwebagent-message li {
+  margin: 4px 0;
+  line-height: 1.5;
+}
+
+.xwebagent-message ul li {
+  list-style-type: disc;
+}
+
+.xwebagent-message ol li {
+  list-style-type: decimal;
+}
+
 .xwebagent-message.system {
   align-self: center;
   background: rgba(0, 255, 136, 0.1);
@@ -320,6 +408,28 @@ body {
   color: #00ff88;
 }
 
+/* PDF Page Citations - Index style [1], [2], [3] */
+.xwebagent-pdf-citation {
+  display: inline;
+  background: rgba(255, 193, 7, 0.25);
+  color: #FFD54F;
+  padding: 1px 5px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 12px;
+  font-weight: 600;
+  vertical-align: super;
+  margin: 0 1px;
+  text-decoration: none;
+}
+
+.xwebagent-pdf-citation:hover {
+  background: rgba(255, 193, 7, 0.5);
+  color: #fff;
+  transform: scale(1.1);
+}
+
 /* Typing Indicator */
 .xwebagent-typing {
   display: flex;
@@ -389,6 +499,18 @@ body {
   background: rgba(0, 217, 255, 0.15);
   border-color: rgba(0, 217, 255, 0.3);
   color: #00d9ff;
+}
+
+.xwebagent-pdf-reader-btn {
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.2), rgba(180, 100, 255, 0.2));
+  border-color: rgba(124, 92, 255, 0.4);
+  color: #b088ff;
+}
+
+.xwebagent-pdf-reader-btn:hover {
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.35), rgba(180, 100, 255, 0.35));
+  border-color: rgba(124, 92, 255, 0.6);
+  color: #d0b0ff;
 }
 
 /* Image Preview Area */

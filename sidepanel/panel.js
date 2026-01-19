@@ -27,6 +27,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
   });
   
+  // PDF Reader button
+  document.getElementById('xwebagent-pdf-reader')?.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
+  });
+  
   // Image upload handling
   const imageUpload = document.getElementById('xwebagent-image-upload');
   const removeImageBtn = document.getElementById('xwebagent-remove-image');
@@ -53,30 +58,98 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 /**
  * Parse citations in text and make them clickable
- * Converts [N:"text"] or [N] to clickable spans showing the text (not the number)
- * For [N:"text"] format, removes duplicate text if it appears before the citation
- * For [N] format, extracts the preceding phrase as the clickable text
+ * Supports two formats:
+ * 1. Web page citations: [N:"text"] or [N] - scrolls to indexed element
+ * 2. PDF citations: [Page N: "text"] - navigates to PDF page
  */
-function parseCitations(text) {
+function parseCitations(text, isPdf = false) {
   // Normalize curly/smart quotes to straight quotes first
   const normalizedText = text
     .replace(/[""]/g, '"')
     .replace(/['']/g, "'");
   
-  // Match citations with various quote styles:
-  // [N:"text"] - double quoted (text can contain apostrophes)
-  // [N:'text'] - single quoted (text can contain double quotes)
-  // [N:text] - unquoted
-  // [N] - just index
-  const citationPattern = /\[(\d+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
-  
   // Use normalized text for parsing
   text = normalizedText;
   
-  let lastIndex = 0;
   let result = '';
-  let match;
+  let lastIndex = 0;
+  let citationCount = 0;
   
+  // First, check for indexed citations: [idx:N], [idx:N-M], or [idx:N-M, X-Y, ...]
+  const indexedCitationPattern = /\[idx:([^\]]+)\]/gi;
+  const hasIndexedCitations = indexedCitationPattern.test(text);
+  indexedCitationPattern.lastIndex = 0;
+  
+  if (hasIndexedCitations) {
+    let match;
+    
+    while ((match = indexedCitationPattern.exec(text)) !== null) {
+      citationCount++;
+      const rangesStr = match[1]; // e.g., "1-2, 38-42, 58-59" or "57"
+      
+      // Parse all ranges
+      const ranges = [];
+      const rangeParts = rangesStr.split(/[,;]\s*/);
+      for (const part of rangeParts) {
+        const rangeMatch = part.trim().match(/(\d+)(?:-(\d+))?/);
+        if (rangeMatch) {
+          const start = parseInt(rangeMatch[1]);
+          const end = rangeMatch[2] ? parseInt(rangeMatch[2]) : start;
+          ranges.push({ start, end });
+        }
+      }
+      
+      // Add text before this citation (already HTML from parseMarkdown)
+      result += text.slice(lastIndex, match.index);
+      
+      // Store all ranges as JSON in data attribute
+      const rangesJson = JSON.stringify(ranges);
+      const tooltipText = ranges.map(r => r.start === r.end ? r.start : `${r.start}-${r.end}`).join(', ');
+      result += `<span class="xwebagent-pdf-citation" data-ranges='${rangesJson}' data-citation="${citationCount}" title="Elements: ${tooltipText}">[${citationCount}]</span>`;
+      
+      lastIndex = match.index + match[0].length;
+    }
+    
+    // Add remaining text (already HTML from parseMarkdown)
+    result += text.slice(lastIndex);
+    return result;
+  }
+  
+  // Second, handle PDF page citations: [Page N: "text"] or [Page N: 'text']
+  const pdfCitationPattern = /\[Page\s*(\d+):\s*["']([^"']+)["']\]/gi;
+  
+  // Check if there are PDF citations
+  const hasPdfCitations = pdfCitationPattern.test(text);
+  pdfCitationPattern.lastIndex = 0; // Reset regex
+  
+  if (hasPdfCitations) {
+    let match;
+    
+    while ((match = pdfCitationPattern.exec(text)) !== null) {
+      citationCount++;
+      const pageNum = match[1];
+      const quoteText = match[2];
+      
+      // Add text before this citation (already HTML from parseMarkdown)
+      result += text.slice(lastIndex, match.index);
+      
+      // Add clickable PDF citation - show index only, store quote for highlighting
+      // Truncate quote for tooltip (first 60 chars)
+      const tooltipText = quoteText.length > 60 ? quoteText.slice(0, 60) + '...' : quoteText;
+      result += `<span class="xwebagent-pdf-citation" data-page="${pageNum}" data-text="${escapeHtml(quoteText)}" data-citation="${citationCount}" title="Page ${pageNum}: ${escapeHtml(tooltipText)}">[${citationCount}]</span>`;
+      
+      lastIndex = match.index + match[0].length;
+    }
+    
+    // Add remaining text (already HTML from parseMarkdown)
+    result += text.slice(lastIndex);
+    return result;
+  }
+  
+  // Otherwise, handle regular web citations: [N:"text"] or [N]
+  const citationPattern = /\[(\d+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
+  
+  let match;
   while ((match = citationPattern.exec(text)) !== null) {
     const index = match[1];
     // Text could be in group 2 (double quoted), 3 (single quoted), or 4 (unquoted)
@@ -87,7 +160,6 @@ function parseCitations(text) {
       let textBefore = text.slice(lastIndex, match.index);
       
       // Check if the explicit text already appears right before the citation (avoid duplication)
-      // e.g., "Queen's University [498:"Queen's University"]" -> just show "Queen's University" once
       const explicitLower = explicitText.toLowerCase().trim();
       const beforeLower = textBefore.toLowerCase();
       
@@ -95,11 +167,11 @@ function parseCitations(text) {
         // Text appears before citation - remove the duplicate and make it clickable
         const dupStart = textBefore.toLowerCase().lastIndexOf(explicitLower);
         const textBeforeDup = textBefore.slice(0, dupStart);
-        result += escapeHtml(textBeforeDup);
+        result += textBeforeDup;
         result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(explicitText)}</span>`;
       } else {
         // Text doesn't appear before - just add the citation as clickable
-        result += escapeHtml(textBefore);
+        result += textBefore;
         result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(explicitText)}</span>`;
       }
     } else {
@@ -114,11 +186,11 @@ function parseCitations(text) {
         const phrase = phraseMatch[1].trim();
         const textBeforePhrase = textBefore.slice(0, textBefore.lastIndexOf(phrase));
         
-        result += escapeHtml(textBeforePhrase);
+        result += textBeforePhrase;
         result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(phrase)}</span>`;
       } else {
         // No clear phrase found - show text before and a small superscript number
-        result += escapeHtml(textBefore);
+        result += textBefore;
         result += `<span class="xwebagent-citation xwebagent-citation-sup" data-index="${index}" title="Click to scroll"><sup>${index}</sup></span>`;
       }
     }
@@ -126,8 +198,8 @@ function parseCitations(text) {
     lastIndex = match.index + match[0].length;
   }
   
-  // Add remaining text
-  result += escapeHtml(text.slice(lastIndex));
+  // Add remaining text (already HTML from parseMarkdown)
+  result += text.slice(lastIndex);
   
   return result;
 }
@@ -139,6 +211,56 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+/**
+ * Parse markdown formatting to HTML
+ * Supports: **bold**, *italic*, `code`, - lists, numbered lists, headers
+ */
+function parseMarkdown(text) {
+  // First escape HTML to prevent XSS
+  let result = escapeHtml(text);
+  
+  // Code blocks with triple backticks (must be done before inline code)
+  result = result.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  
+  // Inline code with single backticks
+  result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Bold with **text** (must be done before italic)
+  result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  
+  // Italic with *text* (single asterisks, not part of **)
+  result = result.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  
+  // Headers
+  result = result.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+  result = result.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+  result = result.replace(/^# (.+)$/gm, '<h2>$1</h2>');
+  
+  // Bullet lists (- item or * item at start of line)
+  result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> elements in <ul>
+  result = result.replace(/(<li>[\s\S]*?<\/li>)(?:\n|<br>)?(<li>)/g, '$1$2');
+  result = result.replace(/(?:^|[^>])(<li>[\s\S]*?<\/li>)(?:[^<]|$)/g, '<ul>$1</ul>');
+  
+  // Numbered lists (1. item, 2. item, etc.)
+  result = result.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+  
+  // Line breaks (convert \n to <br> but preserve paragraph structure)
+  result = result.replace(/\n\n/g, '</p><p>');
+  result = result.replace(/\n/g, '<br>');
+  
+  // Clean up any empty paragraphs and fix structure
+  result = result.replace(/<p><\/p>/g, '');
+  result = result.replace(/<br><br>/g, '</p><p>');
+  
+  // Wrap in paragraph if not already wrapped with a block element
+  if (!result.startsWith('<h') && !result.startsWith('<ul') && !result.startsWith('<pre') && !result.startsWith('<p')) {
+    result = '<p>' + result + '</p>';
+  }
+  
+  return result;
 }
 
 /**
@@ -155,27 +277,74 @@ function addMessage(content, type = 'assistant', clickable = false) {
   
   if (clickable) {
     msg.classList.add('xwebagent-clickable');
-    // Parse citations to make them clickable
-    const parsedContent = parseCitations(content);
-    msg.innerHTML = `${parsedContent} <span class="xwebagent-scroll-hint">👆 Click citation to scroll</span>`;
+    // Parse markdown first, then citations
+    const markdownParsed = parseMarkdown(content);
+    // Parse citations to make them clickable (handles both web and PDF citations)
+    const parsedContent = parseCitations(markdownParsed);
     
-    // Add click handler for citations
+    // Check if there are PDF citations (both formats)
+    const hasPdfCitations = content.includes('[Page ') || content.includes('[idx:');
+    const hintText = hasPdfCitations 
+      ? '👆 Click citation to go to page' 
+      : '👆 Click citation to scroll';
+    
+    msg.innerHTML = `${parsedContent} <span class="xwebagent-scroll-hint">${hintText}</span>`;
+    
+    // Add click handler for web citations
     msg.querySelectorAll('.xwebagent-citation').forEach(citation => {
       citation.addEventListener('click', (e) => {
-        e.stopPropagation(); // Don't trigger parent click
+        e.stopPropagation();
         const index = parseInt(citation.dataset.index, 10);
         sendToContentScript({ action: 'scrollToIndex', index });
       });
     });
     
+    // Add click handler for PDF citations (both indexed and text-based)
+    msg.querySelectorAll('.xwebagent-pdf-citation').forEach(citation => {
+      citation.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        
+        // Check if this is an indexed citation with ranges
+        const rangesJson = citation.dataset.ranges;
+        const pageNum = citation.dataset.page ? parseInt(citation.dataset.page, 10) : null;
+        const searchText = citation.dataset.text;
+        
+        let message;
+        if (rangesJson) {
+          // New format with multiple ranges
+          const ranges = JSON.parse(rangesJson);
+          message = { action: 'highlightByRanges', ranges: ranges };
+        } else if (pageNum && searchText) {
+          // Old format with page and text
+          message = { action: 'navigateToPdfPage', page: pageNum, searchText: searchText };
+        } else {
+          console.warn('Invalid citation data');
+          return;
+        }
+        
+        // Send to the PDF viewer tab
+        const tabs = await chrome.tabs.query({});
+        const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
+        
+        if (pdfViewerTab) {
+          chrome.tabs.sendMessage(pdfViewerTab.id, message);
+          chrome.tabs.update(pdfViewerTab.id, { active: true });
+        } else {
+          sendToContentScript(message);
+        }
+      });
+    });
+    
     // Click on message (not citation) scrolls to first highlight
     msg.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('xwebagent-citation')) {
+      if (!e.target.classList.contains('xwebagent-citation') && 
+          !e.target.classList.contains('xwebagent-pdf-citation')) {
         sendToContentScript({ action: 'scrollToHighlight' });
       }
     });
   } else {
-    msg.textContent = content;
+    // Apply markdown parsing for non-clickable messages too
+    msg.innerHTML = parseMarkdown(content);
   }
   
   container.appendChild(msg);
@@ -526,11 +695,42 @@ async function sendMessage() {
   showTyping();
   
   try {
-    const result = await sendToContentScript({ 
-      action: 'handleQuery', 
-      query: query,
-      history: conversationHistory.slice(0, -1) // Send history without current query
-    });
+    // Check if current tab is the PDF viewer
+    const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const isOnPdfViewer = currentTab?.url?.includes('pdf-viewer/viewer.html');
+    
+    let result;
+    
+    if (isOnPdfViewer) {
+      // Get PDF context from storage
+      const pdfContext = await chrome.storage.session.get(['pdfViewerActive', 'pdfName', 'pdfTotalPages', 'pdfText']);
+      
+      console.log('📄 PDF context from storage:', {
+        active: pdfContext.pdfViewerActive,
+        name: pdfContext.pdfName,
+        pages: pdfContext.pdfTotalPages,
+        textPages: pdfContext.pdfText?.length
+      });
+      
+      if (pdfContext.pdfText?.length > 0) {
+        // Handle PDF question directly
+        result = await handlePdfQuestion(query, pdfContext);
+      } else {
+        // No PDF loaded yet - show friendly message
+        result = { 
+          success: true, 
+          answer: '📄 Please load a PDF first!\n\nUpload a PDF file or paste a URL in the viewer, then ask me questions about it.',
+          isPdf: false
+        };
+      }
+    } else {
+      // Normal routing via content script
+      result = await sendToContentScript({ 
+        action: 'handleQuery', 
+        query: query,
+        history: conversationHistory.slice(0, -1)
+      });
+    }
     
     hideTyping();
     
@@ -545,7 +745,8 @@ async function sendMessage() {
           'ask': '💬',
           'guide': '📋',
           'protection': '🛡️',
-          'image_ask': '🖼️'
+          'image_ask': '🖼️',
+          'pdf_ask': '📄'
         }[result.routedTo] || '🎯';
         debugLines.push(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}%)`);
       }
@@ -560,6 +761,14 @@ async function sendMessage() {
           result.imageAskActions.forEach(action => {
             debugLines.push(`  • ${action}`);
           });
+        }
+      }
+      
+      // PDF info
+      if (result.isPdf) {
+        debugLines.push(`📄 PDF mode: ${result.extractedPages || '?'}/${result.totalPages || '?'} pages extracted`);
+        if (result.pdfJsMode) {
+          debugLines.push(`🔧 Method: PDF.js client-side extraction`);
         }
       }
       
@@ -603,8 +812,13 @@ async function sendMessage() {
         if (result.highlightCount > 0) {
           message += ` ✨ (${result.highlightCount} highlighted)`;
         }
+        // Make clickable if has highlights OR is a PDF response (has citations)
         const hasHighlights = result.hasHighlights || result.highlightCount > 0;
-        addMessage(message, 'assistant', hasHighlights);
+        const hasPdfCitations = result.isPdf && (
+          result.answer?.includes('[Page ') || 
+          result.answer?.includes('[idx:')
+        );
+        addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
       }
     } else {
       addMessage(`❌ ${result?.error || 'Unknown error'}`, 'error');
@@ -623,6 +837,85 @@ async function sendMessage() {
 }
 
 /**
+ * Handle PDF question using stored PDF context
+ */
+async function handlePdfQuestion(query, pdfContext) {
+  console.log('📄 Handling PDF question:', query);
+  
+  // Use indexed text if available, otherwise fall back to regular text
+  const hasIndexedText = pdfContext.pdfText.some(p => p.indexedText);
+  
+  const pdfTextContent = pdfContext.pdfText.map(p => {
+    if (hasIndexedText && p.indexedText) {
+      return `[Page ${p.page}]\n${p.indexedText}`;
+    }
+    return `[Page ${p.page}]\n${p.text}`;
+  }).join('\n\n');
+  
+  const systemPrompt = hasIndexedText 
+    ? `You are a helpful assistant that answers questions about PDF documents.
+
+CRITICAL RULES:
+1. The text below has index markers like "[42]Hello [43]World" - these are for YOUR reference only
+2. NEVER include these markers [N] in your response text
+3. Write naturally, then add citations using ONLY this format: [idx:N] or [idx:N-M]
+4. Place citations AFTER the relevant phrase, not mixed into text
+
+CORRECT: "The TRUE dataset is the first explainable video fact-checking dataset [idx:462-464]"
+WRONG: "[462]TRUE [464]dataset is..."
+
+Keep answers clear and concise with citations for key claims.
+
+Document: ${pdfContext.pdfName}
+Total Pages: ${pdfContext.pdfTotalPages}
+
+PDF Content (with reference indices):
+${pdfTextContent}`
+    : `You are a helpful assistant that answers questions about PDF documents.
+When answering, ALWAYS cite specific passages using this exact format: [Page N: "exact quote from the document"]
+Keep quotes concise (under 50 words) but include enough context to be useful.
+If you can't find relevant information, say so clearly.
+
+Document: ${pdfContext.pdfName}
+Total Pages: ${pdfContext.pdfTotalPages}
+
+PDF Content:
+${pdfTextContent}`;
+  
+  // Build messages (without system prompt - it goes separately)
+  const messages = [
+    ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: query }
+  ];
+  
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'callLLM',
+      messages: messages,
+      systemPrompt: systemPrompt
+    });
+    
+    if (response.error) {
+      return { success: false, error: response.error };
+    }
+    
+    // Add to conversation history
+    conversationHistory.push({ role: 'assistant', content: response.content });
+    
+    return {
+      success: true,
+      answer: response.content,
+      isPdf: true,
+      routedTo: 'pdf_viewer',
+      routeConfidence: 1.0
+    };
+  } catch (e) {
+    console.error('PDF question error:', e);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
  * Handle quick action buttons
  */
 async function handleQuickAction(action) {
@@ -632,6 +925,17 @@ async function handleQuickAction(action) {
       await sendToContentScript({ action: 'reset' });
     } catch (e) {
       // Page might not have content script loaded
+    }
+    
+    // Clear highlights in PDF viewer if open
+    try {
+      const tabs = await chrome.tabs.query({});
+      const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
+      if (pdfViewerTab) {
+        chrome.tabs.sendMessage(pdfViewerTab.id, { action: 'clearPdfHighlights' });
+      }
+    } catch (e) {
+      // PDF viewer might not be open
     }
     
     // Clear chat and history
