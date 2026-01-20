@@ -84,7 +84,7 @@ async function handleImageAsk(query) {
   let lastAnswer = null;
   
   // Create page index
-  let pageIndex = createPageIndex(500);
+  let pageIndex = createPageIndex(5000);
   console.log('🖼️ Initial page index count:', pageIndex.count);
   
   // Show Set of Marks if enabled
@@ -98,7 +98,7 @@ async function handleImageAsk(query) {
     
     // Refresh page index after scroll
     if (step > 1) {
-      pageIndex = createPageIndex(500);
+      pageIndex = createPageIndex(5000);
       await showSomIfEnabled(pageIndex);
     }
     

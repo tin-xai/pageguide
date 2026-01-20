@@ -22,7 +22,12 @@ async function handleMessage(request) {
   switch (request.action) {
     case 'handleQuery':
       if (typeof handleSmartQuery === 'function') {
-        return await handleSmartQuery(request.query, request.history || []);
+        return await handleSmartQuery(
+          request.query, 
+          request.history || [],
+          request.hasImage || false,
+          request.hasImageInHistory || false
+        );
       }
       return { success: false, error: 'Query handler not loaded' };
     
