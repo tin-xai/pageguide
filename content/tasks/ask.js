@@ -333,7 +333,7 @@ async function handleAsk(query, history = []) {
   
   // Try with highlighting first
   try {
-    result = await handleAskWithHighlight(query, pageContent, pageIndex);
+    result = await handleAskWithHighlight(query, pageContent, pageIndex, history);
     if (result.success && result.answer) {
       // Hide SoM when task completes successfully
       cleanupSom();
@@ -354,8 +354,12 @@ async function handleAsk(query, history = []) {
 
 /**
  * Ask with highlighting (main approach)
+ * @param {string} query - User's question
+ * @param {string} pageContent - Page text content
+ * @param {Object} pageIndex - Page element index
+ * @param {Array} history - Conversation history [{role, content}]
  */
-async function handleAskWithHighlight(query, pageContent, pageIndex) {
+async function handleAskWithHighlight(query, pageContent, pageIndex, history = []) {
   // Check if we have enough content to work with
   if (pageContent.length < 50 && pageIndex.count < 3) {
     console.log('🤖 Very minimal page content detected');
@@ -368,17 +372,24 @@ async function handleAskWithHighlight(query, pageContent, pageIndex) {
     };
   }
   
-  // Build prompt with page content and index
-  const prompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+  // Build system prompt with page content (fresh context each time)
+  const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
     .replace('{pageContent}', pageContent || '(No text content found)')
-    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)')
-    .replace('{question}', query);
+    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)');
   
-  // Single LLM call
+  // Build messages with history (history contains only Q&A, not page context)
+  const messages = [
+    ...history.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: query }
+  ];
+  
+  console.log('🤖 Chat history length:', history.length);
+  
+  // LLM call with history
   const response = await safeSendMessage({
     action: 'callLLM',
-    systemPrompt: '',
-    messages: [{ role: 'user', content: prompt }]
+    systemPrompt: systemPrompt,
+    messages: messages
   });
   
   if (response?.error) {

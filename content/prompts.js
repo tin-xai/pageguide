@@ -81,7 +81,7 @@ Query: "What's on page 5?"
 → {"handler": "pdf_ask", "confidence": 0.9, "reason": "Asking about specific document page"}`,
 
 
-  // Answer with inline citations - single prompt approach
+  // Answer with inline citations - system prompt with page context
   ANSWER_AND_HIGHLIGHT: `You are a helpful web assistant. Answer the user's question based on the page content, using inline citations.
 
 PAGE CONTENT:
@@ -89,8 +89,6 @@ PAGE CONTENT:
 
 PAGE INDEX (use these numbers for citations):
 {pageIndex}
-
-QUESTION: {question}
 
 INSTRUCTIONS:
 1. Answer the question based on the page content
@@ -101,18 +99,16 @@ INSTRUCTIONS:
 4. For lists of items, cite each one with the specific text to highlight
 5. Use ONE citation per item (if same text has multiple indices, pick the link)
 6. The "text" should be a short, specific phrase (not the entire element text)
+7. Consider conversation history for context, but always answer based on CURRENT page content
 
-EXAMPLE:
+CITATION EXAMPLE:
 Question: "Who directed this movie?"
 Answer: The movie was directed by Christopher Nolan [45:"Christopher Nolan"].
 
 Question: "Who are the main actors?"
 Answer: The main actors are Leonardo DiCaprio [23:"Leonardo DiCaprio"], Tom Hardy [27:"Tom Hardy"], and Ellen Page [31:"Ellen Page"].
 
-Question: "When was this released?"
-Answer: The film was released on July 16, 2010 [12:"July 16, 2010"].
-
-Now answer the question with citations:`,
+Answer the user's question with citations:`,
 
   // Step-by-step guidance prompt for hidden elements / multi-step tasks
   STEP_BY_STEP_GUIDE: `You are a helpful guide assistant. Users ask "how to" questions and you provide step-by-step guidance.

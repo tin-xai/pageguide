@@ -146,23 +146,30 @@ function parseCitations(text, isPdf = false) {
     return result;
   }
   
-  // Otherwise, handle regular web citations: [N:"text"] or [N]
-  const citationPattern = /\[(\d+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
+  // Handle regular web citations: [N], [N:"text"], or [N, M, ...] (multiple indices)
+  // Pattern matches: [517], [517:"text"], [517, 519], [517, 519:"text"]
+  const citationPattern = /\[([\d,\s]+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
   
   let match;
   let webCitationCount = 0;
   while ((match = citationPattern.exec(text)) !== null) {
-    webCitationCount++;
-    const index = match[1];
+    const indicesStr = match[1]; // Could be "517" or "517, 519" or "517,519"
     // Text could be in group 2 (double quoted), 3 (single quoted), or 4 (unquoted)
     const explicitText = match[2] || match[3] || match[4];
     
+    // Parse all indices (handle comma-separated)
+    const indices = indicesStr.split(/[,\s]+/).filter(s => s.match(/^\d+$/));
+    
     // Just show clickable index [N] - text is already in the answer
     const textBefore = text.slice(lastIndex, match.index);
-    const tooltipText = explicitText ? escapeHtml(explicitText) : `Element ${index}`;
-    
     result += textBefore;
-    result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${index}" data-citation="${webCitationCount}" title="${tooltipText}">[${webCitationCount}]</span>`;
+    
+    // Create a citation badge for each index
+    indices.forEach((idx, i) => {
+      webCitationCount++;
+      const tooltipText = explicitText ? escapeHtml(explicitText) : `Element ${idx}`;
+      result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}" title="${tooltipText}">[${webCitationCount}]</span>`;
+    });
     
     lastIndex = match.index + match[0].length;
   }
@@ -817,6 +824,7 @@ async function handlePdfQuestion(query, pdfContext) {
   
   const systemPrompt = hasIndexedText 
     ? `You are a helpful assistant that answers questions about PDF documents.
+Consider conversation history for context, but always answer based on the CURRENT document content.
 
 CRITICAL RULES:
 1. The text below has index markers like "[42]Hello [43]World" - these are for YOUR reference only
@@ -835,6 +843,7 @@ Total Pages: ${pdfContext.pdfTotalPages}
 PDF Content (with reference indices):
 ${pdfTextContent}`
     : `You are a helpful assistant that answers questions about PDF documents.
+Consider conversation history for context, but always answer based on the CURRENT document content.
 When answering, ALWAYS cite specific passages using this exact format: [Page N: "exact quote from the document"]
 Keep quotes concise (under 50 words) but include enough context to be useful.
 If you can't find relevant information, say so clearly.
