@@ -380,14 +380,12 @@ body {
   border-bottom-color: #00d9ff;
 }
 
-/* Citation index only (web citations) */
+/* Citation with toggleable text (web citations) */
 .xwebagent-citation-idx {
   display: inline;
   color: #00d9ff;
-  font-size: 11px;
-  font-weight: 600;
   cursor: pointer;
-  padding: 1px 3px;
+  padding: 1px 4px;
   border-radius: 3px;
   background: rgba(0, 217, 255, 0.1);
   transition: all 0.2s ease;
@@ -396,6 +394,46 @@ body {
 .xwebagent-citation-idx:hover {
   background: rgba(0, 217, 255, 0.25);
   color: #fff;
+}
+
+/* Citation text - hidden by default */
+.xwebagent-citation-idx .citation-text {
+  display: none;
+  font-size: inherit;
+}
+
+/* Citation index - always visible */
+.xwebagent-citation-idx .citation-index {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* When expanded, show citation text */
+.citations-expanded .xwebagent-citation-idx .citation-text {
+  display: inline;
+  margin-right: 1px;
+}
+
+/* Toggle hint on clickable messages */
+.xwebagent-clickable {
+  cursor: pointer;
+}
+
+.xwebagent-clickable::after {
+  content: '👆 Click to expand citations';
+  display: block;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 6px;
+  transition: opacity 0.2s;
+}
+
+.xwebagent-clickable.citations-expanded::after {
+  content: '👆 Click to collapse citations';
+}
+
+.xwebagent-clickable:hover::after {
+  color: rgba(255, 255, 255, 0.6);
 }
 
 /* Superscript citation number (fallback when no phrase found) */

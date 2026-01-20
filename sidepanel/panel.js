@@ -2,9 +2,10 @@
 // Handles chat UI and communicates with content scripts
 
 let chatMessages = [];
-let conversationHistory = []; // Stores {role: 'user'|'assistant', content: string}
+let conversationHistory = []; // Stores {role: 'user'|'assistant', content: string, hasImage?: boolean}
 let currentTabId = null;
 let uploadedImageBase64 = null; // Stores the uploaded image
+let hasImageInConversation = false; // Track if image was used in conversation
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -160,15 +161,20 @@ function parseCitations(text, isPdf = false) {
     // Parse all indices (handle comma-separated)
     const indices = indicesStr.split(/[,\s]+/).filter(s => s.match(/^\d+$/));
     
-    // Just show clickable index [N] - text is already in the answer
     const textBefore = text.slice(lastIndex, match.index);
     result += textBefore;
     
-    // Create a citation badge for each index
+    // Create citation with toggleable text and index
+    // Default: collapsed (show only index), click to expand (show text + index)
     indices.forEach((idx, i) => {
       webCitationCount++;
-      const tooltipText = explicitText ? escapeHtml(explicitText) : `Element ${idx}`;
-      result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}" title="${tooltipText}">[${webCitationCount}]</span>`;
+      if (explicitText) {
+        // Has citation text - make it toggleable
+        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><span class="citation-text">${escapeHtml(explicitText)}</span><sup class="citation-index">[${webCitationCount}]</sup></span>`;
+      } else {
+        // No text - just show index
+        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><sup class="citation-index">[${webCitationCount}]</sup></span>`;
+      }
     });
     
     lastIndex = match.index + match[0].length;
@@ -305,12 +311,15 @@ function addMessage(content, type = 'assistant', clickable = false) {
       });
     });
     
-    // Click on message (not citation) scrolls to first highlight
+    // Click on message (not citation) toggles citation text visibility
     msg.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('xwebagent-citation') && 
-          !e.target.classList.contains('xwebagent-pdf-citation')) {
-        sendToContentScript({ action: 'scrollToHighlight' });
+      // Don't toggle if clicking on a citation (let citation click handler handle it)
+      if (e.target.closest('.xwebagent-citation') || 
+          e.target.closest('.xwebagent-pdf-citation')) {
+        return;
       }
+      // Toggle expanded state for citations
+      msg.classList.toggle('citations-expanded');
     });
   } else {
     // Apply markdown parsing for non-clickable messages too
@@ -658,8 +667,18 @@ async function sendMessage() {
   input.value = '';
   btn.disabled = true;
   
-  // Add to conversation history
-  conversationHistory.push({ role: 'user', content: query });
+  // Check if current message has an image attached
+  const currentMessageHasImage = !!uploadedImageBase64;
+  if (currentMessageHasImage) {
+    hasImageInConversation = true;
+  }
+  
+  // Add to conversation history (mark if this message has an image)
+  conversationHistory.push({ 
+    role: 'user', 
+    content: query,
+    hasImage: currentMessageHasImage
+  });
   
   addMessage(query, 'user');
   showTyping();
@@ -695,10 +714,13 @@ async function sendMessage() {
       }
     } else {
       // Normal routing via content script
+      // Pass hasImage flag so router knows if image_ask is valid
       result = await sendToContentScript({ 
         action: 'handleQuery', 
         query: query,
-        history: conversationHistory.slice(0, -1)
+        history: conversationHistory.slice(0, -1),
+        hasImage: currentMessageHasImage,
+        hasImageInHistory: hasImageInConversation
       });
     }
     
@@ -913,6 +935,7 @@ async function handleQuickAction(action) {
     // Clear chat and history
     conversationHistory = [];
     chatMessages = [];
+    hasImageInConversation = false;
     const container = document.getElementById('xwebagent-messages');
     if (container) container.innerHTML = '';
     
