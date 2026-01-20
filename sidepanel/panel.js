@@ -150,50 +150,19 @@ function parseCitations(text, isPdf = false) {
   const citationPattern = /\[(\d+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
   
   let match;
+  let webCitationCount = 0;
   while ((match = citationPattern.exec(text)) !== null) {
+    webCitationCount++;
     const index = match[1];
     // Text could be in group 2 (double quoted), 3 (single quoted), or 4 (unquoted)
     const explicitText = match[2] || match[3] || match[4];
     
-    if (explicitText) {
-      // Has explicit text: [N:"text"] format
-      let textBefore = text.slice(lastIndex, match.index);
-      
-      // Check if the explicit text already appears right before the citation (avoid duplication)
-      const explicitLower = explicitText.toLowerCase().trim();
-      const beforeLower = textBefore.toLowerCase();
-      
-      if (beforeLower.trimEnd().endsWith(explicitLower)) {
-        // Text appears before citation - remove the duplicate and make it clickable
-        const dupStart = textBefore.toLowerCase().lastIndexOf(explicitLower);
-        const textBeforeDup = textBefore.slice(0, dupStart);
-        result += textBeforeDup;
-        result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(explicitText)}</span>`;
-      } else {
-        // Text doesn't appear before - just add the citation as clickable
-        result += textBefore;
-        result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(explicitText)}</span>`;
-      }
-    } else {
-      // No explicit text: [N] format - extract preceding phrase
-      const textBefore = text.slice(lastIndex, match.index);
-      
-      // Find the last phrase before the citation (after comma, period, or other delimiter)
-      const phraseMatch = textBefore.match(/(?:^|[,.:;])\s*([^,.:;]+?)\s*$/);
-      
-      if (phraseMatch && phraseMatch[1].trim()) {
-        // Found a phrase - make it clickable and remove the citation number
-        const phrase = phraseMatch[1].trim();
-        const textBeforePhrase = textBefore.slice(0, textBefore.lastIndexOf(phrase));
-        
-        result += textBeforePhrase;
-        result += `<span class="xwebagent-citation" data-index="${index}" title="Click to scroll">${escapeHtml(phrase)}</span>`;
-      } else {
-        // No clear phrase found - show text before and a small superscript number
-        result += textBefore;
-        result += `<span class="xwebagent-citation xwebagent-citation-sup" data-index="${index}" title="Click to scroll"><sup>${index}</sup></span>`;
-      }
-    }
+    // Just show clickable index [N] - text is already in the answer
+    const textBefore = text.slice(lastIndex, match.index);
+    const tooltipText = explicitText ? escapeHtml(explicitText) : `Element ${index}`;
+    
+    result += textBefore;
+    result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${index}" data-citation="${webCitationCount}" title="${tooltipText}">[${webCitationCount}]</span>`;
     
     lastIndex = match.index + match[0].length;
   }
@@ -282,13 +251,7 @@ function addMessage(content, type = 'assistant', clickable = false) {
     // Parse citations to make them clickable (handles both web and PDF citations)
     const parsedContent = parseCitations(markdownParsed);
     
-    // Check if there are PDF citations (both formats)
-    const hasPdfCitations = content.includes('[Page ') || content.includes('[idx:');
-    const hintText = hasPdfCitations 
-      ? '👆 Click citation to go to page' 
-      : '👆 Click citation to scroll';
-    
-    msg.innerHTML = `${parsedContent} <span class="xwebagent-scroll-hint">${hintText}</span>`;
+    msg.innerHTML = parsedContent;
     
     // Add click handler for web citations
     msg.querySelectorAll('.xwebagent-citation').forEach(citation => {
