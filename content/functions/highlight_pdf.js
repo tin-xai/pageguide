@@ -2,14 +2,16 @@
 // Handles PDF detection, text extraction, and highlighting on PDF.js viewers
 
 /**
- * PDF Highlight Configuration
+ * PDF Highlight Configuration (guard against double-loading)
  */
-const PDF_CONFIG = {
-  highlightColor: 'rgba(255, 235, 59, 0.4)',  // Yellow highlight
-  highlightBorder: '2px solid #FFC107',
-  animationDuration: 2000,  // ms for highlight pulse animation
-  scrollPadding: 100  // px padding when scrolling to highlight
-};
+if (typeof PDF_CONFIG === 'undefined') {
+  var PDF_CONFIG = {
+    highlightColor: 'rgba(255, 235, 59, 0.4)',  // Yellow highlight
+    highlightBorder: '2px solid #FFC107',
+    animationDuration: 2000,  // ms for highlight pulse animation
+    scrollPadding: 100  // px padding when scrolling to highlight
+  };
+}
 
 // Note: PDF.js is loaded in the background service worker
 // Text extraction is done via message passing to the service worker

@@ -1,13 +1,15 @@
 // XWebAgent - PDF Ask Functionality
 // Handles questions about PDF documents with backend-powered text extraction and bbox highlighting
 
-// Configuration for PDF backend
-const PDF_ASK_CONFIG = {
-  backendUrl: 'http://localhost:8000',  // Backend server URL (configurable)
-  maxPagesToScan: 10,  // Maximum pages to send to backend
-  timeoutMs: 30000,    // Timeout for backend requests
-  maxRetries: 2        // Number of retries on failure
-};
+// Configuration for PDF backend (guard against double-loading)
+if (typeof PDF_ASK_CONFIG === 'undefined') {
+  var PDF_ASK_CONFIG = {
+    backendUrl: 'http://localhost:8000',  // Backend server URL (configurable)
+    maxPagesToScan: 10,  // Maximum pages to send to backend
+    timeoutMs: 30000,    // Timeout for backend requests
+    maxRetries: 2        // Number of retries on failure
+  };
+}
 
 /**
  * Check if PDF Ask is available (backend running, PDF detected)

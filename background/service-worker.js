@@ -92,19 +92,29 @@ chrome.action.onClicked.addListener(async (tab) => {
       await chrome.sidePanel.open({ tabId: tab.id });
       sidePanelOpen = true;
       
-      // Inject content scripts if on a valid page
+      // Inject content scripts only if not already loaded (check via manifest injection)
       if (tab.url?.startsWith('http')) {
         try {
-          await chrome.scripting.executeScript({
+          // Check if content scripts are already loaded
+          const [result] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            files: CONTENT_SCRIPTS
+            func: () => typeof window._xwebagentLoaded !== 'undefined'
           });
-          await chrome.scripting.insertCSS({
-            target: { tabId: tab.id },
-            files: ['content/content.css']
-          });
+          
+          // Only inject if not already loaded
+          if (!result?.result) {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: CONTENT_SCRIPTS
+            });
+            await chrome.scripting.insertCSS({
+              target: { tabId: tab.id },
+              files: ['content/content.css']
+            });
+          }
         } catch (err) {
-          // Scripts might already be injected
+          // Scripts might already be injected or page doesn't allow scripts
+          console.log('Script injection skipped:', err.message);
         }
       }
     }

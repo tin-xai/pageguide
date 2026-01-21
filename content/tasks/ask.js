@@ -2,12 +2,14 @@
 // Single prompt approach: Answer with inline citations
 // Supports vision-based answering for visual questions
 
-// Configuration
-const VISION_CONFIG = {
-  maxScrollSteps: 5,        // Maximum number of scroll steps
-  scrollDelayMs: 500,       // Delay between scrolls for rendering
-  viewportOverlap: 0.2      // 20% overlap between screenshots
-};
+// Configuration (guard against double-loading)
+if (typeof VISION_CONFIG === 'undefined') {
+  var VISION_CONFIG = {
+    maxScrollSteps: 5,        // Maximum number of scroll steps
+    scrollDelayMs: 500,       // Delay between scrolls for rendering
+    viewportOverlap: 0.2      // 20% overlap between screenshots
+  };
+}
 
 /**
  * Route query to determine if vision (screenshots) is needed

@@ -2,12 +2,14 @@
 // Allows users to upload an image and ask questions about finding similar content on the page
 // Uses vision-based scrolling to find and highlight matching elements
 
-// Configuration for image ask
-const IMAGE_ASK_CONFIG = {
-  maxScrollSteps: 8,          // Maximum scroll steps to find matching content
-  scrollDelayMs: 600,         // Delay between scrolls for rendering
-  viewportOverlap: 0.2        // 20% overlap between screenshots
-};
+// Configuration for image ask (guard against double-loading)
+if (typeof IMAGE_ASK_CONFIG === 'undefined') {
+  var IMAGE_ASK_CONFIG = {
+    maxScrollSteps: 8,          // Maximum scroll steps to find matching content
+    scrollDelayMs: 600,         // Delay between scrolls for rendering
+    viewportOverlap: 0.2        // 20% overlap between screenshots
+  };
+}
 
 // Store the uploaded image globally
 window._xwebagentUploadedImage = null;
