@@ -8,7 +8,7 @@ async function handleProtectionQuery(query) {
   console.log('🛡️ Protection query:', query);
   
   // Get page content
-  const pageIndex = createPageIndex(500);
+  const pageIndex = createPageIndex(5000);
   const visibleText = getVisibleText(50000);
   
   // Show SoM if enabled
@@ -126,9 +126,8 @@ function hideContent(items) {
     if (hidden.has(container)) return;
     hidden.add(container);
     
-    container.style.filter = 'blur(8px)';
-    container.style.opacity = '0.3';
-    container.style.pointerEvents = 'none';
+    // Completely hide the content
+    container.style.display = 'none';
     container.setAttribute('data-xwebagent-hidden', 'true');
   });
 }
@@ -174,9 +173,7 @@ function clearMarkings() {
   });
   
   document.querySelectorAll('[data-xwebagent-hidden]').forEach(el => {
-    el.style.filter = '';
-    el.style.opacity = '';
-    el.style.pointerEvents = '';
+    el.style.display = '';
     el.removeAttribute('data-xwebagent-hidden');
   });
 }
