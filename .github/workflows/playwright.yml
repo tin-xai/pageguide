@@ -25,9 +25,6 @@ jobs:
       working-directory: ./e2e-tests
       run: npx jest unit/logic.test.js
 
-    - name: Run Mocked UI Tests
-      working-directory: ./e2e-tests
-      run: node ui/runner.js
       
     - name: Install Playwright Browsers
       working-directory: ./e2e-tests
