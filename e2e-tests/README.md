@@ -132,10 +132,10 @@ e2e-tests/
 
 ### 7. Mocked UI Tests (`ui/ui-test.html`)
 
-- **Popup Rendering**: Verifies initial state (Connect button visibility).
-- **Connection Flow**: Simulates "Connect" click and validates status update.
-- **Settings Persistence**: Tests saving API keys to Mock Chrome Storage with UI feedback ("Saved!").
-- **Error Display**: Verifies error container visibility and message text.
+- **UI Element Check**: Verifies Input and Send button exist.
+- **Chat Flow**: Simulates sending a message and validates that the agent responds (echo).
+- **Clear Function**: Tests the "Clear" button to empty the chat history.
+- **Error Handling**: Simulates an API failure and verifies the error message display.
 
 ## Notes
 
