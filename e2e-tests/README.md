@@ -13,26 +13,31 @@ npx playwright install chromium
 ## Running Tests
 
 ### Run all tests
+
 ```bash
 npm test
 ```
 
 ### Run tests with browser visible (headed mode)
+
 ```bash
 npm run test:headed
 ```
 
 ### Run tests in debug mode
+
 ```bash
 npm run test:debug
 ```
 
 ### Run tests with UI
+
 ```bash
 npm run test:ui
 ```
 
 ### View test report
+
 ```bash
 npm run report
 ```
@@ -62,6 +67,7 @@ e2e-tests/
 ## Test Categories
 
 ### 1. Extension Loading (`extension-loading.spec.js`)
+
 - Service worker loads correctly
 - Extension ID is obtained
 - Side panel page loads
@@ -70,6 +76,7 @@ e2e-tests/
 - Content scripts inject on web pages
 
 ### 2. Side Panel UI (`sidepanel-ui.spec.js`)
+
 - Input field accepts text
 - Send button is clickable
 - Enter key triggers send
@@ -79,6 +86,7 @@ e2e-tests/
 - Typing indicator appears
 
 ### 3. Options Page (`options-page.spec.js`)
+
 - API key input exists and is secure
 - Model selection dropdown works
 - Save button exists
@@ -86,6 +94,7 @@ e2e-tests/
 - No JavaScript errors
 
 ### 4. Content Scripts (`content-script.spec.js`)
+
 - Scripts load on pages
 - Page text can be extracted
 - Handles minimal content pages
@@ -94,6 +103,7 @@ e2e-tests/
 - Highlights can be added/cleared
 
 ### 5. Error Handling (`error-handling.spec.js`)
+
 - Empty input handling
 - Whitespace-only input
 - Very long input text
