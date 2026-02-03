@@ -9,31 +9,28 @@ const path = require('path');
  */
 module.exports = defineConfig({
   testDir: './tests',
-  
-  // Run tests serially to avoid extension conflicts
-  fullyParallel: false,
-  workers: 1,
-  
+
+  // Run tests in parallel
+  fullyParallel: true,
+  workers: 4,
+
   // Fail the build on CI if you accidentally left test.only in the source code
   forbidOnly: !!process.env.CI,
-  
+
   // Retry on CI only
   retries: process.env.CI ? 2 : 0,
-  
+
   // Reporter to use
-  reporter: [
-    ['html', { open: 'never' }],
-    ['list']
-  ],
-  
+  reporter: [['html', { open: 'never' }], ['list']],
+
   // Shared settings for all the projects below
   use: {
     // Collect trace when retrying the failed test
     trace: 'on-first-retry',
-    
+
     // Screenshots on failure
     screenshot: 'only-on-failure',
-    
+
     // Video on failure
     video: 'on-first-retry',
   },
@@ -48,7 +45,7 @@ module.exports = defineConfig({
 
   // Timeout for each test
   timeout: 60000,
-  
+
   // Expect timeout
   expect: {
     timeout: 15000,

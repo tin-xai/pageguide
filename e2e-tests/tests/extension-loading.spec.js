@@ -2,7 +2,7 @@
 const { test, expect, chromium } = require('@playwright/test');
 const path = require('path');
 
-const EXTENSION_PATH = path.join(__dirname, '../../XWebAgent-Extension');
+const EXTENSION_PATH = path.join(__dirname, '../../');
 
 /**
  * Test suite for extension loading and basic functionality
@@ -10,13 +10,15 @@ const EXTENSION_PATH = path.join(__dirname, '../../XWebAgent-Extension');
  */
 
 test.describe('Extension Loading', () => {
+  /** @type {import('@playwright/test').BrowserContext} */
   let context;
+  /** @type {string} */
   let extensionId;
 
   test.beforeAll(async () => {
     // Use launchPersistentContext for extension testing
     const userDataDir = path.join(__dirname, '../.test-user-data-' + Date.now());
-    
+
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: false, // Extensions require headed mode
       args: [
@@ -26,10 +28,10 @@ test.describe('Extension Loading', () => {
         '--disable-gpu',
       ],
     });
-    
+
     // Wait for service worker and get extension ID
-    await new Promise(r => setTimeout(r, 3000));
-    
+    await new Promise((r) => setTimeout(r, 3000));
+
     // Get extension ID from service workers
     let serviceWorkers = context.serviceWorkers();
     for (const worker of serviceWorkers) {
@@ -39,7 +41,7 @@ test.describe('Extension Loading', () => {
         break;
       }
     }
-    
+
     // Fallback: try to get from background page
     if (!extensionId) {
       const pages = context.backgroundPages();
@@ -51,7 +53,7 @@ test.describe('Extension Loading', () => {
         }
       }
     }
-    
+
     console.log('Extension ID:', extensionId);
   });
 
@@ -62,11 +64,10 @@ test.describe('Extension Loading', () => {
   test('extension service worker loads without errors', async () => {
     // The extension should have a service worker running
     const serviceWorkers = context.serviceWorkers();
-    const extensionWorker = serviceWorkers.find(w => 
-      w.url().includes('chrome-extension://') && 
-      w.url().includes('service-worker.js')
+    const extensionWorker = serviceWorkers.find(
+      (w) => w.url().includes('chrome-extension://') && w.url().includes('service-worker.js')
     );
-    
+
     // If no service worker, check background pages (MV2 style)
     if (!extensionWorker) {
       const bgPages = context.backgroundPages();
@@ -83,76 +84,77 @@ test.describe('Extension Loading', () => {
 
   test('side panel page loads correctly', async () => {
     test.skip(!extensionId, 'Extension ID not found');
-    
+
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/sidepanel/panel.html`);
-    
+
     // Check key UI elements exist
     await expect(page.locator('#xwebagent-input')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#xwebagent-send')).toBeVisible();
     await expect(page.locator('#xwebagent-messages')).toBeVisible();
-    
+
     // Check quick action buttons
     await expect(page.locator('.xwebagent-quick-btn[data-action="reset"]')).toBeVisible();
-    
+
     await page.close();
   });
 
   test('options page loads correctly', async () => {
     test.skip(!extensionId, 'Extension ID not found');
-    
+
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/options/options.html`);
-    
+
     // Check that options page has API key input (Gemini is default)
     await expect(page.locator('#geminiApiKey')).toBeVisible({ timeout: 10000 });
-    
+
     // Check that model selection exists
     await expect(page.locator('#geminiModel')).toBeVisible();
-    
+
     await page.close();
   });
 
   test('PDF viewer page loads correctly', async () => {
     test.skip(!extensionId, 'Extension ID not found');
-    
+
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/pdf-viewer/viewer.html`);
-    
+
     // Just verify the page loads without crashing
     await page.waitForLoadState('domcontentloaded');
     expect(page.url()).toContain('pdf-viewer/viewer.html');
-    
+
     await page.close();
   });
 
   test('content scripts inject on web pages', async () => {
     test.skip(!extensionId, 'Extension ID not found');
-    
+
     const page = await context.newPage();
     const fixturesPath = path.join(__dirname, 'fixtures/sample-article.html');
     await page.goto(`file://${fixturesPath}`);
-    
+
     // Wait for content scripts to potentially load
     await page.waitForTimeout(2000);
-    
+
     // Check that the page loaded correctly
     const pageTitle = await page.title();
     expect(pageTitle).toBe('Sample Article - XWebAgent Test');
-    
+
     // Verify no console errors from extension
+    /** @type {string[]} */
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
-    
+    page.on('pageerror', (error) => errors.push(error.message));
+
     await page.waitForTimeout(1000);
-    
+
     // Filter out non-extension errors
-    const extensionErrors = errors.filter(e => 
-      e.includes('xwebagent') || e.includes('chrome-extension')
+    const extensionErrors = errors.filter(
+      (e) => e.includes('xwebagent') || e.includes('chrome-extension')
     );
-    
+
     expect(extensionErrors).toHaveLength(0);
-    
+
     await page.close();
   });
 });
