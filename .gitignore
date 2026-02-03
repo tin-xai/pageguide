@@ -28,3 +28,7 @@ playwright-report/
 # Build artifacts
 *.zip
 
+# Orchestration
+ANTIGRAVITY.md
+CODEX.md
+
