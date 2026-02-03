@@ -14,6 +14,9 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: 18
+
+    - name: Validate Manifest
+      run: node e2e-tests/scripts/validate_manifest.js
     
     - name: Install dependencies
       working-directory: ./e2e-tests

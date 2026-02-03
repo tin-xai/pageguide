@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const manifestPath = path.join(__dirname, '../manifest.json');
+const manifestPath = path.join(__dirname, '../../manifest.json');
 
 try {
   if (!fs.existsSync(manifestPath)) {
