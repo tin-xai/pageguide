@@ -12,7 +12,11 @@
     "jest-environment-jsdom": "^29.7.0"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "e2e:install": "npm ci --prefix e2e-tests",
+    "e2e:manifest": "node e2e-tests/scripts/validate_manifest.js",
+    "e2e:unit": "npm run e2e:install && npx --prefix e2e-tests jest unit/logic.test.js",
+    "e2e:e2e": "npm run e2e:install && npx --prefix e2e-tests playwright install --with-deps chromium && xvfb-run --auto-servernum --server-args=\"-screen 0 1280x960x24\" npx --prefix e2e-tests playwright test",
+    "ci": "npm run e2e:manifest && npm run e2e:unit && npm run e2e:e2e"
   },
   "keywords": [],
   "author": "",
