@@ -11,14 +11,15 @@ echo "--------------------------------------------------"
 
 
 # 2. Unit Tests
+# 2. Unit Tests
 echo "--------------------------------------------------"
 echo "🧪 Running Unit Tests..."
-npx jest e2e-tests/unit/logic.test.js
+(cd "$BASE_DIR/e2e-tests" && npx jest unit/logic.test.js)
 
 # 3. Mocked UI Tests
 echo "--------------------------------------------------"
 echo "🖥️ Running Mocked UI Tests..."
-node e2e-tests/ui/runner.js
+(cd "$BASE_DIR/e2e-tests" && node ui/runner.js)
 
 # 4. Playwright Smoke Tests
 echo "--------------------------------------------------"

@@ -16,18 +16,23 @@ jobs:
         node-version: 18
     
     - name: Install dependencies
+      working-directory: ./e2e-tests
       run: npm ci
 
     - name: Run Unit Tests
-      run: npx jest e2e-tests/unit/logic.test.js
+      working-directory: ./e2e-tests
+      run: npx jest unit/logic.test.js
 
     - name: Run Mocked UI Tests
-      run: node e2e-tests/ui/runner.js
+      working-directory: ./e2e-tests
+      run: node ui/runner.js
       
     - name: Install Playwright Browsers
+      working-directory: ./e2e-tests
       run: npx playwright install --with-deps chromium
 
     - name: Run Playwright tests
+      working-directory: ./e2e-tests
       run: npx playwright test
       env:
         CI: true
@@ -36,5 +41,5 @@ jobs:
       if: failure()
       with:
         name: playwright-report
-        path: playwright-report/
+        path: e2e-tests/playwright-report/
         retention-days: 30
