@@ -2,77 +2,119 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Mocked UI Tests</title>
+    <title>Mocked Side Panel Tests</title>
     <style>
-        .test-pass { color: green; }
-        .test-fail { color: red; }
+        /* Basic styling to mimic panel.css for testing logic */
+        .xwebagent-message { padding: 5px; margin: 5px; border-radius: 4px; }
+        .xwebagent-message.user { background-color: #e3f2fd; text-align: right; }
+        .xwebagent-message.agent { background-color: #f5f5f5; }
+        .test-pass { color: green; font-family: monospace; }
+        .test-fail { color: red; font-family: monospace; }
+        #results { margin-bottom: 20px; padding: 10px; background: #eee; }
     </style>
 </head>
 <body>
-    <h1>UI Regression Tests</h1>
+    <h1>Side Panel UI Tests</h1>
     <div id="results">Running tests...</div>
 
-    <!-- MOCK UI CONTAINER -->
-    <div id="app-container" style="border: 1px solid #ccc; padding: 10px; margin-top: 20px;">
-        <div id="connection-status">Disconnected</div>
-        <button id="connect-btn">Connect</button>
+    <!-- MOCK UI CONTAINER (Structure matches sidepanel/panel.html) -->
+    <div id="app-container" style="border: 1px solid #ccc; padding: 10px; width: 300px;">
         
-        <div id="settings-panel" style="display:none;">
-            <input type="text" id="api-key" placeholder="API Key">
-            <button id="save-btn">Save</button>
-            <div id="save-status"></div>
+        <!-- Header -->
+        <div class="xwebagent-chat-header">
+             <h2>XWebAgent</h2>
+             <button id="xwebagent-settings" title="Settings">⚙️</button>
+        </div>
+
+        <!-- Messages Area -->
+        <div id="xwebagent-messages" style="height: 200px; overflow-y: auto; border: 1px solid #ddd; margin-bottom: 10px;">
+            <!-- Messages go here -->
+        </div>
+
+        <!-- Input Area -->
+        <div class="xwebagent-chat-input-area">
+             <div class="xwebagent-quick-actions">
+                <button class="xwebagent-quick-btn" data-action="reset">🧹 Clear</button>
+             </div>
+             
+             <div style="display: flex; gap: 5px;">
+                 <input type="text" id="xwebagent-input" placeholder="Ask anything...">
+                 <button id="xwebagent-send">➤</button>
+             </div>
         </div>
         
+        <!-- Hidden/Overlay Elements -->
         <div id="error-msg" style="color: red; display: none;"></div>
+        <div id="loading-indicator" style="display: none;">Thinking...</div>
     </div>
 
-    <!-- MOCK UI LOGIC (Minimal implementation to testing against) -->
+    <!-- MOCK UI LOGIC (Simplified panel.js) -->
     <script>
-        // Simulating the extension UI logic here for the 'mock' tests
-        document.getElementById('connect-btn').addEventListener('click', () => {
-            document.getElementById('connection-status').textContent = 'Connected';
-            document.getElementById('connect-btn').disabled = true;
+        const input = document.getElementById('xwebagent-input');
+        const sendBtn = document.getElementById('xwebagent-send');
+        const messagesDiv = document.getElementById('xwebagent-messages');
+        const resetBtn = document.querySelector('[data-action="reset"]');
+        
+        // Helper to add message
+        function addMessage(text, sender) {
+            const div = document.createElement('div');
+            div.className = `xwebagent-message ${sender}`;
+            div.textContent = text;
+            messagesDiv.appendChild(div);
+            return div;
+        }
+
+        // Send Logic
+        async function handleSend() {
+            const text = input.value.trim();
+            if (!text) return;
+
+            addMessage(text, 'user');
+            input.value = '';
+
+            // Simulate API Call
+            document.getElementById('loading-indicator').style.display = 'block';
+            
+            try {
+                // Mock simple echo response or command processing
+                const response = await mockExtensionApi(text);
+                addMessage(response, 'agent');
+            } catch (err) {
+                document.getElementById('error-msg').textContent = err.message;
+                document.getElementById('error-msg').style.display = 'block';
+            } finally {
+                document.getElementById('loading-indicator').style.display = 'none';
+            }
+        }
+
+        // Event Listeners
+        sendBtn.addEventListener('click', handleSend);
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleSend();
         });
 
-        document.getElementById('save-btn').addEventListener('click', () => {
-            const key = document.getElementById('api-key').value;
-            chrome.storage.local.set({ apiKey: key }, () => {
-                document.getElementById('save-status').textContent = 'Saved!';
+        resetBtn.addEventListener('click', () => {
+            messagesDiv.innerHTML = '';
+            document.getElementById('error-msg').style.display = 'none';
+        });
+
+        // Mock API function (replaces actual LLM call)
+        async function mockExtensionApi(text) {
+            return new Promise((resolve) => {
+                setTimeout(() => {
+                    if (text === 'error_test') throw new Error('Simulated API Failure');
+                    resolve(`Echo: ${text}`);
+                }, 50);
             });
-        });
-
-        function showError(msg) {
-            const el = document.getElementById('error-msg');
-            el.textContent = msg;
-            el.style.display = 'block';
         }
     </script>
     
+    <!-- TEST RUNNER -->
     <script>
-        // MOCK CHROME API
-        window.chrome = {
-            storage: {
-                local: {
-                    _data: { apiKey: 'mock-key' },
-                    get: (keys, cb) => cb(window.chrome.storage.local._data),
-                    set: (items, cb) => {
-                        Object.assign(window.chrome.storage.local._data, items);
-                        if (cb) cb();
-                    }
-                }
-            },
-            runtime: {
-                sendMessage: (msg) => console.log('Mock message:', msg)
-            }
-        };
-
-        // TEST RUNNER LOGIC
         const resultsDiv = document.getElementById('results');
         const tests = [];
 
-        function test(name, fn) {
-            tests.push({ name, fn });
-        }
+        function test(name, fn) { tests.push({ name, fn }); }
 
         async function runTests() {
             let passed = 0;
@@ -81,11 +123,11 @@
 
             for (const t of tests) {
                 try {
-                    // Reset UI State between tests
-                    document.getElementById('connection-status').textContent = 'Disconnected';
-                    document.getElementById('connect-btn').disabled = false;
+                    // TEARDOWN / SETUP
+                    document.getElementById('xwebagent-messages').innerHTML = '';
+                    document.getElementById('xwebagent-input').value = '';
                     document.getElementById('error-msg').style.display = 'none';
-
+                    
                     await t.fn();
                     html += `<li class="test-pass">✓ ${t.name}</li>`;
                     passed++;
@@ -98,69 +140,64 @@
             html += '</ul>';
             html += `<p><strong>Passed: ${passed}, Failed: ${failed}</strong></p>`;
             resultsDiv.innerHTML = html;
-            
             window.__TEST_RESULTS__ = { passed, failed, total: tests.length };
         }
 
-        // --- TESTS ---
+        // --- TEST CASES ---
 
-        test('Popup renders connect button', () => {
-            // Verifies the initial state of the Popup UI.
-            // Checks if the 'Connect' button is present and labelled correctly.
-            const btn = document.getElementById('connect-btn');
-            if (!btn) throw new Error('Connect button not visible');
-            if (btn.textContent !== 'Connect') throw new Error('Wrong button text');
+        test('UI Input and Send Button exist', () => {
+            if (!document.getElementById('xwebagent-input')) throw new Error('Input missing');
+            if (!document.getElementById('xwebagent-send')) throw new Error('Send button missing');
         });
 
-        test('Clicking connect updates status', () => {
-            // Simulates the user flow of connecting to the agent.
-            // 1. Click button
-            // 2. Button should become disabled (prevent double click)
-            // 3. Status text should change to 'Connected'
-            const btn = document.getElementById('connect-btn');
-            btn.click();
-            const status = document.getElementById('connection-status').textContent;
-            if (status !== 'Connected') throw new Error(`Status was ${status}, expected Connected`);
-            if (!btn.disabled) throw new Error('Button should be disabled after connect');
+        test('Sending a message updates UI', async () => {
+            const input = document.getElementById('xwebagent-input');
+            const sendBtn = document.getElementById('xwebagent-send');
+            const msgs = document.getElementById('xwebagent-messages');
+
+            input.value = 'Hello World';
+            sendBtn.click();
+
+            // Check immediate user message
+            const userMsg = msgs.querySelector('.xwebagent-message.user');
+            if (!userMsg || userMsg.textContent !== 'Hello World') {
+                throw new Error('User message not displayed correctly');
+            }
+
+            // Wait for agent response
+            await new Promise(r => setTimeout(r, 100));
+            const agentMsg = msgs.querySelector('.xwebagent-message.agent');
+            if (!agentMsg || !agentMsg.textContent.includes('Echo: Hello World')) {
+                throw new Error('Agent response missing or incorrect');
+            }
         });
 
-        test('Settings persistence (Save Flow)', async () => {
-            // Verifies that Settings can be saved to Chrome storage.
-            // This is an Async test using a Promise.
-            return new Promise((resolve, reject) => {
-                // 1. Enter new API Key
-                const input = document.getElementById('api-key');
-                input.value = 'new-api-key-123';
-                
-                // 2. Click Save
-                const saveBtn = document.getElementById('save-btn');
-                saveBtn.click();
-                
-                // 3. Wait for async storage operation
-                setTimeout(() => {
-                    const status = document.getElementById('save-status').textContent;
-                    // Check UI feedback
-                    if (status !== 'Saved!') reject(new Error('Save status not shown'));
-                    
-                    // Check Mock Storage for correct data
-                    chrome.storage.local.get(null, (data) => {
-                        if (data.apiKey === 'new-api-key-123') resolve();
-                        else reject(new Error(`Storage not updated: ${JSON.stringify(data)}`));
-                    });
-                }, 10);
-            });
+        test('Clear button empties chat', () => {
+            const msgs = document.getElementById('xwebagent-messages');
+            // Manually add junk
+            msgs.innerHTML = '<div>Junk</div>';
+            
+            const clearBtn = document.querySelector('[data-action="reset"]');
+            clearBtn.click();
+
+            if (msgs.children.length !== 0) throw new Error('Chat not cleared');
         });
 
-        test('Error state rendering', () => {
-            // Verifies that the UI correctly displays error messages.
-            // Checks if the error container becomes visible and has correct text.
-            showError('Network Error');
-            const el = document.getElementById('error-msg');
-            if (el.style.display === 'none') throw new Error('Error div hidden');
-            if (el.textContent !== 'Network Error') throw new Error('Wrong error text');
+        test('Error handling displays message', async () => {
+            const input = document.getElementById('xwebagent-input');
+            const sendBtn = document.getElementById('xwebagent-send');
+            
+            // Trigger mocked error
+            input.value = 'error_test';
+            sendBtn.click();
+
+            await new Promise(r => setTimeout(r, 100));
+            
+            const errDiv = document.getElementById('error-msg');
+            if (errDiv.style.display === 'none') throw new Error('Error div hidden');
+            if (errDiv.textContent !== 'Simulated API Failure') throw new Error('Wrong error text');
         });
 
-        // AUTO RUN
         setTimeout(runTests, 100);
     </script>
 </body>
