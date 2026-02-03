@@ -130,12 +130,7 @@ e2e-tests/
     - `safeSendMessage`: Verifies message passing and error handling (e.g. context invalidation).
     - `routeQuery`: Verifies LLM JSON response parsing.
 
-### 7. Mocked UI Tests (`ui/ui-test.html`)
 
-- **UI Element Check**: Verifies Input and Send button exist.
-- **Chat Flow**: Simulates sending a message and validates that the agent responds (echo).
-- **Clear Function**: Tests the "Clear" button to empty the chat history.
-- **Error Handling**: Simulates an API failure and verifies the error message display.
 
 ## Notes
 
