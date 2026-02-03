@@ -2,6 +2,15 @@
 config.js
 keys.py
 
+# Dependencies
+node_modules/
+e2e-tests/node_modules/
+
+# Test Artifacts
+e2e-tests/playwright-report/
+e2e-tests/.test-user-data*
+
+
 # IDE
 .idea/
 .vscode/
@@ -10,6 +19,11 @@ keys.py
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+.test-user-data*
+test-results/
+playwright-report/
 
 # Build artifacts
 *.zip

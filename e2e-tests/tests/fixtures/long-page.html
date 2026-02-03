@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Long Scrollable Page - XWebAgent Test</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 20px;
+        line-height: 1.8;
+      }
+      section {
+        margin-bottom: 600px; /* Large gap to ensure scrolling is needed */
+        padding: 30px;
+        background: #f9f9f9;
+        border-radius: 8px;
+      }
+      h2 {
+        color: #2c3e50;
+        border-bottom: 2px solid #3498db;
+        padding-bottom: 10px;
+      }
+      .target-element {
+        background: #e8f5e9;
+        padding: 15px;
+        border-radius: 4px;
+        margin: 20px 0;
+      }
+      .scroll-marker {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: #333;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 20px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Long Scrollable Page for Vision Testing</h1>
+    <p>This page is designed to test scroll-based vision navigation.</p>
+
+    <section id="section-1">
+      <h2>Section 1: Introduction</h2>
+      <p>This is the first section at the top of the page. It contains introductory content.</p>
+      <div class="target-element" data-testid="target-1">
+        <strong>Target Element 1:</strong> The quick brown fox jumps over the lazy dog.
+      </div>
+      <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut
+        labore et dolore magna aliqua.
+      </p>
+    </section>
+
+    <section id="section-2">
+      <h2>Section 2: Features</h2>
+      <p>This section is located in the middle of the page.</p>
+      <div class="target-element" data-testid="target-2">
+        <strong>Target Element 2:</strong> XWebAgent supports vision-based question answering.
+      </div>
+      <ul>
+        <li>Feature A: Automatic element indexing</li>
+        <li>Feature B: Screenshot capture</li>
+        <li>Feature C: Intelligent scrolling</li>
+      </ul>
+    </section>
+
+    <section id="section-3">
+      <h2>Section 3: Technical Details</h2>
+      <p>Deep in the page, you'll find technical information.</p>
+      <div class="target-element" data-testid="target-3">
+        <strong>Target Element 3:</strong> The system uses GPT-4 Vision for image understanding.
+      </div>
+      <p>
+        The architecture consists of content scripts, a background service worker, and a side panel
+        interface.
+      </p>
+    </section>
+
+    <section id="section-4">
+      <h2>Section 4: Performance Metrics</h2>
+      <p>Performance data is stored here at the bottom.</p>
+      <div class="target-element" data-testid="target-4">
+        <strong>Target Element 4:</strong> Average response time is 2.3 seconds.
+      </div>
+      <table>
+        <tr>
+          <th>Metric</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>Response Time</td>
+          <td>2.3s</td>
+        </tr>
+        <tr>
+          <td>Accuracy</td>
+          <td>94%</td>
+        </tr>
+        <tr>
+          <td>User Satisfaction</td>
+          <td>4.8/5</td>
+        </tr>
+      </table>
+    </section>
+
+    <section id="section-5">
+      <h2>Section 5: Conclusion</h2>
+      <p>This is the final section at the very bottom of the page.</p>
+      <div class="target-element" data-testid="target-5">
+        <strong>Target Element 5:</strong> Thank you for testing XWebAgent!
+      </div>
+      <p>We hope this tool helps make your browsing experience more productive.</p>
+    </section>
+
+    <div class="scroll-marker" id="scroll-position">Scroll: 0%</div>
+
+    <script>
+      // Update scroll position indicator
+      window.addEventListener('scroll', () => {
+        const scrollPercent = Math.round(
+          (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100
+        );
+        document.getElementById('scroll-position').textContent = `Scroll: ${scrollPercent}%`;
+      });
+    </script>
+  </body>
+</html>
