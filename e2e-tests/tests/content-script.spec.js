@@ -36,20 +36,21 @@ test.describe('Content Scripts', () => {
       ],
     });
 
-    // Wait for the extension to initialize
-    await new Promise((r) => setTimeout(r, 1000));
-
-    // Attempt to locate extension ID from Service Workers
-    const serviceWorkers = context.serviceWorkers();
-    for (const worker of serviceWorkers) {
-      const workerUrl = worker.url();
-      if (workerUrl.includes('chrome-extension://')) {
-        extensionId = workerUrl.split('/')[2];
-        break;
+    // Wait for the extension to initialize using polling
+    await expect.poll(async () => {
+      const serviceWorkers = context.serviceWorkers();
+      const worker = serviceWorkers.find(w => w.url().includes('chrome-extension://'));
+      if (worker) {
+        extensionId = worker.url().split('/')[2];
+        return true;
       }
-    }
-
-    // Fallback: Attempt to locate from Background Pages
+      return false;
+    }, {
+      message: 'Extension service worker did not appear',
+      timeout: 5000
+    }).toBe(true);
+    
+    // Fallback: Attempt to locate from Background Pages if SW didn't yield ID (unlikely if poll passed)
     if (!extensionId) {
       const pages = context.backgroundPages();
       for (const pg of pages) {
