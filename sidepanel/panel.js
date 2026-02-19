@@ -279,17 +279,37 @@ function addMessage(content, type = 'assistant', clickable = false) {
     msg.querySelectorAll('.xwebagent-pdf-citation').forEach(citation => {
       citation.addEventListener('click', async (e) => {
         e.stopPropagation();
-        
+
         // Check if this is an indexed citation with ranges
         const rangesJson = citation.dataset.ranges;
         const pageNum = citation.dataset.page ? parseInt(citation.dataset.page, 10) : null;
         const searchText = citation.dataset.text;
-        
+
         let message;
         if (rangesJson) {
-          // New format with multiple ranges
+          // New format with multiple ranges — cycle through one at a time
           const ranges = JSON.parse(rangesJson);
-          message = { action: 'highlightByRanges', ranges: ranges };
+
+          if (ranges.length > 1) {
+            // Get the index of the range to show on THIS click, then advance
+            const currentIdx = parseInt(citation.dataset.currentRangeIdx || '0', 10);
+            const nextIdx = (currentIdx + 1) % ranges.length;
+            citation.dataset.currentRangeIdx = String(nextIdx);
+
+            // Update or create the (k/n) counter inside the citation span
+            let counter = citation.querySelector('.citation-range-counter');
+            if (!counter) {
+              counter = document.createElement('span');
+              counter.className = 'citation-range-counter';
+              citation.appendChild(counter);
+            }
+            counter.textContent = `${currentIdx + 1}/${ranges.length}`;
+            citation.title = `Evidence ${currentIdx + 1} of ${ranges.length} — click to cycle`;
+
+            message = { action: 'highlightByRanges', ranges: [ranges[currentIdx]] };
+          } else {
+            message = { action: 'highlightByRanges', ranges: ranges };
+          }
         } else if (pageNum && searchText) {
           // Old format with page and text
           message = { action: 'navigateToPdfPage', page: pageNum, searchText: searchText };
@@ -297,11 +317,11 @@ function addMessage(content, type = 'assistant', clickable = false) {
           console.warn('Invalid citation data');
           return;
         }
-        
+
         // Send to the PDF viewer tab
         const tabs = await chrome.tabs.query({});
         const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
-        
+
         if (pdfViewerTab) {
           chrome.tabs.sendMessage(pdfViewerTab.id, message);
           chrome.tabs.update(pdfViewerTab.id, { active: true });

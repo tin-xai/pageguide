@@ -474,6 +474,13 @@ body {
   transform: scale(1.1);
 }
 
+.citation-range-counter {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.85;
+  margin-left: 1px;
+}
+
 /* Typing Indicator */
 .xwebagent-typing {
   display: flex;
