@@ -49,8 +49,9 @@ async function routeQuery(query) {
   console.log('🎯 Routing query:', query);
   
   try {
+    // Use fast router LLM (Gemini 2.5 Flash) for quick classification
     const response = await safeSendMessage({
-      action: 'callLLM',
+      action: 'callRouterLLM',
       systemPrompt: PROMPTS.ROUTER,
       messages: [{
         role: 'user',

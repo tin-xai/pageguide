@@ -20,8 +20,9 @@ async function routeVisionQuery(query) {
   console.log('👁️ Checking if vision is needed for:', query);
   
   try {
+    // Use fast router LLM (Gemini 2.5 Flash) for quick vision classification
     const response = await safeSendMessage({
-      action: 'callLLM',
+      action: 'callRouterLLM',
       systemPrompt: PROMPTS.VISION_ROUTER,
       messages: [{
         role: 'user',

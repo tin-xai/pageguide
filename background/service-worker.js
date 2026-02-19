@@ -130,6 +130,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ success: true });
     return true;
   }
+  if (request.action === 'callRouterLLM') {
+    // Fast router - always uses Gemini 2.5 Flash for quick routing decisions
+    callRouterLLM(request.messages, request.systemPrompt)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   if (request.action === 'callLLM') {
     callLLM(request.messages, request.systemPrompt, request.imageBase64)
       .then(sendResponse)
@@ -326,6 +333,65 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
   // Stop keep-alive after LLM call completes
   stopKeepAlive();
   return result;
+}
+
+// ===== Fast Router LLM =====
+// Always uses Gemini 2.5 Flash for fast routing decisions (query classification, vision routing)
+// This is separate from the main LLM which uses the user's selected model
+async function callRouterLLM(messages, systemPrompt) {
+  const config = CONFIG.providers.gemini;
+  const routerModel = 'gemini-2.5-flash'; // Always use fast model for routing
+  
+  // Get Gemini API key from settings (fallback to config)
+  let apiKey;
+  try {
+    const settings = await chrome.storage.sync.get(['geminiApiKey']);
+    apiKey = (settings.geminiApiKey || config.defaultApiKey).trim();
+  } catch (e) {
+    apiKey = config.defaultApiKey;
+  }
+  
+  if (!apiKey) {
+    return { error: 'Gemini API key not configured for router. Click ⚙️ Settings.' };
+  }
+  
+  const url = `${config.endpoint}/${routerModel}:generateContent?key=${apiKey}`;
+  
+  try {
+    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
+    if (messages?.length > 0) {
+      userContent += messages[messages.length - 1].content;
+    }
+    
+    console.log('🎯 Router LLM (Gemini 2.5 Flash) - prompt length:', userContent.length);
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: userContent }] }],
+        generationConfig: { 
+          temperature: 0.1, 
+          maxOutputTokens: 256 // Router responses are short
+        }
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      return { error: `Router API error: ${data.error?.message || response.status}` };
+    }
+    
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      return { error: 'Empty response from router' };
+    }
+    
+    return { content: text };
+  } catch (error) {
+    return { error: `Router network error: ${error.message}` };
+  }
 }
 
 // ===== Main LLM Router =====
