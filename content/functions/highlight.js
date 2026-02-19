@@ -230,15 +230,46 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
     if (count > 0) break;
   }
   
-  // STRATEGY 2: If no child elements matched, try text node wrapping
+  // STRATEGY 2: Find the deepest/smallest container holding the text, then wrap its text node.
+  // This is critical for X/Twitter, Facebook, LinkedIn, and Wikipedia where content lives
+  // inside nested divs/spans that aren't directly indexed.
   if (count === 0) {
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    // Step 2a: Walk all descendants to find the smallest element whose textContent
+    // still contains the search text. This narrows an article/section down to the
+    // actual tweet-text div, post-body span, or paragraph.
+    let targetEl = element;
+    let targetLen = (element.textContent?.length || 0) + 1;
+
+    const descWalker = document.createTreeWalker(element, NodeFilter.SHOW_ELEMENT);
+    let descEl;
+    while ((descEl = descWalker.nextNode())) {
+      if (isXWebAgentElement(descEl)) continue;
+      const descLen = descEl.textContent?.length || 0;
+      if (descLen < targetLen) {
+        const descTextLower = descEl.textContent?.toLowerCase().trim() || '';
+        for (const variant of searchVariants) {
+          if (descTextLower.includes(variant)) {
+            targetLen = descLen;
+            targetEl = descEl;
+            break;
+          }
+        }
+      }
+    }
+
+    if (targetEl !== element) {
+      const label = targetEl.getAttribute('data-testid') ||
+                    (typeof targetEl.className === 'string' ? targetEl.className.slice(0, 30) : '');
+      console.log('🎯 Narrowed to container:', targetEl.tagName, label, targetEl.textContent?.slice(0, 50));
+    }
+
+    // Step 2b: Walk text nodes within the (possibly narrowed) target element.
+    const nodeWalker = document.createTreeWalker(targetEl, NodeFilter.SHOW_TEXT);
     const textNodes = [];
-    
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
+
+    while (nodeWalker.nextNode()) {
+      const node = nodeWalker.currentNode;
       const nodeTextLower = node.textContent.toLowerCase();
-      
       for (const variant of searchVariants) {
         if (nodeTextLower.includes(variant)) {
           textNodes.push({ node, searchTerm: variant });
@@ -246,25 +277,25 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
         }
       }
     }
-    
-    console.log('🤖 Found', textNodes.length, 'text nodes to highlight');
-    
+
+    console.log('🤖 Found', textNodes.length, 'text nodes in', targetEl.tagName);
+
     // Process text nodes (limit to first match to avoid over-highlighting)
     const maxHighlights = 1;
     for (const { node: textNode, searchTerm } of textNodes) {
       if (count >= maxHighlights) break;
-      
+
       const text = textNode.textContent;
       const lowerText = text.toLowerCase();
       const idx = lowerText.indexOf(searchTerm);
-      
+
       if (idx === -1) continue;
-      
+
       // Split and wrap
       const before = text.slice(0, idx);
       const match = text.slice(idx, idx + searchTerm.length);
       const after = text.slice(idx + searchTerm.length);
-      
+
       // Create highlight span with LLM-chosen style
       const span = document.createElement('span');
       span.className = `xwebagent-highlight xwebagent-highlight-${animation}`;
@@ -274,16 +305,27 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
       span.style.padding = '1px 4px';
       span.setAttribute('data-xwebagent-styled', 'true');
       span.textContent = match;
-      
+
       const fragment = document.createDocumentFragment();
       if (before) fragment.appendChild(document.createTextNode(before));
       fragment.appendChild(span);
       if (after) fragment.appendChild(document.createTextNode(after));
-      
+
       textNode.parentNode.replaceChild(fragment, textNode);
-      
-      // Store reference for scrolling
       window._xwebagentHighlights.push(span);
+      count++;
+    }
+
+    // Step 2c: Text is split across sibling elements (e.g. a tweet with embedded
+    // @mentions / #hashtags rendered as separate <a>/<span> nodes). No single text
+    // node matched, but the narrowed container IS the right element — highlight it
+    // directly instead of falling all the way back to the giant root element.
+    if (count === 0 && targetEl !== element) {
+      console.log('🤖 Cross-span text detected, highlighting narrowed container:', targetEl.tagName);
+      applyAnimatedHighlight(targetEl, color, animation);
+      targetEl.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
+      targetEl.style.borderRadius = '3px';
+      window._xwebagentHighlights.push(targetEl);
       count++;
     }
   }

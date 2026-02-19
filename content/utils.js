@@ -397,6 +397,52 @@ function createPageIndex(maxItems = 200) {
     } catch (e) { /* invalid selector */ }
   });
   
+  // Third pass: Social media text containers
+  // Facebook, X/Twitter, and LinkedIn all use dir="auto"/"ltr" on post/tweet text
+  // containers, but those elements carry no ARIA role and are skipped by the
+  // main accessibility-tree walk above. Index them directly so the LLM can cite
+  // the exact paragraph instead of a distant parent.
+  const socialMediaSelectors = [
+    '[data-testid="tweetText"]',   // X/Twitter tweet body
+    '[data-testid="tweet-text"]',  // X/Twitter alternative
+    'div[dir="auto"]',             // Facebook / X / LinkedIn post text
+    'div[dir="ltr"]',              // LinkedIn post text
+    'span[dir="auto"]',            // Nested social media text
+    'span[dir="ltr"]',             // LinkedIn span containers
+  ];
+
+  socialMediaSelectors.forEach(selector => {
+    if (idx > maxItems) return;
+    try {
+      document.querySelectorAll(selector).forEach(el => {
+        if (idx > maxItems) return;
+        if (isXWebAgentElement(el)) return;
+        if (seen.has(el)) return;
+
+        try {
+          const style = window.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden') return;
+          if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+        } catch (e) { return; }
+
+        let name = (el.textContent || '').replace(/\s+/g, ' ').trim();
+
+        // Only index meaningful text blocks — skip buttons, tiny labels, and huge
+        // feed-level containers (those are already caught by article/section above).
+        if (name.length < 30 || name.length > 1500) return;
+        if (seenText.has(name)) return;
+
+        seen.add(el);
+        seenText.add(name);
+        indexMap[idx] = el;
+
+        const displayText = name.length > 300 ? name.slice(0, 300) + '...' : name;
+        indexLines.push(`[${idx}] (paragraph) ${displayText}`);
+        idx++;
+      });
+    } catch (e) { /* invalid selector */ }
+  });
+
   // SPA Fallback: If we found very few elements, try broader selectors
   // This helps with React/Vue/Angular apps that may not have proper accessibility
   if (idx < 10) {
