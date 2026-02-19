@@ -504,3 +504,78 @@ function createPageIndex(maxItems = 200) {
 function getIndexedElement(idx) {
   return window._xwebagentIndex[idx] || null;
 }
+
+/**
+ * Expand truncated social media posts and other "show more" content before indexing.
+ * Clicks visible expand buttons (See more, Show more, Read more, etc.) silently.
+ * Returns a promise that resolves after all clicks + a short settle delay.
+ */
+async function expandTruncatedContent() {
+  // Text patterns that indicate a "show more" / expand trigger (case-insensitive)
+  const expandPatterns = [
+    /^see more$/i,
+    /^show more$/i,
+    /^read more$/i,
+    /^view more$/i,
+    /^see full post$/i,
+    /^load more$/i,
+    /^more$/i,
+    /^\.\.\.\s*more$/i,
+    /^see more replies$/i,
+    /^continue reading$/i,
+    /^expand$/i,
+  ];
+
+  // Tags that can be expand triggers
+  const candidateTags = new Set(['button', 'a', 'span', 'div']);
+
+  // Walk all visible interactive-ish elements and collect matches
+  const toClick = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+  let el;
+  while ((el = walker.nextNode())) {
+    // Skip extension-own elements
+    if (el.classList?.contains('xwebagent') || el.id?.startsWith('xwebagent')) continue;
+
+    const tag = el.tagName.toLowerCase();
+    if (!candidateTags.has(tag)) continue;
+
+    // Must be visible
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+
+    // Must look interactive (role, tag, or cursor)
+    const role = el.getAttribute('role');
+    const isInteractive =
+      tag === 'button' ||
+      tag === 'a' ||
+      role === 'button' ||
+      role === 'link' ||
+      style.cursor === 'pointer';
+    if (!isInteractive) continue;
+
+    // Match text
+    const text = (el.innerText || el.textContent || '').trim();
+    if (text.length === 0 || text.length > 40) continue; // Expand buttons are short labels
+    if (expandPatterns.some(re => re.test(text))) {
+      toClick.push(el);
+    }
+  }
+
+  if (toClick.length === 0) return;
+
+  console.log('🤖 expandTruncatedContent: clicking', toClick.length, 'expand button(s)');
+
+  for (const btn of toClick) {
+    try {
+      btn.click();
+    } catch (e) {
+      // ignore
+    }
+    // Small delay between clicks so the DOM can update
+    await new Promise(r => setTimeout(r, 120));
+  }
+
+  // Final settle delay so expanded content is in the DOM before indexing
+  await new Promise(r => setTimeout(r, 300));
+}

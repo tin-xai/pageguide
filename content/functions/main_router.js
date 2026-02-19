@@ -101,6 +101,11 @@ async function routeQuery(query) {
  * @param {boolean} hasImageInHistory - Whether any previous message had an image
  */
 async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false) {
+  // Expand truncated posts ("See more", "Show more", etc.) before indexing
+  if (typeof expandTruncatedContent === 'function') {
+    await expandTruncatedContent();
+  }
+
   // Check if image is available (current or in history)
   const imageAvailable = hasImage || hasImageInHistory || !!getUploadedImage?.();
   console.log('🎯 Image available:', imageAvailable, '(current:', hasImage, ', history:', hasImageInHistory, ')');
