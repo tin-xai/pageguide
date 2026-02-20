@@ -8,14 +8,14 @@
     "lib": "lib"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0"
   },
   "scripts": {
-    "e2e:install": "npm ci --prefix e2e-tests",
     "e2e:manifest": "node e2e-tests/scripts/validate_manifest.js",
-    "e2e:unit": "npm run e2e:install && npx --prefix e2e-tests jest unit/logic.test.js",
-    "e2e:e2e": "npm run e2e:install && npx --prefix e2e-tests playwright install --with-deps chromium && cd e2e-tests && npx playwright test",
+    "e2e:unit": "npx jest e2e-tests/unit/logic.test.js",
+    "e2e:e2e": "npx playwright install --with-deps chromium && npx playwright test e2e-tests/tests",
     "ci": "npm run e2e:manifest && npm run e2e:unit && npm run e2e:e2e"
   },
   "keywords": [],
