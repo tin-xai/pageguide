@@ -1090,8 +1090,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       addMessage(answerText, 'assistant', hasHighlights);
     }
   } else if (message.action === 'showTyping') {
-    // Show typing indicator when guidance is continuing
     showTyping();
+  } else if (message.action === 'hideTyping') {
+    hideTyping();
   } else if (message.action === 'addMessage') {
     addMessage(message.content, message.type, message.clickable);
   } else if (message.action === 'closePanel') {
