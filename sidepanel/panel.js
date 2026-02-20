@@ -7,6 +7,12 @@ let currentTabId = null;
 let uploadedImageBase64 = null; // Stores the uploaded image
 let hasImageInConversation = false; // Track if image was used in conversation
 
+// Open a persistent port to the service worker.
+// When the panel is closed (by any means — X button, keyboard shortcut, etc.)
+// the port disconnects and the service worker's onDisconnect handler fires reliably,
+// clearing the page highlights. This is more reliable than beforeunload + sendMessage.
+chrome.runtime.connect({ name: 'sidepanel' });
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   // Get current tab
@@ -17,6 +23,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('xwebagent-settings')?.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
   });
+
+  document.getElementById('xwebagent-new-chat')?.addEventListener('click', () => resetChat());
   
   document.getElementById('xwebagent-send').addEventListener('click', sendMessage);
   document.getElementById('xwebagent-input').addEventListener('keypress', e => {
@@ -930,54 +938,64 @@ ${pdfTextContent}`;
 }
 
 /**
+ * Reset all chat state and clear page highlights.
+ * @param {boolean} showMessage - Whether to show a confirmation message in the chat.
+ */
+async function resetChat(showMessage = true) {
+  // Clear highlights on the active page
+  try {
+    await sendToContentScript({ action: 'reset' });
+  } catch (e) {
+    // Page might not have a content script loaded
+  }
+
+  // Clear highlights in PDF viewer if open
+  try {
+    const tabs = await chrome.tabs.query({});
+    const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
+    if (pdfViewerTab) {
+      chrome.tabs.sendMessage(pdfViewerTab.id, { action: 'clearPdfHighlights' });
+    }
+  } catch (e) {
+    // PDF viewer might not be open
+  }
+
+  // Clear chat and conversation history
+  conversationHistory = [];
+  chatMessages = [];
+  hasImageInConversation = false;
+  const container = document.getElementById('xwebagent-messages');
+  if (container) container.innerHTML = '';
+
+  // Clear uploaded image state
+  uploadedImageBase64 = null;
+  const preview = document.getElementById('xwebagent-image-preview');
+  const uploadLabel = document.getElementById('xwebagent-upload-label');
+  const input = document.getElementById('xwebagent-input');
+  const fileInput = document.getElementById('xwebagent-image-upload');
+
+  if (preview) preview.style.display = 'none';
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  if (input) input.placeholder = 'Ask anything...';
+  if (fileInput) fileInput.value = '';
+
+  try {
+    await sendToContentScript({ action: 'clearUploadedImage' });
+  } catch (e) {
+    // Ignore
+  }
+
+  if (showMessage) {
+    addMessage('🧹 Cleared chat, highlights, and uploaded image', 'system');
+  }
+}
+
+/**
  * Handle quick action buttons
  */
 async function handleQuickAction(action) {
   if (action === 'reset') {
-    try {
-      // Clear highlights on page
-      await sendToContentScript({ action: 'reset' });
-    } catch (e) {
-      // Page might not have content script loaded
-    }
-    
-    // Clear highlights in PDF viewer if open
-    try {
-      const tabs = await chrome.tabs.query({});
-      const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
-      if (pdfViewerTab) {
-        chrome.tabs.sendMessage(pdfViewerTab.id, { action: 'clearPdfHighlights' });
-      }
-    } catch (e) {
-      // PDF viewer might not be open
-    }
-    
-    // Clear chat and history
-    conversationHistory = [];
-    chatMessages = [];
-    hasImageInConversation = false;
-    const container = document.getElementById('xwebagent-messages');
-    if (container) container.innerHTML = '';
-    
-    // Clear uploaded image
-    uploadedImageBase64 = null;
-    const preview = document.getElementById('xwebagent-image-preview');
-    const uploadLabel = document.getElementById('xwebagent-upload-label');
-    const input = document.getElementById('xwebagent-input');
-    const fileInput = document.getElementById('xwebagent-image-upload');
-    
-    if (preview) preview.style.display = 'none';
-    if (uploadLabel) uploadLabel.classList.remove('has-image');
-    if (input) input.placeholder = 'Ask anything...';
-    if (fileInput) fileInput.value = '';
-    
-    try {
-      await sendToContentScript({ action: 'clearUploadedImage' });
-    } catch (e) {
-      // Ignore
-    }
-    
-    addMessage('🧹 Cleared chat, highlights, and uploaded image', 'system');
+    await resetChat(true);
   }
 }
 
@@ -1013,7 +1031,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Notify background when panel is closed
+// Notify background when panel is closed.
+// The service worker clears page highlights upon receiving panelClosed.
 window.addEventListener('beforeunload', () => {
   try {
     chrome.runtime.sendMessage({ action: 'panelClosed' });

@@ -123,10 +123,29 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
+// ===== Port-based Panel Close Detection =====
+// The panel opens a persistent port named 'sidepanel' on load.
+// When the panel is destroyed (X button, keyboard shortcut, etc.) the port
+// disconnects synchronously, which is far more reliable than beforeunload + sendMessage.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'sidepanel') return;
+  sidePanelOpen = true;
+  port.onDisconnect.addListener(() => {
+    sidePanelOpen = false;
+    // Clear page highlights on the active tab
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id;
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { action: 'reset' }).catch(() => {});
+      }
+    });
+  });
+});
+
 // ===== Message Handler =====
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'panelClosed') {
-    sidePanelOpen = false;
+    // Kept for backward compatibility; actual close detection is port-based above.
     sendResponse({ success: true });
     return true;
   }
