@@ -123,11 +123,37 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
+// ===== Port-based Panel Close Detection =====
+// The panel opens a persistent port named 'sidepanel' on load.
+// When the panel is destroyed (X button, keyboard shortcut, etc.) the port
+// disconnects synchronously, which is far more reliable than beforeunload + sendMessage.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'sidepanel') return;
+  sidePanelOpen = true;
+  port.onDisconnect.addListener(() => {
+    sidePanelOpen = false;
+    // Clear page highlights on the active tab
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id;
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { action: 'reset' }).catch(() => {});
+      }
+    });
+  });
+});
+
 // ===== Message Handler =====
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'panelClosed') {
-    sidePanelOpen = false;
+    // Kept for backward compatibility; actual close detection is port-based above.
     sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === 'callRouterLLM') {
+    // Fast router - always uses Gemini 2.5 Flash for quick routing decisions
+    callRouterLLM(request.messages, request.systemPrompt)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
     return true;
   }
   if (request.action === 'callLLM') {
@@ -326,6 +352,71 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
   // Stop keep-alive after LLM call completes
   stopKeepAlive();
   return result;
+}
+
+// ===== Fast Router LLM =====
+// Prefers Gemini 2.5 Flash for fast routing. If no Gemini key is set (e.g. an
+// OpenRouter-only or OpenAI-only user), falls back to the user's selected provider
+// so routing still works without requiring a separate Gemini key.
+async function callRouterLLM(messages, systemPrompt) {
+  const config = CONFIG.providers.gemini;
+  const routerModel = 'gemini-2.5-flash';
+
+  // Load all relevant settings in one call
+  let settings = {};
+  try {
+    settings = await chrome.storage.sync.get([
+      'geminiApiKey', 'provider',
+      'openrouterApiKey', 'openrouterModel',
+      'openaiApiKey', 'openaiModel'
+    ]);
+  } catch (e) { /* ignore */ }
+
+  const apiKey = (settings.geminiApiKey || config.defaultApiKey || '').trim();
+
+  // If no Gemini key, route via the user's selected provider instead
+  if (!apiKey) {
+    console.log('🎯 No Gemini key for router — using selected provider as fallback');
+    return callLLM(messages, systemPrompt);
+  }
+  
+  const url = `${config.endpoint}/${routerModel}:generateContent?key=${apiKey}`;
+  
+  try {
+    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
+    if (messages?.length > 0) {
+      userContent += messages[messages.length - 1].content;
+    }
+    
+    console.log('🎯 Router LLM (Gemini 2.5 Flash) - prompt length:', userContent.length);
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: userContent }] }],
+        generationConfig: { 
+          temperature: 0.1, 
+          maxOutputTokens: 256 // Router responses are short
+        }
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      return { error: `Router API error: ${data.error?.message || response.status}` };
+    }
+    
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      return { error: 'Empty response from router' };
+    }
+    
+    return { content: text };
+  } catch (error) {
+    return { error: `Router network error: ${error.message}` };
+  }
 }
 
 // ===== Main LLM Router =====

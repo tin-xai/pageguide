@@ -366,7 +366,8 @@ async function extractAllText() {
 
 async function renderAllPages() {
   elements.pdfPages.innerHTML = '';
-  
+  state.highlights = []; // DOM was cleared; drop stale references
+
   for (let i = 1; i <= state.totalPages; i++) {
     await renderPage(i);
   }
@@ -473,14 +474,21 @@ function updatePageInfo() {
 }
 
 // Zoom
-function setZoom(newScale) {
+async function setZoom(newScale) {
   if (newScale < 0.5 || newScale > 3) return;
-  
+
+  const savedPage = state.currentPage;
   state.scale = newScale;
   elements.zoomLevel.textContent = `${Math.round(newScale * 100)}%`;
-  
-  // Re-render all pages
-  renderAllPages();
+
+  // Re-render all pages (also clears state.highlights)
+  await renderAllPages();
+
+  // Restore scroll to the page that was visible before zoom
+  const pageEl = elements.pdfPages.querySelector(`[data-page-number="${savedPage}"]`);
+  if (pageEl) {
+    pageEl.scrollIntoView({ behavior: 'instant', block: 'start' });
+  }
 }
 
 // Normalize text for matching (collapse whitespace, remove special chars)

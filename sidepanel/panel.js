@@ -7,6 +7,12 @@ let currentTabId = null;
 let uploadedImageBase64 = null; // Stores the uploaded image
 let hasImageInConversation = false; // Track if image was used in conversation
 
+// Open a persistent port to the service worker.
+// When the panel is closed (by any means — X button, keyboard shortcut, etc.)
+// the port disconnects and the service worker's onDisconnect handler fires reliably,
+// clearing the page highlights. This is more reliable than beforeunload + sendMessage.
+chrome.runtime.connect({ name: 'sidepanel' });
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   // Get current tab
@@ -17,6 +23,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('xwebagent-settings')?.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
   });
+
+  document.getElementById('xwebagent-new-chat')?.addEventListener('click', () => resetChat());
   
   document.getElementById('xwebagent-send').addEventListener('click', sendMessage);
   document.getElementById('xwebagent-input').addEventListener('keypress', e => {
@@ -50,7 +58,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Focus input
   document.getElementById('xwebagent-input')?.focus();
-  
+
+  // Show current model status on open
+  showModelStatus();
+
   // Listen for tab changes
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     currentTabId = activeInfo.tabId;
@@ -246,6 +257,60 @@ function parseMarkdown(text) {
 }
 
 /**
+ * Read stored settings and show the active provider + model in the chat.
+ * If no key is configured, prompt the user to open Settings.
+ */
+async function showModelStatus() {
+  const PROVIDER_LABELS = {
+    gemini: 'Gemini',
+    openrouter: 'OpenRouter',
+    openai: 'OpenAI'
+  };
+
+  let settings = {};
+  try {
+    settings = await chrome.storage.sync.get([
+      'provider',
+      'geminiApiKey', 'geminiModel',
+      'openrouterApiKey', 'openrouterModel',
+      'openaiApiKey', 'openaiModel'
+    ]);
+  } catch (e) { /* storage unavailable */ }
+
+  const provider = settings.provider || 'gemini';
+  const providerLabel = PROVIDER_LABELS[provider] || provider;
+
+  let apiKey = '';
+  let modelRaw = '';
+
+  if (provider === 'gemini') {
+    apiKey = settings.geminiApiKey || '';
+    modelRaw = settings.geminiModel || 'gemini-2.5-flash';
+  } else if (provider === 'openrouter') {
+    apiKey = settings.openrouterApiKey || '';
+    modelRaw = settings.openrouterModel || '';
+  } else if (provider === 'openai') {
+    apiKey = settings.openaiApiKey || '';
+    modelRaw = settings.openaiModel || '';
+  }
+
+  // Shorten "org/model-name" → "model-name" for display
+  const modelDisplay = modelRaw.includes('/') ? modelRaw.split('/').pop() : modelRaw;
+
+  if (!apiKey) {
+    addMessage(
+      `⚙️ No API key configured. Click **⚙️ Settings** to add your ${providerLabel} key and get started.`,
+      'system'
+    );
+  } else {
+    addMessage(
+      `🤖 Using **${providerLabel}** · ${modelDisplay}`,
+      'system'
+    );
+  }
+}
+
+/**
  * Add a message to the chat
  */
 function addMessage(content, type = 'assistant', clickable = false) {
@@ -279,17 +344,37 @@ function addMessage(content, type = 'assistant', clickable = false) {
     msg.querySelectorAll('.xwebagent-pdf-citation').forEach(citation => {
       citation.addEventListener('click', async (e) => {
         e.stopPropagation();
-        
+
         // Check if this is an indexed citation with ranges
         const rangesJson = citation.dataset.ranges;
         const pageNum = citation.dataset.page ? parseInt(citation.dataset.page, 10) : null;
         const searchText = citation.dataset.text;
-        
+
         let message;
         if (rangesJson) {
-          // New format with multiple ranges
+          // New format with multiple ranges — cycle through one at a time
           const ranges = JSON.parse(rangesJson);
-          message = { action: 'highlightByRanges', ranges: ranges };
+
+          if (ranges.length > 1) {
+            // Get the index of the range to show on THIS click, then advance
+            const currentIdx = parseInt(citation.dataset.currentRangeIdx || '0', 10);
+            const nextIdx = (currentIdx + 1) % ranges.length;
+            citation.dataset.currentRangeIdx = String(nextIdx);
+
+            // Update or create the (k/n) counter inside the citation span
+            let counter = citation.querySelector('.citation-range-counter');
+            if (!counter) {
+              counter = document.createElement('span');
+              counter.className = 'citation-range-counter';
+              citation.appendChild(counter);
+            }
+            counter.textContent = `${currentIdx + 1}/${ranges.length}`;
+            citation.title = `Evidence ${currentIdx + 1} of ${ranges.length} — click to cycle`;
+
+            message = { action: 'highlightByRanges', ranges: [ranges[currentIdx]] };
+          } else {
+            message = { action: 'highlightByRanges', ranges: ranges };
+          }
         } else if (pageNum && searchText) {
           // Old format with page and text
           message = { action: 'navigateToPdfPage', page: pageNum, searchText: searchText };
@@ -297,11 +382,11 @@ function addMessage(content, type = 'assistant', clickable = false) {
           console.warn('Invalid citation data');
           return;
         }
-        
+
         // Send to the PDF viewer tab
         const tabs = await chrome.tabs.query({});
         const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
-        
+
         if (pdfViewerTab) {
           chrome.tabs.sendMessage(pdfViewerTab.id, message);
           chrome.tabs.update(pdfViewerTab.id, { active: true });
@@ -819,7 +904,15 @@ async function sendMessage() {
     }
   } catch (e) {
     hideTyping();
-    addMessage(`Error: ${e.message}`, 'error');
+    const msg = e.message || '';
+    if (msg.includes('Could not establish connection') ||
+        msg.includes('Receiving end does not exist') ||
+        msg.includes('Cannot access') ||
+        msg.includes('No active tab')) {
+      addMessage('⚠️ This extension cannot run on this page.\n\nPlease navigate to a regular website (not `chrome://` or extension pages) and try again.', 'error');
+    } else {
+      addMessage(`❌ ${msg || 'Unknown error'}`, 'error');
+    }
     // Remove failed query from history
     conversationHistory.pop();
   }
@@ -910,54 +1003,67 @@ ${pdfTextContent}`;
 }
 
 /**
+ * Reset all chat state and clear page highlights.
+ * @param {boolean} showMessage - Whether to show a confirmation message in the chat.
+ */
+async function resetChat(showMessage = true) {
+  // Clear highlights on the active page
+  try {
+    await sendToContentScript({ action: 'reset' });
+  } catch (e) {
+    // Page might not have a content script loaded
+  }
+
+  // Clear highlights in PDF viewer if open
+  try {
+    const tabs = await chrome.tabs.query({});
+    const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
+    if (pdfViewerTab) {
+      chrome.tabs.sendMessage(pdfViewerTab.id, { action: 'clearPdfHighlights' });
+    }
+  } catch (e) {
+    // PDF viewer might not be open
+  }
+
+  // Clear chat and conversation history
+  conversationHistory = [];
+  chatMessages = [];
+  hasImageInConversation = false;
+  const container = document.getElementById('xwebagent-messages');
+  if (container) container.innerHTML = '';
+
+  // Clear uploaded image state
+  uploadedImageBase64 = null;
+  const preview = document.getElementById('xwebagent-image-preview');
+  const uploadLabel = document.getElementById('xwebagent-upload-label');
+  const input = document.getElementById('xwebagent-input');
+  const fileInput = document.getElementById('xwebagent-image-upload');
+
+  if (preview) preview.style.display = 'none';
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  if (input) input.placeholder = 'Ask anything...';
+  if (fileInput) fileInput.value = '';
+
+  try {
+    await sendToContentScript({ action: 'clearUploadedImage' });
+  } catch (e) {
+    // Ignore
+  }
+
+  if (showMessage) {
+    addMessage('🧹 Cleared chat, highlights, and uploaded image', 'system');
+  }
+
+  // Always show the current model status after clearing
+  showModelStatus();
+}
+
+/**
  * Handle quick action buttons
  */
 async function handleQuickAction(action) {
   if (action === 'reset') {
-    try {
-      // Clear highlights on page
-      await sendToContentScript({ action: 'reset' });
-    } catch (e) {
-      // Page might not have content script loaded
-    }
-    
-    // Clear highlights in PDF viewer if open
-    try {
-      const tabs = await chrome.tabs.query({});
-      const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
-      if (pdfViewerTab) {
-        chrome.tabs.sendMessage(pdfViewerTab.id, { action: 'clearPdfHighlights' });
-      }
-    } catch (e) {
-      // PDF viewer might not be open
-    }
-    
-    // Clear chat and history
-    conversationHistory = [];
-    chatMessages = [];
-    hasImageInConversation = false;
-    const container = document.getElementById('xwebagent-messages');
-    if (container) container.innerHTML = '';
-    
-    // Clear uploaded image
-    uploadedImageBase64 = null;
-    const preview = document.getElementById('xwebagent-image-preview');
-    const uploadLabel = document.getElementById('xwebagent-upload-label');
-    const input = document.getElementById('xwebagent-input');
-    const fileInput = document.getElementById('xwebagent-image-upload');
-    
-    if (preview) preview.style.display = 'none';
-    if (uploadLabel) uploadLabel.classList.remove('has-image');
-    if (input) input.placeholder = 'Ask anything...';
-    if (fileInput) fileInput.value = '';
-    
-    try {
-      await sendToContentScript({ action: 'clearUploadedImage' });
-    } catch (e) {
-      // Ignore
-    }
-    
-    addMessage('🧹 Cleared chat, highlights, and uploaded image', 'system');
+    await resetChat(true);
   }
 }
 
@@ -984,8 +1090,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       addMessage(answerText, 'assistant', hasHighlights);
     }
   } else if (message.action === 'showTyping') {
-    // Show typing indicator when guidance is continuing
     showTyping();
+  } else if (message.action === 'hideTyping') {
+    hideTyping();
   } else if (message.action === 'addMessage') {
     addMessage(message.content, message.type, message.clickable);
   } else if (message.action === 'closePanel') {
@@ -993,7 +1100,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Notify background when panel is closed
+// Notify background when panel is closed.
+// The service worker clears page highlights upon receiving panelClosed.
 window.addEventListener('beforeunload', () => {
   try {
     chrome.runtime.sendMessage({ action: 'panelClosed' });

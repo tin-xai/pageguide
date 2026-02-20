@@ -66,6 +66,7 @@ body {
   gap: 4px;
 }
 
+.xwebagent-new-chat-btn,
 .xwebagent-settings-btn,
 .xwebagent-close-btn {
   background: rgba(255, 255, 255, 0.1);
@@ -76,6 +77,11 @@ body {
   padding: 6px 10px;
   border-radius: 6px;
   transition: all 0.2s;
+}
+
+.xwebagent-new-chat-btn:hover {
+  background: rgba(124, 92, 255, 0.2);
+  color: #9d82ff;
 }
 
 .xwebagent-settings-btn:hover {
@@ -472,6 +478,13 @@ body {
   background: rgba(255, 193, 7, 0.5);
   color: #fff;
   transform: scale(1.1);
+}
+
+.citation-range-counter {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.85;
+  margin-left: 1px;
 }
 
 /* Typing Indicator */

@@ -100,6 +100,7 @@ INSTRUCTIONS:
 5. Use ONE citation per item (if same text has multiple indices, pick the link)
 6. The "text" should be a short, specific phrase (not the entire element text)
 7. Consider conversation history for context, but always answer based on CURRENT page content
+8. NEVER reproduce existing footnote markers from the webpage itself (e.g. Wikipedia's [1], [2], [3]) — only use [N:"text"] format where N comes from the PAGE INDEX above
 
 CITATION EXAMPLE:
 Question: "Who directed this movie?"

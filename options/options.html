@@ -383,6 +383,7 @@
             <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
             <option value="gemini-3-flash-preview">Gemini 3.0 Flash</option>
             <option value="gemini-3-pro-preview">Gemini 3.0 Pro</option>
+            <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
           </select>
         </div>
       </div>
@@ -397,12 +398,18 @@
         <div class="form-group">
           <label for="openrouterModel">Model</label>
           <select id="openrouterModel">
-            <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-            <option value="anthropic/claude-3-haiku">Claude 3 Haiku (Fast)</option>
-            <option value="openai/gpt-4o">GPT-4o</option>
-            <option value="openai/gpt-4o-mini">GPT-4o Mini (Fast)</option>
+            <option value="anthropic/claude-sonnet-4.5">Claude 4.5 Sonnet</option>
+            <option value="anthropic/claude-opus-4.5">Claude 4.5 Opus</option>
+            <option value="anthropic/claude-sonnet-4.6">Claude 4.6 Sonnet</option>
+            <option value="anthropic/claude-opus-4.6">Claude 4.6 Opus</option>
+            <option value="openai/gpt-4o-2024-11-20">GPT-4o</option>
+            <option value="openai/gpt-4o-mini-2024-07-18">GPT-4o Mini</option>
+            <option value="openai/gpt-5.2">GPT-5.2</option>
+            <option value="openai/gpt-5.2-pro">GPT-5.2 Pro</option>
             <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
-            <option value="meta-llama/llama-3.1-70b-instruct">Llama 3.1 70B</option>
+            <option value="google/gemini-3-flash-preview">Gemini 3.0 Flash Preview</option>
+            <option value="google/gemini-3-pro-preview">Gemini 3.0 Pro Preview</option>
+            <option value="google/gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
           </select>
         </div>
       </div>
@@ -417,17 +424,16 @@
         <div class="form-group">
           <label for="openaiModel">Model</label>
           <select id="openaiModel">
-            <option value="gpt-4o">GPT-4o (Best)</option>
-            <option value="gpt-4o-mini">GPT-4o Mini (Fast)</option>
-            <option value="gpt-4-turbo">GPT-4 Turbo</option>
-            <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+            <option value="gpt-4o-2024-11-20">GPT-4o</option>
+            <option value="gpt-4o-mini-2024-07-18">GPT-4o Mini</option>
+            <option value="gpt-5.2">GPT-5.2</option>
+            <option value="gpt-5.2-pro">GPT-5.2 Pro</option>
           </select>
         </div>
       </div>
       
-      <div class="btn-row">
-        <button type="button" id="testApiBtn" class="secondary">🧪 Test Connection</button>
-      </div>
+      <button type="button" id="testApiBtn" class="primary" style="width: 100%;">🧪 Test & Save Connection</button>
+      <small style="display:block; color:#555; margin-top:8px; font-size:12px; text-align:center;">API key is saved automatically on successful test</small>
       <div id="testResult" class="status"></div>
     </div>
     
@@ -465,7 +471,7 @@
       </div>
     </div>
     
-    <button class="primary" id="saveBtn" style="width: 100%;">💾 Save Settings</button>
+    <button class="secondary" id="saveBtn" style="width: 100%;">💾 Save Vision & SoM Preferences</button>
     <div class="status" id="status"></div>
     
     <p class="version">XWebAgent v1.0.0</p>

@@ -20,8 +20,9 @@ async function routeVisionQuery(query) {
   console.log('👁️ Checking if vision is needed for:', query);
   
   try {
+    // Use fast router LLM (Gemini 2.5 Flash) for quick vision classification
     const response = await safeSendMessage({
-      action: 'callLLM',
+      action: 'callRouterLLM',
       systemPrompt: PROMPTS.VISION_ROUTER,
       messages: [{
         role: 'user',
@@ -458,42 +459,60 @@ function applyHighlightsFromCitations(answer) {
   console.log('🤖 Available indices in _xwebagentIndex:', Object.keys(window._xwebagentIndex || {}).length);
   
   const pageBg = getPageBackground();
+  // highlightedElements tracks WHOLE-element highlights (simple citations / Strategy-3
+  // fallbacks). Used to prevent simple citations from re-highlighting an element whose
+  // parent is already lit up. NOT used to block multiple text highlights on the same
+  // element (e.g. two different phrases inside the same social-media paragraph).
   const highlightedElements = new Set();
   const seenIndices = new Set();
+  // For text citations we dedup by "index:text" pair so the SAME element can carry
+  // multiple distinct highlighted substrings (e.g. "16,180 tokens" AND "3,150 tokens"
+  // both inside the same indexed paragraph div).
+  const seenIndexTextPairs = new Set();
   const failedIndices = [];
   let count = 0;
-  
+
   // Process citations with text first (higher priority)
   for (const match of matchesWithText) {
     const index = parseInt(match[1], 10);
     const textToHighlight = match[2];
-    
-    // Skip duplicate indices
-    if (seenIndices.has(index)) continue;
-    seenIndices.add(index);
-    
+
+    // Deduplicate by index+text pair — same index with different text is ALLOWED
+    const pairKey = `${index}:${textToHighlight.toLowerCase().trim()}`;
+    if (seenIndexTextPairs.has(pairKey)) continue;
+    seenIndexTextPairs.add(pairKey);
+    seenIndices.add(index); // keep tracking index so simple [N] citations are deduped
+
     let element = getIndexedElement(index);
-    
+
     if (!element) {
       console.log('🤖 Index', index, 'not found and text search failed');
       failedIndices.push(index);
       continue;
     }
-    
+
     console.log('🤖 Found element for [' + index + ':"' + textToHighlight + '"]:', element.tagName, element.textContent?.slice(0, 30));
-    
-    // Skip if already highlighted or parent/child is highlighted
-    if (isAlreadyHighlighted(element, highlightedElements)) {
-      console.log('🤖 Skipping', index, '- overlapping element');
+
+    // For text citations: only skip if a PARENT element is already whole-highlighted.
+    // Siblings or children being highlighted is fine — we want every cited phrase lit up.
+    let parentAlreadyHighlighted = false;
+    let parent = element.parentElement;
+    while (parent) {
+      if (highlightedElements.has(parent)) { parentAlreadyHighlighted = true; break; }
+      parent = parent.parentElement;
+    }
+    if (parentAlreadyHighlighted) {
+      console.log('🤖 Skipping', index, '- parent element already highlighted');
       continue;
     }
-    
+
     // Apply highlight with specific text
     const style = getRandomHighlightStyle(pageBg.isDark);
     const highlighted = applyIndexedHighlight(index, textToHighlight, style);
-    
+
     if (highlighted > 0) {
-      highlightedElements.add(element);
+      // Do NOT add element to highlightedElements here — other phrases inside the
+      // same element must still be highlightable in subsequent loop iterations.
       count += highlighted;
       console.log('🤖 Highlighted [' + index + ':"' + textToHighlight + '"] ✓');
     }
@@ -502,10 +521,19 @@ function applyHighlightsFromCitations(answer) {
   // Process simple citations (fallback, highlights entire element)
   for (const match of matchesSimple) {
     const index = parseInt(match[1], 10);
-    
+
     // Skip duplicate indices
     if (seenIndices.has(index)) continue;
     seenIndices.add(index);
+
+    // Skip bare [N] citations that look like Wikipedia-style footnotes.
+    // Wikipedia footnotes appear as "text[1]" (no space before the bracket).
+    // Valid extension citations should have a space: "text [45]".
+    const matchPos = match.index;
+    if (matchPos > 0 && normalizedAnswer[matchPos - 1] !== ' ' && normalizedAnswer[matchPos - 1] !== '\n') {
+      console.log('🤖 Skipping likely webpage footnote [' + index + '] - no space before bracket');
+      continue;
+    }
     
     const element = getIndexedElement(index);
     if (!element) {
