@@ -88,10 +88,14 @@ async function saveSettings() {
 // Test API connection based on current provider
 async function testApi() {
   const resultDiv = document.getElementById('testResult');
-  
+
   resultDiv.textContent = '🔄 Testing...';
   resultDiv.className = 'status info';
-  
+
+  // Save settings first so the service worker always has the latest key,
+  // even if the user never clicked the separate "Save" button.
+  await saveSettings();
+
   try {
     switch (currentProvider) {
       case 'gemini':
