@@ -25,17 +25,17 @@ async function loadSettings() {
   currentProvider = settings.provider || 'gemini';
   updateProviderUI(currentProvider);
   
-  // Load Gemini settings
+  // Load Gemini settings (model falls back to <select> first option if not saved)
   document.getElementById('geminiApiKey').value = settings.geminiApiKey || '';
-  document.getElementById('geminiModel').value = settings.geminiModel || 'gemini-2.5-flash';
-  
+  if (settings.geminiModel) document.getElementById('geminiModel').value = settings.geminiModel;
+
   // Load OpenRouter settings
   document.getElementById('openrouterApiKey').value = settings.openrouterApiKey || '';
-  document.getElementById('openrouterModel').value = settings.openrouterModel || 'google/gemini-2.5-flash';
-  
+  if (settings.openrouterModel) document.getElementById('openrouterModel').value = settings.openrouterModel;
+
   // Load OpenAI settings
   document.getElementById('openaiApiKey').value = settings.openaiApiKey || '';
-  document.getElementById('openaiModel').value = settings.openaiModel || 'gpt-4o';
+  if (settings.openaiModel) document.getElementById('openaiModel').value = settings.openaiModel;
   
   // Load Vision setting (default: enabled)
   document.getElementById('visionEnabled').checked = settings.visionEnabled !== false;
@@ -92,10 +92,8 @@ async function testApi() {
   resultDiv.textContent = '🔄 Testing...';
   resultDiv.className = 'status info';
 
-  // Save settings first so the service worker always has the latest key,
-  // even if the user never clicked the separate "Save" button.
-  await saveSettings();
-
+  // Settings are saved ONLY on success (inside each test function).
+  // This prevents a bad/untested key from being persisted and shown as "active" in the chat.
   try {
     switch (currentProvider) {
       case 'gemini':
@@ -139,7 +137,8 @@ async function testGemini(resultDiv) {
   const data = await response.json();
   
   if (response.ok && data.candidates?.[0]?.content?.parts?.[0]?.text) {
-    resultDiv.textContent = '✅ Gemini API connected!';
+    await saveSettings(); // Only persist on success
+    resultDiv.textContent = `✅ Gemini connected! (${model})`;
     resultDiv.className = 'status success';
   } else {
     resultDiv.textContent = `❌ ${data.error?.message || 'Unknown error'}`;
@@ -169,13 +168,14 @@ async function testOpenRouter(resultDiv) {
     body: JSON.stringify({
       model: model,
       messages: [{ role: 'user', content: 'Say "OK" only.' }],
-      max_tokens: 10
+      max_tokens: 100
     })
   });
-  
+
   const data = await response.json();
-  
+
   if (response.ok && data.choices?.[0]?.message?.content) {
+    await saveSettings(); // Only persist on success
     resultDiv.textContent = `✅ OpenRouter connected! (${model.split('/')[1] || model})`;
     resultDiv.className = 'status success';
   } else {
@@ -204,13 +204,14 @@ async function testOpenAI(resultDiv) {
     body: JSON.stringify({
       model: model,
       messages: [{ role: 'user', content: 'Say "OK" only.' }],
-      max_tokens: 10
+      max_tokens: 100
     })
   });
-  
+
   const data = await response.json();
-  
+
   if (response.ok && data.choices?.[0]?.message?.content) {
+    await saveSettings(); // Only persist on success
     resultDiv.textContent = `✅ OpenAI connected! (${model})`;
     resultDiv.className = 'status success';
   } else {

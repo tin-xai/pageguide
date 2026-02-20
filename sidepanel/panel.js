@@ -58,7 +58,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Focus input
   document.getElementById('xwebagent-input')?.focus();
-  
+
+  // Show current model status on open
+  showModelStatus();
+
   // Listen for tab changes
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     currentTabId = activeInfo.tabId;
@@ -251,6 +254,60 @@ function parseMarkdown(text) {
   }
   
   return result;
+}
+
+/**
+ * Read stored settings and show the active provider + model in the chat.
+ * If no key is configured, prompt the user to open Settings.
+ */
+async function showModelStatus() {
+  const PROVIDER_LABELS = {
+    gemini: 'Gemini',
+    openrouter: 'OpenRouter',
+    openai: 'OpenAI'
+  };
+
+  let settings = {};
+  try {
+    settings = await chrome.storage.sync.get([
+      'provider',
+      'geminiApiKey', 'geminiModel',
+      'openrouterApiKey', 'openrouterModel',
+      'openaiApiKey', 'openaiModel'
+    ]);
+  } catch (e) { /* storage unavailable */ }
+
+  const provider = settings.provider || 'gemini';
+  const providerLabel = PROVIDER_LABELS[provider] || provider;
+
+  let apiKey = '';
+  let modelRaw = '';
+
+  if (provider === 'gemini') {
+    apiKey = settings.geminiApiKey || '';
+    modelRaw = settings.geminiModel || 'gemini-2.5-flash';
+  } else if (provider === 'openrouter') {
+    apiKey = settings.openrouterApiKey || '';
+    modelRaw = settings.openrouterModel || '';
+  } else if (provider === 'openai') {
+    apiKey = settings.openaiApiKey || '';
+    modelRaw = settings.openaiModel || '';
+  }
+
+  // Shorten "org/model-name" → "model-name" for display
+  const modelDisplay = modelRaw.includes('/') ? modelRaw.split('/').pop() : modelRaw;
+
+  if (!apiKey) {
+    addMessage(
+      `⚙️ No API key configured. Click **⚙️ Settings** to add your ${providerLabel} key and get started.`,
+      'system'
+    );
+  } else {
+    addMessage(
+      `🤖 Using **${providerLabel}** · ${modelDisplay}`,
+      'system'
+    );
+  }
 }
 
 /**
@@ -847,7 +904,15 @@ async function sendMessage() {
     }
   } catch (e) {
     hideTyping();
-    addMessage(`Error: ${e.message}`, 'error');
+    const msg = e.message || '';
+    if (msg.includes('Could not establish connection') ||
+        msg.includes('Receiving end does not exist') ||
+        msg.includes('Cannot access') ||
+        msg.includes('No active tab')) {
+      addMessage('⚠️ This extension cannot run on this page.\n\nPlease navigate to a regular website (not `chrome://` or extension pages) and try again.', 'error');
+    } else {
+      addMessage(`❌ ${msg || 'Unknown error'}`, 'error');
+    }
     // Remove failed query from history
     conversationHistory.pop();
   }
@@ -988,6 +1053,9 @@ async function resetChat(showMessage = true) {
   if (showMessage) {
     addMessage('🧹 Cleared chat, highlights, and uploaded image', 'system');
   }
+
+  // Always show the current model status after clearing
+  showModelStatus();
 }
 
 /**

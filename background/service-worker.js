@@ -355,23 +355,29 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
 }
 
 // ===== Fast Router LLM =====
-// Always uses Gemini 2.5 Flash for fast routing decisions (query classification, vision routing)
-// This is separate from the main LLM which uses the user's selected model
+// Prefers Gemini 2.5 Flash for fast routing. If no Gemini key is set (e.g. an
+// OpenRouter-only or OpenAI-only user), falls back to the user's selected provider
+// so routing still works without requiring a separate Gemini key.
 async function callRouterLLM(messages, systemPrompt) {
   const config = CONFIG.providers.gemini;
-  const routerModel = 'gemini-2.5-flash'; // Always use fast model for routing
-  
-  // Get Gemini API key from settings (fallback to config)
-  let apiKey;
+  const routerModel = 'gemini-2.5-flash';
+
+  // Load all relevant settings in one call
+  let settings = {};
   try {
-    const settings = await chrome.storage.sync.get(['geminiApiKey']);
-    apiKey = (settings.geminiApiKey || config.defaultApiKey).trim();
-  } catch (e) {
-    apiKey = config.defaultApiKey;
-  }
-  
+    settings = await chrome.storage.sync.get([
+      'geminiApiKey', 'provider',
+      'openrouterApiKey', 'openrouterModel',
+      'openaiApiKey', 'openaiModel'
+    ]);
+  } catch (e) { /* ignore */ }
+
+  const apiKey = (settings.geminiApiKey || config.defaultApiKey || '').trim();
+
+  // If no Gemini key, route via the user's selected provider instead
   if (!apiKey) {
-    return { error: 'Gemini API key not configured for router. Click ⚙️ Settings.' };
+    console.log('🎯 No Gemini key for router — using selected provider as fallback');
+    return callLLM(messages, systemPrompt);
   }
   
   const url = `${config.endpoint}/${routerModel}:generateContent?key=${apiKey}`;
