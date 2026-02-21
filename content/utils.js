@@ -511,23 +511,48 @@ function getIndexedElement(idx) {
  * Returns a promise that resolves after all clicks + a short settle delay.
  */
 async function expandTruncatedContent() {
-  // Text patterns that indicate a "show more" / expand trigger (case-insensitive)
+  // X/Twitter: "Show more" on a tweet is a JS-driven navigation to the tweet's permalink
+  // (via history.pushState / React Router), NOT an inline expand. It is rendered as a
+  // <span role="button"> with no href, so the anchor-href check below can't catch it.
+  // Clicking it during an LLM call kills the message channel → error. Skip entirely.
+  const _h = window.location.hostname;
+  if (_h === 'x.com' || _h === 'twitter.com' ||
+      _h.endsWith('.x.com') || _h.endsWith('.twitter.com')) {
+    return;
+  }
+
+  // Text patterns that indicate a "show more" / expand trigger (case-insensitive).
+  // Kept intentionally conservative — patterns that could match navigation links are excluded.
+  // Removed: /^more$/i          → matches X/Twitter sidebar "More" (navigates)
+  // Removed: /^see more replies$/i → matches X/Twitter reply-count link (navigates to tweet page)
+  // Removed: /^load more$/i     → triggers infinite-scroll pagination (can cause navigation)
+  // Removed: /^expand$/i        → too generic
   const expandPatterns = [
     /^see more$/i,
     /^show more$/i,
     /^read more$/i,
     /^view more$/i,
     /^see full post$/i,
-    /^load more$/i,
-    /^more$/i,
     /^\.\.\.\s*more$/i,
-    /^see more replies$/i,
     /^continue reading$/i,
-    /^expand$/i,
   ];
 
   // Tags that can be expand triggers
   const candidateTags = new Set(['button', 'a', 'span', 'div']);
+
+  // Structural ancestors that indicate a navigation context.
+  // Elements inside these should never be auto-clicked.
+  const isInsideNav = (node) => {
+    let p = node.parentElement;
+    while (p && p !== document.body) {
+      const t = p.tagName.toLowerCase();
+      if (t === 'nav' || t === 'header' || t === 'footer' || t === 'aside') return true;
+      const r = p.getAttribute('role');
+      if (r === 'navigation' || r === 'banner' || r === 'complementary') return true;
+      p = p.parentElement;
+    }
+    return false;
+  };
 
   // Walk all visible interactive-ish elements and collect matches
   const toClick = [];
@@ -553,6 +578,19 @@ async function expandTruncatedContent() {
       role === 'link' ||
       style.cursor === 'pointer';
     if (!isInteractive) continue;
+
+    // Skip <a> tags that point to a different URL path — those are navigation links,
+    // not inline expand buttons. Real expanders are buttons or href-less anchors.
+    if (tag === 'a' && el.href) {
+      try {
+        const dest = new URL(el.href);
+        const here = new URL(window.location.href);
+        if (dest.origin !== here.origin || dest.pathname !== here.pathname) continue;
+      } catch (e) { /* ignore URL parse errors */ }
+    }
+
+    // Skip elements inside nav / header / footer / sidebar
+    if (isInsideNav(el)) continue;
 
     // Match text
     const text = (el.innerText || el.textContent || '').trim();

@@ -43,6 +43,7 @@
         "content/tasks/ask.js",
         "content/tasks/ask_pdf.js",
         "content/tasks/guide.js",
+        "content/tasks/guidev2.js",
         "content/tasks/protection.js",
         "content/tasks/image_ask.js",
         "content/content.js"

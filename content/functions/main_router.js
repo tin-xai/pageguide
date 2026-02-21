@@ -101,10 +101,10 @@ async function routeQuery(query) {
  * @param {boolean} hasImageInHistory - Whether any previous message had an image
  */
 async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false) {
-  // Expand truncated posts ("See more", "Show more", etc.) before indexing
-  if (typeof expandTruncatedContent === 'function') {
-    await expandTruncatedContent();
-  }
+  // expandTruncatedContent is called AFTER routing (below), only for non-guide modes.
+  // Calling it before routing would auto-click "See more" / "More" buttons on
+  // social sites (X, LinkedIn) before guidance even starts, mutating the page
+  // and confusing the step generator.
 
   // Check if image is available (current or in history)
   const imageAvailable = hasImage || hasImageInHistory || !!getUploadedImage?.();
@@ -151,7 +151,18 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
   }
   
   let result;
-  
+
+  // Expand "See more" / "Show more" ONLY for ask and pdf_ask.
+  // All other modes (guide, protection, image_ask) skip this because auto-clicking
+  // mutates the page unexpectedly:
+  //   • guide     — mutates the page before guidance starts, confusing the step generator
+  //   • protection — user wants to scan/hide existing elements, not trigger more content
+  //   • image_ask — expanding text doesn't help find images
+  const _shouldExpand = route.handler === 'ask' || route.handler === 'pdf_ask';
+  if (_shouldExpand && typeof expandTruncatedContent === 'function') {
+    await expandTruncatedContent();
+  }
+
   switch (route.handler) {
     case 'protection':
       if (typeof handleProtectionQuery === 'function') {
@@ -161,7 +172,7 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
       // Fall through to ask if protection handler not available
       result = await handleAsk(query, history);
       break;
-    
+
     case 'guide':
       result = await handleStepByStepGuide(query);
       break;

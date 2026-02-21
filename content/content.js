@@ -45,6 +45,9 @@ async function handleMessage(request) {
         window._xwebagentGuidance.previousSteps = [];
         window._xwebagentGuidance.waitingForAction = null;
       }
+      // Reset guidev2 state
+      if (typeof gv2ClearState === 'function') gv2ClearState();
+      if (window._guidev2) window._guidev2.active = false;
       // Clear uploaded image
       if (typeof clearUploadedImage === 'function') clearUploadedImage();
       return { success: true };
