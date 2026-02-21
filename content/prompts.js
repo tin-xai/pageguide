@@ -9,14 +9,14 @@ else var PROMPTS = {
 
 AVAILABLE HANDLERS:
 1. "guide" - For step-by-step "how to" questions that need interactive guidance
-2. "protection" - For safety/privacy requests (hide ads, scan for dark patterns, block trackers)
+2. "hide" - For requests to hide, remove, or suppress distracting/annoying content (ads, banners, popups, cookie notices, sidebars, recommendations, etc.)
 3. "image_ask" - For questions about an UPLOADED IMAGE (finding similar items, comparing with page content)
 4. "pdf_ask" - For questions about PDF documents (summarize, find specific content, extract info from PDFs)
 5. "ask" - For questions, information lookup, finding content, highlighting elements (DEFAULT)
 
 ROUTING RULES:
 - "guide": User wants to LEARN how to do something in steps (e.g., "how do I report this video?", "where can I find settings?", "help me delete my account")
-- "protection": User mentions ads, privacy, dark patterns, safety, or wants to hide/block something (e.g., "hide the ads", "scan for dark patterns", "protect my privacy")
+- "hide": User wants to hide or remove something on the page (e.g., "hide the ads", "remove the sidebar", "get rid of this popup", "hide recommended videos", "remove the cookie banner", "hide comments", "remove distractions")
 - "image_ask": User asks about their UPLOADED IMAGE - finding it on page, comparing, locating similar items (e.g., "find this product", "where is this item?", "do they have this?", "is my image on this page?", "find similar to my upload")
 - "pdf_ask": User asks about PDF content, document analysis, or mentions PDF explicitly (e.g., "what does this PDF say?", "find X in the document", "summarize this PDF", "where does it mention Y?")
 - "ask": Questions about the page, finding information, showing/highlighting elements (e.g., "what is this page about?", "find the price", "show me images", "where is the login button?")
@@ -34,7 +34,7 @@ IMPORTANT: Route to "pdf_ask" when:
 
 Return JSON only:
 {
-  "handler": "guide" | "protection" | "image_ask" | "pdf_ask" | "ask",
+  "handler": "guide" | "hide" | "image_ask" | "pdf_ask" | "ask",
   "confidence": 0.0-1.0,
   "reason": "Brief explanation of why this handler"
 }
@@ -45,7 +45,7 @@ Query: "How do I report this video?"
 → {"handler": "guide", "confidence": 0.9, "reason": "How-to question needing step-by-step guidance"}
 
 Query: "Hide the ads on this page"
-→ {"handler": "protection", "confidence": 0.95, "reason": "Request to hide ads"}
+→ {"handler": "hide", "confidence": 0.95, "reason": "Request to hide ads"}
 
 Query: "What is the price of this product?"
 → {"handler": "ask", "confidence": 0.9, "reason": "Question about page content"}
@@ -297,15 +297,22 @@ After scrolling through entire page, none found
 
 Analyze the current screenshot and respond with JSON:`,
 
-  // Protection prompt - find and hide unwanted content
-  PROTECTION: `You are a content filter. Find content on this page that the user wants to hide.
+  // Hide prompt - find and hide distracting or annoying content
+  PROTECTION: `You are a content hider. Find elements on this page that match what the user wants to remove or hide.
 
-Look for:
-- 18+ / Adult / NSFW content (age warnings, adult labels, NSFW tags)
-- Ads / Sponsored content
-- Ragebait / Clickbait
-- Political content
-- Any specific content the user mentions
+Common things users want to hide:
+- Ads, sponsored posts, promoted content
+- Cookie banners, GDPR notices, consent popups
+- Newsletter signup prompts, subscription nags
+- Autoplay video players, floating video widgets
+- Sidebar widgets (trending, recommendations, "you may also like")
+- Comment sections
+- Related/recommended content feeds
+- Chat widgets, live support bubbles
+- Notification permission prompts
+- Any other element the user explicitly describes
+
+Return at most 15 items. If more match, pick the most prominent/visible ones.
 
 Return JSON:
 {
