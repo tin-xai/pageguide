@@ -52,8 +52,20 @@ async function handleProtectionQuery(query) {
       if (match) json = match[0];
       result = JSON.parse(json);
     } catch (e) {
-      cleanupSom();
-      return { success: true, answer: response.content, isProtection: true };
+      // JSON was likely truncated (too many items). Salvage individual item objects
+      // using a regex so we don't lose all the work the LLM already did.
+      const salvaged = [...response.content.matchAll(
+        /\{\s*"index"\s*:\s*(\d+)\s*,\s*"reason"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"snippet"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}/g
+      )];
+      if (salvaged.length > 0) {
+        result = {
+          found: salvaged.map(m => ({ index: parseInt(m[1]), reason: m[2], snippet: m[3] })),
+          message: `Found ${salvaged.length} items to hide`
+        };
+      } else {
+        cleanupSom();
+        return { success: true, answer: 'Could not parse response. Try a more specific request.', isProtection: true };
+      }
     }
     
     // Nothing found
@@ -189,7 +201,7 @@ function showHideDialog(count, message) {
       <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:center;justify-content:center;">
         <div style="background:#1a1a2e;padding:24px;border-radius:12px;max-width:400px;color:white;font-family:system-ui;">
           <h3 style="margin:0 0 12px;font-size:18px;">🛡️ Found ${count} items</h3>
-          <p style="margin:0 0 20px;color:#aaa;font-size:14px;">${message || 'Content matching your request'}</p>
+          <p style="margin:0 0 20px;color:#e0e0e0;font-size:14px;">${message || 'Content matching your request'}</p>
           <div style="display:flex;gap:12px;">
             <button id="xwebagent-cancel" style="flex:1;padding:10px;border:none;border-radius:6px;background:#333;color:white;cursor:pointer;">Keep visible</button>
             <button id="xwebagent-confirm" style="flex:1;padding:10px;border:none;border-radius:6px;background:#667eea;color:white;cursor:pointer;">Hide content</button>
