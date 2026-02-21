@@ -4,6 +4,32 @@
 // Store element references globally
 window._xwebagentIndex = window._xwebagentIndex || {};
 
+/**
+ * Return true if the element is effectively hidden and should be excluded from
+ * the page index / SoM.  Uses the modern checkVisibility() API (Chrome 105+)
+ * when available for a comprehensive single-call check that handles opacity,
+ * content-visibility, display:none and visibility:hidden — including values
+ * inherited from ancestor elements.  Falls back to manual checks on older builds.
+ */
+function isHiddenElement(el) {
+  // HTML hidden attribute (fastest, no style lookup needed)
+  if (el.hidden) return true;
+
+  // Modern comprehensive check (Chrome 105+)
+  if (typeof el.checkVisibility === 'function') {
+    return !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  }
+
+  // Legacy fallback
+  const style = window.getComputedStyle(el);
+  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return true;
+
+  // Zero rendered size: use OR so either dimension alone is enough to discard
+  if (el.offsetWidth === 0 || el.offsetHeight === 0) return true;
+
+  return false;
+}
+
 
 function isElementInteractive(el) {
   // Has click handler
@@ -191,8 +217,7 @@ function getVisibleText(maxLength = 20000) {
     
     // Skip hidden
     try {
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      if (isHiddenElement(el)) continue;
     } catch (e) { continue; }
     
     // Get accessible role and name
@@ -271,13 +296,10 @@ function createPageIndex(maxItems = 200) {
         acceptNode: (node) => {
           // Skip our UI
           if (isXWebAgentElement(node)) return NodeFilter.FILTER_REJECT;
-          
-          // Skip hidden
-          const style = window.getComputedStyle(node);
-          if (style.display === 'none' || style.visibility === 'hidden') {
-            return NodeFilter.FILTER_REJECT;
-          }
-          
+
+          // Skip hidden (opacity:0, display:none, visibility:hidden, el.hidden, zero-size, etc.)
+          if (isHiddenElement(node)) return NodeFilter.FILTER_REJECT;
+
           return NodeFilter.FILTER_ACCEPT;
         }
       }
@@ -298,9 +320,7 @@ function createPageIndex(maxItems = 200) {
     
     // Skip hidden elements
     try {
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') continue;
-      if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+      if (isHiddenElement(el)) continue;
     } catch (e) { continue; }
     
     // Get accessible role - if no role, skip (not interesting)
@@ -360,18 +380,16 @@ function createPageIndex(maxItems = 200) {
     if (seen.has(el)) return;
     
     try {
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') return;
-      if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+      if (isHiddenElement(el)) return;
     } catch (e) { return; }
-    
+
     const role = getAccessibleRole(el);
     if (!role) return;
-    
+
     let name = getAccessibleName(el);
     if (!name || name.length < 2) return;
     name = name.replace(/\s+/g, ' ').trim();
-    
+
     if (!isElementInteractive(el) && seenText.has(name)) return;
     if (name === 'edit' || name === '[edit]' || name.includes('#cite')) return;
     
@@ -420,9 +438,7 @@ function createPageIndex(maxItems = 200) {
         if (seen.has(el)) return;
 
         try {
-          const style = window.getComputedStyle(el);
-          if (style.display === 'none' || style.visibility === 'hidden') return;
-          if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+          if (isHiddenElement(el)) return;
         } catch (e) { return; }
 
         let name = (el.textContent || '').replace(/\s+/g, ' ').trim();
