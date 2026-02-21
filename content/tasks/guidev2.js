@@ -1,0 +1,590 @@
+// XWebAgent - Step-by-Step Guidance v2
+//
+// Architecture (SeeAct-inspired):
+//   • Service worker (SW) owns the guidance state in memory.
+//   • Every time a content script loads it opens a persistent port named 'guidev2'.
+//   • SW immediately replies with {type:'swState', state} via that port.
+//   • If state.pendingResume is true, this page is a continuation → resume.
+//   • If SW was killed (no state), session storage is the fallback.
+//
+// Interaction model:
+//   • action="click"  → highlight element, user clicks, then wait for navigation or DOM settle
+//   • action="type"   → agent fills the field automatically, then continues
+//   • action="done"   → last step, no further interaction
+//
+// window.handleStepByStepGuide is overridden so the router calls v2 instead of guide.js.
+
+// ===== PROMPT (inline to keep guidev2.js self-contained) =====
+
+const GUIDE_V2_PROMPT = `You are a helpful guide assistant providing step-by-step interactive guidance.
+
+Given the current page and the user's goal, provide ONE step at a time.
+For "type" steps you provide the exact text to type — the agent fills it automatically.
+For "click" steps the user clicks the highlighted element themselves.
+
+Return JSON only:
+{
+  "step": N,
+  "instruction": "Clear instruction shown to the user",
+  "element": {"index": N, "text": "element text to highlight"},
+  "action": "click" | "type" | "done",
+  "typeText": "text to type (only when action=type)",
+  "isLastStep": false,
+  "nextStepHint": "What will happen after this step"
+}
+
+RULES:
+1. ONE step at a time — never list multiple things to do
+2. action="click": user manually clicks the highlighted element; wait for them
+3. action="type": provide typeText, the agent auto-fills the field and continues
+4. action="done": set isLastStep=true; no element interaction needed
+5. Highlight the element to interact with using its index from PAGE INDEX
+6. If the target is not visible, guide the user to open the relevant menu first
+
+COMMON PATTERNS:
+- Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
+- Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
+- Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option`;
+
+// ===== CONSTANTS =====
+
+const _GV2_KEY = 'xwebagentGuidanceV2';
+const _GV2_MAX_AGE = 10 * 60 * 1000; // 10 minutes
+
+// ===== IN-PAGE STATE =====
+
+window._guidev2 = { active: false, question: '', previousSteps: [] };
+
+// Prevent concurrent resume/generate calls
+let _guidev2Resuming = false;
+
+// Flag set when a click step is awaiting user action
+let _guidev2WaitingForClick = false;
+
+// ===== SESSION-STORAGE FALLBACK (for when SW was killed) =====
+
+async function gv2SaveFallback(extra = {}) {
+  const s = window._guidev2;
+  try {
+    await chrome.storage.session.set({
+      [_GV2_KEY]: {
+        active: s.active,
+        question: s.question,
+        previousSteps: s.previousSteps,
+        lastUrl: window.location.href,
+        timestamp: Date.now(),
+        ...extra
+      }
+    });
+  } catch (e) { /* ignore */ }
+}
+
+async function gv2LoadFallback() {
+  try {
+    const r = await chrome.storage.session.get(_GV2_KEY);
+    const saved = r[_GV2_KEY];
+    if (!saved) return null;
+    if (Date.now() - (saved.timestamp || 0) > _GV2_MAX_AGE) {
+      await gv2ClearFallback();
+      return null;
+    }
+    return saved;
+  } catch (e) { return null; }
+}
+
+async function gv2ClearFallback() {
+  try { await chrome.storage.session.remove(_GV2_KEY); } catch (e) {}
+}
+
+// ===== SERVICE WORKER PORT (primary state channel) =====
+// The SW immediately responds to our port connection with {type:'swState', state}.
+// We also send state updates to SW through separate chrome.runtime.sendMessage calls
+// (ports can't be used for content→SW messages after the initial handshake reliably
+// across page navigations).
+
+let _gv2Port = null;
+
+function _gv2ConnectToSW() {
+  try {
+    _gv2Port = chrome.runtime.connect({ name: 'guidev2' });
+    _gv2Port.onMessage.addListener(_gv2HandleSwMessage);
+    _gv2Port.onDisconnect.addListener(() => { _gv2Port = null; });
+  } catch (e) {
+    console.warn('[guidev2] SW port connect failed:', e);
+    // If port fails, fall back to session storage check
+    _gv2CheckSessionStorageFallback();
+  }
+}
+
+async function _gv2HandleSwMessage(msg) {
+  if (msg.type !== 'swState') return;
+
+  if (msg.state?.active && msg.state?.pendingResume) {
+    // SW has live guidance state AND it's expecting navigation → resume
+    await _gv2ResumeFromState(msg.state);
+  } else {
+    // SW has no state (was killed/restarted) → check session-storage fallback
+    await _gv2CheckSessionStorageFallback();
+  }
+}
+
+// Called when SW has no state — check if session storage has a pending resume
+async function _gv2CheckSessionStorageFallback() {
+  const saved = await gv2LoadFallback();
+  if (saved?.active && saved?.pendingResume) {
+    await _gv2ResumeFromState(saved);
+  }
+}
+
+// Connect as soon as the script loads on each page
+_gv2ConnectToSW();
+
+// ===== DOM STABILITY DETECTION (MutationObserver — SeeAct pattern) =====
+
+/**
+ * Wait until the DOM has had no mutations for `stableMs` milliseconds,
+ * or until `maxWait` milliseconds have elapsed, whichever comes first.
+ */
+function gv2WaitForDomStable(maxWait = 6000, stableMs = 300) {
+  return new Promise(resolve => {
+    let stableTimer = null;
+    let giveUpTimer = null;
+
+    function done() {
+      if (stableTimer) clearTimeout(stableTimer);
+      if (giveUpTimer) clearTimeout(giveUpTimer);
+      observer.disconnect();
+      resolve();
+    }
+
+    function resetStableTimer() {
+      if (stableTimer) clearTimeout(stableTimer);
+      stableTimer = setTimeout(done, stableMs);
+    }
+
+    const observer = new MutationObserver(resetStableTimer);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    // Start the stable timer immediately (handles pages with no mutations at all)
+    resetStableTimer();
+
+    // Hard cap
+    giveUpTimer = setTimeout(done, maxWait);
+  });
+}
+
+// ===== RESUME AFTER NAVIGATION =====
+
+/**
+ * Restore guidance state from `state` (from SW or session storage),
+ * wait for the new page's DOM to settle, then generate the next step.
+ */
+async function _gv2ResumeFromState(state) {
+  if (_guidev2Resuming) {
+    console.log('[guidev2] Already resuming, ignoring duplicate resume signal');
+    return;
+  }
+  _guidev2Resuming = true;
+
+  // Restore in-memory state
+  window._guidev2 = {
+    active: true,
+    question: state.question,
+    previousSteps: state.previousSteps || []
+  };
+
+  console.log('[guidev2] Resuming on new page — next step will be',
+    window._guidev2.previousSteps.length + 1);
+
+  try {
+    try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+
+    // Wait for the new page's DOM to stop mutating before indexing
+    await gv2WaitForDomStable();
+
+    const result = await gv2GenerateNextStep();
+
+    if (result && result.success !== false) {
+      try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+    } else {
+      try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+      if (result?.error) {
+        try {
+          chrome.runtime.sendMessage({
+            action: 'addMessage',
+            content: `❌ Could not generate next step: ${result.error}`,
+            type: 'error'
+          });
+        } catch (e) {}
+      }
+      window._guidev2.active = false;
+      _gv2ClearState();
+    }
+  } catch (e) {
+    console.error('[guidev2] Resume error:', e);
+    try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e2) {}
+  } finally {
+    _guidev2Resuming = false;
+  }
+}
+
+// ===== STATE HELPERS =====
+
+/**
+ * Push guidance state to SW memory (primary) and session storage (fallback).
+ * @param {boolean} pendingResume - true when a click step is active and we expect navigation
+ */
+async function _gv2SetState(pendingResume) {
+  const s = window._guidev2;
+  const state = {
+    active: s.active,
+    question: s.question,
+    previousSteps: s.previousSteps,
+    lastUrl: window.location.href,
+    timestamp: Date.now(),
+    pendingResume
+  };
+
+  // Primary: tell service worker (survives page navigation if SW stays alive)
+  try {
+    await safeSendMessage({ action: 'guidanceV2_setState', state });
+  } catch (e) {
+    console.warn('[guidev2] SW state set failed:', e);
+  }
+
+  // Fallback: session storage (survives SW restart)
+  await gv2SaveFallback({ pendingResume });
+}
+
+function _gv2ClearState() {
+  window._guidev2.active = false;
+
+  // Clear from SW
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+
+  // Clear session storage
+  gv2ClearFallback();
+}
+
+// ===== CORE GUIDANCE =====
+
+/**
+ * Start guidance for a new question (called by the router override at bottom of file).
+ */
+async function _handleStepByStepGuideV2(question) {
+  window._guidev2 = { active: true, question, previousSteps: [] };
+
+  // Not pending resume on first step — we're already on the right page
+  await _gv2SetState(false);
+
+  console.log('[guidev2] Starting guidance for:', question);
+  return gv2GenerateNextStep();
+}
+
+/**
+ * Generate the next step: build page index, call LLM, process response.
+ */
+async function gv2GenerateNextStep() {
+  const g = window._guidev2;
+  if (!g.active) return null;
+
+  // Retry loop in case DOM is sparse (page still rendering)
+  let pageIndex;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    pageIndex = createPageIndex(5000);
+    if (pageIndex.count > 5) break;
+    console.log('[guidev2] Sparse DOM (', pageIndex.count, 'el), retrying...');
+    await new Promise(r => setTimeout(r, 700));
+  }
+
+  const pageBg = getPageBackground();
+  if (typeof showSomIfEnabled === 'function') await showSomIfEnabled(pageIndex);
+
+  const stepNumber = g.previousSteps.length + 1;
+  console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
+
+  try {
+    const response = await safeSendMessage({
+      action: 'callLLM',
+      systemPrompt: GUIDE_V2_PROMPT,
+      messages: [{
+        role: 'user',
+        content: `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
+CURRENT URL: ${window.location.href}
+
+=== PAGE INDEX ===
+${pageIndex.indexText}
+
+=== USER GOAL ===
+${g.question}
+
+=== CURRENT STEP ===
+Step ${stepNumber}
+
+=== COMPLETED STEPS ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+
+Provide the next step as JSON.`
+      }]
+    });
+
+    if (response?.error) {
+      console.warn('[guidev2] LLM error:', response.error);
+      return { success: false, error: response.error };
+    }
+    if (response?.content) return gv2ProcessResponse(response.content);
+    return { success: false, error: 'No response from AI' };
+
+  } catch (e) {
+    console.error('[guidev2] Generation error:', e);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Parse LLM JSON, apply highlight, schedule the appropriate action.
+ */
+async function gv2ProcessResponse(content) {
+  const g = window._guidev2;
+  try {
+    let json = content.trim()
+      .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+    const m = json.match(/\{[\s\S]*\}/);
+    if (m) json = m[0];
+    const step = JSON.parse(json);
+    console.log('[guidev2] Parsed step:', step);
+
+    // Clear previous highlights
+    if (typeof clearHighlights === 'function') clearHighlights();
+    window._xwebagentHighlights = [];
+
+    // Highlight target element
+    let highlightCount = 0;
+    if (step.element?.index) {
+      const pageBg = getPageBackground();
+      const style = typeof getRandomHighlightStyle === 'function'
+        ? getRandomHighlightStyle(pageBg.isDark)
+        : { color: '#2ed573', animation: 'pulse' };
+      highlightCount = applyIndexedHighlight(step.element.index, step.element.text, style);
+      if (window._xwebagentHighlights?.length > 0) {
+        setTimeout(() => { if (typeof scrollToHighlight === 'function') scrollToHighlight(0); }, 300);
+      }
+    }
+
+    if (typeof cleanupSom === 'function') cleanupSom();
+
+    const isLast = !!step.isLastStep;
+    g.previousSteps.push(`Step ${step.step}: ${step.instruction}${isLast ? ' ✓' : ''}`);
+
+    if (isLast) {
+      _gv2ClearState();
+    } else if (step.action === 'click') {
+      // Save state with pendingResume=true BEFORE setting up click listener.
+      // This ensures the SW and session storage have the flag before the user
+      // can possibly click — no race condition with fast navigation.
+      await _gv2SetState(true);
+      _gv2SetupClickListener();
+    } else if (step.action === 'type') {
+      await _gv2SetState(false);
+      setTimeout(() => _gv2AutoType(step), 200);
+    } else {
+      // done / unknown
+      await _gv2SetState(false);
+    }
+
+    return {
+      success: true,
+      answer: step.instruction,
+      step: step.step,
+      isLastStep: isLast,
+      nextStepHint: step.nextStepHint,
+      action: step.action,
+      highlightCount,
+      hasHighlights: highlightCount > 0,
+      isGuide: true
+    };
+
+  } catch (e) {
+    console.error('[guidev2] Parse error:', e);
+    _gv2ClearState();
+    if (typeof cleanupSom === 'function') cleanupSom();
+    return { success: true, answer: content, isGuide: false };
+  }
+}
+
+// ===== CLICK LISTENER =====
+
+let _gv2ClickHandlers = [];
+
+function _gv2RemoveClickListeners() {
+  _gv2ClickHandlers.forEach(({ el, evt, fn, cap }) => el.removeEventListener(evt, fn, cap));
+  _gv2ClickHandlers = [];
+}
+
+function _gv2SetupClickListener() {
+  _gv2RemoveClickListeners();
+  _guidev2WaitingForClick = true;
+
+  const handler = async (e) => {
+    const onHighlight = e.target.closest('[data-xwebagent-styled]') ||
+                        e.target.hasAttribute('data-xwebagent-styled');
+    if (!onHighlight) return;
+
+    console.log('[guidev2] User clicked highlighted element');
+    _gv2RemoveClickListeners();
+    _guidev2WaitingForClick = false;
+
+    if (_guidev2Resuming) {
+      console.log('[guidev2] Already resuming (SPA watcher), ignoring click handler');
+      return;
+    }
+
+    try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e2) {}
+
+    const startUrl = window.location.href;
+    await _gv2WaitForNavOrSettle(startUrl);
+  };
+
+  document.addEventListener('click', handler, true);
+  _gv2ClickHandlers.push({ el: document, evt: 'click', fn: handler, cap: true });
+  console.log('[guidev2] Waiting for user click...');
+}
+
+/**
+ * After user clicks:
+ *
+ * Full page nav  → the port to SW will disconnect; SW signals the new page via port.
+ *                  We just poll briefly to detect this and bail out cleanly.
+ *
+ * SPA nav        → URL changes while page stays alive. We detect it here and
+ *                  generate the next step ourselves.
+ *
+ * Same page      → DOM changed (dropdown opened, modal appeared). Wait for DOM
+ *                  to settle, then generate next step.
+ *
+ * We poll every 100 ms for up to 2 s. For full-page nav, browser usually
+ * fires pagehide within a few hundred ms.
+ */
+let _guidev2PageHiding = false;
+window.addEventListener('pagehide', () => { _guidev2PageHiding = true; });
+
+async function _gv2WaitForNavOrSettle(startUrl) {
+  const POLL_MS = 100;
+  const MAX_POLLS = 20; // 2 s
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise(r => setTimeout(r, POLL_MS));
+
+    // Full page navigation: pagehide has fired.
+    // The SW port from this page is now (or about to be) disconnected.
+    // The new page's content script will connect to SW and get the state.
+    if (_guidev2PageHiding) {
+      console.log('[guidev2] Full page navigation detected — new page will resume via SW');
+      return;
+    }
+
+    // SPA navigation: URL changed but page is still alive.
+    if (window.location.href !== startUrl) {
+      console.log('[guidev2] SPA navigation detected');
+      if (_guidev2Resuming) return;
+      _guidev2Resuming = true;  // Set BEFORE any await to prevent double-fire
+      try {
+        // Wait for the SPA to finish rendering
+        await gv2WaitForDomStable(4000, 250);
+        const result = await gv2GenerateNextStep();
+        if (result && result.success !== false) {
+          try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+        } else {
+          try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+        }
+      } finally {
+        _guidev2Resuming = false;
+      }
+      return;
+    }
+  }
+
+  // No navigation after 2 s — same page (dropdown, modal, etc.)
+  console.log('[guidev2] No navigation — continuing on same page');
+  if (_guidev2Resuming) return;
+  _guidev2Resuming = true;
+  try {
+    // Wait for DOM to settle (e.g. dropdown finished rendering)
+    await gv2WaitForDomStable(2000, 200);
+    const result = await gv2GenerateNextStep();
+    if (result && result.success !== false) {
+      try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+    } else {
+      try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+    }
+  } finally {
+    _guidev2Resuming = false;
+  }
+}
+
+// ===== AUTO-TYPING =====
+
+/**
+ * Agent fills a text field automatically using native input setters
+ * so React / Vue / Angular state management picks up the change.
+ */
+async function _gv2AutoType(step) {
+  if (!step.typeText) {
+    console.warn('[guidev2] autoType: no typeText in step');
+  } else {
+    const highlighted = document.querySelector('[data-xwebagent-styled]');
+    const input = highlighted
+      ? (highlighted.matches('input,textarea,[contenteditable]')
+          ? highlighted
+          : highlighted.querySelector('input,textarea,[contenteditable]'))
+      : null;
+
+    if (!input) {
+      console.warn('[guidev2] autoType: no input element found in highlighted area');
+    } else {
+      console.log('[guidev2] Auto-typing:', step.typeText);
+      input.focus();
+
+      if (input.isContentEditable) {
+        input.textContent = step.typeText;
+      } else {
+        const proto = input.tagName === 'TEXTAREA'
+          ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(input, step.typeText);
+        else input.value = step.typeText;
+      }
+
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 400));
+    }
+  }
+
+  console.log('[guidev2] Auto-type done, generating next step...');
+  if (_guidev2Resuming) return;
+  _guidev2Resuming = true;
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+  try {
+    const result = await gv2GenerateNextStep();
+    if (result && result.success !== false) {
+      try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+    } else {
+      try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+    }
+  } finally {
+    _guidev2Resuming = false;
+  }
+}
+
+// ===== ROUTER INTEGRATION =====
+// guidev2.js is injected after guide.js, so this assignment overrides guide.js.
+
+window.handleStepByStepGuide = function (question, continueFromStep = false) {
+  // continueFromStep=true comes from guide.js's continueGuidance() which won't fire
+  // when v2 is active (_xwebagentGuidance.active = false). Handle defensively anyway.
+  if (continueFromStep) return gv2GenerateNextStep();
+  return _handleStepByStepGuideV2(question);
+};
+
+console.log('[guidev2] loaded — SW-based navigation, MutationObserver stability');

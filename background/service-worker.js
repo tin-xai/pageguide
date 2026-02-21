@@ -65,6 +65,7 @@ const CONTENT_SCRIPTS = [
   'content/functions/main_router.js',
   'content/tasks/protection.js',
   'content/tasks/guide.js',
+  'content/tasks/guidev2.js',
   'content/tasks/ask.js',
   'content/tasks/ask_pdf.js',
   'content/tasks/image_ask.js',
@@ -73,6 +74,13 @@ const CONTENT_SCRIPTS = [
 
 // Track if side panel is open
 let sidePanelOpen = false;
+
+// ===== Guidance V2 State (SeeAct-inspired) =====
+// Primary state store — survives page navigations as long as the SW is alive.
+// Content scripts read this by connecting a 'guidev2' port on every page load.
+// Session storage in guidev2.js is the fallback if the SW was killed.
+let _gv2State = null;   // { active, question, previousSteps, pendingResume, lastUrl }
+let _gv2TabId = null;   // Tab ID that owns the active guidance session
 
 // ===== Extension Icon Click - Toggle Side Panel =====
 chrome.action.onClicked.addListener(async (tab) => {
@@ -128,18 +136,37 @@ chrome.action.onClicked.addListener(async (tab) => {
 // When the panel is destroyed (X button, keyboard shortcut, etc.) the port
 // disconnects synchronously, which is far more reliable than beforeunload + sendMessage.
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'sidepanel') return;
-  sidePanelOpen = true;
-  port.onDisconnect.addListener(() => {
-    sidePanelOpen = false;
-    // Clear page highlights on the active tab
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tabId = tabs[0]?.id;
-      if (tabId) {
-        chrome.tabs.sendMessage(tabId, { action: 'reset' }).catch(() => {});
-      }
+  if (port.name === 'sidepanel') {
+    sidePanelOpen = true;
+    port.onDisconnect.addListener(() => {
+      sidePanelOpen = false;
+      // Clear page highlights on the active tab
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tabId = tabs[0]?.id;
+        if (tabId) {
+          chrome.tabs.sendMessage(tabId, { action: 'reset' }).catch(() => {});
+        }
+      });
     });
-  });
+    return;
+  }
+
+  if (port.name === 'guidev2') {
+    // A content script just loaded on a (possibly new) page.
+    // Send it the current guidance state immediately so it can decide whether to resume.
+    // Only share state with the tab that owns the guidance session.
+    const senderTabId = port.sender?.tab?.id;
+    const stateForThisTab =
+      (senderTabId && senderTabId === _gv2TabId && _gv2State?.active)
+        ? _gv2State
+        : null;
+
+    try {
+      port.postMessage({ type: 'swState', state: stateForThisTab });
+    } catch (e) {
+      // Port may have closed already (rare race on fast navigations)
+    }
+  }
 });
 
 // ===== Message Handler =====
@@ -219,6 +246,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
     });
     return true;
+  }
+  if (request.action === 'guidanceV2_setState') {
+    // Content script saves guidance state to SW memory.
+    // Kept in sync by guidev2.js whenever the step changes.
+    _gv2State = request.state || null;
+    _gv2TabId = sender.tab?.id ?? _gv2TabId;
+    // Synchronous response — do NOT return true (that keeps the channel open and
+    // causes "message channel closed before response received" warnings).
+    sendResponse({ success: true });
+    return false;
+  }
+  if (request.action === 'guidanceV2_clearState') {
+    _gv2State = null;
+    _gv2TabId = null;
+    sendResponse({ success: true });
+    return false;
   }
 });
 
