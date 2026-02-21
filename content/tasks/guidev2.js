@@ -546,17 +546,23 @@ async function _gv2AutoType(step) {
       input.focus();
 
       if (input.isContentEditable) {
-        input.textContent = step.typeText;
+        // Select all existing content and replace it in one execCommand call
+        // so rich-text frameworks (Draft.js, ProseMirror, etc.) see proper events.
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, step.typeText);
+        // execCommand already fires 'input'; fire 'change' for good measure.
+        input.dispatchEvent(new Event('change', { bubbles: true }));
       } else {
+        // Select all existing text first (visual feedback + clean slate).
+        input.select();
         const proto = input.tagName === 'TEXTAREA'
           ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
         if (setter) setter.call(input, step.typeText);
         else input.value = step.typeText;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
       }
-
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
       await new Promise(r => setTimeout(r, 400));
     }
   }
