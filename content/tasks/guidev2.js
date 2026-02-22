@@ -51,6 +51,105 @@ COMMON PATTERNS:
 const _GV2_KEY = 'xwebagentGuidanceV2';
 const _GV2_MAX_AGE = 10 * 60 * 1000; // 10 minutes
 
+// ===== TUTORIAL REFERENCE LOOKUP =====
+// Strategy:
+//   1. Filter candidates by URL hostname match (primary).
+//      If no URL match, fall back to all tutorials (user may not be on target site yet).
+//   2. Always ask the router LLM to pick the best semantic match.
+//      Word-overlap is NOT used — the LLM handles paraphrases and synonyms correctly
+//      (e.g. "delete watch history" ↔ "delete your watch history when I log out",
+//            "go incognito" ↔ "start a private session").
+//   3. If a match is found → inject its steps into the guide LLM context
+//      as === TUTORIAL REFERENCE === so the LLM follows the verified flow.
+
+let _gv2TutorialsCache = null; // in-memory cache (loaded once per content script lifetime)
+
+async function _gv2LoadTutorials() {
+  if (_gv2TutorialsCache) return _gv2TutorialsCache;
+  try {
+    const url = chrome.runtime.getURL('guide_tutorials.json');
+    const resp = await fetch(url);
+    _gv2TutorialsCache = await resp.json();
+  } catch (e) {
+    console.warn('[guidev2] Could not load guide_tutorials.json:', e.message);
+    _gv2TutorialsCache = [];
+  }
+  return _gv2TutorialsCache;
+}
+
+function _gv2UrlMatches(pageUrl, tutorialUrl) {
+  try {
+    const norm = u => new URL(u.startsWith('http') ? u : 'https://' + u)
+      .hostname.replace(/^www\./, '');
+    const pageHost = norm(pageUrl);
+    const tutHost = norm(tutorialUrl);
+    return pageHost === tutHost
+      || pageHost.endsWith('.' + tutHost)
+      || tutHost.endsWith('.' + pageHost);
+  } catch { return false; }
+}
+
+/**
+ * Ask the router LLM (Gemini Flash) to semantically pick the best tutorial
+ * from the candidate list. Always used — no word-overlap fallback.
+ * Returns { tutorial, reason } or null.
+ */
+async function _gv2LlmPickTutorial(query, candidates) {
+  const list = candidates
+    .map((t, i) => `[${i}] (${t.website}) ${t.task}`)
+    .join('\n');
+  try {
+    const response = await safeSendMessage({
+      action: 'callRouterLLM',
+      systemPrompt: `You are a tutorial matcher. Given a user query and a numbered list of tutorial tasks, pick the ONE that best matches the intent of the user's query — considering synonyms and paraphrases (e.g. "delete" ↔ "remove", "incognito" ↔ "private session", "turn off" ↔ "disable"). Return -1 if no tutorial is a reasonable match. Return JSON only: {"bestIndex": N, "confidence": 0.0-1.0, "reason": "brief reason"}`,
+      messages: [{
+        role: 'user',
+        content: `USER QUERY: "${query}"\n\nCANDIDATE TUTORIALS:\n${list}`
+      }]
+    });
+
+    if (!response?.content) return null;
+
+    let json = response.content.trim()
+      .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+    const m = json.match(/\{[\s\S]*\}/);
+    if (m) json = m[0];
+    const picked = JSON.parse(json);
+
+    const idx = picked.bestIndex;
+    if (idx === -1 || picked.confidence < 0.4 || idx < 0 || idx >= candidates.length) return null;
+
+    console.log(`[guidev2] LLM picked tutorial [${idx}]: "${candidates[idx].task}" (${(picked.confidence * 100).toFixed(0)}% — ${picked.reason})`);
+    return { tutorial: candidates[idx], reason: picked.reason };
+  } catch (e) {
+    console.warn('[guidev2] LLM tutorial ranking failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Find the best matching tutorial for this query + page URL.
+ * Returns { tutorial, reason } or null (no match).
+ * Called ONCE at the start of a guide session; result cached in window._guidev2.
+ */
+async function _gv2FindTutorial(query, pageUrl) {
+  const tutorials = await _gv2LoadTutorials();
+  if (!tutorials.length) return null;
+
+  // Primary: narrow to tutorials for this site (fewer candidates = better LLM accuracy)
+  let candidates = tutorials.filter(t => _gv2UrlMatches(pageUrl, t.website_url));
+
+  // Fallback: if not on any known site, search all tutorials
+  // (user may be asking before navigating, or the URL didn't match)
+  if (!candidates.length) {
+    console.log('[guidev2] No URL match — searching all tutorials');
+    candidates = tutorials;
+  }
+
+  console.log(`[guidev2] Asking LLM to rank ${candidates.length} tutorial(s) for: "${query}"`);
+  return _gv2LlmPickTutorial(query, candidates);
+}
+
 // ===== IN-PAGE STATE =====
 
 window._guidev2 = { active: false, question: '', previousSteps: [] };
@@ -199,8 +298,11 @@ async function _gv2ResumeFromState(state) {
   try {
     try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
 
-    // Wait for the new page's DOM to stop mutating before indexing
-    await gv2WaitForDomStable();
+    // Wait for the new page's DOM to stop mutating before indexing.
+    // Add a small initial delay so the new page has time to start rendering,
+    // then require 700 ms of DOM silence (up from the default 300 ms).
+    await new Promise(r => setTimeout(r, 500));
+    await gv2WaitForDomStable(8000, 700);
 
     const result = await gv2GenerateNextStep();
 
@@ -272,7 +374,16 @@ function _gv2ClearState() {
  * Start guidance for a new question (called by the router override at bottom of file).
  */
 async function _handleStepByStepGuideV2(question) {
-  window._guidev2 = { active: true, question, previousSteps: [] };
+  // Look up a pre-verified tutorial ONCE at the start. Result is cached in
+  // window._guidev2.tutorialRef so intermediate steps reuse it for free.
+  const match = await _gv2FindTutorial(question, window.location.href);
+  window._guidev2 = {
+    active: true,
+    question,
+    previousSteps: [],
+    tutorialRef: match?.tutorial || null,
+    tutorialReason: match?.reason || null
+  };
 
   // Not pending resume on first step — we're already on the right page
   await _gv2SetState(false);
@@ -303,6 +414,16 @@ async function gv2GenerateNextStep() {
   const stepNumber = g.previousSteps.length + 1;
   console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
 
+  // Use tutorial cached at session start (no repeated lookup or API call)
+  let tutorialSection = '';
+  if (g.tutorialRef) {
+    tutorialSection = `\n=== TUTORIAL REFERENCE ===
+Pre-verified steps for "${g.tutorialRef.task}" on ${g.tutorialRef.website}:
+${g.tutorialRef.content.steps.join('\n')}
+Use these as a reference guide but map each step to the actual elements visible in the PAGE INDEX above.
+`;
+  }
+
   try {
     const response = await safeSendMessage({
       action: 'callLLM',
@@ -317,7 +438,7 @@ ${pageIndex.indexText}
 
 === USER GOAL ===
 ${g.question}
-
+${tutorialSection}
 === CURRENT STEP ===
 Step ${stepNumber}
 
@@ -332,7 +453,19 @@ Provide the next step as JSON.`
       console.warn('[guidev2] LLM error:', response.error);
       return { success: false, error: response.error };
     }
-    if (response?.content) return gv2ProcessResponse(response.content);
+    if (response?.content) {
+      const result = await gv2ProcessResponse(response.content);
+      // On step 1 only, attach tutorial match info so the panel can show it in Details
+      if (result?.success && g.tutorialRef && stepNumber === 1) {
+        result.tutorialMatch = {
+          task: g.tutorialRef.task,
+          website: g.tutorialRef.website,
+          steps: g.tutorialRef.content.steps,
+          reason: g.tutorialReason
+        };
+      }
+      return result;
+    }
     return { success: false, error: 'No response from AI' };
 
   } catch (e) {
@@ -485,12 +618,24 @@ async function _gv2WaitForNavOrSettle(startUrl) {
 
     // SPA navigation: URL changed but page is still alive.
     if (window.location.href !== startUrl) {
-      console.log('[guidev2] SPA navigation detected');
+      // Pause briefly — some browsers update the URL right before firing pagehide
+      // (a full-page nav that pushes a history entry before unloading).
+      // Waiting 400 ms lets pagehide arrive so we can bail out correctly.
+      await new Promise(r => setTimeout(r, 400));
+      if (_guidev2PageHiding) {
+        console.log('[guidev2] Full-page nav after URL change — new page will resume via SW');
+        return;
+      }
+      console.log('[guidev2] SPA navigation confirmed');
       if (_guidev2Resuming) return;
       _guidev2Resuming = true;  // Set BEFORE any await to prevent double-fire
       try {
-        // Wait for the SPA to finish rendering
-        await gv2WaitForDomStable(4000, 250);
+        // Give the SPA framework time to tear down the old view and render the
+        // new one before we start the stability observer.  Without this initial
+        // delay the observer can resolve on the OLD (static) DOM within 250 ms
+        // and capture the wrong page.
+        await new Promise(r => setTimeout(r, 600));
+        await gv2WaitForDomStable(6000, 600);
         const result = await gv2GenerateNextStep();
         if (result && result.success !== false) {
           try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
@@ -505,12 +650,15 @@ async function _gv2WaitForNavOrSettle(startUrl) {
   }
 
   // No navigation after 2 s — same page (dropdown, modal, etc.)
+  // One last guard: if pagehide fired during the polling loop it means a very
+  // slow full-page navigation is in progress — let the new page handle it.
+  if (_guidev2PageHiding) return;
   console.log('[guidev2] No navigation — continuing on same page');
   if (_guidev2Resuming) return;
   _guidev2Resuming = true;
   try {
     // Wait for DOM to settle (e.g. dropdown finished rendering)
-    await gv2WaitForDomStable(2000, 200);
+    await gv2WaitForDomStable(2000, 300);
     const result = await gv2GenerateNextStep();
     if (result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
