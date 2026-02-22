@@ -1,5 +1,5 @@
 // XWebAgent - API Router (Main Entry Point)
-// Routes queries to appropriate handlers: ask, guide, protection
+// Routes queries to appropriate handlers: ask, guide, hide
 /**
  * Safe wrapper for chrome.runtime.sendMessage
  * Handles common Chrome extension messaging errors gracefully
@@ -156,7 +156,7 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
   // All other modes (guide, protection, image_ask) skip this because auto-clicking
   // mutates the page unexpectedly:
   //   • guide     — mutates the page before guidance starts, confusing the step generator
-  //   • protection — user wants to scan/hide existing elements, not trigger more content
+  //   • hide      — user wants to hide existing elements, not trigger more content
   //   • image_ask — expanding text doesn't help find images
   const _shouldExpand = route.handler === 'ask' || route.handler === 'pdf_ask';
   if (_shouldExpand && typeof expandTruncatedContent === 'function') {
@@ -164,12 +164,12 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
   }
 
   switch (route.handler) {
-    case 'protection':
+    case 'hide':
       if (typeof handleProtectionQuery === 'function') {
         result = await handleProtectionQuery(query);
         if (result) break;
       }
-      // Fall through to ask if protection handler not available
+      // Fall through to ask if hide handler not available
       result = await handleAsk(query, history);
       break;
 

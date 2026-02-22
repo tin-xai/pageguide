@@ -48,6 +48,8 @@ async function handleMessage(request) {
       // Reset guidev2 state
       if (typeof gv2ClearState === 'function') gv2ClearState();
       if (window._guidev2) window._guidev2.active = false;
+      // Stop auto-hide session
+      if (typeof stopAutoHide === 'function') stopAutoHide();
       // Clear uploaded image
       if (typeof clearUploadedImage === 'function') clearUploadedImage();
       return { success: true };

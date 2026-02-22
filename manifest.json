@@ -60,7 +60,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "lib/*", "pdf-viewer/*"],
+      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json"],
       "matches": ["<all_urls>"]
     }
   ]

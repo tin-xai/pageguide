@@ -1,0 +1,1024 @@
+[
+    {
+        "task_id": "10mrw4y6rszbxhny6wgooshzgwzbktcl",
+        "task": "How do I export a Canva design for only Page 1 and Page 2 in the format of Flatten PDF?",
+        "content": {
+            "steps": [
+                "Step 1: Open the design you want to download.",
+                "Step 2: Above the editor, go to Share, and select Download.",
+                "Step 3: Select PDF Standard or PDF Print from the dropdown.",
+                "Step 4: Check Flatten PDF to tick the checkbox.",
+                "Step 5: Select Download. If you used paid elements, select Pay and Download."
+            ]
+        },
+        "website": "Canva - Export correct format",
+        "website_url": "https://www.canva.com/",
+        "ground_truth_help": "https://www.canva.com/help/download-flattened-pdf/"
+    },
+    {
+        "task_id": "11p338rilt3fpb9pp1v9sy0t7i1j791dp",
+        "task": "How do I turn off YouTube watch history?",
+        "content": {
+            "steps": [
+                "Step 1: Sign in to YouTube.",
+                "Step 2: Click your profile picture.",
+                "Step 3: Click Settings.",
+                "Step 4: Click Manage all history.",
+                "Step 5: Click Pause watch history.",
+                "Step 6: Select the Pause watch history button."
+            ]
+        },
+        "website": "YouTube - Pause watch history",
+        "website_url": "https://www.youtube.com/",
+        "ground_truth_help": "https://support.google.com/youtube/answer/95725?hl=en&co=GENIE.Platform%3DAndroid#:~:text=Pause%20watch%20history,the%20Clear%20watch%20history%20button."
+    },
+    {
+        "task_id": "12b8s0sf53848ml3ejj4kmzqvvfn1ptoi",
+        "task": "How do I delete your watch history when I log out? ",
+        "content": {
+            "steps": [
+                "Step 1: Sign in to your computer.",
+                "Step 2: Go to your YouTube watch history.",
+                "Step 3: Click on the videos you want to delete.",
+                "Step 4: Click the three vertical dots menu button.",
+                "Step 5: Click Remove from watch history."
+            ]
+        },
+        "website": "YouTube - Remove one history item",
+        "website_url": "https://www.youtube.com/",
+        "ground_truth_help": "https://support.google.com/youtube/answer/95725?hl=en&co=GENIE.Platform%3DAndroid"
+    },
+    {
+        "task_id": "13zk8ogmtill0z33jgo1glyttty3uu1qe",
+        "task": "How do I start a private session on Spotify so others can\u2019t see my listening?",
+        "content": {
+            "steps": [
+                "Step 1: Click your profile picture at the top.",
+                "Step 2: Click Private session.",
+                "Step 3: A padlock on your profile picture means the private session is active.",
+                "Step 4: To end a Private Session, repeat the steps and switch it off.",
+                "Step 5: The Private Session ends automatically after 6 hours, or when you restart Spotify."
+            ]
+        },
+        "website": "Spotify - Start private session",
+        "website_url": "https://open.spotify.com/",
+        "ground_truth_help": "https://support.spotify.com/us/article/private-listening/"
+    },
+    {
+        "task_id": "140vb4inv1luspjh0t0t2a2gwa6jsk2s",
+        "task": "How do I turn off autoplay on Spotify?",
+        "content": {
+            "steps": [
+                "Step 1: Click your profile picture at the top, and select Settings.",
+                "Step 2: Scroll down to Autoplay and switch it on , or off ."
+            ]
+        },
+        "website": "Spotify - Disable autoplay",
+        "website_url": "https://open.spotify.com/",
+        "ground_truth_help": "https://support.spotify.com/us/article/autoplay/"
+    },
+    {
+        "task_id": "15wo30fruarrpzp7l1mvs4gofvgogm46",
+        "task": "How do I create a Gmail filter that automatically labels emails from one sender?",
+        "content": {
+            "steps": [
+                "Step 1: Open Gmail.",
+                "Step 2: In the search box at the top, click Show search options",
+                "Step 3: Enter your search criteria. If you want to check that your search worked correctly, see what emails show up by clicking Search.",
+                "Step 4: At the bottom of the search window, click Create filter.",
+                "Step 5: Choose what you\u2019d like the filter to do.",
+                "Step 6: Click Create filter."
+            ]
+        },
+        "website": "Gmail - Label filter",
+        "website_url": "https://mail.google.com/",
+        "ground_truth_help": "https://support.google.com/mail/answer/9259770?hl=en"
+    },
+    {
+        "task_id": "16u786iq61aqsp50suvq6d0vgibeyvzr",
+        "task": "How do I create rules to filter my email inbox? ",
+        "content": {
+            "steps": [
+                "Step 1: Open Gmail.",
+                "Step 2: In the search box at the top, click Show search options",
+                "Step 3: Enter your search criteria. If you want to check that your search worked correctly, see what emails show up by clicking Search.&nbsp;",
+                "Step 4: At the bottom of the search window, click Create filter.",
+                "Step 5: Choose what you\u2019d like the filter to do.",
+                "Step 6: Click Create filter."
+            ]
+        },
+        "website": "Gmail - Auto-archive newsletters",
+        "website_url": "https://mail.google.com/",
+        "ground_truth_help": "https://support.google.com/mail/answer/6579?hl=en"
+    },
+    {
+        "task_id": "17hhhqkf07tc608zd0diyarejz35vt9i",
+        "task": "How do I mute a subreddit so it stops appearing in my Reddit home feed?",
+        "content": {
+            "steps": [
+                "Step 1: Go to https://www.reddit.com/settings/privacy in a web browser. Reddit now makes it easy to block any subreddit from appearing in your feeds and recommendations. Start by opening this page in any web browser.",
+                "Step 2: Click Add next to \"Communities You've Muted.\" You'll see this section below \"People You've Blocked.\"",
+                "Step 3: Type the subreddit's name and click Add. You can leave out the /r/ at the beginning and just enter the name. Once you've added a subreddit to your mute list, the sub will no longer appear in your feeds or recommendations.",
+                "Step 4: Go to https://old.reddit.com/r/all in your web browser. Muting a subreddit won't prevent it from showing up in /r/all. If you like to scroll through /r/all from time to time, you can block subreddits from there as well. Using this link will temporarily switch you back to Old Reddit, which makes blocking from /r/all easy.",
+                "Step 5: Type the subreddit's name into the \"filter subreddit\" field. You'll see this field just below \"all\" at the top-right corner of the page.",
+                "Step 6: Click +. Once you click the plus symbol, posts from that subreddit will no longer appear when browsing /r/all."
+            ]
+        },
+        "website": "Reddit - Mute subreddit",
+        "website_url": "https://www.reddit.com/",
+        "ground_truth_help": "https://www.wikihow.com/Block-a-Subreddit"
+    },
+    {
+        "task_id": "18ech5njr3d7rwd3gzqnppu08pjkzqbq",
+        "task": "How do I change Reddit username? ",
+        "content": {
+            "steps": [
+                "Step 1: Click your avatar or username at the top-right corner of Reddit.",
+                "Step 2: Click Profile.",
+                "Step 3: Click Change Username.",
+                "Step 4: Enter a new username and click Continue.",
+                "Step 5: Click Save Username to permanently change your username."
+            ]
+        },
+        "website": "Reddit - Approve chat requests",
+        "website_url": "https://www.reddit.com/",
+        "ground_truth_help": "https://www.wikihow.com/Change-Reddit-Username"
+    },
+    {
+        "task_id": "19isv46mtct0rji0ne3ajvv3c2wouy7vb",
+        "task": "How do I mute a specific word on X so posts containing it don\u2019t show up?",
+        "content": {
+            "steps": [
+                "Step 1: Click More from the side navigation menu, then click Settings and privacy.",
+                "Step 2: Click the Privacy and safety tab, then click Mute and block.",
+                "Step 3: Click Muted words.",
+                "Step 4: Click the plus icon. ",
+                "Step 5: Enter the word or hashtag you\u2019d like to mute. Entries can only be added one a time.",
+                "Step 6: Select Home timeline if you wish to mute the word or phrase from your Home timeline.",
+                "Step 7: Select Notifications if you wish to mute the word or phrase from your Notifications.",
+                "Step 8: Specify From anyone or From people you don\u2019t follow.",
+                "Step 9: Under Mute timing choose between Forever, 24 hours from now, 7 days from now, or 30 days from now.",
+                "Step 10: Click Save."
+            ]
+        },
+        "website": "X - Mute a word",
+        "website_url": "https://x.com/",
+        "ground_truth_help": "https://help.x.com/en/using-x/advanced-x-mute-options"
+    },
+    {
+        "task_id": "1j3lckueukxm66b996v1io4wlkbqxqvm",
+        "task": "How do I create a database table from scratch in Notion?",
+        "content": {
+            "steps": [
+                "Step 1: To create a database in Notion, create a new page and under `Get started with`, select `Table`.",
+                "Step 2: You can also open an existing page and use the slash command `/database`.",
+                "Step 3: Create a new database page: Click `New page` to add a new page to your database. For example, if your database is a task tracker, your first page might be the first task you want to track.",
+                "Step 4: Add a property: Give your database properties so you have more options for how to organize each page. A task tracking database might include a status property and a due date property.",
+                "Step 5: Add a new view: Views allow you to organize the information in your database in different ways. By default, your database will be displayed in Table view, but you can add as many views as you\u2019d like.",
+                "Step 6: Edit your view: For each view, you can edit its name, its layout, the properties that are shown or hidden in it, and more. You can also filter, sort, and group the items in your database. For example, you might want to see a task requestor in one view but not in another."
+            ]
+        },
+        "website": "Notion - Create database table",
+        "website_url": "https://www.notion.so/",
+        "ground_truth_help": "https://www.notion.com/help/intro-to-databases"
+    },
+    {
+        "task_id": "20euxv487a3tb1tgprpz37kbd4bu4bbl",
+        "task": "How do I reduce notifications on X by disabling alerts for a specific type of activity?",
+        "content": {
+            "steps": [
+                "Step 1: Go to your Notifications timeline.",
+                "Step 2: To filter your notifications, click on Settings.",
+                "Step 3: Click on Advanced filters.",
+                "Step 4: Check the box of your preferred filter(s) to turn on."
+            ]
+        },
+        "website": "X - Reduce notification type",
+        "website_url": "https://x.com/",
+        "ground_truth_help": "https://help.x.com/en/managing-your-account/understanding-the-notifications-timeline"
+    },
+    {
+        "task_id": "21k2i8zqas4bvt2txdrmor4sb44vr40w",
+        "task": "How do I register for a class in AU Access after logging in?",
+        "content": {
+            "steps": [
+                "Step 1: On the new AU Access interface, if the \"My Academics\" tab is not obvious when you log on, look to the top left corner of the screen where it says \u201c///AU ACCESS\u201d.",
+                "Step 2: To the left of that are three horizontal bars.",
+                "Step 3: If you click on the three horizontal bars, the resulting menu window (on the left side of the screen) should give you the \u201cMy Academics\u201d option.",
+                "Step 4: From there you can follow links to add and drop courses."
+            ]
+        },
+        "website": "AU Access - Register for class",
+        "website_url": "https://auaccess.auburn.edu/",
+        "ground_truth_help": "https://cla.auburn.edu/psychological-sciences/graduate-studies/graduate-student-milestones/registration-faq/"
+    },
+    {
+        "task_id": "22mx0m0dgp4mk8z5bs4ktbcv2mzww4j9",
+        "task": "How do I drop a class inside AU Access? ",
+        "content": {
+            "steps": [
+                "Step 1: Login to AU Access, go to the \"My Academics\" tab and click on \"Add or Drop Classes\" to withdraw from all or some classes."
+            ]
+        },
+        "website": "AU Access - View final exam schedule",
+        "website_url": "https://auaccess.auburn.edu/",
+        "ground_truth_help": "https://studentaffairs.auburn.edu/acsc/how-to/withdraw-first-15.php#:~:text=To%20withdraw%20from%20classes%20at%20Auburn%20University,will%20look%20like%20they%20were%20never%20enrolled"
+    },
+    {
+        "task_id": "23au0jjg84pyfj6g4xz2gmfq65zn5h5a",
+        "task": "How do I enable two-factor authentication on PayPal?",
+        "content": {
+            "steps": [
+                "Step 1: Click the Settings icon next to \"Log out.\"",
+                "Step 2: Click Security near the top of the page.",
+                "Step 3: Click Set Up to the right of \"2-step verification.\"",
+                "Step 4: Choose how you\u2019ll get your code by selecting \"Use an authenticator app.\"",
+                "Step 5: Click Set it Up and follow the steps on the screen."
+            ]
+        },
+        "website": "PayPal - Enable 2FA",
+        "website_url": "https://www.paypal.com/",
+        "ground_truth_help": "https://www.paypal.com/c2/cshelp/article/what-is-2-step-verification-and-how-do-i-turn-it-on-or-off-help167?locale.x=en_C2"
+    },
+    {
+        "task_id": "24lwus3rx2j5u91jxv5qjw0bt3vxmrcx",
+        "task": "How do I resend the confirmation code on the app?",
+        "content": {
+            "steps": [
+                "Step 1: Tap the Profile Icon.",
+                "Step 2: Tap Account Info. ",
+                "Step 3: Tap Phone Numbers.  ",
+                "Step 4: Tap the number you want to confirm, then tap Resend Code.",
+                "Step 5: Enter the code and tap Confirm Number.  "
+            ]
+        },
+        "website": "PayPal - Verify new phone number",
+        "website_url": "https://www.paypal.com/",
+        "ground_truth_help": "https://www.paypal.com/us/cshelp/article/how-do-i-add-and-confirm-change-or-remove-a-phone-number-on-my-paypal-account-help265"
+    },
+    {
+        "task_id": "25pjo4rqzxl92ik3858ofw1kywf1oue2",
+        "task": "How do I turn on two-factor authentication for my Apple ID?",
+        "content": {
+            "steps": [
+                "Step 1: Go to account.apple.com and sign in to your Apple Account.",
+                "Step 2: You might need to enter a code that\u2019s sent to your email address or answer security questions.",
+                "Step 3: Tap Upgrade Account Security and follow the onscreen instructions."
+            ]
+        },
+        "website": "Apple ID - Turn on 2FA",
+        "website_url": "https://appleid.apple.com/",
+        "ground_truth_help": "https://support.apple.com/en-us/102660"
+    },
+    {
+        "task_id": "26adc6osy16frod97mriwutvy016qg9v",
+        "task": "How do I generate and save recovery keys for my Apple ID?",
+        "content": {
+            "steps": [
+                "Step 1: Choose Apple \uf8ff menu, then select System Settings.",
+                "Step 2: Click your name, then click Sign-in & Security.",
+                "Step 3: Click Recovery Key. You might need to enter your Apple Account password.",
+                "Step 4: Click Turn On, click Use Recovery Key, then enter the password for your Mac.",
+                "Step 5: Print or write down your recovery key and keep it in a safe place.",
+                "Step 6: Click Continue.",
+                "Step 7: To complete setup, confirm your recovery key."
+            ]
+        },
+        "website": "Apple ID - Set recovery options",
+        "website_url": "https://appleid.apple.com/",
+        "ground_truth_help": "https://support.apple.com/en-us/109345"
+    },
+    {
+        "task_id": "27fomnut0ss6s6qr0rvnr46pjfs7532x",
+        "task": "How do I set up Microsoft Account sign-in verification using an authenticator app?",
+        "content": {
+            "steps": [
+                "Step 1: Sign in to your Microsoft account Security tab at account.microsoft.com/security.",
+                "Step 2: \u200b\u200b\u200b\u200b\u200b\u200b\u200bSelect Manage how I sign in \u200b\u200b\u200b\u200b\u200b\u200b\u200bto show the ways to prove who you are.",
+                "Step 3: Select \u2795 Add a new way to sign in or verify.",
+                "Step 4: Choose Use an app.",
+                "Step 5: Open Authenticator on your phone and select the plus icon \u2795",
+                "Step 6: Select Personal account then tap Scan a QR Code."
+            ]
+        },
+        "website": "Microsoft Account - Authenticator setup",
+        "website_url": "https://account.microsoft.com/",
+        "ground_truth_help": "https://support.microsoft.com/en-us/account-billing/how-to-add-your-accounts-to-microsoft-authenticator-92544b53-7706-4581-a142-30344a2a2a57"
+    },
+    {
+        "task_id": "28y87jomit42pxbea2bjs6k4esghllfx",
+        "task": "How do I change your primary address for a microsoft account? ",
+        "content": {
+            "steps": [
+                "Step 1: Navigate to Microsoft's alias management page. Go to account.live.com/names/Manage in your web browser. Enter your original email address to sign in if you're not already signed in, and then click Next. If you don't remember that email address, click Sign in with Windows Hello or a security key to sign in without that information.",
+                "Step 2: Click Add Email. The button is located under the \"Account\" section.",
+                "Step 3: Select \"New\" or \"Existing\" Microsoft alias. If you want to make a new Outlook email address, click New and enter text that will be your new email address.",
+                "Step 4: Enter the email address. Creating a new email will prompt you to enter the email name and select an email service from a menu. Using an existing email will prompt you to enter the full address into a text field.",
+                "Step 5: Click Add Alias. You will be taken back to the profile page, and the new alias will be listed among your other emails.",
+                "Step 6: Click Make Primary. This will appear next to each alias listed on the account (except the current primary alias). The address you select will now be the one that appears in your avatar when you log into your account."
+            ]
+        },
+        "website": "Microsoft Account - Review sign-in activity",
+        "website_url": "https://account.microsoft.com/",
+        "ground_truth_help": "https://www.wikihow.com/Change-Your-Primary-Email-for-a-Microsoft-Account"
+    },
+    {
+        "task_id": "29uuf5unej65qsrwl4dxky8fam9znmz4",
+        "task": "How do I complete an ID.me identity verification flow that requires document upload?",
+        "content": {
+            "steps": [
+                "Step 1: When prompted, choose which documents you\u2019ll upload to verify your identity. For example, you may use Primary and secondary documents.",
+                "Step 2: Answer questions to confirm that the information you previously entered matches the information on your documents.",
+                "Step 3: Take photos of your documents",
+                "Step 4: For documents you want to upload, select Choose Image, then upload your documents from your computer.",
+                "Step 5: Answer questions about the documents you selected or took a picture of.",
+                "Step 6: Select Continue to send your documents. Your document will be reviewed, then if approved, you\u2019ll be prompted to join a video call."
+            ]
+        },
+        "website": "ID.me - Complete identity verification",
+        "website_url": "https://www.id.me/",
+        "ground_truth_help": "https://help.id.me/hc/en-us/articles/360051696334-Upload-your-ID-documents-to-ID-me"
+    },
+    {
+        "task_id": "2kyuqbg0abqrb9ishugptxjvd0r6iuid",
+        "task": "How do I create a filtered view of a database in Notion?",
+        "content": {
+            "steps": [
+                "Step 1: Open the settings menu at the top of the database.",
+                "Step 2: In the menu that appears, select `Filter` under `View settings`.",
+                "Step 3: Choose the property you'd like to filter by.",
+                "Step 4: You can choose to `Save for everyone` if you want the filter to be applied for everyone in the database view. If you want the filter to apply only for you, don\u2019t select this option.",
+                "Step 5: Open the settings menu at the top of the database.",
+                "Step 6: In the menu that appears, select `Filter` under `View settings` \u2192 `Add advanced filter`.",
+                "Step 7: In the menu that appears, choose the properties that you'd like to filter by, and customize the `AND` and `OR` logic of the advanced filter."
+            ]
+        },
+        "website": "Notion - Create filtered database view",
+        "website_url": "https://www.notion.so/",
+        "ground_truth_help": "https://www.notion.com/help/views-filters-and-sorts"
+    },
+    {
+        "task_id": "30wpi3zom59zatx0nh0k0k572jesb1xp",
+        "task": "How do I reset my ID.me password if it requires me to re-verify my identity first?",
+        "content": {
+            "steps": [
+                "Step 1: Go to the ID.me sign-in page.",
+                "Step 2: Enter your email address and select Continue.",
+                "Step 3: Select Forgot password?.",
+                "Step 4: Enter your email address and select Continue.",
+                "Step 5: Check your email for a reset email titled \u201cID.me - Your password reset link.\u201d It may take up to 10 minutes to receive it.",
+                "Step 6: In the email, select Reset your password or copy and enter the code into the previous browser screen and select Confirm.",
+                "Step 7: Enter your new password twice, then select Continue.",
+                "Step 8: On the ID.me sign-in page, enter your email address and new password, then select Sign in.",
+                "Step 9: Complete multi-factor authentication (MFA). If you have a new phone number or other trouble completing MFA, visit Resetting your multi-factor authentication (MFA) method."
+            ]
+        },
+        "website": "ID.me - Recover password",
+        "website_url": "https://www.id.me/",
+        "ground_truth_help": "https://help.id.me/hc/en-us/articles/202087724-Reset-your-ID-me-password-if-you-can-t-sign-in"
+    },
+    {
+        "task_id": "31a31peyrcqubv296s5oz5fg3qb0gdbe",
+        "task": "How do I create an IAM user with read-only access to one specific service in AWS?",
+        "content": {
+            "steps": [
+                "Step 1: Create the <a href=\"./getting-started-workloads.html\">user in the AWS Management Console, the AWS CLI</a>, Tools for Windows PowerShell, or using an AWS API operation.",
+                "Step 2: Create credentials for the user, depending on the type of access the user requires:",
+                "Step 3: Give the user permissions to perform the required tasks.",
+                "Step 4: (Optional) Add metadata to the user by attaching tags.",
+                "Step 5: Provide the user with the necessary sign-in information.",
+                "Step 6: (Optional) Configure <a href=\"./id_credentials_mfa.html\">multi-factor authentication (MFA)</a> for the user.",
+                "Step 7: (Optional) Give IAM users permissions to manage their own security credentials. (By default, IAM users do not have permissions to manage their own credentials.)"
+            ]
+        },
+        "website": "AWS - Create read-only IAM user",
+        "website_url": "https://console.aws.amazon.com/",
+        "ground_truth_help": "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html"
+    },
+    {
+        "task_id": "32bkwgbcvkx3jc2yafzsp1xsvzpv5ky56",
+        "task": "How do I create an access key for an IAM user? ",
+        "content": {
+            "steps": [
+                "Step 1: Use your AWS account ID or account alias, your IAM user name, and your password to sign in to the IAM console.",
+                "Step 2: In the navigation bar on the upper right, choose your user name, and then choose Security credentials. ",
+                "Step 3: In the Access keys section, choose Create access key. If you already have two access keys, this button is deactivated and you must delete an access key before you can create a new one.",
+                "Step 4: On the Access key best practices & alternatives page, choose your use case to learn about additional options which can help you avoid creating a long-term access key. If you determine that your use case still requires an access key, choose Other and then choose Next.",
+                "Step 5: (Optional) Set a description tag value for the access key. This adds a tag key-value pair to your IAM user. This can help you identify and update access keys later. The tag key is set to the access key id. The tag value is set to the access key description that you specify. When you are finished, choose Create access key.",
+                "Step 6: On the Retrieve access keys page, choose either Show to reveal the value of your user's secret access key, or Download .csv file. This is your only opportunity to save your secret access key. After you've saved your secret access key in a secure location, choose Done."
+            ]
+        },
+        "website": "AWS - Enable IAM MFA required",
+        "website_url": "https://console.aws.amazon.com/",
+        "ground_truth_help": "https://docs.aws.amazon.com/IAM/latest/UserGuide/access-key-self-managed.html"
+    },
+    {
+        "task_id": "33c2ugu9a4a3r5s6nh1gjl6nefsn2krxd",
+        "task": "How do I create a service account in Google Cloud with only the minimum role needed?",
+        "content": {
+            "steps": [
+                "Step 1: In the Google Cloud console, go to the <b>Create service account</b> page.",
+                "Step 2: Select a Google Cloud project.",
+                "Step 3: Enter a service account name to display in the Google Cloud console.",
+                "Step 4: Optional: Enter a description of the service account.",
+                "Step 5: If you don't want to set access controls now, click <b>Done</b> to finish creating the service account.",
+                "Step 6: Optional: Choose one or more <a href=\"/iam/docs/understanding-roles\">IAM roles</a> to grant to the service account on the project.",
+                "Step 7: When you are done adding roles, click <b>Continue</b>.",
+                "Step 8: Optional: In the <b>Service account users role</b> field, add members that need to <a href=\"/iam/docs/attach-service-accounts\">attach the service account to other resources</a>.",
+                "Step 9: Optional: In the <b>Service account admins role</b> field, add members that need to manage the service account.",
+                "Step 10: Click <b>Done</b> to finish creating the service account."
+            ]
+        },
+        "website": "Google Cloud - Create minimal service account",
+        "website_url": "https://console.cloud.google.com/",
+        "ground_truth_help": "https://docs.cloud.google.com/iam/docs/service-accounts-create"
+    },
+    {
+        "task_id": "34d0waj86503br37f2m66iqmpsxyphlc1",
+        "task": "How do I rotate a Google Cloud service account key?",
+        "content": {
+            "steps": [
+                "Step 1: Identify the service account keys that need to be rotated.",
+                "Step 2: Create new keys for the same service accounts.",
+                "Step 3: Replace the existing keys with the new keys across all applications.",
+                "Step 4: Disable the replaced keys and monitor the applications to confirm that they work as expected.",
+                "Step 5: Delete the service account keys that were replaced."
+            ]
+        },
+        "website": "Google Cloud - Rotate service account key",
+        "website_url": "https://console.cloud.google.com/",
+        "ground_truth_help": "https://docs.cloud.google.com/iam/docs/key-rotation"
+    },
+    {
+        "task_id": "35bat4mihrp18uglaiph435olzchtoss",
+        "task": "How do I assign a least-privilege RBAC role to a user for only one Azure resource group?",
+        "content": {
+            "steps": [
+                "Step 1: Sign in to the Azure portal.",
+                "Step 2: In the Search box at the top, search for the scope you want to grant access to. For example, search for Management groups, Subscriptions, Resource groups, or a specific resource.",
+                "Step 3: Click the specific resource for that scope.",
+                "Step 4: Click Access control (IAM).",
+                "Step 5: Click the Role assignments tab to view the role assignments at this scope.",
+                "Step 6: Click Add > Add role assignment.",
+                "Step 7: On the Role tab, select a role that you want to use.",
+                "Step 8: Click Next.",
+                "Step 9: On the Members tab, select User, group, or service principal to assign the selected role to one or more Microsoft Entra users, groups, or service principals (applications).",
+                "Step 10: Click Select members.",
+                "Step 11: Find and select the users, groups, or service principals.",
+                "Step 12: Click Select to add the users, groups, or service principals to the Members list.",
+                "Step 13: To assign the selected role to one or more managed identities, select Managed identity.",
+                "Step 14: Click Select members.",
+                "Step 15: In the Select managed identities pane, select whether the type is user-assigned managed identity or system-assigned managed identity.",
+                "Step 16: Find and select the managed identities.",
+                "Step 17: Click Select to add the managed identities to the Members list.",
+                "Step 18: In the Description box enter an optional description for this role assignment.",
+                "Step 19: Click Next.",
+                "Step 20: If you selected a role that supports conditions, a Conditions tab will appear and you have the option to add a condition to your role assignment.",
+                "Step 21: Click Next.",
+                "Step 22: On the Assignment type tab, select the Assignment type.",
+                "Step 23: Select Active.",
+                "Step 24: Select Permanent.",
+                "Step 25: Click Next.",
+                "Step 26: On the Review + assign tab, review the role assignment settings.",
+                "Step 27: Click Review + assign to assign the role."
+            ]
+        },
+        "website": "Azure - Assign least-privilege RBAC",
+        "website_url": "https://portal.azure.com/",
+        "ground_truth_help": "https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-portal"
+    },
+    {
+        "task_id": "36bgvs58q4mk2npuczf13gbkmsqzid77",
+        "task": "How do I create a client secret for an Azure app registration?",
+        "content": {
+            "steps": [
+                "Step 1: Login to Azure Portal.",
+                "Step 2: Switch to directory which contains your B2C tenant",
+                "Step 3: Search for \u2018Azure AD B2C\u2019(or 'Azure AD' in case of AD tenant) and click on it.",
+                "Step 4: Navigate to \u2018App Registrations\u2019 and click on your application.",
+                "Step 5: Inside your application, click on \u2018Certificates & Secrets\u2019. If you see the client secret is about to expire then click on \u2018New client secret\u2019",
+                "Step 6: Add description and set the expiration date to 24 months (or the maximum allowed time).",
+                "Step 7: Copy the Secret Value immediately as this value will be hidden if page reloads. Proceed to adding this to key-vault."
+            ]
+        },
+        "website": "Azure - Create client secret safely",
+        "website_url": "https://portal.azure.com/",
+        "ground_truth_help": "https://learn.microsoft.com/en-us/azure/industry/training-services/microsoft-community-training/public-preview-version/frequently-asked-questions/generate-new-clientsecret-link-to-key-vault"
+    },
+    {
+        "task_id": "37z7sv4z92eu8vj74r2o5tdnzykfs1zq",
+        "task": "How do I create a Cloudflare API token scoped to a single zone only?",
+        "content": {
+            "steps": [
+                "Step 1: Determine if you want a user token or an Account API token. Use Account API tokens if you prefer service tokens that are not associated with users and your desired API endpoints are compatible.",
+                "Step 2: From the Cloudflare dashboard, go to My Profile &gt; API Tokens for user tokens. For Account Tokens, go to Manage Account &gt; API Tokens.",
+                "Step 3: Select Create Token.",
+                "Step 4: Select a template from the available API token templates or create a custom token. The following example uses the Edit zone DNS template.",
+                "Step 5: Add or edit the token name to describe why or how the token is used. Templates are prefilled with a token name and permissions.",
+                "Step 6: Modify the token's permissions. After selecting a permissions group (Account, User, or Zone), choose what level of access to grant the token. Most groups offer Edit or Read options. Edit is full CRUDL (create, read, update, delete, list) access, while Read is the read permission and list where appropriate. Refer to the available token permissions for more information.",
+                "Step 7: Select which resources the token is authorized to access. For example, granting Zone DNS Read access to a zone example.com will allow the token to read DNS records only for that specific zone. Any other zone will return an error for DNS record reads operations. Any other operation on that zone will also return an error.",
+                "Step 8: (Optional) Restrict how a token is used in the Client IP Address Filtering and TTL (time to live) fields.",
+                "Step 9: Select Continue to summary.",
+                "Step 10: Review the token summary. Select Edit token to make adjustments. You can also edit a token after creation.",
+                "Step 11: Select Create Token to generate the token's secret.",
+                "Step 12: Copy the secret to a secure place."
+            ]
+        },
+        "website": "Cloudflare - Create zone-scoped token",
+        "website_url": "https://dash.cloudflare.com/",
+        "ground_truth_help": "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/"
+    },
+    {
+        "task_id": "38kefc2lkc3v597dv2ku5jyb4z7qf5sk",
+        "task": "How do I retrieve origin CA keys for Cloudflare?",
+        "content": {
+            "steps": [
+                "Step 1: Log in to the Cloudflare dashboard.",
+                "Step 2: Go to User Profile &gt; API Tokens.",
+                "Step 3: In the API Keys section, select Origin CA Key."
+            ]
+        },
+        "website": "Cloudflare - Revoke token and verify",
+        "website_url": "https://dash.cloudflare.com/",
+        "ground_truth_help": "https://developers.cloudflare.com/fundamentals/api/get-started/ca-keys/"
+    },
+    {
+        "task_id": "39xsiuitfteukl7dzy02h9e2tscotc81",
+        "task": "How do I create a GitLab personal access token with minimal scopes for one workflow?",
+        "content": {
+            "steps": [
+                "Step 1: In the upper-right corner, select your avatar.",
+                "Step 2: Select Edit profile.",
+                "Step 3: On the left sidebar, select Personal access tokens.",
+                "Step 4: Select Add new token.",
+                "Step 5: In Token name, enter a name for the token.",
+                "Step 6: Optional. In Token description, enter a description for the token.",
+                "Step 7: In Expiration date, enter an expiration date for the token.",
+                "Step 8: Select the desired scopes.",
+                "Step 9: Select Create personal access token."
+            ]
+        },
+        "website": "GitLab - Create minimal PAT",
+        "website_url": "https://gitlab.com/",
+        "ground_truth_help": "https://docs.gitlab.com/user/profile/personal_access_tokens/"
+    },
+    {
+        "task_id": "3i4ghdyion39t2qq3yzlho81i25yixa0",
+        "task": "How do I create a new channel in Slack?",
+        "content": {
+            "steps": [
+                "Step 1: Click the plus sign in the sidebar.",
+                "Step 2: Select Channel. If you\u2019re on a paid plan, you can select Blank channel to set up a regular channel, or choose a template to automatically set your channel up for a specific purpose (like managing a project, handling approvals, and more).",
+                "Step 3: Enter a channel name and choose whether your channel should be public or private, then click Create."
+            ]
+        },
+        "website": "Slack - Create channel purpose",
+        "website_url": "https://slack.com/",
+        "ground_truth_help": "https://slack.com/help/articles/201402297-Create-a-channel"
+    },
+    {
+        "task_id": "40nyl8y5gvivy42gefxry8lcei9nu535",
+        "task": "How do I add a deploy key to a GitLab repository?",
+        "content": {
+            "steps": [
+                "Step 1: On the top bar, select Search or go to and find your project.",
+                "Step 2: Select Settings > Repository.",
+                "Step 3: Expand Deploy keys.",
+                "Step 4: Select Add new key.",
+                "Step 5: Complete the fields.",
+                "Step 6: Optional. To grant read-write permission, select the Grant write permissions to this key checkbox.",
+                "Step 7: Optional. Update the Expiration date."
+            ]
+        },
+        "website": "GitLab - Add deploy key and test",
+        "website_url": "https://gitlab.com/",
+        "ground_truth_help": "https://docs.gitlab.com/user/project/deploy_keys/"
+    },
+    {
+        "task_id": "416ri3l1hkii5sohwlx58e28kpmcgr6i",
+        "task": "How do I permanently delete a file in Google Drive?",
+        "content": {
+            "steps": [
+                "Step 1: On your computer, go to drive.google.com.",
+                "Step 2: On the left, click Trash.",
+                "Step 3: Make sure there are no files you want to keep.",
+                "Step 4: At the top right, click Empty trash",
+                "Step 5: Delete forever"
+            ]
+        },
+        "website": "Google Drive - Permanently delete file",
+        "website_url": "https://drive.google.com/",
+        "ground_truth_help": "https://support.google.com/drive/answer/2375102?hl=en&co=GENIE.Platform%3DDesktop"
+    },
+    {
+        "task_id": "421vimpxrpf4t9ouzzva4lq79lcaxrlh",
+        "task": "How do I delete my google account? ",
+        "content": {
+            "steps": [
+                "Step 1: Go to the Data & Privacy section of your Google Account.",
+                "Step 2: Scroll to \"Your data & privacy options.\"",
+                "Step 3: Select&nbsp;<strong>More options&nbsp;</strong><img src=\"//lh3.googleusercontent.com/3_l97rr0GvhSP2XV5OoCkV2ZDTIisAOczrSdzNCBxhIKWrjXjHucxNwocghoUa39gw=h36\" width=\"auto\" height=\"18\" alt=\"and then\" data-mime-type=\"image/png\" data-alt-src=\"//lh3.googleusercontent.com/3_l97rr0GvhSP2XV5OoCkV2ZDTIisAOczrSdzNCBxhIKWrjXjHucxNwocghoUa39gw\"><strong>Delete your Google Account</strong>.",
+                "Step 4: Follow the instructions to delete your account."
+            ]
+        },
+        "website": "Google Account - Deletion",
+        "website_url": "https://drive.google.com/",
+        "ground_truth_help": "https://support.google.com/mail/answer/32046?hl=en&sjid=11115605845272457698-NC"
+    },
+    {
+        "task_id": "43taxmy0kzel1kpokyyerf2tcjxw6gsm",
+        "task": "How do I restore a deleted file in Dropbox?",
+        "content": {
+            "steps": [
+                "Step 1: Just head to dropbox.com",
+                "Step 2: Select 'Deleted Files' on the left sidebar.",
+                "Step 3: And find the name of the deleted files, or folders, you want to recover.",
+                "Step 4: Click the checkbox icon, and select 'Restore'."
+            ]
+        },
+        "website": "Dropbox - Restore deleted file",
+        "website_url": "https://www.dropbox.com/",
+        "ground_truth_help": "https://help.dropbox.com/delete-restore/recover-deleted-files-folders"
+    },
+    {
+        "task_id": "44xdf4w5cjjdb37q3gkclifytoe82h8d",
+        "task": "How do I stop sharing a Dropbox folder?",
+        "content": {
+            "steps": [
+                "Step 1: Log in to dropbox.com.",
+                "Step 2: Hover over the folder you\u2019d like to manage and click <span class=\"moreVertical\" title=\"More options\">\u2611</span> (more options).",
+                "Step 3: Click Manage permissions.",
+                "Step 4: Click the dropdown next to the member you\u2019d like to remove.",
+                "Step 5: Click Remove.",
+                "Step 6: Choose if you want to leave the member a copy of the shared folder.",
+                "Step 7: Click Remove again."
+            ]
+        },
+        "website": "Dropbox - Stop sharing folder",
+        "website_url": "https://www.dropbox.com/",
+        "ground_truth_help": "https://help.dropbox.com/share/unshare-folder"
+    },
+    {
+        "task_id": "45l682xl0exey6b12o1m8sz71ee2kvk1",
+        "task": "How do I safely drop a table in Supabase?",
+        "content": {
+            "steps": [
+                "Step 1: This deletes all tables and their associated data. Ensure you have a recent backup before proceeding.",
+                "Step 2: Execute the following query to drop all tables in a given schema. Replace my-schema-name with the name of your schema. In Supabase, the default schema is public.  Query: do $$ declare\n    r record;\nbegin\n    for r in (select tablename from pg_tables where schemaname = 'my-schema-name') loop\n        execute 'drop table if exists ' || quote_ident(r.tablename) || ' cascade';\n    end loop;\nend $$;",
+                "Step 3: You can run this query using the SQL Editor in the Supabase Dashboard, or via psql if you're connecting directly to the database."
+            ]
+        },
+        "website": "Supabase - Drop table safely",
+        "website_url": "https://supabase.com/dashboard",
+        "ground_truth_help": "https://supabase.com/docs/guides/database/postgres/dropping-all-tables-in-schema"
+    },
+    {
+        "task_id": "46590e6gub4awd7hsz1esom8eg0qtfid",
+        "task": "How do I delete the database in vercel?",
+        "content": {
+            "steps": [
+                "Step 1: Run ALTER TABLE your_table ENABLE ROW LEVEL SECURITY on every table in your public schema. New tables do not have RLS enabled by default, so you must enable it explicitly after creation.",
+                "Step 2: Add a user_id column of type UUID that references auth.users(id) to each table where you need per-user access control. Create an index on this column for query performance.",
+                "Step 3: Create a SELECT policy using the USING clause with auth.uid() = user_id to restrict row visibility to the owning user.",
+                "Step 4: Create an INSERT policy using the WITH CHECK clause to validate that new rows contain the authenticated user's ID, preventing users from inserting data under another user's ID.",
+                "Step 5: Create UPDATE policies with both USING and WITH CHECK clauses. USING controls which rows the user can target, WITH CHECK validates the new values. DELETE policies use only USING.",
+                "Step 6: Add multi-tenant or role policies. For team or organization access, add tenant_id or org_id columns and create policies that check JWT custom claims using auth.jwt(). For admin access, create helper functions like is_admin() and add OR conditions to existing policies.",
+                "Step 7: Index Policy Columns and Test. Create indexes on all columns referenced in RLS policies. Test policies using the Supabase client SDK with real user tokens, not the SQL Editor which bypasses RLS. Run EXPLAIN ANALYZE to verify query performance."
+            ]
+        },
+        "website": "Vercel - Delete database ",
+        "website_url": "https://vercel.com",
+        "ground_truth_help": "https://supabase.com/docs/guides/troubleshooting/how-to-delete-vercel-linked-projects-9d08aa"
+    },
+    {
+        "task_id": "47w8eajyg90uen47etbl43x2k7q55git",
+        "task": "How do I delete a Bitbucket repository?",
+        "content": {
+            "steps": [
+                "Step 1: From the repository you want to delete, select Repository settings on the left sidebar.",
+                "Step 2: Select Repository details under the General heading on the left sidebar.",
+                "Step 3: Select the Manage repository dropdown.",
+                "Step 4: Select Delete repository.",
+                "Step 5: (Optional) Enter a URL in the URL to new location field. Future users who try to access your repository will be sent to this new URL.",
+                "Step 6: Select Delete."
+            ]
+        },
+        "website": "Bitbucket - Delete repo irreversibly",
+        "website_url": "https://bitbucket.org/",
+        "ground_truth_help": "https://support.atlassian.com/bitbucket-cloud/docs/delete-a-repository/"
+    },
+    {
+        "task_id": "48tl8931m9gd5an8uyksfmo70eyg3sbu",
+        "task": "How do I transfer a Bitbucket repository to a different workspace?",
+        "content": {
+            "steps": [
+                "Step 1: Select Repository settings on the left sidebar of each repository you would like to transfer.",
+                "Step 2: From the Repository details page, select Transfer repository.",
+                "Step 3: Enter the workspace ID (only) for the New owner.",
+                "Step 4: Select Transfer.",
+                "Step 5: Log in to the account with the workspace you want to keep.",
+                "Step 6: Look for the Repository transfer request email.",
+                "Step 7: Select View transfer request.",
+                "Step 8: Select a project, then Accept."
+            ]
+        },
+        "website": "Bitbucket - Transfer repo workspace",
+        "website_url": "https://bitbucket.org/",
+        "ground_truth_help": "https://support.atlassian.com/bitbucket-cloud/docs/transfer-repositories-and-groups-to-a-workspace/"
+    },
+    {
+        "task_id": "496rv5qdl6asoog4l9u61tapcgz5mhp8",
+        "task": "How do I delete a Jira project and confirm what data will be removed?",
+        "content": {
+            "steps": [
+                "Step 1: Choose Jira home > Projects, and select the relevant project.",
+                "Step 2: Find the relevant project and click&nbsp;Delete.",
+                "Step 3: Read the friendly warning message and click&nbsp;Delete.",
+                "Step 4: Acknowledge the project has been deleted and head back to your list of remaining projects."
+            ]
+        },
+        "website": "Jira - Delete project safely",
+        "website_url": "https://www.atlassian.com/software/jira",
+        "ground_truth_help": "https://community.atlassian.com/forums/Jira-questions/How-do-I-delete-a-project-in-Jira-Cloud/qaq-p/723715"
+    },
+    {
+        "task_id": "4zw819q4t8mlgie1r0q8nzkrvmy6akqc",
+        "task": "How do I reset my notification setting back to default in Slack? ",
+        "content": {
+            "steps": [
+                "Step 1: Click your profile picture in the sidebar.",
+                "Step 2: Select Preferences from the menu.",
+                "Step 3: Scroll down to Exceptions to the defaults.",
+                "Step 4: Click the  close icon to reset notifications back to the default setting."
+            ]
+        },
+        "website": "Slack - Channel notifications",
+        "website_url": "https://slack.com/",
+        "ground_truth_help": "https://slack.com/help/articles/360056534254-Manage-notifications-for-specific-channels-and-direct-messages"
+    },
+    {
+        "task_id": "50nf60v5f86d546jngvow8y98n634fxt",
+        "task": "How do I bulk-close issues in Jira without accidentally closing the wrong ones?",
+        "content": {
+            "steps": [
+                "Step 1: Perform a search with the required filters to produce a list of issues.",
+                "Step 2: Select Tools > Bulk Change.",
+                "Step 3: Select the issues you'd like to perform the bulk operation on and then select Next.",
+                "Step 4: Select the desired bulk operation (e.g., Transition Issues, Delete Issues, Move Issues, Edit Issues, Watch Issues, Stop Watching Issues, Archive Issues) and then select Next.",
+                "Step 5: Follow the on-screen prompts to specify the details of your bulk operation, which may include mapping statuses, selecting values for fields, or confirming specific actions.",
+                "Step 6: Review the summary of your bulk operation on the confirmation screen.",
+                "Step 7: Select Confirm to execute the bulk operation."
+            ]
+        },
+        "website": "Jira - Bulk-close issues safely",
+        "website_url": "https://www.atlassian.com/software/jira",
+        "ground_truth_help": "https://confluence.atlassian.com/jiracoreserver/editing-multiple-issues-at-the-same-time-939937916.html"
+    },
+    {
+        "task_id": "51lx5fg4uegpqbaoq8hcc5y7tzxhu724",
+        "task": "How do I check the status of my USCIS case online using my receipt number?",
+        "content": {
+            "steps": [
+                "Step 1: You only have to access USCIS\u2019 Case Status Online directly through uscis.gov.",
+                "Step 2: To check your case status using our online tool, you have to have your case receipt number.",
+                "Step 3: When entering your receipt number, you should omit dashes (\u201d-\u201c), but you can include all other characters, including asterisks (\u201c*\u201d) if they are listed on your notice as part of the receipt number."
+            ]
+        },
+        "website": "USCIS - Check case status",
+        "website_url": "https://www.uscis.gov/",
+        "ground_truth_help": "https://www.uscis.gov/tools/checking-your-case-status-online"
+    },
+    {
+        "task_id": "523elz47bl5h6625mzdtki72c1u9vh51",
+        "task": "How do I submit a change of address to USCIS online?",
+        "content": {
+            "steps": [
+                "Step 1: We strongly encourage you to submit your change of address through a USCIS online account as soon as you move.",
+                "Step 2: Most people can change their address online using the USCIS Enterprise Change of Address (E-COA) self-service change-of-address tool. This tool can be found in their USCIS Online Account under the My Account dropdown menu.",
+                "Step 3: If you do not have a USCIS online account, see our How to Create a USCIS Online Account page.",
+                "Step 4: If you use your USCIS online account to change your address, you must enter the receipt numbers for each pending benefit request to apply the address change."
+            ]
+        },
+        "website": "USCIS - Change address",
+        "website_url": "https://www.uscis.gov/",
+        "ground_truth_help": "https://www.uscis.gov/addresschange"
+    },
+    {
+        "task_id": "53awjjquojc4k2wq88x6x6llt729kzmq",
+        "task": "How do I check for my visa status?",
+        "content": {
+            "steps": [
+                "Step 1: Visit the website. You can check your visa status by visiting the U.S. Department of State\u2019s Consular Electronic Application Center website. Once there, you will be prompted to provide various information.",
+                "Step 2: Select your Visa Application Type. There are two choices: \u201cImmigrant Visa (IV)\u201d and \u201cNonimmigrant Visa (NIV).\u201d Select the one that applies to you from the drop-down box.",
+                "Step 3: Select your interview location. If you applied for a \u201cnonimmigrant visa,\u201d then you will need to select your location where you interviewed. The dropdown box will contain a list of cities around the globe. They are listed by country first, and then city. For example: \u201cBELARUS, MINSK.\u201d Select the city where you applied for your U.S. visa.",
+                "Step 4: Enter your Immigration Visa Case Number. When you applied for a visa, the embassy or consulate should have given you an Immigrant Visa Case Number or an Application ID. It may also be your \u201cconfirmation number.\u201d You should enter it in the box.",
+                "Step 5: Enter a code. The CEAC website also requires that you enter a CAPTCHA code so that they know you are not a spam bot. The code will differ each time you visit the screen, but it is usually a mix of letters and numbers.",
+                "Step 6: Call instead. If you don\u2019t want the hassle of trying to find out your visa status online, then you can call (603) 334-0700. Provide your name and ask for an update on your case."
+            ]
+        },
+        "website": "U.S. Dept. of State - Visa documents",
+        "website_url": "https://travel.state.gov/",
+        "ground_truth_help": "https://www.wikihow.com/Check-Your-Visa-Status"
+    },
+    {
+        "task_id": "54qpi19fi45j85getr3lzz0gjjplkxw3",
+        "task": "How do I apply for a U.S passport? ",
+        "content": {
+            "steps": [
+                "Step 1: Fill Out Your Form and Print It Use our Form Filler tool on a computer and print it on single-sided paper. We do not accept double-sided forms. If you are experiencing technical issues with the Form Filler, download a PDF. Do not sign your form until asked to do so by a passport acceptance agent. You can apply for a passport book, a passport card, or both. If you travel internationally several times each year, you can request a passport book with extra visa pages by checking the 'large book' box at the top of the application.",
+                "Step 2: Get Evidence of U.S. Citizenship Your evidence of U.S. citizenship must have the original, official seal or stamp of the government office which issued it. You must provide one of the following documents: U.S. birth certificate that meets the following requirements: Shows the seal or stamp from the city, county, or state of birth which issued it; the applicant\u2019s full name, date of birth, place of birth; your parent(s)' full names; the date filed with registrar's office (must be within one year of birth); and the registrar's signature. Or Full validity, undamaged U.S. passport (Full validity means the passport was valid for 10 years for adults and 5 years for children under 16). Consular Report of Birth Abroad or any birth document issued by the U.S. Department of State. Certificate of Naturalization or Citizenship (If you have an Alien Registration Number (A-Number) from USCIS and you are applying for the first time, you may include the A-Number on your passport application.) Paper only: We do not accept digital evidence of U.S. citizenship such as a mobile or electronic birth certificate. You must submit physical evidence of U.S. citizenship.",
+                "Step 3: Get a Photo ID You must present a physical, photo identification (ID) at the time of your application. The most common photo ID we accept is a: Fully-valid driver's license or enhanced driver's license with photo. If your ID is from a different state than the state you are applying, bring a second photo ID.",
+                "Step 4: Provide Photocopies and Additional Documents You must provide a: photocopy of your citizenship evidence (along with the original or replacement version that has the seal or stamp), and photocopy of the front and back of your photo ID Photocopy requirements: Use 8.5 inch by 11 inch paper, Use a single side of the paper. You must also provide more documents if: Your current valid passport is lost or stolen. Your valid passport is damaged (Provide a signed statement explaining the damage and submit the damaged passport. Examples of passport damage include water damage, mold, stains, significant tears, unofficial markings, or missing pages. Normal wear such as folded pages or small bends does not count as a damaged passport.) You are a sex offender covered under International Megan's Law (Provide a signed and dated statement that says you believe you are a covered sex offender under International Megan\u2019s Law). Your application will be delayed or denied if you do not resolve these issues before applying: If you owe over $2500 in child support, you must pay your child support to your state. If you have seriously delinquent tax debt, you must follow the guidance on the Internal Revenue Service (IRS) website.",
+                "Step 5: Get a Photo You must provide one passport photo with your application. Go to our Passport Photo page for photo requirements and to see examples of photos. Do not attach or staple your photo to the form. The acceptance agent or passport employee will review the photo and staple it for you.",
+                "Step 6: Pay Your Fees When you apply for a passport using Form DS-11, you will need to pay two fees: one to the U.S. Department of State and one to the facility where you submit your application. Adult Applicants (Age 16 and older): Product: Passport Book, Form: DS-11, Passport Application Fee: $130, Facility Acceptance Fee: $35. Product: Passport Card, Form: DS-11, Passport Application Fee: $30, Facility Acceptance Fee: $35. Product: Passport Book & Card, Form: DS-11, Passport Application Fee: $160, Facility Acceptance Fee: $35. How to pay the passport application fee: Use a check or money order made out to \"U.S. Department of State.\" Write the applicant\u2019s name and date of birth in the memo section. Optional application fees: Add $60 to your application fee if you want faster expedited service. Add $22.05 to your application fee if you want your new passport in 1-3 days after we mail it. How to pay the $35 facility acceptance fee: Find an acceptance facility to learn what payment methods they accept.",
+                "Step 7: Find a Location to Submit Your Application You must submit your passport application, documents, and fees at an authorized passport acceptance facility. The passport agent will verify your ID, give you an oath, and have you sign the application. Where you apply depends on your travel plans. Current processing times are: 4-6 weeks for routine service, 2-3 weeks for expedite service (extra $60). Our processing times do not include mailing times. Consider the total time it will take to receive your passport when you are booking travel. It may take two weeks for your application to get to us, and two weeks for you to get your new passport after we mail it. In the United States: Traveling in more than 3 weeks? Go to a passport acceptance facility such as a post office, library, or local government office. Check with the facility to see if you need to make an appointment. Traveling internationally in less than 3 weeks? Make an appointment to apply at a passport agency or center once you're within 14 days of travel. Outside the United States: Contact your U.S. embassy or consulate for instructions.",
+                "Step 8: Track Your Application Status After you sign and submit your passport application, the facility will mail it to the U.S. Department of State for processing, which may take up to two weeks. We will send status updates to the email address you provided on your application. You will know we are processing the application when you get an email update of \u201cIn Process.\u201d You can also check the status of the application online. If you did not receive application status updates, want to change the email address receiving status updates, or learn more about each status update, please visit our application status page."
+            ]
+        },
+        "website": "U.S. Dept. of State - Apply for a US passport",
+        "website_url": "https://travel.state.gov/",
+        "ground_truth_help": "https://travel.state.gov/content/travel/en/passports/need-passport/apply-in-person.html"
+    },
+    {
+        "task_id": "55w3t4si84owat59m97it8hi0yde61uj",
+        "task": "How do I add a recipients to transfer money? ",
+        "content": {
+            "steps": [
+                "Step 1: After signing in, choose \u201cPay &amp; transfer\u201d",
+                "Step 2: Choose \u201cEnroll now\u201d and agree to the terms of use",
+                "Step 3: To add a recipient, choose \u201cAdd recipient\u201d under the \u201cWires and global transfers\u201d section on the \u201cPay &amp; transfer\u201d tab",
+                "Step 4: For your security, we may request an activation code to confirm you are the owner of the account",
+                "Step 5: Add your recipient\u2019s bank details, followed by your recipient's name and address, then click \u201cNext\u201d",
+                "Step 6: Review and confirm the recipient\u2019s information, then click \u201cAdd recipient\u201d"
+            ]
+        },
+        "website": "Chase - Send $2,500 safely",
+        "website_url": "https://www.chase.com/",
+        "ground_truth_help": "https://www.chase.com/digital/customer-service/helpful-tips/business-banking/payments/wire-enroll-recipient"
+    },
+    {
+        "task_id": "56g80jztm4byjf912var44ar7yrkn846",
+        "task": "How do I set up a recurring payment in Chase?",
+        "content": {
+            "steps": [
+                "Step 1: After signing in, choose the account for the card you want and tap \"Pay card\"",
+                "Step 2: Tap \"Set up\" next to \"Automatic payments\"",
+                "Step 3: Choose your payment amount and the account you want to pay from",
+                "Step 4: Review your choices and tap \"Set up automatic payments\""
+            ]
+        },
+        "website": "Chase - Recurring payment verify",
+        "website_url": "https://www.chase.com/",
+        "ground_truth_help": "https://www.chase.com/digital/customer-service/helpful-tips/credit-cards/mobile/set-up-autopay"
+    },
+    {
+        "task_id": "57g9id7ne21je84jmqj7l7yyugtw8wcc",
+        "task": "How to change or update current health insurance plan",
+        "content": {
+            "steps": [
+                "Step 1: Update your expected income and household information on your application for the year you're applying for coverage, so you get the right amount of savings.",
+                "Step 2: Compare available plans and renew your current plan (if available) or enroll in a different one that meets your needs.",
+                "Step 3: Log into your Marketplace account by December 15 to update your application, get savings for next year, and enroll in a plan so your coverage starts January 1.",
+                "Step 4: If your insurance company letter says they aren't offering your plan or a similar plan for the new year, you'll be matched with an alternate plan.",
+                "Step 5: Compare your current year's plan to the plan you're matched with and other available plans, especially if you had or expect income or household changes."
+            ]
+        },
+        "website": "Blue Cross Blue Shield",
+        "website_url": "bcbs.com",
+        "ground_truth_help": "https://www.healthcare.gov/keep-or-change-plan/"
+    },
+    {
+        "task_id": "582e8d22ouudwgc8ffcpy7jj687dguxu",
+        "task": "How to update your household income? ",
+        "content": {
+            "steps": [
+                "Step 1: Log in to your HealthCare.gov account.",
+                "Step 2: Choose the application you want to update.",
+                "Step 3: Click \"Report a Life Change\" on the left-hand menu.",
+                "Step 4: Read through the list of changes, and click \"Report a Life Change\" to get started.",
+                "Step 5: Select the kind of change you want to report.",
+                "Step 6: Navigate through your application and report any changes to your income, household members, or address; new health coverage offers; and other information.",
+                "Step 7: After you\u2019re done, you\u2019ll get new eligibility results explaining your options to change plans."
+            ]
+        },
+        "website": "Health.gov",
+        "website_url": "https://www.healthcare.gov",
+        "ground_truth_help": "https://www.healthcare.gov/reporting-changes/how-to-report-changes/"
+    },
+    {
+        "task_id": "59r2xtt5hf2xgjrtb1o10uycnp228cow",
+        "task": "How to upgrade or adjust auto insurance coverage limits",
+        "content": {
+            "steps": [
+                "Step 1: Review Your Renewal Notice",
+                "Step 2: Reassess Your Coverage Needs",
+                "Step 3: Update Personal Information",
+                "Step 4: Finalize and Pay for Your Renewal"
+            ]
+        },
+        "website": "GEICO",
+        "website_url": "geico.com",
+        "ground_truth_help": "https://www.geico.com/information/aboutinsurance/auto/car-insurance-renewal/"
+    },
+    {
+        "task_id": "5rkg913c2fsrocqav5l684vvaqm9ry8y",
+        "task": "How do I create a reusable component in Figma?",
+        "content": {
+            "steps": [
+                "Step 1: Select the layers you\u2019d like to be included in the component.",
+                "Step 2: Click Create component next to the selection's name in the right sidebar",
+                "Step 3: Right-click on your selection and choose Create component",
+                "Step 4: Use the keyboard shortcut: Mac: Option Command K or Windows: Ctrl Alt K"
+            ]
+        },
+        "website": "Figma - Create component",
+        "website_url": "https://www.figma.com/",
+        "ground_truth_help": "https://help.figma.com/hc/en-us/articles/360038663154-Create-components-to-reuse-in-designs"
+    },
+    {
+        "task_id": "60jpoj1gl8ghpazx0o37lxxlfpd4pygs",
+        "task": "How to switch or replace vehicles on an existing auto policy",
+        "content": {
+            "steps": [
+                "Step 1: Sign into your account",
+                "Step 2: Visit the Add or Replace Vehicle page",
+                "Step 3: Answer a few questions about your new vehicle (or your potential new vehicle)",
+                "Step 4: Adding One Vehicle or Multiple Vehicles?",
+                "Step 5: Select the Vehicle Type",
+                "Step 6: Enter the VIN",
+                "Step 7: Is the vehicle owned, financed, or leased?",
+                "Step 8: Will the new vehicle replace a vehicle on your policy?",
+                "Step 9: If you\u2019re replacing a vehicle, have the plates been surrendered or transferred?",
+                "Step 10: Primary Use, Primary Driver, Annual Mileage, and Matching Drivers to Vehicles",
+                "Step 11: Review your quote and apply your changes, or save the quote for later"
+            ]
+        },
+        "website": "GEICO",
+        "website_url": "geico.com",
+        "ground_truth_help": "https://www.geico.com/knowledge/how-to-manage-your-auto-policy/"
+    },
+    {
+        "task_id": "6hq565ohtvcwqfou1659brvfwbdln1lw",
+        "task": "How do I add an export configurations? ",
+        "content": {
+            "steps": [
+                "Step 1: Select the layers you want to export. If you want to export the entire canvas of the current page, deselect everything on the canvas.",
+                "Step 2: Click the plus in the Export section to add an export configuration. You can add as many export configurations to a selection as needed.",
+                "Step 3: Configure the export settings. Learn more about\u00a0Figma's export formats and settings \u2192",
+                "Step 4: (Optional) Click Preview to see how your asset will look. If you have multiple objects selected, the Preview setting does not display.",
+                "Step 5: Click Export."
+            ]
+        },
+        "website": "Figma - Export frame PNG",
+        "website_url": "https://www.figma.com/",
+        "ground_truth_help": "https://help.figma.com/hc/en-us/articles/360040028114-Export-from-Figma-Design"
+    },
+    {
+        "task_id": "7zbo7m3c9x0yfyw1nbyhwpil83hj6ns2",
+        "task": "How do I create a Trello board with lists?",
+        "content": {
+            "steps": [
+                "Step 1: Select Create in the header",
+                "Step 2: Select Create Board",
+                "Step 3: Enter a title for your board",
+                "Step 4: Select the Workspace you want to create the board in",
+                "Step 5: Select Add another list to add a new list to the right side of your board.",
+                "Step 6: To add a list between two other lists, double-click between them."
+            ]
+        },
+        "website": "Trello - Create board basics",
+        "website_url": "https://trello.com/",
+        "ground_truth_help": "https://support.atlassian.com/trello/docs/creating-a-new-board/"
+    },
+    {
+        "task_id": "8vongvodwgzk40jxvf6efioliqihzrak",
+        "task": "How do I set up a Trello rule that moves a card when it\u2019s marked done?",
+        "content": {
+            "steps": [
+                "Step 1: Open a board and select the Automation menu from the board header",
+                "Step 2: Select Suggestions",
+                "Step 3: Select Add, and customize the automation or select Save to add it to your board immediately"
+            ]
+        },
+        "website": "Trello - Automation rule move card",
+        "website_url": "https://trello.com/",
+        "ground_truth_help": "https://support.atlassian.com/trello/docs/automation-overview/"
+    },
+    {
+        "task_id": "9pw0yoen30vdwbl9zcb94glh762wlc47",
+        "task": "How do I create a new design using a template in Canva and replace its text and images?",
+        "content": {
+            "steps": [
+                "Step 1: On the homepage, use the search bar to look for the design type you want.",
+                "Step 2: Select Canva Templates.",
+                "Step 3: Select it from the results.",
+                "Step 4: Scroll through the available templates.",
+                "Step 5: To preview one, move your pointer over it and select the (more icon) that appears. Select Preview this template.",
+                "Step 6: Select Customize this template. You\u2019ll then be taken to the editor."
+            ]
+        },
+        "website": "Canva - Template edit",
+        "website_url": "https://www.canva.com/",
+        "ground_truth_help": "https://www.canva.com/help/use-templates/"
+    }
+]

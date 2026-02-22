@@ -484,9 +484,23 @@ function addGuideStep(result) {
       sendToContentScript({ action: 'scrollToHighlight' });
     });
   }
-  
+
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+
+  // On step 1, show the matched tutorial reference in a collapsible Details section
+  if (result.tutorialMatch) {
+    const { task, website, steps, reason } = result.tutorialMatch;
+    const lines = [
+      `📚 Tutorial: ${website}`,
+      `🔍 Matched: "${task}"`,
+      `💡 Reason: ${reason}`,
+      ``,
+      `📋 Reference steps:`,
+      ...steps.map(s => `  ${s}`)
+    ];
+    addCollapsibleDebug(lines);
+  }
 }
 
 /**
