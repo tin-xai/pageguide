@@ -91,7 +91,7 @@ async function handleMessage(request) {
         return { success: true };
       }
       return { success: true }; // Silently succeed even if function not loaded
-    
+
     default:
       return { error: 'Unknown action' };
   }
