@@ -631,22 +631,22 @@ async function handlePasteImage(event) {
           
           // Send image to content script
           try {
-            await sendToContentScript({ 
-              action: 'setUploadedImage', 
-              imageBase64: uploadedImageBase64 
+            await sendToContentScript({
+              action: 'setUploadedImage',
+              imageBase64: uploadedImageBase64
             });
             console.log('🖼️ Pasted image sent to content script');
           } catch (err) {
             console.warn('🖼️ Could not send pasted image to content script:', err);
           }
-          
+
           // Update placeholder to hint about asking
           const input = document.getElementById('xwebagent-input');
           if (input) {
             input.placeholder = 'Ask about the pasted image...';
             input.focus();
           }
-          
+
           addMessage('📋 Image pasted! Ask me to find it on the page.', 'system');
         };
         
@@ -703,21 +703,21 @@ async function handleImageUpload(event) {
       
       // Send image to content script
       try {
-        await sendToContentScript({ 
-          action: 'setUploadedImage', 
-          imageBase64: uploadedImageBase64 
+        await sendToContentScript({
+          action: 'setUploadedImage',
+          imageBase64: uploadedImageBase64
         });
         console.log('🖼️ Image sent to content script');
       } catch (err) {
         console.warn('🖼️ Could not send image to content script:', err);
       }
-      
+
       // Update placeholder to hint about asking
       const input = document.getElementById('xwebagent-input');
       if (input) {
         input.placeholder = 'Ask about the uploaded image...';
       }
-      
+
       addMessage('📷 Image uploaded! Ask me to find it on the page.', 'system');
     };
     
@@ -732,14 +732,21 @@ async function handleImageUpload(event) {
  */
 async function clearUploadedImage() {
   uploadedImageBase64 = null;
-  
-  // Hide preview
+
+  // Hide preview and clear region overlays
   const preview = document.getElementById('xwebagent-image-preview');
+  const wrapper = document.getElementById('xwebagent-image-wrapper');
   const uploadLabel = document.getElementById('xwebagent-upload-label');
   const input = document.getElementById('xwebagent-input');
   const fileInput = document.getElementById('xwebagent-image-upload');
-  
+  const label = document.getElementById('xwebagent-image-label');
+
   if (preview) preview.style.display = 'none';
+  if (wrapper) {
+    wrapper.classList.remove('has-regions');
+    wrapper.querySelectorAll('.xwebagent-image-region').forEach(el => el.remove());
+  }
+  if (label) label.textContent = '📷 Image ready — ask about it!';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
@@ -752,6 +759,52 @@ async function clearUploadedImage() {
   }
   
   addMessage('🗑️ Image removed', 'system');
+}
+
+/**
+ * Render clickable region overlays on the image preview wrapper.
+ * Called after a successful image_ask response that includes imageRegions.
+ * Each region is grounded to the LLM's answer: clicking scrolls to the
+ * already-highlighted page element (no new LLM call).
+ * @param {Array} regions - [{label, citationIndex, bbox:{x,y,w,h}}]
+ */
+function renderImageRegions(regions) {
+  const wrapper = document.getElementById('xwebagent-image-wrapper');
+  const label = document.getElementById('xwebagent-image-label');
+  if (!wrapper) return;
+
+  // Remove any existing regions
+  wrapper.querySelectorAll('.xwebagent-image-region').forEach(el => el.remove());
+  wrapper.classList.add('has-regions');
+
+  regions.forEach(item => {
+    const { bbox, citationIndex, label: itemLabel } = item;
+    if (!bbox) return;
+
+    const region = document.createElement('div');
+    region.className = 'xwebagent-image-region';
+    region.style.left   = `${bbox.x}%`;
+    region.style.top    = `${bbox.y}%`;
+    region.style.width  = `${bbox.w}%`;
+    region.style.height = `${bbox.h}%`;
+
+    const tooltip = document.createElement('span');
+    tooltip.className = 'xwebagent-region-label';
+    tooltip.textContent = itemLabel || '';
+    region.appendChild(tooltip);
+
+    region.addEventListener('click', async () => {
+      try {
+        await sendToContentScript({ action: 'scrollToIndex', index: citationIndex });
+      } catch (e) {
+        console.warn('🖼️ scrollToIndex failed:', e);
+      }
+    });
+
+    wrapper.appendChild(region);
+  });
+
+  if (label) label.textContent = `🎯 ${regions.length} found — click to jump`;
 }
 
 /**
@@ -852,6 +905,10 @@ async function sendMessage() {
           result.imageAskActions.forEach(action => {
             debugLines.push(`  • ${action}`);
           });
+        }
+        // Render clickable regions on the uploaded image grounded to the answer
+        if (result.imageRegions?.length > 0) {
+          renderImageRegions(result.imageRegions);
         }
       }
       

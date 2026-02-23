@@ -176,11 +176,11 @@ async function handleImageAsk(query) {
     if (parsed.found && parsed.answer) {
       console.log('🖼️ Found matching content at step', step);
       lastAnswer = parsed.answer;
-      
+
       // Apply highlights from citations
       const highlightCount = applyHighlightsFromCitations(parsed.answer);
       cleanupSom();
-      
+
       return {
         success: true,
         answer: parsed.answer,
@@ -188,7 +188,8 @@ async function handleImageAsk(query) {
         imageAskSteps: step,
         imageAskActions: previousActions,
         highlightCount: highlightCount,
-        hasHighlights: highlightCount > 0
+        hasHighlights: highlightCount > 0,
+        imageRegions: Array.isArray(parsed.imageRegions) ? parsed.imageRegions : []
       };
     }
     

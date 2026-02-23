@@ -354,8 +354,18 @@ RESPONSE FORMAT (JSON only):
   "action": "none" | "scroll_down" | "scroll_up" | "not_found",
   "reason": "Why you chose this action",
   "matchConfidence": 0.0-1.0,
-  "matchDescription": "What you found that matches (if found)"
+  "matchDescription": "What you found that matches (if found)",
+  "imageRegions": [
+    { "bbox": {"x":0-100,"y":0-100,"w":0-100,"h":0-100}, "citationIndex": N, "label": "short name" }
+  ]
 }
+
+imageRegions (only when found=true): For EACH [N:"text"] citation in your answer, identify which specific VISUAL PART of the UPLOADED IMAGE that cited property belongs to, and draw a bbox around it.
+- "vibrant blue head [1:"..."]"  → bbox tightly around the HEAD in the uploaded image, citationIndex: 1
+- "green back [2:"..."]"         → bbox tightly around the BACK in the uploaded image, citationIndex: 2
+- "red underparts [3:"..."]"     → bbox tightly around the BELLY in the uploaded image, citationIndex: 3
+- "standing on a branch [4:"..."]" → bbox around the FEET/BRANCH area, citationIndex: 4
+bbox values are percentages (0-100) of the UPLOADED image dimensions, top-left origin. Be precise — small tight boxes, not the whole image. Include one entry per citation where a distinct visual region can be identified.
 
 ACTIONS:
 - "none": You found a match (found must be true)
@@ -370,10 +380,10 @@ CITATION FORMAT:
 
 EXAMPLES:
 
-Uploaded: Pink chair image
-Question: "Where can I buy this chair?"
-Viewport shows: Pink accent chair product
-→ {"found": true, "answer": "I found the pink chair! It's the [23:\\"Pink Velvet Accent Chair\\"] available for $299. Click to view details.", "action": "none", "reason": "Found matching product", "matchConfidence": 0.9, "matchDescription": "Pink velvet accent chair matches uploaded image"}
+Uploaded: Bird image (blue head, green back, red belly)
+Question: "Describe this bird"
+Viewport shows: Article about Painted Bunting with sections on plumage, habitat
+→ {"found": true, "answer": "This is a Painted Bunting. It has a [12:\\"vibrant blue head\\"], a [15:\\"bright green back\\"], and [18:\\"red underparts\\"].", "action": "none", "reason": "Found matching species description", "matchConfidence": 0.95, "matchDescription": "Painted Bunting plumage description", "imageRegions": [{"bbox": {"x":35,"y":0,"w":30,"h":28}, "citationIndex": 12, "label": "Blue head"}, {"bbox": {"x":20,"y":25,"w":55,"h":35}, "citationIndex": 15, "label": "Green back"}, {"bbox": {"x":25,"y":55,"w":45,"h":35}, "citationIndex": 18, "label": "Red belly"}]}
 
 Uploaded: Laptop image
 Question: "Is this laptop on sale here?"

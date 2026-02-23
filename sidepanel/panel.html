@@ -33,9 +33,14 @@
       
       <!-- Image Preview Area (hidden by default) -->
       <div class="xwebagent-image-preview" id="xwebagent-image-preview" style="display: none;">
-        <img id="xwebagent-preview-img" src="" alt="Uploaded image">
-        <button class="xwebagent-remove-image" id="xwebagent-remove-image" title="Remove image">✕</button>
-        <span class="xwebagent-image-label">📷 Image ready - ask about it!</span>
+        <div class="xwebagent-image-wrapper" id="xwebagent-image-wrapper">
+          <img id="xwebagent-preview-img" src="" alt="Uploaded image">
+          <!-- clickable region overlays injected here by JS -->
+        </div>
+        <div class="xwebagent-image-preview-footer">
+          <span class="xwebagent-image-label" id="xwebagent-image-label">📷 Image ready - ask about it!</span>
+          <button class="xwebagent-remove-image" id="xwebagent-remove-image" title="Remove image">✕</button>
+        </div>
       </div>
       
       <div class="xwebagent-input-row">
