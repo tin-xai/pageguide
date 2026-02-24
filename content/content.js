@@ -46,8 +46,8 @@ async function handleMessage(request) {
         window._xwebagentGuidance.waitingForAction = null;
       }
       // Reset guidev2 state
-      if (typeof gv2ClearState === 'function') gv2ClearState();
-      if (window._guidev2) window._guidev2.active = false;
+      if (typeof gv2StopGuide === 'function') gv2StopGuide();
+      else if (window._guidev2) window._guidev2.active = false;
       // Stop auto-hide session
       if (typeof stopAutoHide === 'function') stopAutoHide();
       // Clear uploaded image
@@ -72,6 +72,11 @@ async function handleMessage(request) {
       }
       return { success: false, error: 'PDF navigation not available' };
     
+    case 'stopGuide':
+      if (typeof gv2StopGuide === 'function') gv2StopGuide();
+      else if (window._guidev2) window._guidev2.active = false;
+      return { success: true };
+
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {
         return await continueGuidance();

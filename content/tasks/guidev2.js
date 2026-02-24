@@ -160,6 +160,9 @@ let _guidev2Resuming = false;
 // Flag set when a click step is awaiting user action
 let _guidev2WaitingForClick = false;
 
+// Flag set when the user explicitly stops the guide
+let _guidev2Stopped = false;
+
 // ===== SESSION-STORAGE FALLBACK (for when SW was killed) =====
 
 async function gv2SaveFallback(extra = {}) {
@@ -374,6 +377,7 @@ function _gv2ClearState() {
  * Start guidance for a new question (called by the router override at bottom of file).
  */
 async function _handleStepByStepGuideV2(question) {
+  _guidev2Stopped = false;
   // Look up a pre-verified tutorial ONCE at the start. Result is cached in
   // window._guidev2.tutorialRef so intermediate steps reuse it for free.
   const match = await _gv2FindTutorial(question, window.location.href);
@@ -397,7 +401,7 @@ async function _handleStepByStepGuideV2(question) {
  */
 async function gv2GenerateNextStep() {
   const g = window._guidev2;
-  if (!g.active) return null;
+  if (!g.active || _guidev2Stopped) return null;
 
   // Retry loop in case DOM is sparse (page still rendering)
   let pageIndex;
@@ -448,6 +452,8 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
 Provide the next step as JSON.`
       }]
     });
+
+    if (_guidev2Stopped) return null;
 
     if (response?.error) {
       console.warn('[guidev2] LLM error:', response.error);
@@ -730,6 +736,20 @@ async function _gv2AutoType(step) {
     _guidev2Resuming = false;
   }
 }
+
+// ===== STOP GUIDE =====
+
+/**
+ * Called when the user presses the Stop button or resets the chat.
+ * Aborts any in-progress generation and clears all guidance state.
+ */
+window.gv2StopGuide = function () {
+  _guidev2Stopped = true;
+  _guidev2Resuming = false;
+  _guidev2WaitingForClick = false;
+  _gv2RemoveClickListeners();
+  _gv2ClearState();
+};
 
 // ===== ROUTER INTEGRATION =====
 // guidev2.js is injected after guide.js, so this assignment overrides guide.js.
