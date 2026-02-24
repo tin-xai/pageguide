@@ -6,6 +6,7 @@ let conversationHistory = []; // Stores {role: 'user'|'assistant', content: stri
 let currentTabId = null;
 let uploadedImageBase64 = null; // Stores the uploaded image
 let hasImageInConversation = false; // Track if image was used in conversation
+let guideActive = false; // True while guide is generating steps (shows stop button)
 
 // Open a persistent port to the service worker.
 // When the panel is closed (by any means — X button, keyboard shortcut, etc.)
@@ -461,7 +462,8 @@ function addCollapsibleDebug(lines) {
 function addGuideStep(result) {
   const container = document.getElementById('xwebagent-messages');
   if (!container) return;
-  
+
+  guideActive = !result.isLastStep;
   hideTyping();
   
   const msg = document.createElement('div');
@@ -477,7 +479,19 @@ function addGuideStep(result) {
     ${result.nextStepHint && !result.isLastStep ? `<div class="xwebagent-next-hint">💡 ${result.nextStepHint}</div>` : ''}
     ${!result.isLastStep ? `<div class="xwebagent-guide-waiting">👆 Complete this step, then I'll show you the next one</div>` : ''}
   `;
-  
+
+  if (!result.isLastStep) {
+    const stopHereBtn = document.createElement('button');
+    stopHereBtn.className = 'xwebagent-step-stop-btn';
+    stopHereBtn.textContent = '⏹ Stop here';
+    stopHereBtn.title = 'Stop the guide at this step';
+    stopHereBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); // don't trigger scroll-to-highlight
+      stopGuide(`✅ Stopped after step ${result.step}. Ask me again whenever you need more help.`);
+    });
+    msg.appendChild(stopHereBtn);
+  }
+
   if (result.hasHighlights) {
     msg.classList.add('xwebagent-clickable');
     msg.addEventListener('click', () => {
@@ -541,17 +555,41 @@ function addAskStep(result) {
 }
 
 /**
- * Show typing indicator
+ * Show typing indicator. In guide mode, appends a Stop button.
  */
 function showTyping() {
   const container = document.getElementById('xwebagent-messages');
   if (!container || container.querySelector('.xwebagent-typing')) return;
-  
+
   const typing = document.createElement('div');
   typing.className = 'xwebagent-typing';
   typing.innerHTML = '<span></span><span></span><span></span>';
+
+  if (guideActive) {
+    const stopBtn = document.createElement('button');
+    stopBtn.className = 'xwebagent-guide-stop-btn';
+    stopBtn.textContent = '⏹ Stop';
+    stopBtn.addEventListener('click', stopGuide);
+    typing.appendChild(stopBtn);
+  }
+
   container.appendChild(typing);
   container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * Stop an in-progress guide session.
+ * @param {string} [message] - Optional message shown in chat; defaults to generic stop notice.
+ */
+async function stopGuide(message = '⏹ Guide stopped.') {
+  guideActive = false;
+  hideTyping();
+  try {
+    await sendToContentScript({ action: 'stopGuide' });
+  } catch (e) { /* content script may not be reachable */ }
+  // Also clear SW state directly so the next page load won't resume
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+  addMessage(message, 'system');
 }
 
 /**
@@ -1078,6 +1116,11 @@ ${pdfTextContent}`;
  * @param {boolean} showMessage - Whether to show a confirmation message in the chat.
  */
 async function resetChat(showMessage = true) {
+  guideActive = false;
+
+  // Clear guide state in SW directly (doesn't depend on content script being available)
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+
   // Clear highlights on the active page
   try {
     await sendToContentScript({ action: 'reset' });

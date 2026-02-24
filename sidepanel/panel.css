@@ -526,6 +526,43 @@ body {
   }
 }
 
+/* Stop-here button on each guide step card */
+.xwebagent-step-stop-btn {
+  display: block;
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  color: rgba(255, 107, 107, 0.7);
+  border-radius: 8px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.xwebagent-step-stop-btn:hover {
+  background: rgba(255, 80, 80, 0.12);
+  border-color: rgba(255, 80, 80, 0.55);
+  color: #ff6b6b;
+}
+
+/* Guide Stop Button (inside typing indicator) */
+.xwebagent-guide-stop-btn {
+  background: rgba(255, 80, 80, 0.15);
+  border: 1px solid rgba(255, 80, 80, 0.45);
+  color: #ff6b6b;
+  border-radius: 8px;
+  padding: 2px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.xwebagent-guide-stop-btn:hover {
+  background: rgba(255, 80, 80, 0.3);
+}
+
 /* Chat Input Area */
 .xwebagent-chat-input-area {
   padding: 16px;
