@@ -59,6 +59,40 @@ settings there, then click the Print or Save button to finish."`;
 const _GV2_KEY = 'xwebagentGuidanceV2';
 const _GV2_MAX_AGE = 10 * 60 * 1000; // 10 minutes
 
+// ===== PAGE INDICATOR =====
+
+const _GV2_INDICATOR_ID = 'xwebagent-gv2-indicator';
+let _gv2IndicatorInjected = false;
+
+function _gv2ShowIndicator(text = 'Agent thinking…') {
+  if (!_gv2IndicatorInjected) {
+    _gv2IndicatorInjected = true;
+    const style = document.createElement('style');
+    style.id = 'xwebagent-gv2-indicator-css';
+    style.textContent = `
+#xwebagent-gv2-indicator{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);z-index:2147483647;display:flex;align-items:center;gap:10px;padding:10px 18px;border-radius:999px;background:rgba(20,20,30,.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);box-shadow:0 4px 24px rgba(0,0,0,.45);color:#e8e8f0;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none;opacity:0;transition:opacity .22s ease,transform .22s ease}
+#xwebagent-gv2-indicator.gv2-visible{opacity:1;transform:translateX(-50%) translateY(0)}
+#xwebagent-gv2-indicator .gv2-spinner{width:14px;height:14px;border:2px solid rgba(160,120,255,.35);border-top-color:#a078ff;border-radius:50%;animation:gv2spin .75s linear infinite;flex-shrink:0}
+@keyframes gv2spin{to{transform:rotate(360deg)}}`;
+    document.head.appendChild(style);
+  }
+  let el = document.getElementById(_GV2_INDICATOR_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = _GV2_INDICATOR_ID;
+    el.innerHTML = '<div class="gv2-spinner"></div><span class="gv2-label"></span>';
+    document.body.appendChild(el);
+  }
+  el.querySelector('.gv2-label').textContent = text;
+  el.getBoundingClientRect(); // force reflow so transition plays
+  el.classList.add('gv2-visible');
+}
+
+function _gv2HideIndicator() {
+  const el = document.getElementById(_GV2_INDICATOR_ID);
+  if (el) el.classList.remove('gv2-visible');
+}
+
 // ===== TUTORIAL REFERENCE LOOKUP =====
 // Strategy:
 //   1. Filter candidates by URL hostname match (primary).
@@ -371,6 +405,7 @@ async function _gv2SetState(pendingResume) {
 
 function _gv2ClearState() {
   window._guidev2.active = false;
+  _gv2HideIndicator();
 
   // Clear from SW
   try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
@@ -410,6 +445,8 @@ async function _handleStepByStepGuideV2(question) {
 async function gv2GenerateNextStep() {
   const g = window._guidev2;
   if (!g.active || _guidev2Stopped) return null;
+
+  _gv2ShowIndicator('Agent thinking…');
 
   // Retry loop in case DOM is sparse (page still rendering)
   // interactiveOnly=true: guide only needs clickable/typeable elements, not headings,
@@ -468,6 +505,7 @@ Provide the next step as JSON.`
 
     if (response?.error) {
       console.warn('[guidev2] LLM error:', response.error);
+      _gv2HideIndicator();
       return { success: false, error: response.error };
     }
     if (response?.content) {
@@ -483,10 +521,12 @@ Provide the next step as JSON.`
       }
       return result;
     }
+    _gv2HideIndicator();
     return { success: false, error: 'No response from AI' };
 
   } catch (e) {
     console.error('[guidev2] Generation error:', e);
+    _gv2HideIndicator();
     return { success: false, error: e.message };
   }
 }
@@ -625,6 +665,7 @@ async function gv2ProcessResponse(content) {
       await _gv2SetState(false);
     }
 
+    _gv2HideIndicator();
     return {
       success: true,
       answer: step.instruction,
@@ -639,6 +680,7 @@ async function gv2ProcessResponse(content) {
 
   } catch (e) {
     console.error('[guidev2] Parse error:', e);
+    _gv2HideIndicator();
     _gv2ClearState();
     if (typeof cleanupSom === 'function') cleanupSom();
     return { success: true, answer: content, isGuide: false };
@@ -974,6 +1016,7 @@ window.gv2StopGuide = function () {
   _guidev2Resuming = false;
   _guidev2WaitingForClick = false;
   _gv2RemoveClickListeners();
+  _gv2HideIndicator();
   _gv2ClearState();
 };
 
