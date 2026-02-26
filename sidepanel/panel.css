@@ -526,10 +526,38 @@ body {
   }
 }
 
+/* Button row: holds Next + Stop Here side by side */
+.xwebagent-step-btn-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+/* Next button on each guide step card */
+.xwebagent-step-next-btn {
+  background: rgba(46, 213, 115, 0.12);
+  border: 1px solid rgba(46, 213, 115, 0.4);
+  color: #2ed573;
+  border-radius: 8px;
+  padding: 3px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.xwebagent-step-next-btn:hover {
+  background: rgba(46, 213, 115, 0.22);
+  border-color: rgba(46, 213, 115, 0.7);
+}
+
+.xwebagent-step-next-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* Stop-here button on each guide step card */
 .xwebagent-step-stop-btn {
-  display: block;
-  margin-top: 8px;
   background: transparent;
   border: 1px solid rgba(255, 80, 80, 0.3);
   color: rgba(255, 107, 107, 0.7);
@@ -544,6 +572,11 @@ body {
   background: rgba(255, 80, 80, 0.12);
   border-color: rgba(255, 80, 80, 0.55);
   color: #ff6b6b;
+}
+
+.xwebagent-step-stop-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Guide Stop Button (inside typing indicator) */

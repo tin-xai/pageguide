@@ -77,6 +77,13 @@ async function handleMessage(request) {
       else if (window._guidev2) window._guidev2.active = false;
       return { success: true };
 
+    case 'nextGuideStep':
+      if (typeof gv2NextStep === 'function') {
+        gv2NextStep();
+        return { success: true };
+      }
+      return { success: false, error: 'Guide not active' };
+
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {
         return await continueGuidance();
