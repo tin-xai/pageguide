@@ -872,7 +872,7 @@ function renderImageRegions(regions) {
     wrapper.appendChild(region);
   });
 
-  if (label) label.textContent = `🎯 ${regions.length} found — click to jump`;
+  if (label) label.textContent = `🎯 ${regions.length} highlight${regions.length !== 1 ? 's' : ''} found — click to jump`;
 }
 
 // ---------------------------------------------------------------------------
