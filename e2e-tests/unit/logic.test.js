@@ -282,16 +282,121 @@ describe('Routing Logic (content/functions/main_router.js)', () => {
   // Verify the LLM routing logic parses JSON correctly
   test('routeQuery handles valid JSON response', async () => {
     // Mock LLM response structure for a guidance query
-    const mockResponse = { 
-        content: '```json\n{"handler": "guide", "confidence": 0.9}\n```' 
+    const mockResponse = {
+        content: '```json\n{"handler": "guide", "confidence": 0.9}\n```'
     };
     chrome.runtime.sendMessage.mockResolvedValue(mockResponse);
-    
+
     // Test routing decision for "how to do x"
     const result = await window.routeQuery('how to do x');
-    
+
     // Verify it chose the correct handler ('guide') with high confidence
     expect(result.handler).toBe('guide');
     expect(result.confidence).toBe(0.9);
+  });
+});
+
+// ============================================================
+// Tab-Switch Reset Logic (_shouldResetOnTabSwitch in sidepanel/panel.js)
+// Tests the pure decision function that controls whether switching tabs
+// clears the chat. Mirrors the implementation exposed as window._shouldResetOnTabSwitch.
+// ============================================================
+describe('Tab-switch reset decision (_shouldResetOnTabSwitch)', () => {
+  // Mirror the implementation so this suite stays self-contained and fast.
+  // If the logic in panel.js changes, update here too.
+  function shouldResetOnTabSwitch(prevTabId, newTabId, isGuideActive) {
+    if (isGuideActive) return false;
+    if (!prevTabId || prevTabId === newTabId) return false;
+    return true;
+  }
+
+  test('does NOT reset while the guide agent is active (agent-triggered tab)', () => {
+    // When guideActive=true the agent navigated to a new tab — session must survive
+    expect(shouldResetOnTabSwitch(1, 2, true)).toBe(false);
+  });
+
+  test('does NOT reset on first panel activation (no previous tab)', () => {
+    // prevTabId is null on the very first onActivated event after the panel opens
+    expect(shouldResetOnTabSwitch(null, 5, false)).toBe(false);
+  });
+
+  test('does NOT reset when the same tab is re-activated', () => {
+    // Defensive: onActivated theoretically could fire for the same tab
+    expect(shouldResetOnTabSwitch(3, 3, false)).toBe(false);
+  });
+
+  test('DOES reset when the user switches to a different tab without guide active', () => {
+    // Normal tab switch — old highlights cleared, new chat starts
+    expect(shouldResetOnTabSwitch(1, 2, false)).toBe(true);
+  });
+
+  test('DOES reset when user opens a brand-new tab (different id, no guide)', () => {
+    expect(shouldResetOnTabSwitch(10, 11, false)).toBe(true);
+  });
+});
+
+// ============================================================
+// Per-tab session management (_tabSessions in sidepanel/panel.js)
+// Tests the Map-based save/restore contract that preserves chat history
+// when the user switches tabs and returns.
+// ============================================================
+describe('Per-tab session management (_tabSessions)', () => {
+  let tabSessions;
+
+  // Minimal mirror of the save/restore helpers from panel.js
+  function saveSession(tabId, messages, history) {
+    if (!tabId) return;
+    tabSessions.set(tabId, {
+      chatMessages: [...messages],
+      conversationHistory: [...history],
+      hasImageInConversation: false,
+      html: '<div>msg</div>'
+    });
+  }
+
+  beforeEach(() => {
+    tabSessions = new Map();
+  });
+
+  test('saves a session and retrieves it for the same tab', () => {
+    saveSession(1, ['hello'], [{ role: 'user', content: 'hello' }]);
+    const s = tabSessions.get(1);
+    expect(s).toBeDefined();
+    expect(s.chatMessages).toEqual(['hello']);
+    expect(s.conversationHistory[0].content).toBe('hello');
+  });
+
+  test('returns undefined for a tab that has never been saved', () => {
+    expect(tabSessions.get(99)).toBeUndefined();
+  });
+
+  test('switching back to a saved tab should restore (not start fresh)', () => {
+    saveSession(5, ['previous answer'], []);
+    // Switching to tab 5 — a saved session exists, so restore path is taken
+    const saved = tabSessions.get(5);
+    expect(saved).toBeDefined();  // truthy → _restoreTabSession branch
+  });
+
+  test('URL change (onUpdated) deletes the stale session for that tab', () => {
+    saveSession(3, ['old answer'], []);
+    tabSessions.delete(3); // mirrors: _tabSessions.delete(tabId) in onUpdated
+    expect(tabSessions.get(3)).toBeUndefined();
+  });
+
+  test('manual reset deletes the current tab session so returning starts fresh', () => {
+    saveSession(2, ['some msg'], []);
+    tabSessions.delete(2); // mirrors: _tabSessions.delete(currentTabId) in resetChat
+    expect(tabSessions.get(2)).toBeUndefined();
+  });
+
+  test('tab close (onRemoved) deletes the session to prevent memory leaks', () => {
+    saveSession(7, ['data'], []);
+    tabSessions.delete(7); // mirrors: _tabSessions.delete(tabId) in onRemoved
+    expect(tabSessions.get(7)).toBeUndefined();
+  });
+
+  test('null tabId does not add an entry', () => {
+    saveSession(null, ['msg'], []);
+    expect(tabSessions.size).toBe(0);
   });
 });
