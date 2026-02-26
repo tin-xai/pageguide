@@ -591,7 +591,7 @@ function showTyping() {
     const stopBtn = document.createElement('button');
     stopBtn.className = 'xwebagent-guide-stop-btn';
     stopBtn.textContent = '⏹ Stop';
-    stopBtn.addEventListener('click', stopGuide);
+    stopBtn.addEventListener('click', (e) => { e.stopPropagation(); stopGuide(); });
     typing.appendChild(stopBtn);
   }
 
@@ -1137,7 +1137,11 @@ ${pdfTextContent}`;
  * Reset all chat state and clear page highlights.
  * @param {boolean} showMessage - Whether to show a confirmation message in the chat.
  */
+let _resettingChat = false;
+
 async function resetChat(showMessage = true) {
+  if (_resettingChat) return;
+  _resettingChat = true;
   guideActive = false;
 
   // Clear guide state in SW directly (doesn't depend on content script being available)
@@ -1192,6 +1196,8 @@ async function resetChat(showMessage = true) {
 
   // Always show the current model status after clearing
   showModelStatus();
+
+  _resettingChat = false;
 }
 
 /**

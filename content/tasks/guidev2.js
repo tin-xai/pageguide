@@ -44,7 +44,15 @@ RULES:
 COMMON PATTERNS:
 - Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
 - Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
-- Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option`;
+- Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
+
+NATIVE BROWSER DIALOGS (print, save, open file, etc.):
+When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that
+step MUST be the last step (isLastStep=true, action="done"). Explain what the user will see in
+the dialog and what they should do, but do NOT attempt to guide actions inside the dialog — the
+extension cannot access native browser UI. Example last-step instruction:
+"Click 'Print' in the File menu. Your browser's print dialog will open — choose your printer and
+settings there, then click the Print or Save button to finish."`;
 
 // ===== CONSTANTS =====
 
@@ -666,6 +674,10 @@ function _gv2SetupClickListener() {
 
     try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e2) {}
 
+    // Arm SW watch-for-new-tab window before the click propagates.
+    // Fire-and-forget — no await so the click event isn't blocked.
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_preClick' }); } catch (e2) {}
+
     const startUrl = window.location.href;
     await _gv2WaitForNavOrSettle(startUrl);
   };
@@ -710,13 +722,15 @@ async function _gv2WaitForNavOrSettle(startUrl) {
 
     // SPA navigation: URL changed but page is still alive.
     if (window.location.href !== startUrl) {
-      // Pause briefly — some browsers update the URL right before firing pagehide
-      // (a full-page nav that pushes a history entry before unloading).
-      // Waiting 400 ms lets pagehide arrive so we can bail out correctly.
-      await new Promise(r => setTimeout(r, 400));
-      if (_guidev2PageHiding) {
-        console.log('[guidev2] Full-page nav after URL change — new page will resume via SW');
-        return;
+      // Poll for up to 800 ms for pagehide — some sites (e.g. Amazon) push a new
+      // history entry via JS *before* the full page unload.  400 ms was too short
+      // for those cases; 800 ms with early exit keeps SPA detection responsive.
+      for (let j = 0; j < 8; j++) {
+        await new Promise(r => setTimeout(r, 100));
+        if (_guidev2PageHiding) {
+          console.log('[guidev2] Full-page nav after URL change — new page will resume via SW');
+          return;
+        }
       }
       console.log('[guidev2] SPA navigation confirmed');
       if (_guidev2Resuming) return;
@@ -745,6 +759,19 @@ async function _gv2WaitForNavOrSettle(startUrl) {
   // One last guard: if pagehide fired during the polling loop it means a very
   // slow full-page navigation is in progress — let the new page handle it.
   if (_guidev2PageHiding) return;
+
+  // Check if the click opened a new tab (target="_blank" / window.open).
+  // In that case the SW has transferred guidance ownership to the new tab,
+  // so this tab should stop — the new tab will resume on its own.
+  try {
+    const ownerCheck = await safeSendMessage({ action: 'guidanceV2_isOwner' });
+    if (ownerCheck && ownerCheck.isOwner === false) {
+      console.log('[guidev2] Guidance transferred to new tab — stopping on this page');
+      try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+      return;
+    }
+  } catch (e) { /* SW unavailable — proceed with same-page behaviour */ }
+
   console.log('[guidev2] No navigation — continuing on same page');
   if (_guidev2Resuming) return;
   _guidev2Resuming = true;
@@ -823,6 +850,44 @@ async function _gv2AutoType(step) {
   }
 }
 
+// ===== CLICK SIMULATION =====
+
+/**
+ * Dispatch the full synthetic pointer+mouse event sequence on an element.
+ *
+ * el.click() only fires the 'click' event.  Many SPA frameworks — including
+ * Google Docs and Google Sheets — open menus by listening for 'mousedown'
+ * (which el.click() skips).  Dispatching the complete sequence
+ * pointerdown → mousedown → pointerup → mouseup → click ensures those
+ * frameworks respond identically to a real user click.
+ *
+ * A synthetic 'click' MouseEvent still triggers the browser default action
+ * (e.g. following <a href> links) per spec, so navigation works too.
+ */
+function _gv2DispatchClick(el) {
+  const rect = el.getBoundingClientRect();
+  const cx = Math.round(rect.left + rect.width / 2);
+  const cy = Math.round(rect.top + rect.height / 2);
+  const shared = {
+    bubbles: true, cancelable: true, view: window,
+    clientX: cx, clientY: cy,
+    screenX: cx + (window.screenX || 0),
+    screenY: cy + (window.screenY || 0),
+  };
+
+  try { el.focus({ preventScroll: true }); } catch (e) {}
+
+  el.dispatchEvent(new PointerEvent('pointerover',  { ...shared, pointerType: 'mouse', isPrimary: true, button: -1, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('mouseover',     { ...shared, button: -1, buttons: 0 }));
+  el.dispatchEvent(new PointerEvent('pointermove',  { ...shared, pointerType: 'mouse', isPrimary: true, button: -1, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('mousemove',     { ...shared, button: -1, buttons: 0 }));
+  el.dispatchEvent(new PointerEvent('pointerdown',  { ...shared, pointerType: 'mouse', isPrimary: true, button: 0,  buttons: 1 }));
+  el.dispatchEvent(new MouseEvent ('mousedown',     { ...shared, button: 0,  buttons: 1 }));
+  el.dispatchEvent(new PointerEvent('pointerup',    { ...shared, pointerType: 'mouse', isPrimary: true, button: 0,  buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('mouseup',       { ...shared, button: 0,  buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('click',         { ...shared, button: 0,  buttons: 0 }));
+}
+
 // ===== NEXT STEP (panel "Next" button) =====
 
 /**
@@ -887,7 +952,7 @@ window.gv2NextStep = async function () {
   }
 
   if (toClick) {
-    try { toClick.click(); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
+    try { _gv2DispatchClick(toClick); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
   } else {
     console.warn('[guidev2] No clickable element found — continuing without click');
   }

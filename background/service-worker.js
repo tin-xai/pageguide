@@ -81,6 +81,7 @@ let sidePanelOpen = false;
 // Session storage in guidev2.js is the fallback if the SW was killed.
 let _gv2State = null;   // { active, question, previousSteps, pendingResume, lastUrl }
 let _gv2TabId = null;   // Tab ID that owns the active guidance session
+let _gv2PreClickTs = 0; // Timestamp of last guided click — used to catch new tabs when openerTabId is absent
 
 // ===== Extension Icon Click - Toggle Side Panel =====
 chrome.action.onClicked.addListener(async (tab) => {
@@ -166,6 +167,28 @@ chrome.runtime.onConnect.addListener((port) => {
     } catch (e) {
       // Port may have closed already (rare race on fast navigations)
     }
+  }
+});
+
+// ===== New Tab Detection for Guidance =====
+// When the guided tab opens a link in a new tab (target="_blank" or window.open),
+// openerTabId on the created tab identifies the originating tab.
+// We transfer guidance ownership so the new tab's content script can resume.
+chrome.tabs.onCreated.addListener((tab) => {
+  if (!(_gv2State?.active && _gv2TabId)) return;
+  // Transfer guidance when the new tab was opened from the guided tab.
+  // Two detection paths:
+  //   1. openerTabId — reliable when Chrome sets it (most target="_blank" links)
+  //   2. _gv2PreClickTs — fallback for links where openerTabId is absent
+  //      (e.g. window.open with noopener, JS-redirected links)
+  const byOpener = tab.openerTabId === _gv2TabId;
+  const byPreClick = _gv2PreClickTs > 0 && (Date.now() - _gv2PreClickTs < 2000);
+  if (byOpener || byPreClick) {
+    console.log('[SW guidev2] New tab', tab.id, 'opened from guided tab', _gv2TabId,
+      byOpener ? '(openerTabId)' : '(preClick watch)', '— transferring guidance');
+    _gv2TabId = tab.id;
+    _gv2State = { ..._gv2State, pendingResume: true };
+    _gv2PreClickTs = 0; // consume the flag — one transfer per click
   }
 });
 
@@ -260,6 +283,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'guidanceV2_clearState') {
     _gv2State = null;
     _gv2TabId = null;
+    sendResponse({ success: true });
+    return false;
+  }
+  if (request.action === 'guidanceV2_isOwner') {
+    // Content script asks: does this tab still own the active guidance session?
+    // Used to detect when a click transferred guidance to a new tab.
+    const senderTabId = sender.tab?.id;
+    sendResponse({ isOwner: !!senderTabId && senderTabId === _gv2TabId });
+    return false;
+  }
+  if (request.action === 'guidanceV2_preClick') {
+    // Content script signals that a guided click is about to fire.
+    // Arm the pre-click watch window so onCreated can transfer guidance
+    // even when tab.openerTabId is not available.
+    _gv2PreClickTs = Date.now();
     sendResponse({ success: true });
     return false;
   }
