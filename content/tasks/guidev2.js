@@ -44,7 +44,15 @@ RULES:
 COMMON PATTERNS:
 - Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
 - Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
-- Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option`;
+- Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
+
+NATIVE BROWSER DIALOGS (print, save, open file, etc.):
+When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that
+step MUST be the last step (isLastStep=true, action="done"). Explain what the user will see in
+the dialog and what they should do, but do NOT attempt to guide actions inside the dialog — the
+extension cannot access native browser UI. Example last-step instruction:
+"Click 'Print' in the File menu. Your browser's print dialog will open — choose your printer and
+settings there, then click the Print or Save button to finish."`;
 
 // ===== CONSTANTS =====
 
@@ -842,6 +850,44 @@ async function _gv2AutoType(step) {
   }
 }
 
+// ===== CLICK SIMULATION =====
+
+/**
+ * Dispatch the full synthetic pointer+mouse event sequence on an element.
+ *
+ * el.click() only fires the 'click' event.  Many SPA frameworks — including
+ * Google Docs and Google Sheets — open menus by listening for 'mousedown'
+ * (which el.click() skips).  Dispatching the complete sequence
+ * pointerdown → mousedown → pointerup → mouseup → click ensures those
+ * frameworks respond identically to a real user click.
+ *
+ * A synthetic 'click' MouseEvent still triggers the browser default action
+ * (e.g. following <a href> links) per spec, so navigation works too.
+ */
+function _gv2DispatchClick(el) {
+  const rect = el.getBoundingClientRect();
+  const cx = Math.round(rect.left + rect.width / 2);
+  const cy = Math.round(rect.top + rect.height / 2);
+  const shared = {
+    bubbles: true, cancelable: true, view: window,
+    clientX: cx, clientY: cy,
+    screenX: cx + (window.screenX || 0),
+    screenY: cy + (window.screenY || 0),
+  };
+
+  try { el.focus({ preventScroll: true }); } catch (e) {}
+
+  el.dispatchEvent(new PointerEvent('pointerover',  { ...shared, pointerType: 'mouse', isPrimary: true, button: -1, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('mouseover',     { ...shared, button: -1, buttons: 0 }));
+  el.dispatchEvent(new PointerEvent('pointermove',  { ...shared, pointerType: 'mouse', isPrimary: true, button: -1, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('mousemove',     { ...shared, button: -1, buttons: 0 }));
+  el.dispatchEvent(new PointerEvent('pointerdown',  { ...shared, pointerType: 'mouse', isPrimary: true, button: 0,  buttons: 1 }));
+  el.dispatchEvent(new MouseEvent ('mousedown',     { ...shared, button: 0,  buttons: 1 }));
+  el.dispatchEvent(new PointerEvent('pointerup',    { ...shared, pointerType: 'mouse', isPrimary: true, button: 0,  buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('mouseup',       { ...shared, button: 0,  buttons: 0 }));
+  el.dispatchEvent(new MouseEvent ('click',         { ...shared, button: 0,  buttons: 0 }));
+}
+
 // ===== NEXT STEP (panel "Next" button) =====
 
 /**
@@ -906,7 +952,7 @@ window.gv2NextStep = async function () {
   }
 
   if (toClick) {
-    try { toClick.click(); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
+    try { _gv2DispatchClick(toClick); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
   } else {
     console.warn('[guidev2] No clickable element found — continuing without click');
   }
