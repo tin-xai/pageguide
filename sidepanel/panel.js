@@ -25,6 +25,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.runtime.openOptionsPage();
   });
 
+  // Theme toggle (light / dark mode)
+  const themeToggleBtn = document.getElementById('xwebagent-theme-toggle');
+  const applyTheme = (isLight) => {
+    document.body.classList.toggle('light-mode', isLight);
+    if (themeToggleBtn) themeToggleBtn.textContent = isLight ? '☀️' : '🌙';
+  };
+  const savedTheme = localStorage.getItem('xwebagent-theme');
+  applyTheme(savedTheme === 'light');
+  themeToggleBtn?.addEventListener('click', () => {
+    const isLight = !document.body.classList.contains('light-mode');
+    applyTheme(isLight);
+    localStorage.setItem('xwebagent-theme', isLight ? 'light' : 'dark');
+  });
+
   document.getElementById('xwebagent-new-chat')?.addEventListener('click', () => resetChat());
   
   document.getElementById('xwebagent-send').addEventListener('click', sendMessage);

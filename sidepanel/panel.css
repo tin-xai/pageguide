@@ -965,3 +965,360 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- Theme toggle button ---- */
+.xwebagent-theme-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #888;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.xwebagent-theme-btn:hover {
+  background: rgba(255, 220, 0, 0.2);
+  color: #ffd700;
+}
+
+/* ============================================================
+   LIGHT MODE OVERRIDES
+   Applied when <body> has the .light-mode class
+   ============================================================ */
+
+body.light-mode {
+  background: linear-gradient(180deg, #f0f4f8 0%, #e4eaf2 100%);
+}
+
+body.light-mode .xwebagent-panel {
+  color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-chat-header {
+  background: linear-gradient(135deg, rgba(0, 140, 200, 0.08) 0%, rgba(0, 180, 100, 0.05) 100%);
+  border-bottom: 1px solid rgba(0, 140, 200, 0.2);
+}
+
+body.light-mode .xwebagent-header-text p {
+  color: #666;
+}
+
+body.light-mode .xwebagent-new-chat-btn,
+body.light-mode .xwebagent-settings-btn,
+body.light-mode .xwebagent-close-btn,
+body.light-mode .xwebagent-theme-btn {
+  background: rgba(0, 0, 0, 0.06);
+  color: #555;
+}
+
+body.light-mode .xwebagent-theme-btn:hover {
+  background: rgba(255, 180, 0, 0.15);
+  color: #cc8800;
+}
+
+body.light-mode .xwebagent-chat-messages::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+body.light-mode .xwebagent-chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(0, 140, 200, 0.3);
+}
+
+body.light-mode .xwebagent-message.assistant {
+  background: rgba(0, 0, 0, 0.05);
+  color: #2a2a40;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .xwebagent-message strong {
+  color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-message em {
+  color: #3a5a7a;
+}
+
+body.light-mode .xwebagent-message code {
+  background: rgba(0, 140, 200, 0.1);
+  color: #0077aa;
+}
+
+body.light-mode .xwebagent-message pre {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .xwebagent-message pre code {
+  color: #2a2a40;
+}
+
+body.light-mode .xwebagent-message h2,
+body.light-mode .xwebagent-message h3,
+body.light-mode .xwebagent-message h4 {
+  color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-message h2 {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .xwebagent-message.system {
+  background: rgba(0, 180, 100, 0.08);
+  color: #007a44;
+  border: 1px solid rgba(0, 180, 100, 0.2);
+}
+
+body.light-mode .xwebagent-message.error {
+  background: rgba(200, 50, 50, 0.08);
+  color: #cc3333;
+  border: 1px solid rgba(200, 50, 50, 0.2);
+}
+
+body.light-mode .xwebagent-message.action {
+  background: linear-gradient(135deg, rgba(200, 150, 0, 0.1), rgba(200, 100, 0, 0.1));
+  color: #a07000;
+  border: 1px solid rgba(200, 150, 0, 0.25);
+}
+
+body.light-mode .xwebagent-message.guide {
+  background: linear-gradient(135deg, rgba(100, 60, 220, 0.08), rgba(50, 100, 220, 0.08));
+  color: #2a2a40;
+  border: 1px solid rgba(100, 60, 220, 0.2);
+}
+
+body.light-mode .xwebagent-guide-waiting {
+  color: #0088cc;
+}
+
+body.light-mode .xwebagent-message.ask-step {
+  background: linear-gradient(135deg, rgba(200, 130, 0, 0.08), rgba(200, 80, 30, 0.08));
+  color: #2a2a40;
+  border: 1px solid rgba(200, 130, 0, 0.2);
+}
+
+body.light-mode .xwebagent-action-hint {
+  color: #cc7700;
+}
+
+body.light-mode .xwebagent-next-hint {
+  background: rgba(0, 0, 0, 0.04);
+  color: #777;
+}
+
+body.light-mode .xwebagent-message.xwebagent-clickable {
+  border: 1px solid rgba(0, 140, 200, 0.3);
+}
+
+body.light-mode .xwebagent-message.xwebagent-clickable:hover {
+  background: rgba(0, 140, 200, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 140, 200, 0.15);
+}
+
+body.light-mode .xwebagent-clickable::after {
+  color: rgba(0, 0, 0, 0.3);
+}
+
+body.light-mode .xwebagent-clickable:hover::after {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+body.light-mode .xwebagent-citation {
+  background: linear-gradient(135deg, rgba(0, 140, 200, 0.12), rgba(0, 200, 100, 0.08));
+  color: #0077aa;
+  border-bottom: 1px dashed rgba(0, 140, 200, 0.5);
+}
+
+body.light-mode .xwebagent-citation:hover {
+  background: linear-gradient(135deg, rgba(0, 140, 200, 0.25), rgba(0, 200, 100, 0.15));
+  color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-citation-idx {
+  color: #0077aa;
+  background: rgba(0, 140, 200, 0.1);
+}
+
+body.light-mode .xwebagent-citation-idx:hover {
+  background: rgba(0, 140, 200, 0.2);
+  color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-citation-sup {
+  color: #0077aa;
+}
+
+body.light-mode .xwebagent-pdf-citation {
+  background: rgba(180, 130, 0, 0.18);
+  color: #a07000;
+}
+
+body.light-mode .xwebagent-pdf-citation:hover {
+  background: rgba(180, 130, 0, 0.35);
+  color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-typing {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .xwebagent-typing span {
+  background: #0099cc;
+}
+
+body.light-mode .xwebagent-step-next-btn {
+  background: rgba(30, 180, 80, 0.1);
+  border: 1px solid rgba(30, 180, 80, 0.35);
+  color: #1a9e4a;
+}
+
+body.light-mode .xwebagent-step-next-btn:hover {
+  background: rgba(30, 180, 80, 0.18);
+  border-color: rgba(30, 180, 80, 0.6);
+}
+
+body.light-mode .xwebagent-step-stop-btn {
+  border: 1px solid rgba(200, 50, 50, 0.25);
+  color: rgba(200, 80, 80, 0.7);
+}
+
+body.light-mode .xwebagent-step-stop-btn:hover {
+  background: rgba(200, 50, 50, 0.08);
+  border-color: rgba(200, 50, 50, 0.45);
+  color: #cc4444;
+}
+
+body.light-mode .xwebagent-guide-stop-btn {
+  background: rgba(200, 50, 50, 0.1);
+  border: 1px solid rgba(200, 50, 50, 0.35);
+  color: #cc4444;
+}
+
+body.light-mode .xwebagent-guide-stop-btn:hover {
+  background: rgba(200, 50, 50, 0.2);
+}
+
+body.light-mode .xwebagent-chat-input-area {
+  background: rgba(255, 255, 255, 0.7);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .xwebagent-quick-btn {
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #555;
+}
+
+body.light-mode .xwebagent-quick-btn:hover {
+  background: rgba(0, 140, 200, 0.1);
+  border-color: rgba(0, 140, 200, 0.3);
+  color: #0077aa;
+}
+
+body.light-mode .xwebagent-pdf-reader-btn {
+  background: linear-gradient(135deg, rgba(100, 60, 220, 0.1), rgba(150, 80, 220, 0.1));
+  border-color: rgba(100, 60, 220, 0.3);
+  color: #6040bb;
+}
+
+body.light-mode .xwebagent-pdf-reader-btn:hover {
+  background: linear-gradient(135deg, rgba(100, 60, 220, 0.18), rgba(150, 80, 220, 0.18));
+  border-color: rgba(100, 60, 220, 0.5);
+  color: #4d30aa;
+}
+
+body.light-mode .xwebagent-image-preview {
+  background: linear-gradient(135deg, rgba(100, 30, 200, 0.07), rgba(0, 140, 200, 0.05));
+  border: 1px solid rgba(100, 30, 200, 0.18);
+}
+
+body.light-mode .xwebagent-image-label {
+  color: #6040bb;
+}
+
+body.light-mode .xwebagent-remove-image {
+  background: rgba(200, 50, 50, 0.12);
+  border: 1px solid rgba(200, 50, 50, 0.3);
+  color: #cc4444;
+}
+
+body.light-mode .xwebagent-remove-image:hover {
+  background: rgba(200, 50, 50, 0.25);
+}
+
+body.light-mode .xwebagent-upload-btn {
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+body.light-mode .xwebagent-upload-btn:hover {
+  background: rgba(100, 30, 200, 0.1);
+  border-color: rgba(100, 30, 200, 0.4);
+}
+
+body.light-mode .xwebagent-chat-input {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-chat-input::placeholder {
+  color: #999;
+}
+
+body.light-mode .xwebagent-chat-input:focus {
+  border-color: rgba(0, 140, 200, 0.5);
+  box-shadow: 0 0 20px rgba(0, 140, 200, 0.08);
+}
+
+body.light-mode .xwebagent-debug-toggle {
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+body.light-mode .xwebagent-debug-toggle:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 140, 200, 0.2);
+}
+
+body.light-mode .xwebagent-debug-arrow,
+body.light-mode .xwebagent-debug-label {
+  color: #999;
+}
+
+body.light-mode .xwebagent-debug-content {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .xwebagent-debug-line {
+  color: #777;
+}
+
+body.light-mode .xwebagent-slash-menu {
+  background: #fff;
+  border: 1px solid rgba(0, 140, 200, 0.25);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .xwebagent-slash-item {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+body.light-mode .xwebagent-slash-item:hover,
+body.light-mode .xwebagent-slash-item.active {
+  background: rgba(0, 140, 200, 0.08);
+}
+
+body.light-mode .xwebagent-slash-item .slash-cmd {
+  color: #0077aa;
+}
+
+body.light-mode .xwebagent-slash-item .slash-cmd em {
+  color: rgba(0, 120, 170, 0.55);
+}
+
+body.light-mode .xwebagent-slash-item .slash-desc {
+  color: rgba(0, 0, 0, 0.45);
+}
