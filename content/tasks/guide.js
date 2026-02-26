@@ -246,7 +246,7 @@ async function handleStepByStepGuide(question, continueFromStep = false) {
   console.log('🎯 Guidance step', guidance.currentStep, 'for:', guidance.question);
   
   // Get fresh page index (DOM may have changed after user action)
-  const pageIndex = createPageIndex(5000);
+  const pageIndex = createPageIndex(5000, true);
   const pageBg = getPageBackground();
   
   // Show SoM if enabled
@@ -605,7 +605,7 @@ async function continueGuidance() {
   const RETRY_DELAY = 600;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const pageIndex = createPageIndex(1000);
+    const pageIndex = createPageIndex(1000, true);
     console.log('🎯 Attempt', attempt + 1, '- Page index has', pageIndex.count, 'elements');
 
     if (pageIndex.count > 10) {
