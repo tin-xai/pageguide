@@ -591,7 +591,7 @@ function showTyping() {
     const stopBtn = document.createElement('button');
     stopBtn.className = 'xwebagent-guide-stop-btn';
     stopBtn.textContent = '⏹ Stop';
-    stopBtn.addEventListener('click', stopGuide);
+    stopBtn.addEventListener('click', (e) => { e.stopPropagation(); stopGuide(); });
     typing.appendChild(stopBtn);
   }
 

@@ -666,6 +666,10 @@ function _gv2SetupClickListener() {
 
     try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e2) {}
 
+    // Arm SW watch-for-new-tab window before the click propagates.
+    // Fire-and-forget — no await so the click event isn't blocked.
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_preClick' }); } catch (e2) {}
+
     const startUrl = window.location.href;
     await _gv2WaitForNavOrSettle(startUrl);
   };
@@ -710,13 +714,15 @@ async function _gv2WaitForNavOrSettle(startUrl) {
 
     // SPA navigation: URL changed but page is still alive.
     if (window.location.href !== startUrl) {
-      // Pause briefly — some browsers update the URL right before firing pagehide
-      // (a full-page nav that pushes a history entry before unloading).
-      // Waiting 400 ms lets pagehide arrive so we can bail out correctly.
-      await new Promise(r => setTimeout(r, 400));
-      if (_guidev2PageHiding) {
-        console.log('[guidev2] Full-page nav after URL change — new page will resume via SW');
-        return;
+      // Poll for up to 800 ms for pagehide — some sites (e.g. Amazon) push a new
+      // history entry via JS *before* the full page unload.  400 ms was too short
+      // for those cases; 800 ms with early exit keeps SPA detection responsive.
+      for (let j = 0; j < 8; j++) {
+        await new Promise(r => setTimeout(r, 100));
+        if (_guidev2PageHiding) {
+          console.log('[guidev2] Full-page nav after URL change — new page will resume via SW');
+          return;
+        }
       }
       console.log('[guidev2] SPA navigation confirmed');
       if (_guidev2Resuming) return;
@@ -745,6 +751,19 @@ async function _gv2WaitForNavOrSettle(startUrl) {
   // One last guard: if pagehide fired during the polling loop it means a very
   // slow full-page navigation is in progress — let the new page handle it.
   if (_guidev2PageHiding) return;
+
+  // Check if the click opened a new tab (target="_blank" / window.open).
+  // In that case the SW has transferred guidance ownership to the new tab,
+  // so this tab should stop — the new tab will resume on its own.
+  try {
+    const ownerCheck = await safeSendMessage({ action: 'guidanceV2_isOwner' });
+    if (ownerCheck && ownerCheck.isOwner === false) {
+      console.log('[guidev2] Guidance transferred to new tab — stopping on this page');
+      try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+      return;
+    }
+  } catch (e) { /* SW unavailable — proceed with same-page behaviour */ }
+
   console.log('[guidev2] No navigation — continuing on same page');
   if (_guidev2Resuming) return;
   _guidev2Resuming = true;
