@@ -404,9 +404,12 @@ async function gv2GenerateNextStep() {
   if (!g.active || _guidev2Stopped) return null;
 
   // Retry loop in case DOM is sparse (page still rendering)
+  // interactiveOnly=true: guide only needs clickable/typeable elements, not headings,
+  // paragraphs, list items, etc. This prevents the LLM from picking a text label
+  // that shares the same name as the actual interactive button.
   let pageIndex;
   for (let attempt = 0; attempt < 3; attempt++) {
-    pageIndex = createPageIndex(5000);
+    pageIndex = createPageIndex(5000, true);
     if (pageIndex.count > 5) break;
     console.log('[guidev2] Sparse DOM (', pageIndex.count, 'el), retrying...');
     await new Promise(r => setTimeout(r, 700));
@@ -481,6 +484,68 @@ Provide the next step as JSON.`
 }
 
 /**
+ * Find the best matching element index in window._xwebagentIndex by text.
+ *
+ * Two-step approach: the LLM often gets element.index wrong but gets
+ * element.text right. We search all indexed elements by their accessible
+ * name and return the index of the closest text match.  The LLM's index
+ * is used as a fallback only when no confident text match is found.
+ *
+ * @param {string} searchText - The element description from the LLM response
+ * @returns {number|null} The best-matching index key, or null if not found
+ */
+function gv2FindElementByText(searchText) {
+  if (!searchText) return null;
+  const indexMap = window._xwebagentIndex;
+  if (!indexMap || Object.keys(indexMap).length === 0) return null;
+
+  const normalize = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const needle = normalize(searchText);
+  if (needle.length < 2) return null;
+
+  const needleWords = needle.split(' ').filter(w => w.length >= 2);
+  if (needleWords.length === 0) return null;
+
+  let bestKey = null;
+  let bestScore = -1;
+
+  for (const [key, el] of Object.entries(indexMap)) {
+    let name;
+    try { name = normalize(typeof getAccessibleName === 'function' ? (getAccessibleName(el) || '') : (el.textContent || '')); }
+    catch (e) { continue; }
+    if (!name || name.length < 2) continue;
+
+    let score;
+    if (name === needle) {
+      // Perfect match
+      score = 1000;
+    } else if (name.includes(needle)) {
+      // Element's accessible name contains the full search text
+      // Prefer shorter names (more specific elements)
+      score = 900 - Math.min(name.length, 400);
+    } else if (needle.includes(name) && name.length >= 5) {
+      // Search text contains the element's full name
+      // (e.g. needle="Clear all watch history button", name="Clear all watch history")
+      score = 800 - Math.min(needle.length - name.length, 200);
+    } else {
+      // Word overlap: count how many needle words appear in the element's name
+      const nameWords = new Set(name.split(' '));
+      const matched = needleWords.filter(w => nameWords.has(w)).length;
+      score = Math.floor((matched / needleWords.length) * 200);
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = parseInt(key);
+    }
+  }
+
+  // Require at least 50% word-overlap confidence before trusting the match
+  if (bestScore < 100) return null;
+  return bestKey;
+}
+
+/**
  * Parse LLM JSON, apply highlight, schedule the appropriate action.
  */
 async function gv2ProcessResponse(content) {
@@ -497,17 +562,38 @@ async function gv2ProcessResponse(content) {
     if (typeof clearHighlights === 'function') clearHighlights();
     window._xwebagentHighlights = [];
 
-    // Highlight target element
+    // Highlight target element — two-step approach:
+    //   Step 1: find the element by text match (more reliable than LLM index)
+    //   Step 2: fall back to the LLM's index only if no confident text match
     let highlightCount = 0;
-    if (step.element?.index) {
+    if (step.element?.index || step.element?.text) {
       const pageBg = getPageBackground();
       const style = typeof getRandomHighlightStyle === 'function'
         ? getRandomHighlightStyle(pageBg.isDark)
         : { color: '#2ed573', animation: 'pulse' };
-      highlightCount = applyIndexedHighlight(step.element.index, step.element.text, style);
+
+      const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
+      const idxToUse = textMatchIdx !== null ? textMatchIdx : step.element.index;
+
+      if (textMatchIdx !== null && textMatchIdx !== step.element.index) {
+        console.log(`[guidev2] Text-match override: LLM index ${step.element.index} → matched index ${textMatchIdx} for "${step.element.text}"`);
+      } else if (textMatchIdx === null) {
+        console.log(`[guidev2] No text match for "${step.element.text}", using LLM index ${step.element.index}`);
+      }
+
+      highlightCount = applyIndexedHighlight(idxToUse, step.element.text, style);
       if (window._xwebagentHighlights?.length > 0) {
         setTimeout(() => { if (typeof scrollToHighlight === 'function') scrollToHighlight(0); }, 300);
       }
+
+      // Store the resolved target element and its text so gv2NextStep can click
+      // it reliably even if React's reconciliation removes the highlight span
+      // before the user presses "Next →".
+      g.currentTargetEl   = window._xwebagentIndex[idxToUse] || null;
+      g.currentTargetText = step.element.text || null;
+    } else {
+      g.currentTargetEl   = null;
+      g.currentTargetText = null;
     }
 
     if (typeof cleanupSom === 'function') cleanupSom();
@@ -754,14 +840,56 @@ window.gv2NextStep = async function () {
 
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
 
-  // Auto-click the highlighted element so the page reacts exactly as if the user clicked it
-  // (triggers event listeners, dropdowns, navigation, etc.)
-  const highlighted = document.querySelector('[data-xwebagent-styled]');
-  if (highlighted) {
-    console.log('[guidev2] Auto-clicking highlighted element (Next button)');
-    try { highlighted.click(); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
+  // Resolve the element to click.
+  //
+  // Priority order:
+  //   1. Stored reference from gv2ProcessResponse (survives React reconciliation
+  //      that removes injected highlight spans from the DOM).
+  //   2. Fresh text-based lookup via gv2FindElementByText (handles the case where
+  //      React replaced the element node itself since the last step was generated).
+  //   3. Fallback: query for [data-xwebagent-styled] (whole-element highlight path,
+  //      where data-xwebagent-styled is on the real element, not an injected span).
+  //
+  // After finding the node, walk up to the nearest real interactive ancestor so
+  // React/SPA event handlers (attached to <a>/<button>/[role="button"]) fire correctly.
+  const _INTERACTIVE_SELECTORS =
+    'a[href], button, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="option"], summary';
+
+  function _resolveClickTarget(el) {
+    if (!el || !document.contains(el)) return null;
+    return el.closest(_INTERACTIVE_SELECTORS) || el;
+  }
+
+  let toClick = null;
+
+  // 1. Stored reference
+  const storedEl = window._guidev2?.currentTargetEl;
+  if (storedEl && document.contains(storedEl)) {
+    toClick = _resolveClickTarget(storedEl);
+    console.log('[guidev2] Using stored target:', toClick?.tagName, toClick?.textContent?.slice(0, 60));
+  }
+
+  // 2. Fresh text-based lookup (React may have replaced the node)
+  if (!toClick && window._guidev2?.currentTargetText) {
+    const freshIdx = gv2FindElementByText(window._guidev2.currentTargetText);
+    if (freshIdx !== null) {
+      const freshEl = window._xwebagentIndex?.[freshIdx];
+      toClick = _resolveClickTarget(freshEl);
+      if (toClick) console.log('[guidev2] Using fresh text-match target:', toClick.tagName, toClick.textContent?.slice(0, 60));
+    }
+  }
+
+  // 3. Highlight-span fallback
+  if (!toClick) {
+    const highlighted = document.querySelector('[data-xwebagent-styled]');
+    toClick = _resolveClickTarget(highlighted);
+    if (toClick) console.log('[guidev2] Using highlight-span fallback:', toClick.tagName, toClick.textContent?.slice(0, 60));
+  }
+
+  if (toClick) {
+    try { toClick.click(); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
   } else {
-    console.warn('[guidev2] Next pressed but no highlighted element found — continuing anyway');
+    console.warn('[guidev2] No clickable element found — continuing without click');
   }
 
   // Use the same post-click flow as a real user click: detects full-page nav,

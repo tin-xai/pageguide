@@ -279,7 +279,38 @@ function getVisibleText(maxLength = 20000) {
  * No predefined selectors - walks entire DOM and uses accessible roles
  * Returns: { indexText, indexMap, count }
  */
-function createPageIndex(maxItems = 200) {
+/**
+ * Roles that correspond to interactive widgets.
+ * Used by createPageIndex when interactiveOnly=true.
+ */
+const _INTERACTIVE_ROLES = new Set([
+  'button', 'link', 'textbox', 'combobox', 'checkbox', 'radio', 'slider',
+  'searchbox', 'spinbutton', 'switch', 'tab', 'menuitem', 'menuitemcheckbox',
+  'menuitemradio', 'option', 'treeitem', 'listbox', 'menu', 'dialog',
+  'alertdialog', 'gridcell',
+]);
+
+/**
+ * Return a short landmark label for the element's nearest landmark ancestor.
+ * Used to annotate the page index text so the LLM can distinguish navigation
+ * links from main-content links (e.g. "[nav] History" vs "[main] Video title").
+ */
+function _getLandmarkLabel(el) {
+  let node = el.parentElement;
+  while (node && node !== document.body) {
+    const tag = node.tagName?.toLowerCase();
+    const role = node.getAttribute?.('role');
+    if (role === 'navigation' || tag === 'nav') return '[nav]';
+    if (role === 'banner'     || tag === 'header') return '[header]';
+    if (role === 'complementary' || tag === 'aside') return '[sidebar]';
+    if (role === 'dialog' || role === 'alertdialog') return '[dialog]';
+    if (role === 'main' || tag === 'main') return '[main]';
+    node = node.parentElement;
+  }
+  return '';
+}
+
+function createPageIndex(maxItems = 200, interactiveOnly = false) {
   const indexMap = {};
   const indexLines = [];
   let idx = 1;
@@ -326,14 +357,19 @@ function createPageIndex(maxItems = 200) {
     // Get accessible role - if no role, skip (not interesting)
     const role = getAccessibleRole(el);
     if (!role) continue;
-    
+
+    // In interactive-only mode (used by the guide), skip purely structural/text
+    // elements (headings, paragraphs, list items, etc.) so the LLM index only
+    // contains elements the user can actually click or type into.
+    if (interactiveOnly && !_INTERACTIVE_ROLES.has(role) && !isElementInteractive(el)) continue;
+
     // Get accessible name
     let name = getAccessibleName(el);
     if (!name || name.length < 2) continue;
-    
+
     // Clean up
     name = name.replace(/\s+/g, ' ').trim();
-    
+
     // Only skip duplicates for non-interactive elements
     if (!isElementInteractive(el) && seenText.has(name)) continue;
     
@@ -349,9 +385,14 @@ function createPageIndex(maxItems = 200) {
     // Truncate long text
     const maxLen = (role === 'paragraph' || role === 'article') ? 300 : 120;
     const displayText = name.length > maxLen ? name.slice(0, maxLen) + '...' : name;
-    
-    // Format: [idx] (role) text
-    indexLines.push(`[${idx}] (${role}) ${displayText}`);
+
+    // In guide mode use a clean format: just the index and text.
+    // In find/hide mode keep the role annotation for LLM context.
+    if (interactiveOnly) {
+      indexLines.push(`[${idx}] ${displayText}`);
+    } else {
+      indexLines.push(`[${idx}] (${role}) ${displayText}`);
+    }
     idx++;
   }
   
