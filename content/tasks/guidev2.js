@@ -737,6 +737,39 @@ async function _gv2AutoType(step) {
   }
 }
 
+// ===== NEXT STEP (panel "Next" button) =====
+
+/**
+ * Called when the user clicks the "Next →" button in the side panel.
+ * Equivalent to clicking the highlighted element, but without requiring the
+ * user to interact with the page. Removes the pending click listener and
+ * immediately generates the next step on the current page.
+ */
+window.gv2NextStep = async function () {
+  if (!_guidev2WaitingForClick) return; // Not in a click-wait state
+  _gv2RemoveClickListeners();
+  _guidev2WaitingForClick = false;
+
+  if (_guidev2Resuming) return;
+
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+
+  // Auto-click the highlighted element so the page reacts exactly as if the user clicked it
+  // (triggers event listeners, dropdowns, navigation, etc.)
+  const highlighted = document.querySelector('[data-xwebagent-styled]');
+  if (highlighted) {
+    console.log('[guidev2] Auto-clicking highlighted element (Next button)');
+    try { highlighted.click(); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
+  } else {
+    console.warn('[guidev2] Next pressed but no highlighted element found — continuing anyway');
+  }
+
+  // Use the same post-click flow as a real user click: detects full-page nav,
+  // SPA nav, or same-page DOM settle, then generates the next step.
+  const startUrl = window.location.href;
+  await _gv2WaitForNavOrSettle(startUrl);
+};
+
 // ===== STOP GUIDE =====
 
 /**

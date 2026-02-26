@@ -477,10 +477,13 @@ function addGuideStep(result) {
       <span class="xwebagent-step-text">${result.answer}</span>
     </div>
     ${result.nextStepHint && !result.isLastStep ? `<div class="xwebagent-next-hint">💡 ${result.nextStepHint}</div>` : ''}
-    ${!result.isLastStep ? `<div class="xwebagent-guide-waiting">👆 Complete this step, then I'll show you the next one</div>` : ''}
+    ${!result.isLastStep ? `<div class="xwebagent-guide-waiting">${result.action === 'click' ? '👆 Click the highlighted element, or press Next below' : '👆 Complete this step, then I\'ll show you the next one'}</div>` : ''}
   `;
 
   if (!result.isLastStep) {
+    const btnRow = document.createElement('div');
+    btnRow.className = 'xwebagent-step-btn-row';
+
     const stopHereBtn = document.createElement('button');
     stopHereBtn.className = 'xwebagent-step-stop-btn';
     stopHereBtn.textContent = '⏹ Stop here';
@@ -489,7 +492,26 @@ function addGuideStep(result) {
       e.stopPropagation(); // don't trigger scroll-to-highlight
       stopGuide(`✅ Stopped after step ${result.step}. Ask me again whenever you need more help.`);
     });
-    msg.appendChild(stopHereBtn);
+
+    if (result.action === 'click') {
+      const nextBtn = document.createElement('button');
+      nextBtn.className = 'xwebagent-step-next-btn';
+      nextBtn.textContent = 'Next →';
+      nextBtn.title = 'Mark this step as done and get the next one';
+      nextBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        nextBtn.disabled = true;
+        stopHereBtn.disabled = true;
+        showTyping();
+        try {
+          await sendToContentScript({ action: 'nextGuideStep' });
+        } catch (err) { /* ignore */ }
+      });
+      btnRow.appendChild(nextBtn);
+    }
+
+    btnRow.appendChild(stopHereBtn);
+    msg.appendChild(btnRow);
   }
 
   if (result.hasHighlights) {
