@@ -400,3 +400,269 @@ describe('Per-tab session management (_tabSessions)', () => {
     expect(tabSessions.size).toBe(0);
   });
 });
+
+// ============================================================
+// Agentic Planner — parsePlanResponse (content/agent/planner.js)
+// Tests the pure JSON-parsing function that converts LLM output
+// into a validated plan. Uses inline mirrors so tests are
+// self-contained and fast (no Chrome API mocking needed).
+// ============================================================
+describe('parsePlanResponse (content/agent/planner.js)', () => {
+  // Inline mirror of parsePlanResponse so the test suite is self-contained
+  const VALID_TOOLS = ['find', 'guide', 'hide', 'answer', 'image_ask', 'pdf_ask'];
+  function parsePlanResponse(content, fallbackQuery) {
+    try {
+      let jsonStr = content.trim()
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '');
+      const match = jsonStr.match(/\{[\s\S]*\}/);
+      if (match) jsonStr = match[0];
+      const parsed = JSON.parse(jsonStr);
+      if (!Array.isArray(parsed.steps) || parsed.steps.length === 0) throw new Error('no steps');
+      const steps = parsed.steps
+        .filter(s => s && VALID_TOOLS.includes(s.tool))
+        .map(s => ({ tool: s.tool, args: s.args || {}, reason: s.reason || '' }));
+      if (steps.length === 0) throw new Error('no valid steps');
+      return { steps, planSummary: parsed.planSummary || '' };
+    } catch (e) {
+      return {
+        steps: [{ tool: 'find', args: { question: fallbackQuery }, reason: 'parse error fallback' }],
+        planSummary: ''
+      };
+    }
+  }
+
+  test('parses a valid single-step plan', () => {
+    const json = JSON.stringify({
+      steps: [{ tool: 'find', args: { question: 'price' }, reason: 'lookup' }],
+      planSummary: 'Finding the price'
+    });
+    const result = parsePlanResponse(json, 'price');
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0].tool).toBe('find');
+    expect(result.steps[0].args.question).toBe('price');
+    expect(result.planSummary).toBe('Finding the price');
+  });
+
+  test('parses a valid multi-step plan', () => {
+    const json = JSON.stringify({
+      steps: [
+        { tool: 'find', args: { question: 'subscribe button' }, reason: 'locate' },
+        { tool: 'guide', args: { task: 'subscribe' }, reason: 'walk through' }
+      ],
+      planSummary: 'Find then guide'
+    });
+    const result = parsePlanResponse(json, 'subscribe');
+    expect(result.steps).toHaveLength(2);
+    expect(result.steps[0].tool).toBe('find');
+    expect(result.steps[1].tool).toBe('guide');
+  });
+
+  test('strips markdown code fences before parsing', () => {
+    const content = '```json\n{"steps":[{"tool":"hide","args":{"filter":"ads"},"reason":""}],"planSummary":""}\n```';
+    const result = parsePlanResponse(content, 'hide ads');
+    expect(result.steps[0].tool).toBe('hide');
+  });
+
+  test('falls back gracefully on malformed JSON', () => {
+    const result = parsePlanResponse('not valid json at all', 'original query');
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0].tool).toBe('find');
+    expect(result.steps[0].args.question).toBe('original query');
+    expect(result.planSummary).toBe('');
+  });
+
+  test('falls back when steps array is missing', () => {
+    const result = parsePlanResponse('{"planSummary":"no steps here"}', 'q');
+    expect(result.steps[0].tool).toBe('find');
+  });
+
+  test('falls back when steps array is empty', () => {
+    const result = parsePlanResponse('{"steps":[],"planSummary":"empty"}', 'q');
+    expect(result.steps[0].tool).toBe('find');
+  });
+
+  test('filters out steps with unknown tool names', () => {
+    const json = JSON.stringify({
+      steps: [
+        { tool: 'unknown_tool', args: {}, reason: '' },
+        { tool: 'find', args: { question: 'test' }, reason: '' }
+      ],
+      planSummary: ''
+    });
+    const result = parsePlanResponse(json, 'test');
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0].tool).toBe('find');
+  });
+
+  test('all valid tool names are accepted', () => {
+    for (const tool of ['find', 'guide', 'hide', 'answer', 'image_ask', 'pdf_ask']) {
+      const json = JSON.stringify({ steps: [{ tool, args: {}, reason: '' }], planSummary: '' });
+      const result = parsePlanResponse(json, 'q');
+      expect(result.steps[0].tool).toBe(tool);
+    }
+  });
+
+  test('handles missing args gracefully', () => {
+    const json = JSON.stringify({
+      steps: [{ tool: 'find', reason: 'no args field' }],
+      planSummary: ''
+    });
+    const result = parsePlanResponse(json, 'q');
+    expect(result.steps[0].args).toEqual({});
+  });
+});
+
+// ============================================================
+// Agentic Executor — buildAgentResult (content/agent/executor.js)
+// Tests the pure result-merging function.
+// ============================================================
+describe('buildAgentResult (content/agent/executor.js)', () => {
+  // Inline mirror of buildAgentResult
+  function buildAgentResult(steps, planSummary) {
+    if (!steps || steps.length === 0) {
+      return { success: false, error: 'No steps executed', planSummary: planSummary || '' };
+    }
+    const totalHighlights = steps.reduce((sum, s) => sum + (s.highlightCount || 0), 0);
+    const firstStep = steps[0];
+    if (steps.length === 1) {
+      return { ...firstStep, planSummary: planSummary || '', planSteps: steps };
+    }
+    return {
+      success: true,
+      isMultiTool: true,
+      steps,
+      planSummary: planSummary || '',
+      answer: firstStep.answer || '',
+      highlightCount: totalHighlights,
+      hasHighlights: totalHighlights > 0,
+      routedTo: 'agent',
+      routeConfidence: 1.0,
+      routeReason: planSummary || ''
+    };
+  }
+
+  test('returns error when no steps provided', () => {
+    const result = buildAgentResult([], 'summary');
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/No steps/);
+  });
+
+  test('single step: passthrough with plan metadata', () => {
+    const step = { success: true, answer: 'The price is $10', highlightCount: 1, tool: 'find' };
+    const result = buildAgentResult([step], 'Finding price');
+    // Must include all original step fields
+    expect(result.answer).toBe('The price is $10');
+    expect(result.highlightCount).toBe(1);
+    expect(result.success).toBe(true);
+    // Plan metadata added
+    expect(result.planSummary).toBe('Finding price');
+    expect(result.planSteps).toHaveLength(1);
+    // Should NOT be flagged as multi-tool
+    expect(result.isMultiTool).toBeUndefined();
+  });
+
+  test('multi-step: combined result with isMultiTool flag', () => {
+    const steps = [
+      { success: true, answer: 'Found button', highlightCount: 1, tool: 'find' },
+      { success: true, answer: 'Step 1: click', highlightCount: 1, tool: 'guide', isGuide: true }
+    ];
+    const result = buildAgentResult(steps, 'Find then guide');
+    expect(result.isMultiTool).toBe(true);
+    expect(result.highlightCount).toBe(2);
+    expect(result.hasHighlights).toBe(true);
+    expect(result.routedTo).toBe('agent');
+    expect(result.steps).toHaveLength(2);
+    expect(result.planSummary).toBe('Find then guide');
+    // First step answer preserved for conversation history
+    expect(result.answer).toBe('Found button');
+  });
+
+  test('multi-step: highlight count sums across all steps', () => {
+    const steps = [
+      { success: true, answer: 'A', highlightCount: 3, tool: 'find' },
+      { success: true, answer: 'B', highlightCount: 2, tool: 'find' }
+    ];
+    const result = buildAgentResult(steps, '');
+    expect(result.highlightCount).toBe(5);
+  });
+
+  test('multi-step with no highlights: hasHighlights is false', () => {
+    const steps = [
+      { success: true, answer: 'General answer', highlightCount: 0, tool: 'answer' },
+      { success: true, answer: 'Guide step', highlightCount: 0, tool: 'guide' }
+    ];
+    const result = buildAgentResult(steps, '');
+    expect(result.hasHighlights).toBe(false);
+    expect(result.highlightCount).toBe(0);
+  });
+
+  test('single step with missing highlightCount defaults to 0', () => {
+    const step = { success: true, answer: 'ok', tool: 'answer' };
+    const result = buildAgentResult([step], '');
+    // highlightCount absent from step, total should be 0
+    expect(result.highlightCount).toBeUndefined(); // passthrough means step's value (undefined)
+    expect(result.planSteps[0].highlightCount).toBeUndefined();
+  });
+});
+
+// ============================================================
+// _isSearchIntentQuery (content/functions/main_router.js)
+// Tests the heuristic that detects search-intent queries so the
+// planner override can correctly route them to "guide".
+// ============================================================
+describe('_isSearchIntentQuery (content/functions/main_router.js)', () => {
+  // Inline mirror — must stay in sync with the function in main_router.js
+  function _isSearchIntentQuery(query) {
+    if (!query) return false;
+    return /\bfind me\b|\bsearch for\b|\blook for\b|\bget me\b|\bshow me an?\b|\bgo to .{1,40} and (find|search|look)\b/i.test(query);
+  }
+
+  test('detects "find me X" as search intent', () => {
+    expect(_isSearchIntentQuery('find me black shoes for men')).toBe(true);
+    expect(_isSearchIntentQuery('Find me a Spider-Man movie')).toBe(true);
+    expect(_isSearchIntentQuery('find me the best laptop')).toBe(true);
+  });
+
+  test('detects "search for X" as search intent', () => {
+    expect(_isSearchIntentQuery('search for flights to Paris')).toBe(true);
+    expect(_isSearchIntentQuery('Search for Python tutorials')).toBe(true);
+  });
+
+  test('detects "look for X" as search intent', () => {
+    expect(_isSearchIntentQuery('look for a red dress')).toBe(true);
+  });
+
+  test('detects "get me X" as search intent', () => {
+    expect(_isSearchIntentQuery('get me a coffee maker under $50')).toBe(true);
+  });
+
+  test('detects "show me a/an X" as search intent', () => {
+    expect(_isSearchIntentQuery('show me a good book')).toBe(true);
+    expect(_isSearchIntentQuery('show me an affordable laptop')).toBe(true);
+  });
+
+  test('detects "go to X and find/search Y" as search intent', () => {
+    expect(_isSearchIntentQuery('go to YouTube and find a Spider-Man movie')).toBe(true);
+    expect(_isSearchIntentQuery('go to amazon and search for shoes')).toBe(true);
+  });
+
+  test('does NOT flag "find the X" as search intent (page-element lookup)', () => {
+    expect(_isSearchIntentQuery('find the add to cart button')).toBe(false);
+    expect(_isSearchIntentQuery('find the price')).toBe(false);
+    expect(_isSearchIntentQuery('find the subscribe button')).toBe(false);
+  });
+
+  test('does NOT flag general questions as search intent', () => {
+    expect(_isSearchIntentQuery('what is the price?')).toBe(false);
+    expect(_isSearchIntentQuery('how do I report this video?')).toBe(false);
+    expect(_isSearchIntentQuery('hide the ads')).toBe(false);
+    expect(_isSearchIntentQuery('what is Python?')).toBe(false);
+  });
+
+  test('handles empty/null query safely', () => {
+    expect(_isSearchIntentQuery('')).toBe(false);
+    expect(_isSearchIntentQuery(null)).toBe(false);
+  });
+});

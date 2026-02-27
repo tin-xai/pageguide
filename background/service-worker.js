@@ -273,8 +273,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'guidanceV2_setState') {
     // Content script saves guidance state to SW memory.
     // Kept in sync by guidev2.js whenever the step changes.
+    // When called from the side panel (no sender.tab), accept an explicit tabId.
     _gv2State = request.state || null;
-    _gv2TabId = sender.tab?.id ?? _gv2TabId;
+    _gv2TabId = sender.tab?.id ?? request.tabId ?? _gv2TabId;
     // Synchronous response — do NOT return true (that keeps the channel open and
     // causes "message channel closed before response received" warnings).
     sendResponse({ success: true });

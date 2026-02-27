@@ -27,8 +27,8 @@ Return JSON only:
   "step": N,
   "instruction": "Clear instruction shown to the user",
   "element": {"index": N, "text": "element text to highlight"},
-  "action": "click" | "type" | "done",
-  "typeText": "text to type (only when action=type)",
+  "action": "click" | "type" | "navigate" | "done",
+  "typeText": "text to type (action=type) OR URL to visit (action=navigate)",
   "isLastStep": false,
   "nextStepHint": "What will happen after this step"
 }
@@ -37,14 +37,23 @@ RULES:
 1. ONE step at a time — never list multiple things to do
 2. action="click": user manually clicks the highlighted element; wait for them
 3. action="type": provide typeText, the agent auto-fills the field and continues
-4. action="done": set isLastStep=true; no element interaction needed
-5. Highlight the element to interact with using its index from PAGE INDEX
-6. If the target is not visible, guide the user to open the relevant menu first
+4. action="navigate": user must visit a different website. Set typeText to the URL (e.g. "https://youtube.com"). Guidance auto-resumes on the new page. No element needed.
+5. action="done": set isLastStep=true; no element interaction needed
+6. Highlight the element to interact with using its index from PAGE INDEX
+7. If the target is not visible, guide the user to open the relevant menu first
 
 COMMON PATTERNS:
 - Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
 - Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
 - Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
+- Cross-site:     Step 1 → navigate to URL (action=navigate) → Step 2 → search/interact on new site
+
+CROSS-SITE NAVIGATION:
+If the goal requires a different website and the user is NOT there yet:
+- Use action="navigate" with typeText set to the full URL (e.g. "https://youtube.com")
+- Do NOT set isLastStep=true — guidance continues on the new page automatically
+- Instruction should tell the user to open that URL in their address bar
+- After the user navigates, the next step will run on the new site
 
 NATIVE BROWSER DIALOGS (print, save, open file, etc.):
 When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that
@@ -649,7 +658,11 @@ async function gv2ProcessResponse(content) {
     const isLast = !!step.isLastStep;
     g.previousSteps.push(`Step ${step.step}: ${step.instruction}${isLast ? ' ✓' : ''}`);
 
+    // Store current action so gv2NextStep can handle it correctly
+    g.currentAction = step.action;
+
     if (isLast) {
+      g.currentAction = 'done';
       _gv2ClearState();
     } else if (step.action === 'click') {
       // Save state with pendingResume=true BEFORE setting up click listener.
@@ -660,6 +673,20 @@ async function gv2ProcessResponse(content) {
     } else if (step.action === 'type') {
       await _gv2SetState(false);
       setTimeout(() => _gv2AutoType(step), 200);
+    } else if (step.action === 'navigate') {
+      // Cross-site navigation: auto-navigate the current tab to the target URL.
+      // Set pendingResume=true BEFORE navigating so SW state is persisted.
+      // The new page's content script will connect to SW, find pendingResume=true,
+      // and resume guidance automatically (same path as click-triggered nav).
+      g.currentAction = 'navigate';
+      g.currentNavigateUrl = step.typeText || null;
+      await _gv2SetState(true);
+      if (step.typeText) {
+        // Short delay so the user sees the instruction, then auto-navigate.
+        // Same pattern as _gv2AutoType for type steps.
+        _gv2ShowIndicator('Navigating…');
+        setTimeout(() => { window.location.href = step.typeText; }, 1200);
+      }
     } else {
       // done / unknown
       await _gv2SetState(false);
@@ -939,6 +966,15 @@ function _gv2DispatchClick(el) {
  * immediately generates the next step on the current page.
  */
 window.gv2NextStep = async function () {
+  // Special case: navigate action auto-navigates; if the user somehow presses
+  // Next before the 1.2s timer fires, navigate immediately.
+  if (window._guidev2?.currentAction === 'navigate' && window._guidev2?.currentNavigateUrl) {
+    console.log('[guidev2] Next pressed on navigate step — navigating now');
+    _gv2ShowIndicator('Navigating…');
+    window.location.href = window._guidev2.currentNavigateUrl;
+    return;
+  }
+
   if (!_guidev2WaitingForClick) return; // Not in a click-wait state
   _gv2RemoveClickListeners();
   _guidev2WaitingForClick = false;

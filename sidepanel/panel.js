@@ -97,6 +97,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Show current model status on open
   showModelStatus();
 
+  // Show a hint if the panel opens on a restricted page
+  {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || '';
+    const restricted = !url || url.startsWith('chrome://') || url.startsWith('chrome-extension://') ||
+      url.startsWith('about:') || url.startsWith('edge://') || url.startsWith('brave://') ||
+      url.startsWith('moz-extension://');
+    if (restricted) {
+      addMessage('💡 You\'re on a browser page where extensions can\'t access the content. I can still answer general knowledge questions — just ask!', 'system');
+    }
+  }
+
   // Listen for tab changes.
   // Save the outgoing tab's session, then restore the incoming tab's session
   // (or start fresh if this is the first time visiting that tab).
@@ -276,12 +288,20 @@ function escapeHtml(text) {
 function parseMarkdown(text) {
   // First escape HTML to prevent XSS
   let result = escapeHtml(text);
-  
+
   // Code blocks with triple backticks (must be done before inline code)
   result = result.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-  
+
   // Inline code with single backticks
   result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Markdown links [text](url) → external clickable links
+  // Done after code so links inside code blocks aren't parsed.
+  // &amp; is unescaped back to & for valid href attributes.
+  result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (match, label, url) => {
+    const href = url.replace(/&amp;/g, '&');
+    return `<a class="xwebagent-ext-link" href="${href}" target="_blank" rel="noopener noreferrer">${label} ↗</a>`;
+  });
   
   // Bold with **text** (must be done before italic)
   result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -542,7 +562,7 @@ function addGuideStep(result) {
       <span class="xwebagent-step-text">${result.answer}</span>
     </div>
     ${result.nextStepHint && !result.isLastStep ? `<div class="xwebagent-next-hint">💡 ${result.nextStepHint}</div>` : ''}
-    ${!result.isLastStep ? `<div class="xwebagent-guide-waiting">${result.action === 'click' ? '👆 Click the highlighted element, or press Next below' : '👆 Complete this step, then I\'ll show you the next one'}</div>` : ''}
+    ${!result.isLastStep ? `<div class="xwebagent-guide-waiting">${result.action === 'click' ? '👆 Click the highlighted element, or press Next below' : result.action === 'navigate' ? '⏳ Navigating automatically…' : '👆 Complete this step, then I\'ll show you the next one'}</div>` : ''}
   `;
 
   if (!result.isLastStep) {
@@ -573,6 +593,21 @@ function addGuideStep(result) {
         } catch (err) { /* ignore */ }
       });
       btnRow.appendChild(nextBtn);
+    } else if (result.action === 'navigate') {
+      // Show a "Go now" button as fallback if auto-navigation is slow
+      const goBtn = document.createElement('button');
+      goBtn.className = 'xwebagent-step-next-btn';
+      goBtn.textContent = 'Go now →';
+      goBtn.title = 'Navigate now';
+      goBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        goBtn.disabled = true;
+        stopHereBtn.disabled = true;
+        try {
+          await sendToContentScript({ action: 'nextGuideStep' });
+        } catch (err) { /* ignore */ }
+      });
+      btnRow.appendChild(goBtn);
     }
 
     btnRow.appendChild(stopHereBtn);
@@ -680,6 +715,106 @@ async function stopGuide(message = '⏹ Guide stopped.') {
  */
 function hideTyping() {
   document.querySelector('.xwebagent-typing')?.remove();
+}
+
+/**
+ * Handle a navigation+guide request from a restricted page.
+ * Detects if the query wants to go to a website, then:
+ *   1. Sets guide state in the SW (so guidance auto-starts on the new page).
+ *   2. Navigates the current tab to the target URL.
+ * Returns a result object on success, or null if not a navigation request.
+ * @param {string} query
+ * @param {number} tabId - Current tab ID (needed to set SW's _gv2TabId)
+ */
+async function _handleRestrictedPageGuide(query, tabId) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'callRouterLLM',
+      systemPrompt: `Detect if the user wants to navigate to a website and do something there. If yes, extract the target URL and task. Return JSON only.
+{"navigate": true, "url": "https://site.com", "task": "what to do on the site"}
+OR if not a navigation request:
+{"navigate": false}
+Examples:
+"go to youtube and find spider-man" → {"navigate":true,"url":"https://youtube.com","task":"find spider-man movie on YouTube"}
+"find me black shoes on amazon" → {"navigate":true,"url":"https://amazon.com","task":"search for black men's shoes"}
+"search for flights to Paris" → {"navigate":true,"url":"https://google.com","task":"search for flights to Paris"}
+"open amazon" → {"navigate":true,"url":"https://amazon.com","task":"browse Amazon"}
+"what is Python?" → {"navigate":false}
+"how are you?" → {"navigate":false}`,
+      messages: [{ role: 'user', content: query }]
+    });
+
+    if (!response?.content) return null;
+
+    let json = response.content.trim()
+      .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+    const m = json.match(/\{[\s\S]*\}/);
+    if (m) json = m[0];
+    const intent = JSON.parse(json);
+
+    if (!intent.navigate || !intent.url || !intent.task) return null;
+
+    const url = intent.url.startsWith('http') ? intent.url : `https://${intent.url}`;
+    new URL(url); // throws if invalid — falls through to null return
+
+    // Set guide state in SW BEFORE navigating.
+    // Pass tabId explicitly because panel messages have no sender.tab.
+    await chrome.runtime.sendMessage({
+      action: 'guidanceV2_setState',
+      tabId,
+      state: {
+        active: true,
+        question: intent.task,
+        previousSteps: [],
+        lastUrl: url,
+        timestamp: Date.now(),
+        pendingResume: true
+      }
+    });
+
+    // Navigate the current tab to the target site
+    chrome.tabs.update(tabId, { url });
+
+    const hostname = new URL(url).hostname.replace(/^www\./, '');
+    return {
+      success: true,
+      answer: `Opening ${hostname} now — I'll start guiding you to "${intent.task}" once the page loads.`,
+      highlightCount: 0,
+      isGeneralKnowledge: true
+    };
+  } catch (e) {
+    console.warn('[panel] _handleRestrictedPageGuide error:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Answer a query purely from LLM general knowledge, bypassing the content script.
+ * Used when the active tab is a restricted page (chrome://, new tab, extension pages)
+ * where content scripts cannot be injected.
+ * @param {string} query
+ * @param {Array} history - Full conversationHistory (last entry is the current user message)
+ */
+async function _answerFromKnowledge(query, history) {
+  try {
+    const messages = [
+      ...history.slice(-7, -1).map(h => ({ role: h.role, content: h.content })),
+      { role: 'user', content: query }
+    ];
+
+    const response = await chrome.runtime.sendMessage({
+      action: 'callLLM',
+      systemPrompt: 'You are a helpful assistant. Answer from your general knowledge. Be concise and accurate. If you are not certain, say so. Do not make up facts.\n\nAfter your answer, if the topic has a well-known Wikipedia article, add a short "Sources:" section with markdown links:\nSources:\n- [Article Name](https://en.wikipedia.org/wiki/Article_Name)\nOnly include 1-3 sources you are confident exist. Skip the section for trivial questions.',
+      messages
+    });
+
+    if (response?.content) {
+      return { success: true, answer: response.content, highlightCount: 0, isGeneralKnowledge: true };
+    }
+    return { success: false, error: response?.error || 'No response from LLM' };
+  } catch (e) {
+    return { success: false, error: e.message || 'Failed to reach service worker' };
+  }
 }
 
 /**
@@ -1187,108 +1322,153 @@ async function sendMessage() {
         };
       }
     } else {
-      // Normal routing via content script
-      // Pass hasImage flag so router knows if image_ask is valid
-      result = await sendToContentScript({ 
-        action: 'handleQuery', 
-        query: query,
-        history: conversationHistory.slice(0, -1),
-        hasImage: currentMessageHasImage,
-        hasImageInHistory: hasImageInConversation
-      });
+      // Check if we're on a restricted page where content scripts cannot be injected
+      // (chrome://, chrome-extension://, about:, edge://, brave://, new tab page, etc.)
+      const tabUrl = currentTab?.url || '';
+      const isRestrictedPage = !tabUrl ||
+        tabUrl.startsWith('chrome://') ||
+        tabUrl.startsWith('chrome-extension://') ||
+        tabUrl.startsWith('about:') ||
+        tabUrl.startsWith('edge://') ||
+        tabUrl.startsWith('brave://') ||
+        tabUrl.startsWith('moz-extension://');
+
+      if (isRestrictedPage) {
+        // Content script unavailable on restricted pages.
+        // First check if this is a navigation+guide request (e.g. "go to youtube and find X").
+        // If so, set guide state in SW and navigate the tab — guide auto-starts on new page.
+        const tabId = currentTab?.id;
+        const guideResult = tabId
+          ? await _handleRestrictedPageGuide(query, tabId)
+          : null;
+        result = guideResult || await _answerFromKnowledge(query, conversationHistory);
+      } else {
+        // Normal routing via content script
+        result = await sendToContentScript({
+          action: 'handleQuery',
+          query: query,
+          history: conversationHistory.slice(0, -1),
+          hasImage: currentMessageHasImage,
+          hasImageInHistory: hasImageInConversation
+        });
+      }
     }
     
     hideTyping();
     
     if (result && result.success) {
-      // Build debug info for collapsible section
-      const debugLines = [];
-      
-      // Routing decision
-      if (result.routedTo) {
-        const confidence = Math.round((result.routeConfidence || 0) * 100);
-        const handlerEmoji = {
-          'ask': '💬',
-          'guide': '📋',
-          'protection': '🛡️',
-          'image_ask': '🖼️',
-          'pdf_ask': '📄'
-        }[result.routedTo] || '🎯';
-        debugLines.push(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}%)`);
-      }
-      
-      // Image ask info
-      if (result.isImageAsk) {
-        if (result.imageAskSteps) {
-          debugLines.push(`🔍 Image search steps: ${result.imageAskSteps}`);
+      // ── Multi-step agentic result ──────────────────────────────────────────
+      if (result.isMultiTool && Array.isArray(result.steps) && result.steps.length > 0) {
+        // Render each step's result in order
+        for (const step of result.steps) {
+          if (!step || step.success === false) continue;
+
+          if (step.answer && !step.isAskStep) {
+            conversationHistory.push({ role: 'assistant', content: step.answer });
+          }
+
+          if (step.isGuide) {
+            addGuideStep(step);
+          } else if (step.isAskStep) {
+            addAskStep(step);
+          } else if (step.answer) {
+            let msg = step.answer;
+            if (step.highlightCount > 0) msg += ` ✨ (${step.highlightCount} highlighted)`;
+            const hasHl = step.hasHighlights || step.highlightCount > 0;
+            const hasPdf = step.isPdf && (step.answer.includes('[Page ') || step.answer.includes('[idx:'));
+            addMessage(msg, 'assistant', hasHl || hasPdf);
+          }
         }
-        if (result.imageAskActions && result.imageAskActions.length > 0) {
-          debugLines.push(`🧭 Image search navigation:`);
-          result.imageAskActions.forEach(action => {
-            debugLines.push(`  • ${action}`);
-          });
+
+        // Collapsible debug: plan summary + per-step breakdown
+        const planDebugLines = [];
+        if (result.planSummary) {
+          planDebugLines.push(`🧠 Plan: ${result.planSummary}`);
         }
-        // Render clickable regions on the uploaded image grounded to the answer
-        if (result.imageRegions?.length > 0) {
-          renderImageRegions(result.imageRegions);
+        result.steps.forEach((s, i) => {
+          const toolEmoji = { find:'💬', guide:'📋', hide:'🛡️', answer:'💡', image_ask:'🖼️', pdf_ask:'📄' }[s.tool] || '🎯';
+          planDebugLines.push(`Step ${i + 1}: ${toolEmoji} ${s.tool}${s.reason ? ` — ${s.reason}` : ''}`);
+        });
+        if (planDebugLines.length > 0) {
+          addCollapsibleDebug(planDebugLines);
         }
-      }
-      
-      // PDF info
-      if (result.isPdf) {
-        debugLines.push(`📄 PDF mode: ${result.extractedPages || '?'}/${result.totalPages || '?'} pages extracted`);
-        if (result.pdfJsMode) {
-          debugLines.push(`🔧 Method: PDF.js client-side extraction`);
-        }
-      }
-      
-      // Vision decision
-      if (result.visionDecision) {
-        const vd = result.visionDecision;
-        const visionConfidence = Math.round((vd.confidence || 0) * 100);
-        const visionEmoji = vd.needsVision ? '📸' : '📝';
-        const visionMode = vd.needsVision ? 'Vision' : 'Text-only';
-        debugLines.push(`${visionEmoji} Mode: ${visionMode} (${visionConfidence}%)`);
-        
-        if (result.useVision && result.visionSteps) {
-          debugLines.push(`🔍 Steps: ${result.visionSteps}`);
-        }
-        
-        if (result.visionActions && result.visionActions.length > 0) {
-          debugLines.push(`🧭 Navigation:`);
-          result.visionActions.forEach(action => {
-            debugLines.push(`  • ${action}`);
-          });
-        }
-      }
-      
-      // Add collapsible debug section if there's debug info
-      if (debugLines.length > 0) {
-        addCollapsibleDebug(debugLines);
-      }
-      
-      // Add assistant response to history (but not for intermediate steps)
-      if (result.answer && !result.isAskStep) {
-        conversationHistory.push({ role: 'assistant', content: result.answer });
-      }
-      
-      if (result.isGuide) {
-        addGuideStep(result);
-      } else if (result.isAskStep) {
-        // Ask mode step (scroll/expand needed)
-        addAskStep(result);
+
       } else {
-        let message = result.answer;
-        if (result.highlightCount > 0) {
-          message += ` ✨ (${result.highlightCount} highlighted)`;
+        // ── Single-step result (standard path, backward-compatible) ───────────
+        const debugLines = [];
+
+        // Routing / plan info
+        if (result.routedTo) {
+          const confidence = Math.round((result.routeConfidence || 0) * 100);
+          const handlerEmoji = {
+            'ask': '💬', 'find': '💬',
+            'guide': '📋',
+            'protection': '🛡️', 'hide': '🛡️',
+            'image_ask': '🖼️',
+            'pdf_ask': '📄',
+            'answer': '💡',
+            'agent': '🤖'
+          }[result.routedTo] || '🎯';
+          const label = result.routedTo === 'ask' ? 'find' : result.routedTo;
+          debugLines.push(`${handlerEmoji} Routed to: ${label} (${confidence}%)`);
         }
-        // Make clickable if has highlights OR is a PDF response (has citations)
-        const hasHighlights = result.hasHighlights || result.highlightCount > 0;
-        const hasPdfCitations = result.isPdf && (
-          result.answer?.includes('[Page ') || 
-          result.answer?.includes('[idx:')
-        );
-        addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
+        if (result.planSummary) {
+          debugLines.push(`🧠 ${result.planSummary}`);
+        }
+
+        // Image ask info
+        if (result.isImageAsk) {
+          if (result.imageAskSteps) {
+            debugLines.push(`🔍 Image search steps: ${result.imageAskSteps}`);
+          }
+          if (result.imageAskActions && result.imageAskActions.length > 0) {
+            debugLines.push(`🧭 Image search navigation:`);
+            result.imageAskActions.forEach(action => { debugLines.push(`  • ${action}`); });
+          }
+          if (result.imageRegions?.length > 0) {
+            renderImageRegions(result.imageRegions);
+          }
+        }
+
+        // PDF info
+        if (result.isPdf) {
+          debugLines.push(`📄 PDF mode: ${result.extractedPages || '?'}/${result.totalPages || '?'} pages extracted`);
+          if (result.pdfJsMode) debugLines.push(`🔧 Method: PDF.js client-side extraction`);
+        }
+
+        // Vision decision
+        if (result.visionDecision) {
+          const vd = result.visionDecision;
+          const visionConfidence = Math.round((vd.confidence || 0) * 100);
+          const visionEmoji = vd.needsVision ? '📸' : '📝';
+          debugLines.push(`${visionEmoji} Mode: ${vd.needsVision ? 'Vision' : 'Text-only'} (${visionConfidence}%)`);
+          if (result.useVision && result.visionSteps) debugLines.push(`🔍 Steps: ${result.visionSteps}`);
+          if (result.visionActions?.length > 0) {
+            debugLines.push(`🧭 Navigation:`);
+            result.visionActions.forEach(action => { debugLines.push(`  • ${action}`); });
+          }
+        }
+
+        if (debugLines.length > 0) addCollapsibleDebug(debugLines);
+
+        // Add to conversation history
+        if (result.answer && !result.isAskStep) {
+          conversationHistory.push({ role: 'assistant', content: result.answer });
+        }
+
+        if (result.isGuide) {
+          addGuideStep(result);
+        } else if (result.isAskStep) {
+          addAskStep(result);
+        } else {
+          let message = result.answer;
+          if (result.highlightCount > 0) message += ` ✨ (${result.highlightCount} highlighted)`;
+          const hasHighlights = result.hasHighlights || result.highlightCount > 0;
+          const hasPdfCitations = result.isPdf && (
+            result.answer?.includes('[Page ') || result.answer?.includes('[idx:')
+          );
+          addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
+        }
       }
     } else {
       addMessage(`❌ ${result?.error || 'Unknown error'}`, 'error');

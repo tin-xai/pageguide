@@ -93,123 +93,122 @@ async function routeQuery(query) {
 }
 
 /**
- * Smart handler that routes queries using LLM coordinator
- * This is the main entry point for all user queries
+ * Pure function: returns true if the query is a search/discovery intent
+ * (e.g. "find me X", "search for X") where the user wants to navigate or
+ * search to reach content, NOT locate something already on the current page.
+ * Used as a heuristic safety override when the planner picks "find" incorrectly.
+ * Exported for unit testing.
+ * @param {string} query
+ * @returns {boolean}
+ */
+function _isSearchIntentQuery(query) {
+  if (!query) return false;
+  // Matches: "find me X", "search for X", "look for X", "get me X",
+  //          "show me a/an X", "go to X and find/search Y"
+  return /\bfind me\b|\bsearch for\b|\blook for\b|\bget me\b|\bshow me an?\b|\bgo to .{1,40} and (find|search|look)\b/i.test(query);
+}
+
+/**
+ * Smart handler that routes queries using the agentic planner + executor.
+ * This is the main entry point for all user queries.
  * @param {string} query - User's query
  * @param {Array} history - Conversation history
  * @param {boolean} hasImage - Whether current message has an image attached
  * @param {boolean} hasImageInHistory - Whether any previous message had an image
  */
 async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false) {
-  // expandTruncatedContent is called AFTER routing (below), only for non-guide modes.
-  // Calling it before routing would auto-click "See more" / "More" buttons on
-  // social sites (X, LinkedIn) before guidance even starts, mutating the page
-  // and confusing the step generator.
-
-  // Check if image is available (current or in history)
   const imageAvailable = hasImage || hasImageInHistory || !!getUploadedImage?.();
-  console.log('🎯 Image available:', imageAvailable, '(current:', hasImage, ', history:', hasImageInHistory, ')');
-  
-  // If current message has an image attached, directly route to image_ask
-  // (don't ask the LLM router since it can't see the image)
+  console.log('🤖 Agent: image available:', imageAvailable, '(current:', hasImage, ', history:', hasImageInHistory, ')');
+
+  // Image bypass: current message has image → go directly to image_ask (skip planner)
   if (hasImage && typeof handleImageAsk === 'function') {
-    console.log('🎯 Current message has image, routing directly to image_ask');
+    console.log('🤖 Agent: current message has image, routing directly to image_ask');
     const result = await handleImageAsk(query);
     if (result) {
       result.routedTo = 'image_ask';
       result.routeConfidence = 1.0;
       result.routeReason = 'Image attached to current message';
+      result.planSummary = 'Searching for your image on the page';
+      result.planSteps = [{ tool: 'image_ask', reason: 'Image attached', ...result }];
       return result;
     }
     // Fall through if image_ask fails
   }
-  
-  // Check if we're on a PDF page first (bypass router for PDF pages)
+
+  // PDF bypass: PDF pages skip the planner (always pdf_ask)
   if (typeof isPdfPage === 'function' && isPdfPage()) {
-    console.log('🎯 PDF page detected, routing to pdf_ask');
+    console.log('🤖 Agent: PDF page detected, routing directly to pdf_ask');
     if (typeof handlePdfAsk === 'function') {
       const result = await handlePdfAsk(query);
       if (result) {
         result.routedTo = 'pdf_ask';
         result.routeConfidence = 1.0;
         result.routeReason = 'PDF page detected';
+        result.planSummary = 'Searching the PDF document';
+        result.planSteps = [{ tool: 'pdf_ask', reason: 'PDF page', ...result }];
         return result;
       }
     }
-    // Fall through to regular ask if pdf handler returns null
+    // Fall through if PDF handler returns null
   }
-  
-  // Route the query using LLM
-  const route = await routeQuery(query);
-  console.log('🎯 Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
-  
-  // If router says image_ask but no image available, fall back to ask
-  if (route.handler === 'image_ask' && !imageAvailable) {
-    console.log('🎯 Router suggested image_ask but no image available, falling back to ask');
-    route.handler = 'ask';
-    route.reason = 'No image available, using ask instead';
-  }
-  
-  let result;
 
-  // Expand "See more" / "Show more" ONLY for ask and pdf_ask.
-  // All other modes (guide, protection, image_ask) skip this because auto-clicking
-  // mutates the page unexpectedly:
-  //   • guide     — mutates the page before guidance starts, confusing the step generator
-  //   • hide      — user wants to hide existing elements, not trigger more content
-  //   • image_ask — expanding text doesn't help find images
-  const _shouldExpand = route.handler === 'ask' || route.handler === 'pdf_ask';
-  if (_shouldExpand && typeof expandTruncatedContent === 'function') {
+  // Build site context for the planner: URL + title + short page snippet.
+  // URL and title are cheap and critical for intent disambiguation
+  // (e.g. "find me black shoes size 6.5" means guide on amazon.com, find on a product page).
+  let pageHint = '';
+  try {
+    const url = window.location.href || '';
+    const title = document.title || '';
+    const snippet = typeof getVisibleText === 'function'
+      ? (getVisibleText(300) || '').slice(0, 300)
+      : '';
+    pageHint = `URL: ${url}\nTitle: ${title}\nPage snippet: ${snippet}`;
+  } catch (e) { /* ignore */ }
+  // Hint the planner that an image is available in history
+  if (imageAvailable && !hasImage) {
+    pageHint = `[User has an uploaded image in conversation]\n${pageHint}`;
+  }
+
+  // Plan the query
+  const plan = await planQuery(query, pageHint);
+
+  // Heuristic override 1: "find me X" / "search for X" almost always means guide.
+  // The planner can get confused when the page snippet shows product/content text,
+  // causing it to assume the item is already on the page. This override corrects that.
+  if (plan.steps.length === 1 && plan.steps[0].tool === 'find' &&
+      _isSearchIntentQuery(query)) {
+    console.log('🤖 Agent: heuristic override find→guide for search-intent query:', query);
+    plan.steps[0].tool = 'guide';
+    plan.steps[0].args = { task: query };
+    plan.steps[0].reason = 'Heuristic: search-intent phrase ("find me / search for / look for") overridden to guide';
+  }
+
+  // If planner chose image_ask but no image is available, override to find
+  for (const step of plan.steps) {
+    if (step.tool === 'image_ask' && !imageAvailable) {
+      console.log('🤖 Agent: planner chose image_ask but no image available, switching to find');
+      step.tool = 'find';
+      step.reason = 'No image available, using find instead';
+    }
+  }
+
+  // Expand "See more" / "Show more" ONLY for plans that include find or pdf_ask steps.
+  // Skipped for guide/hide/answer/image_ask to avoid mutating the page unexpectedly.
+  const shouldExpand = plan.steps.some(s => s.tool === 'find' || s.tool === 'pdf_ask');
+  if (shouldExpand && typeof expandTruncatedContent === 'function') {
     await expandTruncatedContent();
   }
 
-  switch (route.handler) {
-    case 'hide':
-      if (typeof handleProtectionQuery === 'function') {
-        result = await handleProtectionQuery(query);
-        if (result) break;
-      }
-      // Fall through to ask if hide handler not available
-      result = await handleAsk(query, history);
-      break;
+  // Execute the plan
+  const result = await runAgentPlan(plan, query, history, hasImage, hasImageInHistory);
 
-    case 'guide':
-      result = await handleStepByStepGuide(query);
-      break;
-    
-    case 'image_ask':
-      if (typeof handleImageAsk === 'function') {
-        result = await handleImageAsk(query);
-        if (result) break;
-      }
-      // Fall through to ask if image_ask handler not available or no image uploaded
-      console.log('🎯 Falling back to ask (no image or handler unavailable)');
-      result = await handleAsk(query, history);
-      break;
-    
-    case 'pdf_ask':
-      if (typeof handlePdfAsk === 'function') {
-        result = await handlePdfAsk(query);
-        if (result) break;
-      }
-      // Fall through to ask if pdf_ask handler returns null
-      console.log('🎯 Falling back to ask (PDF handler unavailable or not a PDF)');
-      result = await handleAsk(query, history);
-      break;
-    
-    case 'ask':
-    default:
-      result = await handleAsk(query, history);
-      break;
+  // Ensure routedTo is set for the debug panel (backward compat)
+  if (result && !result.routedTo) {
+    result.routedTo = plan.steps.length > 1 ? 'agent' : (plan.steps[0]?.tool || 'find');
+    result.routeConfidence = result.routeConfidence || 1.0;
+    result.routeReason = result.routeReason || plan.planSummary || '';
   }
-  
-  // Add routing info to result
-  if (result) {
-    result.routedTo = route.handler;
-    result.routeConfidence = route.confidence;
-    result.routeReason = route.reason;
-  }
-  
+
   return result;
 }
 

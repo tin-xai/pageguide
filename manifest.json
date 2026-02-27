@@ -46,6 +46,9 @@
         "content/tasks/guidev2.js",
         "content/tasks/protection.js",
         "content/tasks/image_ask.js",
+        "content/tasks/answer.js",
+        "content/agent/planner.js",
+        "content/agent/executor.js",
         "content/content.js"
       ],
       "css": ["content/content.css"],
