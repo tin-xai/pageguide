@@ -8,6 +8,11 @@ let uploadedImageBase64 = null; // Stores the uploaded image
 let hasImageInConversation = false; // Track if image was used in conversation
 let guideActive = false; // True while guide is generating steps (shows stop button)
 
+// Per-tab chat sessions so switching back to a tab restores its conversation.
+// Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
+// Cleared when the tab is closed, navigates to a new URL, or the user manually resets.
+const _tabSessions = new Map();
+
 // Open a persistent port to the service worker.
 // When the panel is closed (by any means — X button, keyboard shortcut, etc.)
 // the port disconnects and the service worker's onDisconnect handler fires reliably,
@@ -25,11 +30,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.runtime.openOptionsPage();
   });
 
+  // Theme toggle (light / dark mode)
+  const themeToggleBtn = document.getElementById('xwebagent-theme-toggle');
+  const applyTheme = (isLight) => {
+    document.body.classList.toggle('light-mode', isLight);
+    if (themeToggleBtn) themeToggleBtn.textContent = isLight ? '☀️' : '🌙';
+  };
+  const savedTheme = localStorage.getItem('xwebagent-theme');
+  applyTheme(savedTheme === 'light');
+  themeToggleBtn?.addEventListener('click', () => {
+    const isLight = !document.body.classList.contains('light-mode');
+    applyTheme(isLight);
+    localStorage.setItem('xwebagent-theme', isLight ? 'light' : 'dark');
+  });
+
   document.getElementById('xwebagent-new-chat')?.addEventListener('click', () => resetChat());
   
   document.getElementById('xwebagent-send').addEventListener('click', sendMessage);
   document.getElementById('xwebagent-input').addEventListener('keypress', e => {
-    if (e.key === 'Enter') sendMessage();
+    if (e.key === 'Enter') {
+      const menu = document.getElementById('xwebagent-slash-menu');
+      // If slash menu is open and an item is selected, let the keydown handler handle it
+      if (menu && menu.style.display !== 'none' && _slashMenuIndex >= 0) return;
+      sendMessage();
+    }
   });
   
   // Quick action buttons
@@ -60,12 +84,49 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Focus input
   document.getElementById('xwebagent-input')?.focus();
 
+  // Wire up delegated click handler for message container.
+  // A single listener on the container survives innerHTML replacement during
+  // session restore, keeping citations and highlights clickable after tab switches.
+  const messagesContainer = document.getElementById('xwebagent-messages');
+  if (messagesContainer) _setupMessageContainerDelegate(messagesContainer);
+
+  // Wire up slash command autocomplete
+  _initSlashAutocomplete();
+
   // Show current model status on open
   showModelStatus();
 
-  // Listen for tab changes
+  // Listen for tab changes.
+  // Save the outgoing tab's session, then restore the incoming tab's session
+  // (or start fresh if this is the first time visiting that tab).
+  // Guide-triggered tab transitions are left untouched (guideActive guard).
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    const prevTabId = currentTabId;
     currentTabId = activeInfo.tabId;
+
+    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive)) return;
+
+    // Snapshot the outgoing tab's conversation
+    _saveTabSession(prevTabId);
+
+    // NOTE: we intentionally do NOT clear highlights on the old tab here.
+    // Highlights live in each tab's own DOM and persist naturally until the
+    // user explicitly clears them (Clear All), the tab navigates to a new URL,
+    // or the panel is closed.
+
+    // Restore a previous session for this tab, or start a fresh one
+    const saved = _tabSessions.get(activeInfo.tabId);
+    if (saved) {
+      _restoreTabSession(saved);
+    } else {
+      await resetChat(false);
+    }
+  });
+
+
+  // Clean up sessions for closed tabs to avoid memory leaks
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    _tabSessions.delete(tabId);
   });
 });
 
@@ -312,6 +373,83 @@ async function showModelStatus() {
 }
 
 /**
+ * Set up a single delegated click handler on the messages container.
+ * This survives innerHTML replacement during session restore, so all
+ * citation and highlight links remain clickable after tab switching.
+ * Call once at startup (DOMContentLoaded).
+ */
+function _setupMessageContainerDelegate(container) {
+  container.addEventListener('click', async (e) => {
+    // 1. PDF citation → PDF navigation (with range cycling)
+    const pdfCit = e.target.closest('.xwebagent-pdf-citation');
+    if (pdfCit) {
+      e.stopPropagation();
+
+      const rangesJson = pdfCit.dataset.ranges;
+      const pageNum = pdfCit.dataset.page ? parseInt(pdfCit.dataset.page, 10) : null;
+      const searchText = pdfCit.dataset.text;
+
+      let message;
+      if (rangesJson) {
+        const ranges = JSON.parse(rangesJson);
+        if (ranges.length > 1) {
+          const currentIdx = parseInt(pdfCit.dataset.currentRangeIdx || '0', 10);
+          const nextIdx = (currentIdx + 1) % ranges.length;
+          pdfCit.dataset.currentRangeIdx = String(nextIdx);
+
+          let counter = pdfCit.querySelector('.citation-range-counter');
+          if (!counter) {
+            counter = document.createElement('span');
+            counter.className = 'citation-range-counter';
+            pdfCit.appendChild(counter);
+          }
+          counter.textContent = `${currentIdx + 1}/${ranges.length}`;
+          pdfCit.title = `Evidence ${currentIdx + 1} of ${ranges.length} — click to cycle`;
+
+          message = { action: 'highlightByRanges', ranges: [ranges[currentIdx]] };
+        } else {
+          message = { action: 'highlightByRanges', ranges };
+        }
+      } else if (pageNum && searchText) {
+        message = { action: 'navigateToPdfPage', page: pageNum, searchText };
+      } else {
+        console.warn('Invalid citation data');
+        return;
+      }
+
+      const tabs = await chrome.tabs.query({});
+      const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
+      if (pdfViewerTab) {
+        chrome.tabs.sendMessage(pdfViewerTab.id, message);
+        chrome.tabs.update(pdfViewerTab.id, { active: true });
+      } else {
+        sendToContentScript(message);
+      }
+      return;
+    }
+
+    // 2. Web citation → scroll to index
+    const webCit = e.target.closest('.xwebagent-citation');
+    if (webCit) {
+      e.stopPropagation();
+      const index = parseInt(webCit.dataset.index, 10);
+      sendToContentScript({ action: 'scrollToIndex', index });
+      return;
+    }
+
+    // 3. Clickable message (guide/ask-step → scrollToHighlight; assistant → toggle citations)
+    const msg = e.target.closest('.xwebagent-message.xwebagent-clickable');
+    if (!msg || e.target.closest('button')) return;
+
+    if (msg.classList.contains('guide') || msg.classList.contains('ask-step')) {
+      sendToContentScript({ action: 'scrollToHighlight' });
+    } else {
+      msg.classList.toggle('citations-expanded');
+    }
+  });
+}
+
+/**
  * Add a message to the chat
  */
 function addMessage(content, type = 'assistant', clickable = false) {
@@ -331,82 +469,8 @@ function addMessage(content, type = 'assistant', clickable = false) {
     const parsedContent = parseCitations(markdownParsed);
     
     msg.innerHTML = parsedContent;
-    
-    // Add click handler for web citations
-    msg.querySelectorAll('.xwebagent-citation').forEach(citation => {
-      citation.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const index = parseInt(citation.dataset.index, 10);
-        sendToContentScript({ action: 'scrollToIndex', index });
-      });
-    });
-    
-    // Add click handler for PDF citations (both indexed and text-based)
-    msg.querySelectorAll('.xwebagent-pdf-citation').forEach(citation => {
-      citation.addEventListener('click', async (e) => {
-        e.stopPropagation();
-
-        // Check if this is an indexed citation with ranges
-        const rangesJson = citation.dataset.ranges;
-        const pageNum = citation.dataset.page ? parseInt(citation.dataset.page, 10) : null;
-        const searchText = citation.dataset.text;
-
-        let message;
-        if (rangesJson) {
-          // New format with multiple ranges — cycle through one at a time
-          const ranges = JSON.parse(rangesJson);
-
-          if (ranges.length > 1) {
-            // Get the index of the range to show on THIS click, then advance
-            const currentIdx = parseInt(citation.dataset.currentRangeIdx || '0', 10);
-            const nextIdx = (currentIdx + 1) % ranges.length;
-            citation.dataset.currentRangeIdx = String(nextIdx);
-
-            // Update or create the (k/n) counter inside the citation span
-            let counter = citation.querySelector('.citation-range-counter');
-            if (!counter) {
-              counter = document.createElement('span');
-              counter.className = 'citation-range-counter';
-              citation.appendChild(counter);
-            }
-            counter.textContent = `${currentIdx + 1}/${ranges.length}`;
-            citation.title = `Evidence ${currentIdx + 1} of ${ranges.length} — click to cycle`;
-
-            message = { action: 'highlightByRanges', ranges: [ranges[currentIdx]] };
-          } else {
-            message = { action: 'highlightByRanges', ranges: ranges };
-          }
-        } else if (pageNum && searchText) {
-          // Old format with page and text
-          message = { action: 'navigateToPdfPage', page: pageNum, searchText: searchText };
-        } else {
-          console.warn('Invalid citation data');
-          return;
-        }
-
-        // Send to the PDF viewer tab
-        const tabs = await chrome.tabs.query({});
-        const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
-
-        if (pdfViewerTab) {
-          chrome.tabs.sendMessage(pdfViewerTab.id, message);
-          chrome.tabs.update(pdfViewerTab.id, { active: true });
-        } else {
-          sendToContentScript(message);
-        }
-      });
-    });
-    
-    // Click on message (not citation) toggles citation text visibility
-    msg.addEventListener('click', (e) => {
-      // Don't toggle if clicking on a citation (let citation click handler handle it)
-      if (e.target.closest('.xwebagent-citation') || 
-          e.target.closest('.xwebagent-pdf-citation')) {
-        return;
-      }
-      // Toggle expanded state for citations
-      msg.classList.toggle('citations-expanded');
-    });
+    // Click handlers for citations and message toggle are handled by the
+    // delegated listener on the container (_setupMessageContainerDelegate).
   } else {
     // Apply markdown parsing for non-clickable messages too
     msg.innerHTML = parseMarkdown(content);
@@ -516,9 +580,7 @@ function addGuideStep(result) {
 
   if (result.hasHighlights) {
     msg.classList.add('xwebagent-clickable');
-    msg.addEventListener('click', () => {
-      sendToContentScript({ action: 'scrollToHighlight' });
-    });
+    // Click handler handled by delegated listener (_setupMessageContainerDelegate).
   }
 
   container.appendChild(msg);
@@ -567,11 +629,9 @@ function addAskStep(result) {
   
   if (result.hasHighlights) {
     msg.classList.add('xwebagent-clickable');
-    msg.addEventListener('click', () => {
-      sendToContentScript({ action: 'scrollToHighlight' });
-    });
+    // Click handler handled by delegated listener (_setupMessageContainerDelegate).
   }
-  
+
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
 }
@@ -864,7 +924,195 @@ function renderImageRegions(regions) {
     wrapper.appendChild(region);
   });
 
-  if (label) label.textContent = `🎯 ${regions.length} found — click to jump`;
+  if (label) label.textContent = `🎯 ${regions.length} highlight${regions.length !== 1 ? 's' : ''} found — click to jump`;
+}
+
+// ---------------------------------------------------------------------------
+// Slash command system
+// ---------------------------------------------------------------------------
+
+const SLASH_COMMANDS = [
+  { command: '/stop',       args: '',        description: 'Immediately cancel the current run' },
+  { command: '/reset',      args: '',        description: 'Clear conversation and context' },
+  { command: '/new',        args: '',        description: 'Clear conversation and context (alias of /reset)' },
+  { command: '/help',       args: '',        description: 'Show available commands and examples' },
+  { command: '/status',     args: '',        description: 'Show current model, SOM, and vision settings' },
+  { command: '/som',        args: 'on|off',  description: 'Enable or disable Set of Marks overlay' },
+  { command: '/vision',     args: 'on|off',  description: 'Enable or disable vision (screenshot) mode' },
+];
+
+/**
+ * Handle slash commands. Returns true if the input was a command (caller should not continue).
+ */
+async function handleSlashCommand(input) {
+  if (!input.startsWith('/')) return false;
+
+  const parts = input.split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+  const arg = parts[1]?.toLowerCase();
+
+  switch (cmd) {
+    case '/stop':
+      await stopGuide('⏹ Stopped.');
+      return true;
+
+    case '/reset':
+    case '/new':
+      await resetChat(false);
+      addMessage('🧹 Conversation reset. Ready for a new task!', 'system');
+      return true;
+
+    case '/help':
+      addMessage(
+        '**Available Commands**\n\n' +
+        '`/stop` — Immediately cancel the current run\n' +
+        '`/reset` or `/new` — Clear conversation and context\n' +
+        '`/status` — Show current model, SOM, and vision settings\n' +
+        '`/som on` / `/som off` — Toggle Set of Marks overlay\n' +
+        '`/vision on` / `/vision off` — Toggle vision (screenshot) mode\n' +
+        '`/help` — Show this help message',
+        'system'
+      );
+      return true;
+
+    case '/status': {
+      let s = {};
+      try { s = await chrome.storage.sync.get(['provider','geminiModel','openrouterModel','openaiModel','visionEnabled','somEnabled']); } catch (e) {}
+      const prov = s.provider || 'gemini';
+      const provLabel = { gemini: 'Gemini', openrouter: 'OpenRouter', openai: 'OpenAI' }[prov] || prov;
+      const modelRaw = prov === 'gemini' ? (s.geminiModel || 'gemini-2.5-flash')
+                     : prov === 'openrouter' ? (s.openrouterModel || '')
+                     : (s.openaiModel || '');
+      const model = modelRaw.includes('/') ? modelRaw.split('/').pop() : modelRaw;
+      const vision = s.visionEnabled === false ? 'OFF' : 'ON';
+      const som = s.somEnabled === true ? 'ON' : 'OFF';
+      addMessage(
+        `**Status**\n\n🤖 Provider: **${provLabel}** · ${model}\n📸 Vision: **${vision}**\n🔢 Set of Marks: **${som}**`,
+        'system'
+      );
+      return true;
+    }
+
+    case '/som':
+      if (arg === 'on' || arg === 'off') {
+        await chrome.storage.sync.set({ somEnabled: arg === 'on' });
+        addMessage(`🔢 Set of Marks: **${arg.toUpperCase()}**`, 'system');
+      } else {
+        addMessage('Usage: `/som on` or `/som off`', 'system');
+      }
+      return true;
+
+    case '/vision':
+      if (arg === 'on' || arg === 'off') {
+        await chrome.storage.sync.set({ visionEnabled: arg === 'on' });
+        addMessage(`📸 Vision: **${arg.toUpperCase()}**`, 'system');
+      } else {
+        addMessage('Usage: `/vision on` or `/vision off`', 'system');
+      }
+      return true;
+
+    default:
+      addMessage(`❓ Unknown command: \`${cmd}\`. Type \`/help\` to see available commands.`, 'system');
+      return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Slash command autocomplete
+// ---------------------------------------------------------------------------
+
+let _slashMenuIndex = -1;
+
+function _buildSlashMenuItems(inputVal) {
+  // Match commands whose full form starts with the typed text (e.g. "/s" matches /stop, /status, /som)
+  const lower = inputVal.toLowerCase();
+  return SLASH_COMMANDS.filter(c => c.command.startsWith(lower));
+}
+
+function _renderSlashMenu(items) {
+  const menu = document.getElementById('xwebagent-slash-menu');
+  if (!menu) return;
+  menu.innerHTML = '';
+  if (items.length === 0) { menu.style.display = 'none'; return; }
+
+  items.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'xwebagent-slash-item' + (idx === _slashMenuIndex ? ' active' : '');
+    row.innerHTML =
+      `<span class="slash-cmd">${item.command}${item.args ? ' <em>' + item.args + '</em>' : ''}</span>` +
+      `<span class="slash-desc">${item.description}</span>`;
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // prevent blur before we can set value
+      _applySlashItem(item);
+    });
+    menu.appendChild(row);
+  });
+  menu.style.display = 'block';
+}
+
+function _applySlashItem(item) {
+  const input = document.getElementById('xwebagent-input');
+  if (!input) return;
+  // Commands that take args: insert command + space so user can type the arg
+  if (item.args) {
+    input.value = item.command + ' ';
+  } else {
+    input.value = item.command;
+  }
+  _hideSlashMenu();
+  input.focus();
+}
+
+function _hideSlashMenu() {
+  const menu = document.getElementById('xwebagent-slash-menu');
+  if (menu) menu.style.display = 'none';
+  _slashMenuIndex = -1;
+}
+
+function _initSlashAutocomplete() {
+  const input = document.getElementById('xwebagent-input');
+  if (!input) return;
+
+  input.addEventListener('input', () => {
+    const val = input.value;
+    if (!val.startsWith('/')) { _hideSlashMenu(); return; }
+    // Only show the menu while user is still on the first "word" (command name)
+    if (val.includes(' ') && val.split(' ').length > 1 && val.split(' ')[1] !== '') {
+      _hideSlashMenu(); return;
+    }
+    _slashMenuIndex = -1;
+    _renderSlashMenu(_buildSlashMenuItems(val));
+  });
+
+  input.addEventListener('keydown', (e) => {
+    const menu = document.getElementById('xwebagent-slash-menu');
+    const visible = menu && menu.style.display !== 'none';
+    if (!visible) return;
+
+    const items = menu.querySelectorAll('.xwebagent-slash-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _slashMenuIndex = Math.min(_slashMenuIndex + 1, items.length - 1);
+      items.forEach((el, i) => el.classList.toggle('active', i === _slashMenuIndex));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _slashMenuIndex = Math.max(_slashMenuIndex - 1, -1);
+      items.forEach((el, i) => el.classList.toggle('active', i === _slashMenuIndex));
+    } else if (e.key === 'Tab' || (e.key === 'Enter' && _slashMenuIndex >= 0)) {
+      e.preventDefault();
+      const idx = _slashMenuIndex >= 0 ? _slashMenuIndex : 0;
+      const cmdIdx = [...items].indexOf(items[idx]);
+      const matched = _buildSlashMenuItems(input.value);
+      if (matched[cmdIdx]) _applySlashItem(matched[cmdIdx]);
+    } else if (e.key === 'Escape') {
+      _hideSlashMenu();
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    // Small delay so mousedown on menu item fires first
+    setTimeout(_hideSlashMenu, 150);
+  });
 }
 
 /**
@@ -874,10 +1122,20 @@ async function sendMessage() {
   const input = document.getElementById('xwebagent-input');
   const btn = document.getElementById('xwebagent-send');
   if (!input?.value.trim()) return;
-  
+
+  _hideSlashMenu();
+
   const query = input.value.trim();
   input.value = '';
   btn.disabled = true;
+
+  // Handle slash commands before routing to agent
+  if (query.startsWith('/')) {
+    btn.disabled = false;
+    input.focus();
+    await handleSlashCommand(query);
+    return;
+  }
   
   // Check if current message has an image attached
   const currentMessageHasImage = !!uploadedImageBase64;
@@ -1134,6 +1392,62 @@ ${pdfTextContent}`;
 }
 
 /**
+ * Decide whether switching from prevTabId to newTabId should trigger a chat reset.
+ * Exposed on window so unit tests can call it directly.
+ *
+ * Rules:
+ *  - Never reset while the guide agent is active (it manages its own tab transitions).
+ *  - Never reset on the very first activation (prevTabId is null).
+ *  - Never reset when the same tab is re-activated (shouldn't normally happen).
+ *  - Reset in every other case (user opened/switched to a real new tab).
+ */
+function _shouldResetOnTabSwitch(prevTabId, newTabId, isGuideActive) {
+  if (isGuideActive) return false;
+  if (!prevTabId || prevTabId === newTabId) return false;
+  return true;
+}
+window._shouldResetOnTabSwitch = _shouldResetOnTabSwitch;
+
+/**
+ * Snapshot the current tab's chat into _tabSessions so it can be restored later.
+ */
+function _saveTabSession(tabId) {
+  if (!tabId) return;
+  const container = document.getElementById('xwebagent-messages');
+  _tabSessions.set(tabId, {
+    chatMessages: [...chatMessages],
+    conversationHistory: [...conversationHistory],
+    hasImageInConversation,
+    html: container ? container.innerHTML : ''
+  });
+}
+
+/**
+ * Restore a previously saved session for the tab being switched to.
+ * Image upload state is always cleared (blobs are not serializable).
+ */
+function _restoreTabSession(session) {
+  chatMessages = [...session.chatMessages];
+  conversationHistory = [...session.conversationHistory];
+  hasImageInConversation = session.hasImageInConversation;
+
+  const container = document.getElementById('xwebagent-messages');
+  if (container) {
+    container.innerHTML = session.html;
+    container.scrollTop = container.scrollHeight;
+  }
+
+  // Clear image upload UI (blobs aren't saved in the session)
+  uploadedImageBase64 = null;
+  const preview = document.getElementById('xwebagent-image-preview');
+  const uploadLabel = document.getElementById('xwebagent-upload-label');
+  const fileInput = document.getElementById('xwebagent-image-upload');
+  if (preview) preview.style.display = 'none';
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  if (fileInput) fileInput.value = '';
+}
+
+/**
  * Reset all chat state and clear page highlights.
  * @param {boolean} showMessage - Whether to show a confirmation message in the chat.
  */
@@ -1143,6 +1457,9 @@ async function resetChat(showMessage = true) {
   if (_resettingChat) return;
   _resettingChat = true;
   guideActive = false;
+
+  // Discard any saved session for this tab so switching away+back starts fresh
+  _tabSessions.delete(currentTabId);
 
   // Clear guide state in SW directly (doesn't depend on content script being available)
   try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
