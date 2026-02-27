@@ -4,7 +4,8 @@
 let chatMessages = [];
 let conversationHistory = []; // Stores {role: 'user'|'assistant', content: string, hasImage?: boolean}
 let currentTabId = null;
-let uploadedImageBase64 = null; // Stores the uploaded image
+let uploadedImageBase64 = null; // Stores the uploaded image (pure base64, no prefix)
+let uploadedImageDataUrl = null; // Full data URL for restoring the preview across tab switches
 let hasImageInConversation = false; // Track if image was used in conversation
 let guideActive = false; // True while guide is generating steps (shows stop button)
 
@@ -733,22 +734,23 @@ async function handlePasteImage(event) {
           const base64 = e.target.result;
           // Remove data URL prefix to get pure base64
           uploadedImageBase64 = base64.split(',')[1];
-          
+          uploadedImageDataUrl = base64;
+
           // Show preview
           const preview = document.getElementById('xwebagent-image-preview');
           const previewImg = document.getElementById('xwebagent-preview-img');
           const uploadLabel = document.getElementById('xwebagent-upload-label');
-          
+
           if (preview && previewImg) {
             previewImg.src = base64;
             preview.style.display = 'flex';
           }
-          
+
           // Highlight upload button to show image is attached
           if (uploadLabel) {
             uploadLabel.classList.add('has-image');
           }
-          
+
           // Send image to content script
           try {
             await sendToContentScript({
@@ -805,7 +807,8 @@ async function handleImageUpload(event) {
       const base64 = e.target.result;
       // Remove data URL prefix to get pure base64
       uploadedImageBase64 = base64.split(',')[1];
-      
+      uploadedImageDataUrl = base64;
+
       // Show preview
       const preview = document.getElementById('xwebagent-image-preview');
       const previewImg = document.getElementById('xwebagent-preview-img');
@@ -852,6 +855,7 @@ async function handleImageUpload(event) {
  */
 async function clearUploadedImage() {
   uploadedImageBase64 = null;
+  uploadedImageDataUrl = null;
 
   // Hide preview and clear region overlays
   const preview = document.getElementById('xwebagent-image-preview');
@@ -1418,13 +1422,14 @@ function _saveTabSession(tabId) {
     chatMessages: [...chatMessages],
     conversationHistory: [...conversationHistory],
     hasImageInConversation,
-    html: container ? container.innerHTML : ''
+    html: container ? container.innerHTML : '',
+    uploadedImageBase64,
+    uploadedImageDataUrl
   });
 }
 
 /**
  * Restore a previously saved session for the tab being switched to.
- * Image upload state is always cleared (blobs are not serializable).
  */
 function _restoreTabSession(session) {
   chatMessages = [...session.chatMessages];
@@ -1437,14 +1442,32 @@ function _restoreTabSession(session) {
     container.scrollTop = container.scrollHeight;
   }
 
-  // Clear image upload UI (blobs aren't saved in the session)
-  uploadedImageBase64 = null;
   const preview = document.getElementById('xwebagent-image-preview');
+  const previewImg = document.getElementById('xwebagent-preview-img');
   const uploadLabel = document.getElementById('xwebagent-upload-label');
   const fileInput = document.getElementById('xwebagent-image-upload');
-  if (preview) preview.style.display = 'none';
-  if (uploadLabel) uploadLabel.classList.remove('has-image');
-  if (fileInput) fileInput.value = '';
+
+  if (session.uploadedImageDataUrl) {
+    // Restore the pending image for this tab
+    uploadedImageBase64 = session.uploadedImageBase64;
+    uploadedImageDataUrl = session.uploadedImageDataUrl;
+    if (preview && previewImg) {
+      previewImg.src = uploadedImageDataUrl;
+      preview.style.display = 'flex';
+    }
+    if (uploadLabel) uploadLabel.classList.add('has-image');
+    // Re-send to the content script (it may have reloaded since the image was set)
+    try {
+      sendToContentScript({ action: 'setUploadedImage', imageBase64: uploadedImageBase64 });
+    } catch (e) { /* ignore — content script may not be ready yet */ }
+  } else {
+    // No image for this tab — clear the UI
+    uploadedImageBase64 = null;
+    uploadedImageDataUrl = null;
+    if (preview) preview.style.display = 'none';
+    if (uploadLabel) uploadLabel.classList.remove('has-image');
+    if (fileInput) fileInput.value = '';
+  }
 }
 
 /**
@@ -1491,6 +1514,7 @@ async function resetChat(showMessage = true) {
 
   // Clear uploaded image state
   uploadedImageBase64 = null;
+  uploadedImageDataUrl = null;
   const preview = document.getElementById('xwebagent-image-preview');
   const uploadLabel = document.getElementById('xwebagent-upload-label');
   const input = document.getElementById('xwebagent-input');
