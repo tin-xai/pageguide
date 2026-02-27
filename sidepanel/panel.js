@@ -285,27 +285,32 @@ function parseMarkdown(text) {
   // Bold with **text** (must be done before italic)
   result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   
-  // Italic with *text* (single asterisks, not part of **)
-  result = result.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  // Bullet lists (- item or * item at start of line)
+  result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
   
-  // Links [text](url) - handle markdown links
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="xwebagent-markdown-link">$1</a>');
+  // Collapse spaces/newlines between list items
+  result = result.replace(/<\/li>\s*<li>/g, '</li><li>');
+  
+  // Wrap consecutive <li> elements in <ul>
+  result = result.replace(/(<li>[\s\S]*?<\/li>)+/g, '<ul>$&</ul>');
+  
+  // Italic with *text* (single asterisks, not part of **)
+  // Stop at newline so it doesn't span multiple paragraphs/list items
+  result = result.replace(/(?<!\*)\*([^*^\n]+)\*(?!\*)/g, '<em>$1</em>');
+  
+  // Links [text](url) - handle markdown links (with up to 1 level of nested parentheses in URL)
+  result = result.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="xwebagent-markdown-link">$1</a>');
   
   // Raw URLs (basic linkify for URLs not inside existing tags or markdown links)
   // Be careful not to replace URLs that are already part of an href attribute or markdown link.
-  const rawUrlRegex = /(^|\s)(https?:\/\/[^\s\)<>]+)/g;
+  // Supports up to 1 level of nested parentheses in URL
+  const rawUrlRegex = /(^|\s)(https?:\/\/(?:[^\s\(\)<>]+|\([^\s\(\)<>]+\))+)/g;
   result = result.replace(rawUrlRegex, '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="xwebagent-markdown-link">$2</a>');
   
   // Headers
   result = result.replace(/^### (.+)$/gm, '<h4>$1</h4>');
   result = result.replace(/^## (.+)$/gm, '<h3>$1</h3>');
   result = result.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-  
-  // Bullet lists (- item or * item at start of line)
-  result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
-  // Wrap consecutive <li> elements in <ul>
-  result = result.replace(/(<li>[\s\S]*?<\/li>)(?:\n|<br>)?(<li>)/g, '$1$2');
-  result = result.replace(/(?:^|[^>])(<li>[\s\S]*?<\/li>)(?:[^<]|$)/g, '<ul>$1</ul>');
   
   // Numbered lists (1. item, 2. item, etc.)
   result = result.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
@@ -1189,6 +1194,40 @@ async function sendMessage() {
           answer: '📄 Please load a PDF first!\n\nUpload a PDF file or paste a URL in the viewer, then ask me questions about it.',
           isPdf: false
         };
+      }
+    } else if (currentTab?.url && (currentTab.url.startsWith('chrome://') || currentTab.url.startsWith('chrome-extension://') || currentTab.url.startsWith('edge://'))) {
+      // Restricted page - cannot run content scripts. Default to Knowledge Base fallback.
+      console.log('🛡️ Restricted page detected. Bypassing content script and using Knowledge Base.');
+      
+      const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+        .replace('{pageContent}', '(No text content found - restricted browser page)')
+        .replace('{pageIndex}', '(No elements indexed)');
+        
+      const messages = [
+        ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+        { role: 'user', content: query }
+      ];
+      
+      const response = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          action: 'callLLM',
+          systemPrompt: systemPrompt,
+          messages: messages
+        }, (res) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(res);
+        });
+      });
+      
+      if (response && !response.error) {
+        result = {
+          success: true,
+          answer: response.content || "Could not generate an answer.",
+          highlightCount: 0,
+          hasHighlights: false
+        };
+      } else {
+        throw new Error(response?.error || 'Failed to call LLM');
       }
     } else {
       // Normal routing via content script
