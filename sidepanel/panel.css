@@ -487,6 +487,22 @@ body {
   margin-left: 1px;
 }
 
+/* Markdown Links and Raw URLs */
+.xwebagent-markdown-link {
+  color: #00ff88;
+  text-decoration: none;
+  font-weight: 500;
+  border-bottom: 1px dashed rgba(0, 255, 136, 0.5);
+  transition: all 0.2s ease;
+  word-break: break-all;
+}
+
+.xwebagent-markdown-link:hover {
+  background: linear-gradient(135deg, rgba(0, 255, 136, 0.15), rgba(0, 217, 255, 0.1));
+  color: #fff;
+  border-bottom-color: #00ff88;
+}
+
 /* Typing Indicator */
 .xwebagent-typing {
   display: flex;
@@ -1133,6 +1149,17 @@ body.light-mode .xwebagent-citation {
 body.light-mode .xwebagent-citation:hover {
   background: linear-gradient(135deg, rgba(0, 140, 200, 0.25), rgba(0, 200, 100, 0.15));
   color: #1a1a2e;
+}
+
+body.light-mode .xwebagent-markdown-link {
+  color: #3882D6;
+  border-bottom-color: #2D6CB5,
+}
+
+body.light-mode .xwebagent-markdown-link:hover {
+  background: linear-gradient(135deg, rgba(11, 214, 70, 0.15), rgba(11, 214, 70, 0.1));
+  color: #2D6CB5;
+  border-bottom-color: #3882D6;
 }
 
 body.light-mode .xwebagent-citation-idx {
