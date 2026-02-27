@@ -377,30 +377,37 @@ AVAILABLE TOOLS:
    - Use when: User asks about PDF content
    - Args: { "question": "what to find in PDF" }
 
-═══════════════════════════════════════════════
-THE MOST IMPORTANT RULE — find vs. guide:
-═══════════════════════════════════════════════
+══════════════════════════════════════════════════════
+DECISION RULES — choose the right tool every time:
+══════════════════════════════════════════════════════
 
-"find me X" / "search for X" / "look for X" / "get me X" → ALWAYS guide
-These phrases mean the user wants to DISCOVER something that requires searching or navigating.
-They do NOT mean "locate something already visible on the page."
+RULE 1 — hide queries (HIGHEST PRIORITY):
+  "hide X" / "remove X" / "block X" / "suppress X" / "get rid of X" / "make X disappear" → ALWAYS hide
+  Examples: "hide the ads", "remove the sidebar", "block cookie popups", "get rid of recommendations" → ALL → hide
+  ⚠️ NEVER route these to guide. guide does NOT hide content.
 
-• guide → user wants to DISCOVER or REACH content (search, navigate, interact)
-• find  → locate and highlight something ALREADY VISIBLE on this exact page
+RULE 2 — find vs. guide:
+  "find me X" / "search for X" / "look for X" / "get me X" → ALWAYS guide
+  "how do I..." / "help me..." / "guide me..." / "walk me through..." → ALWAYS guide
+  These phrases mean the user wants to DISCOVER or DO something that requires searching/navigating.
 
-TEST: Ask yourself — "Is the specific item the user wants ALREADY RENDERED on the current page?"
-  → YES, it's visible right now → find
-  → NO, they need to search/click/navigate to get to it → guide
+  TEST: Ask yourself — "Is the specific item the user wants ALREADY RENDERED on the current page?"
+    → YES, it's visible right now → find
+    → NO, they need to search/click/navigate to get to it → guide
 
-EXAMPLES OF THE DISTINCTION:
-  "find me black shoes size 6.5" on amazon.com → GUIDE (shoes not on page, must search)
-  "find the add to cart button" on a product page → FIND (button IS already on page)
-  "find me a Spider-Man movie" on youtube.com → GUIDE (must search YouTube)
-  "find the price" on a product detail page → FIND (price IS visible on page)
-  "search for flights to Paris" → GUIDE (must navigate/search)
-  "where is the logout button?" → FIND (button exists somewhere on current page)
-  "go to YouTube and find X" → GUIDE (cross-site navigation + search)
-  "find me a Python tutorial" on youtube.com → GUIDE (must search YouTube)
+RULE 3 — answer (knowledge questions):
+  "what is X" / "who is X" / "explain X" when X is general knowledge unrelated to the page → answer
+  Only use answer when confident the page has NO relevant content.
+
+EXAMPLES:
+  "hide the ads" → HIDE ✓  (never guide!)
+  "remove the sidebar" → HIDE ✓  (never guide!)
+  "find me black shoes size 6.5" on amazon.com → GUIDE ✓ (must search)
+  "how do I delete my account?" → GUIDE ✓ (step-by-step interaction)
+  "find the add to cart button" on a product page → FIND ✓ (button IS already visible)
+  "find the price" on a product detail page → FIND ✓ (price IS visible)
+  "go to YouTube and find a Spider-Man movie" → GUIDE ✓ (navigate + search)
+  "what is Python?" on a cooking site → ANSWER ✓ (general knowledge, irrelevant page)
 
 PLANNING RULES:
 - Use ONE step for most queries (this is the default)
@@ -409,7 +416,6 @@ PLANNING RULES:
   • "hide ads and show me what's left" → [hide, find]
 - NEVER use "answer" if the page content might be relevant
 - "guide" is ALWAYS the last step in a multi-step plan (it requires user interaction)
-- Prefer "guide" over "find" whenever the user is trying to discover or reach content
 
 Return JSON only:
 {
@@ -442,7 +448,10 @@ Site context: URL: youtube.com/watch?v=abc — Title: "Some Video - YouTube"
 → {"steps":[{"tool":"guide","args":{"task":"report this video"},"reason":"Step-by-step interaction through menus needed"}],"planSummary":"Guiding you through reporting this video"}
 
 Query: "Hide the ads"
-→ {"steps":[{"tool":"hide","args":{"filter":"hide the ads"},"reason":"User wants ads hidden"}],"planSummary":"Hiding ads on this page"}
+→ {"steps":[{"tool":"hide","args":{"filter":"hide the ads"},"reason":"User wants ads hidden — RULE 1: always hide for remove/hide requests"}],"planSummary":"Hiding ads on this page"}
+
+Query: "Remove the sidebar and recommendations"
+→ {"steps":[{"tool":"hide","args":{"filter":"remove the sidebar and recommendations"},"reason":"User wants to suppress sidebar and recommendations — RULE 1: always hide"}],"planSummary":"Removing sidebar and recommendations"}
 
 Query: "What is Python programming language?"
 Site context: URL: cooking-recipes.com — Title: "Best Pasta Recipes"

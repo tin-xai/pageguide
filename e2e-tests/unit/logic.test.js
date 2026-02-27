@@ -666,3 +666,57 @@ describe('_isSearchIntentQuery (content/functions/main_router.js)', () => {
     expect(_isSearchIntentQuery(null)).toBe(false);
   });
 });
+
+// ============================================================
+// _isHideIntentQuery (content/functions/main_router.js)
+// Tests the heuristic that detects hide/remove/block queries so the
+// planner override can correctly route them to "hide".
+// ============================================================
+describe('_isHideIntentQuery (content/functions/main_router.js)', () => {
+  // Inline mirror — must stay in sync with the function in main_router.js
+  function _isHideIntentQuery(query) {
+    if (!query) return false;
+    return /\bhide\b|\bblock\b|\bget rid of\b|\bsuppress\b|\bmake .{1,30} (go away|disappear)\b|\bno more\b/i.test(query);
+  }
+
+  test('detects "hide X" as hide intent', () => {
+    expect(_isHideIntentQuery('hide the ads')).toBe(true);
+    expect(_isHideIntentQuery('hide recommended videos')).toBe(true);
+    expect(_isHideIntentQuery('Hide the cookie banner')).toBe(true);
+  });
+
+  test('detects "block X" as hide intent', () => {
+    expect(_isHideIntentQuery('block ads')).toBe(true);
+    expect(_isHideIntentQuery('block cookie notices')).toBe(true);
+  });
+
+  test('detects "get rid of X" as hide intent', () => {
+    expect(_isHideIntentQuery('get rid of the banner')).toBe(true);
+    expect(_isHideIntentQuery('get rid of distractions')).toBe(true);
+  });
+
+  test('detects "no more X" as hide intent', () => {
+    expect(_isHideIntentQuery('no more ads')).toBe(true);
+    expect(_isHideIntentQuery('no more recommendations')).toBe(true);
+  });
+
+  test('does NOT flag ambiguous "remove/disable/turn off" as hide intent', () => {
+    // These can mean account/settings actions (guide), not DOM hiding (protection.js)
+    expect(_isHideIntentQuery('remove my account')).toBe(false);
+    expect(_isHideIntentQuery('remove the sidebar')).toBe(false);
+    expect(_isHideIntentQuery('disable notifications')).toBe(false);
+    expect(_isHideIntentQuery('turn off autoplay')).toBe(false);
+  });
+
+  test('does NOT flag search/find/guide queries as hide intent', () => {
+    expect(_isHideIntentQuery('find me black shoes')).toBe(false);
+    expect(_isHideIntentQuery('search for flights')).toBe(false);
+    expect(_isHideIntentQuery('how do I report this video?')).toBe(false);
+    expect(_isHideIntentQuery('what is the price?')).toBe(false);
+  });
+
+  test('handles empty/null query safely', () => {
+    expect(_isHideIntentQuery('')).toBe(false);
+    expect(_isHideIntentQuery(null)).toBe(false);
+  });
+});

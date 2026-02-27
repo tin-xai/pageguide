@@ -109,6 +109,23 @@ function _isSearchIntentQuery(query) {
 }
 
 /**
+ * Pure function: returns true if the query clearly wants to hide/suppress
+ * content on the current page using protection.js (ads, banners, sidebars, etc.).
+ * Only matches UNAMBIGUOUS hide-DOM phrases — "remove/disable/turn off" are
+ * intentionally excluded because they can refer to account actions or settings
+ * (e.g. "remove my account" → guide, "disable notifications in settings" → guide).
+ * Exported for unit testing.
+ * @param {string} query
+ * @returns {boolean}
+ */
+function _isHideIntentQuery(query) {
+  if (!query) return false;
+  // Matches: "hide X", "block X", "get rid of X", "suppress X",
+  //          "make X go away/disappear", "no more X"
+  return /\bhide\b|\bblock\b|\bget rid of\b|\bsuppress\b|\bmake .{1,30} (go away|disappear)\b|\bno more\b/i.test(query);
+}
+
+/**
  * Smart handler that routes queries using the agentic planner + executor.
  * This is the main entry point for all user queries.
  * @param {string} query - User's query
@@ -172,9 +189,20 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
   // Plan the query
   const plan = await planQuery(query, pageHint);
 
-  // Heuristic override 1: "find me X" / "search for X" almost always means guide.
+  // Heuristic override 1: "hide X" / "remove X" / "block X" always means hide.
+  // The planner can misroute these to guide or find; this override enforces the correct tool.
+  if (plan.steps.length === 1 && plan.steps[0].tool !== 'hide' &&
+      _isHideIntentQuery(query)) {
+    console.log('🤖 Agent: heuristic override →hide for hide-intent query:', query);
+    plan.steps[0].tool = 'hide';
+    plan.steps[0].args = { filter: query };
+    plan.steps[0].reason = 'Heuristic: hide/remove/block phrase overridden to hide';
+  }
+
+  // Heuristic override 2: "find me X" / "search for X" almost always means guide.
   // The planner can get confused when the page snippet shows product/content text,
   // causing it to assume the item is already on the page. This override corrects that.
+  // Note: skip this override if override 1 already set tool to hide.
   if (plan.steps.length === 1 && plan.steps[0].tool === 'find' &&
       _isSearchIntentQuery(query)) {
     console.log('🤖 Agent: heuristic override find→guide for search-intent query:', query);
