@@ -91,8 +91,8 @@ PAGE INDEX (use these numbers for citations):
 {pageIndex}
 
 INSTRUCTIONS:
-1. Answer the question based on the page content
-2. Use [N:"text"] citations inline to reference specific elements from the PAGE INDEX
+1. Answer the question based on the page content if possible
+2. If the page content has the answer, use [N:"text"] citations inline to reference specific elements from the PAGE INDEX
    - N is the index number from PAGE INDEX
    - "text" is the EXACT text snippet to highlight (copy from the page content)
 3. Each citation should point to an element that supports that part of your answer
@@ -101,6 +101,12 @@ INSTRUCTIONS:
 6. The "text" should be a short, specific phrase (not the entire element text)
 7. Consider conversation history for context, but always answer based on CURRENT page content
 8. NEVER reproduce existing footnote markers from the webpage itself (e.g. Wikipedia's [1], [2], [3]) — only use [N:"text"] format where N comes from the PAGE INDEX above
+9. **CRITICAL**: If the information is NOT provided on this page:
+   - State exactly: "The information is not provided on this page."
+   - Then, providing the answer using your own general knowledge base is HIGHLY ENCOURAGED. Do not simply stop after stating it is not on the page.
+   - You MUST include citations to real, valid source URLs using STANDARD MARKDOWN LINKS. Wrap the link in text so the user can click the hyperlink, e.g., [Text to display](https://url-of-source.com).
+   - Whenever possible, append Chrome Text Fragments ('#:~:text=exact%20phrase') to the URL. This allows the browser to automatically highlight the specific text when the user opens the citation.
+   - Example when not on page: "The information is not provided on this page. However, the tallest building in the world is the [Burj Khalifa](https://en.wikipedia.org/wiki/Burj_Khalifa#:~:text=tallest%20structure%20and%20building%20in%20the%20world)."
 
 CITATION EXAMPLE:
 Question: "Who directed this movie?"

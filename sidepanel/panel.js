@@ -288,6 +288,14 @@ function parseMarkdown(text) {
   // Italic with *text* (single asterisks, not part of **)
   result = result.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
   
+  // Links [text](url) - handle markdown links
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="xwebagent-markdown-link">$1</a>');
+  
+  // Raw URLs (basic linkify for URLs not inside existing tags or markdown links)
+  // Be careful not to replace URLs that are already part of an href attribute or markdown link.
+  const rawUrlRegex = /(^|\s)(https?:\/\/[^\s\)<>]+)/g;
+  result = result.replace(rawUrlRegex, '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="xwebagent-markdown-link">$2</a>');
+  
   // Headers
   result = result.replace(/^### (.+)$/gm, '<h4>$1</h4>');
   result = result.replace(/^## (.+)$/gm, '<h3>$1</h3>');
