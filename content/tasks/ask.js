@@ -581,4 +581,94 @@ function applyHighlightsFromCitations(answer) {
   return count;
 }
 
+/**
+ * Pure helper: build the combined tab content string for multi-tab find.
+ * Exported for unit testing.
+ * @param {Array} allTabs - [{index, url, title, text}]  (Tab 1 = current page at index 0)
+ * @returns {string}
+ */
+function _buildMultiTabContent(allTabs) {
+  return allTabs.map(t => {
+    const header = `=== Tab ${t.index}: ${t.title} ===\nURL: ${t.url}`;
+    return `${header}\n\n${t.text || '(No content available)'}`;
+  }).join('\n\n---\n\n');
+}
+
+/**
+ * Handle a question by reading multiple browser tabs at once.
+ * Returns ONE unified answer with inline [Tab N] citations.
+ * @param {string} query
+ * @param {Array} history - Conversation history [{role, content}]
+ * @param {Array} sharedTabContexts - [{tabId, url, title, text}] from shared tabs (fetched by panel.js)
+ */
+async function handleMultiTabFind(query, history = [], sharedTabContexts = []) {
+  console.log('🗂️ handleMultiTabFind:', query, `(${sharedTabContexts.length + 1} tab(s))`);
+
+  // Tab 1 = current page: get full text + element index for highlighting
+  const currentText = typeof getVisibleText === 'function' ? getVisibleText(50000) : '';
+  const pageIndex = typeof createPageIndex === 'function' ? createPageIndex(5000) : { indexText: '', count: 0 };
+
+  await (typeof showSomIfEnabled === 'function' ? showSomIfEnabled(pageIndex) : Promise.resolve());
+
+  // Build Tab 1 block (current page, with element index so LLM can cite highlights)
+  const currentTabBlock =
+    `=== Tab 1: ${document.title} (current page) ===\n` +
+    `URL: ${window.location.href}\n\n` +
+    `PAGE CONTENT:\n${currentText || '(No text content)'}\n\n` +
+    `PAGE INDEX (use these numbers for [N:"text"] citations):\n${pageIndex.indexText || '(No elements indexed)'}`;
+
+  // Build Tab 2+ blocks (shared tabs, text only)
+  const sharedBlocks = sharedTabContexts.map((t, i) =>
+    `=== Tab ${i + 2}: ${t.title} ===\nURL: ${t.url}\n\n${t.text || '(No content available)'}`
+  ).join('\n\n---\n\n');
+
+  const combinedContent = currentTabBlock + (sharedBlocks ? '\n\n---\n\n' + sharedBlocks : '');
+  const userMessage = `${combinedContent}\n\nQuestion: ${query}`;
+
+  const response = await safeSendMessage({
+    action: 'callLLM',
+    systemPrompt: PROMPTS.MULTI_TAB_FIND,
+    messages: [
+      ...history.map(m => ({ role: m.role, content: m.content })),
+      { role: 'user', content: userMessage }
+    ]
+  });
+
+  if (typeof cleanupSom === 'function') cleanupSom();
+
+  if (response?.error) {
+    return { success: false, error: response.error };
+  }
+
+  const answer = response?.content?.trim();
+  if (!answer) {
+    return { success: false, error: 'No answer from AI' };
+  }
+
+  // Apply [N:"text"] highlights for current-tab citations
+  const highlightCount = typeof applyHighlightsFromCitations === 'function'
+    ? applyHighlightsFromCitations(answer)
+    : 0;
+
+  const tabCitations = [
+    { index: 1, tabId: null, title: document.title },
+    ...sharedTabContexts.map((t, i) => ({ index: i + 2, tabId: t.tabId, title: t.title }))
+  ];
+
+  return {
+    success: true,
+    answer,
+    isMultiTab: true,
+    tabCitations,
+    highlightCount,
+    hasHighlights: highlightCount > 0,
+    routedTo: 'ask'
+  };
+}
+
+// Export for unit testing
+if (typeof module !== 'undefined') {
+  module.exports = { _buildMultiTabContent };
+}
+
 console.log('💬 ask.js loaded');

@@ -720,3 +720,112 @@ describe('_isHideIntentQuery (content/functions/main_router.js)', () => {
     expect(_isHideIntentQuery(null)).toBe(false);
   });
 });
+
+// ============================================================
+// _buildSharedTabsHint (content/functions/main_router.js)
+// Tests the pure function that formats shared tab contexts into
+// a string appended to the planner's pageHint.
+// ============================================================
+describe('_buildSharedTabsHint (content/functions/main_router.js)', () => {
+  // Inline mirror — must stay in sync with the function in main_router.js
+  function _buildSharedTabsHint(contexts) {
+    if (!contexts || contexts.length === 0) return '';
+    return '\n\nShared tabs:\n' + contexts.map((t, i) =>
+      `[Tab ${i + 1}] URL: ${t.url}\nTitle: ${t.title}\nSnippet: ${(t.text || '').slice(0, 200)}`
+    ).join('\n\n');
+  }
+
+  test('returns empty string for empty array', () => {
+    expect(_buildSharedTabsHint([])).toBe('');
+  });
+
+  test('returns empty string for null/undefined', () => {
+    expect(_buildSharedTabsHint(null)).toBe('');
+    expect(_buildSharedTabsHint(undefined)).toBe('');
+  });
+
+  test('formats a single tab correctly', () => {
+    const result = _buildSharedTabsHint([{ url: 'https://a.com', title: 'A', text: 'hello world' }]);
+    expect(result).toContain('[Tab 1]');
+    expect(result).toContain('https://a.com');
+    expect(result).toContain('A');
+    expect(result).toContain('hello world');
+    expect(result).toContain('Shared tabs:');
+  });
+
+  test('truncates snippet text to 200 characters', () => {
+    const long = 'x'.repeat(300);
+    const result = _buildSharedTabsHint([{ url: 'https://u.com', title: 'T', text: long }]);
+    expect(result).toContain('x'.repeat(200));
+    expect(result).not.toContain('x'.repeat(201));
+  });
+
+  test('handles missing text gracefully', () => {
+    const result = _buildSharedTabsHint([{ url: 'https://u.com', title: 'T' }]);
+    expect(result).toContain('[Tab 1]');
+    expect(result).toContain('Snippet: ');
+  });
+
+  test('formats multiple tabs with sequential numbering', () => {
+    const result = _buildSharedTabsHint([
+      { url: 'https://a.com', title: 'Site A', text: 'aa' },
+      { url: 'https://b.com', title: 'Site B', text: 'bb' }
+    ]);
+    expect(result).toContain('[Tab 1]');
+    expect(result).toContain('https://a.com');
+    expect(result).toContain('[Tab 2]');
+    expect(result).toContain('https://b.com');
+  });
+});
+
+// ============================================================
+// _buildMultiTabContent (content/tasks/ask.js)
+// Tests the pure function that combines multiple tab contexts
+// into a single prompt block for the multi-tab LLM call.
+// ============================================================
+describe('_buildMultiTabContent (content/tasks/ask.js)', () => {
+  // Inline mirror — must stay in sync with the function in ask.js
+  function _buildMultiTabContent(allTabs) {
+    return allTabs.map(t => {
+      const header = `=== Tab ${t.index}: ${t.title} ===\nURL: ${t.url}`;
+      return `${header}\n\n${t.text || '(No content available)'}`;
+    }).join('\n\n---\n\n');
+  }
+
+  test('formats a single tab correctly', () => {
+    const result = _buildMultiTabContent([{ index: 1, url: 'https://a.com', title: 'Site A', text: 'hello' }]);
+    expect(result).toContain('=== Tab 1: Site A ===');
+    expect(result).toContain('URL: https://a.com');
+    expect(result).toContain('hello');
+  });
+
+  test('separates multiple tabs with ---', () => {
+    const result = _buildMultiTabContent([
+      { index: 1, url: 'https://a.com', title: 'A', text: 'aaa' },
+      { index: 2, url: 'https://b.com', title: 'B', text: 'bbb' }
+    ]);
+    expect(result).toContain('=== Tab 1: A ===');
+    expect(result).toContain('=== Tab 2: B ===');
+    expect(result).toContain('---');
+  });
+
+  test('uses fallback text when tab text is missing', () => {
+    const result = _buildMultiTabContent([{ index: 1, url: 'https://a.com', title: 'A', text: '' }]);
+    expect(result).toContain('(No content available)');
+  });
+
+  test('uses fallback text when tab text is undefined', () => {
+    const result = _buildMultiTabContent([{ index: 1, url: 'https://a.com', title: 'A' }]);
+    expect(result).toContain('(No content available)');
+  });
+
+  test('preserves full text (no truncation)', () => {
+    const long = 'x'.repeat(60000);
+    const result = _buildMultiTabContent([{ index: 1, url: 'u', title: 't', text: long }]);
+    expect(result).toContain('x'.repeat(60000));
+  });
+
+  test('returns empty string for empty array', () => {
+    expect(_buildMultiTabContent([])).toBe('');
+  });
+});

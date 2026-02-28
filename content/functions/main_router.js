@@ -126,14 +126,28 @@ function _isHideIntentQuery(query) {
 }
 
 /**
+ * Build a string summarising shared tab contexts for inclusion in the planner's pageHint.
+ * Pure function — exported for unit testing.
+ * @param {Array<{url: string, title: string, text: string}>} contexts
+ * @returns {string}
+ */
+function _buildSharedTabsHint(contexts) {
+  if (!contexts || contexts.length === 0) return '';
+  return '\n\nShared tabs:\n' + contexts.map((t, i) =>
+    `[Tab ${i + 1}] URL: ${t.url}\nTitle: ${t.title}\nSnippet: ${(t.text || '').slice(0, 200)}`
+  ).join('\n\n');
+}
+
+/**
  * Smart handler that routes queries using the agentic planner + executor.
  * This is the main entry point for all user queries.
  * @param {string} query - User's query
  * @param {Array} history - Conversation history
  * @param {boolean} hasImage - Whether current message has an image attached
  * @param {boolean} hasImageInHistory - Whether any previous message had an image
+ * @param {Array} sharedTabsContext - Page contexts from tabs the user chose to share
  */
-async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false) {
+async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false, sharedTabsContext = []) {
   const imageAvailable = hasImage || hasImageInHistory || !!getUploadedImage?.();
   console.log('🤖 Agent: image available:', imageAvailable, '(current:', hasImage, ', history:', hasImageInHistory, ')');
 
@@ -180,6 +194,7 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
       ? (getVisibleText(300) || '').slice(0, 300)
       : '';
     pageHint = `URL: ${url}\nTitle: ${title}\nPage snippet: ${snippet}`;
+    pageHint += _buildSharedTabsHint(sharedTabsContext);
   } catch (e) { /* ignore */ }
   // Hint the planner that an image is available in history
   if (imageAvailable && !hasImage) {
@@ -238,6 +253,11 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
   }
 
   return result;
+}
+
+// Export pure functions for unit testing (no-op in browser, consumed by Jest via window.eval)
+if (typeof module !== 'undefined') {
+  module.exports = { _buildSharedTabsHint };
 }
 
 console.log('🚀 api.js (router) loaded');

@@ -23,13 +23,37 @@ async function handleMessage(request) {
     case 'handleQuery':
       if (typeof handleSmartQuery === 'function') {
         return await handleSmartQuery(
-          request.query, 
+          request.query,
           request.history || [],
           request.hasImage || false,
-          request.hasImageInHistory || false
+          request.hasImageInHistory || false,
+          request.sharedTabsContext || []
         );
       }
       return { success: false, error: 'Query handler not loaded' };
+
+    case 'getPageContext':
+      return {
+        success: true,
+        url: window.location.href,
+        title: document.title,
+        text: typeof getVisibleText === 'function' ? getVisibleText(request.textLimit || 2000) : ''
+      };
+
+    case 'runMultiFind':
+      // Read all tabs at once (current page + shared tab contexts passed in) → ONE LLM call.
+      if (typeof handleMultiTabFind === 'function') {
+        return await handleMultiTabFind(request.query, request.history || [], request.tabContexts || []);
+      }
+      return { success: false, error: 'Multi-tab find not loaded' };
+
+    case 'runFind':
+      // Skip the planner — call handleAsk directly using the query already decided by the home tab.
+      // Used by _broadcastFindToSharedTabs to avoid re-planning (saves one LLM call per shared tab).
+      if (typeof handleAsk === 'function') {
+        return await handleAsk(request.query, request.history || []);
+      }
+      return { success: false, error: 'Find handler not loaded' };
     
     case 'reset':
       if (typeof resetCustomStyles === 'function') resetCustomStyles();

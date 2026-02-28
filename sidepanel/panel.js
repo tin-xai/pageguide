@@ -8,6 +8,8 @@ let uploadedImageBase64 = null; // Stores the uploaded image (pure base64, no pr
 let uploadedImageDataUrl = null; // Full data URL for restoring the preview across tab switches
 let hasImageInConversation = false; // Track if image was used in conversation
 let guideActive = false; // True while guide is generating steps (shows stop button)
+const sharedTabIds = new Set(); // Tab IDs the user has chosen to share with the agent
+let _homeTabId = null; // The tab where sharing was started — all group members share its session
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -113,22 +115,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Save the outgoing tab's session, then restore the incoming tab's session
   // (or start fresh if this is the first time visiting that tab).
   // Guide-triggered tab transitions are left untouched (guideActive guard).
+  // Shared-group members (sharedTabIds + _homeTabId) all share one session:
+  // switching between them keeps the conversation alive without save/restore.
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const prevTabId = currentTabId;
     currentTabId = activeInfo.tabId;
 
     if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive)) return;
 
-    // Snapshot the outgoing tab's conversation
-    _saveTabSession(prevTabId);
+    // Check if both tabs are members of the current shared group.
+    // Group = the home tab + every tab in sharedTabIds.
+    const isGroupMember = (id) => !!id && (id === _homeTabId || sharedTabIds.has(id));
+    if (isGroupMember(prevTabId) && isGroupMember(activeInfo.tabId)) {
+      // Switching within the group — the conversation is the same on all members.
+      return;
+    }
+
+    // Switching into or out of the group:
+    // Save under _homeTabId (not prevTabId) so any group member can restore it later.
+    const saveId = isGroupMember(prevTabId) && _homeTabId ? _homeTabId : prevTabId;
+    _saveTabSession(saveId);
 
     // NOTE: we intentionally do NOT clear highlights on the old tab here.
     // Highlights live in each tab's own DOM and persist naturally until the
     // user explicitly clears them (Clear All), the tab navigates to a new URL,
     // or the panel is closed.
 
-    // Restore a previous session for this tab, or start a fresh one
-    const saved = _tabSessions.get(activeInfo.tabId);
+    // Restore: when entering the group, look up by _homeTabId so all members
+    // share the same saved session regardless of which group tab is activated.
+    const lookupId = isGroupMember(activeInfo.tabId) && _homeTabId ? _homeTabId : activeInfo.tabId;
+    const saved = _tabSessions.get(lookupId);
     if (saved) {
       _restoreTabSession(saved);
     } else {
@@ -140,6 +156,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Clean up sessions for closed tabs to avoid memory leaks
   chrome.tabs.onRemoved.addListener((tabId) => {
     _tabSessions.delete(tabId);
+    // Remove closed tabs from the shared tabs set
+    if (sharedTabIds.delete(tabId)) _updateTabsBadge();
+    // If the home tab closed, promote another group member or dissolve the group
+    if (tabId === _homeTabId) {
+      _homeTabId = sharedTabIds.size > 0 ? sharedTabIds.values().next().value : null;
+    }
+  });
+
+  // Shared tabs button
+  document.getElementById('xwebagent-tabs-btn')?.addEventListener('click', _openTabsPicker);
+
+  // Close tabs picker on outside click
+  document.addEventListener('click', e => {
+    const picker = document.getElementById('xwebagent-tabs-picker');
+    const btn = document.getElementById('xwebagent-tabs-btn');
+    if (picker && picker.style.display !== 'none' &&
+        !picker.contains(e.target) && e.target !== btn && !btn?.contains(e.target)) {
+      picker.style.display = 'none';
+    }
   });
 });
 
@@ -149,7 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  * 1. Web page citations: [N:"text"] or [N] - scrolls to indexed element
  * 2. PDF citations: [Page N: "text"] - navigates to PDF page
  */
-function parseCitations(text, isPdf = false) {
+function parseCitations(text, isPdf = false, tabId = null) {
   // Normalize curly/smart quotes to straight quotes first
   const normalizedText = text
     .replace(/[""]/g, '"')
@@ -252,14 +287,15 @@ function parseCitations(text, isPdf = false) {
     
     // Create citation with toggleable text and index
     // Default: collapsed (show only index), click to expand (show text + index)
-    indices.forEach((idx, i) => {
+    const tabAttr = tabId != null ? ` data-tab-id="${tabId}"` : '';
+    indices.forEach((idx) => {
       webCitationCount++;
       if (explicitText) {
         // Has citation text - make it toggleable
-        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><span class="citation-text">${escapeHtml(explicitText)}</span><sup class="citation-index">[${webCitationCount}]</sup></span>`;
+        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}"${tabAttr} data-citation="${webCitationCount}"><span class="citation-text">${escapeHtml(explicitText)}</span><sup class="citation-index">[${webCitationCount}]</sup></span>`;
       } else {
         // No text - just show index
-        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><sup class="citation-index">[${webCitationCount}]</sup></span>`;
+        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}"${tabAttr} data-citation="${webCitationCount}"><sup class="citation-index">[${webCitationCount}]</sup></span>`;
       }
     });
     
@@ -273,12 +309,250 @@ function parseCitations(text, isPdf = false) {
 }
 
 /**
+ * Replace [Tab N] or [Tab N: Title] citations in HTML text with clickable tab-switch buttons.
+ * @param {string} text - HTML already processed by parseMarkdown
+ * @param {Array} tabCitations - [{index, tabId, title}]
+ * @returns {string} HTML with inline tab citation buttons
+ */
+function parseTabCitations(text, tabCitations) {
+  if (!tabCitations || tabCitations.length === 0) return text;
+  const map = new Map(tabCitations.map(t => [t.index, t]));
+  return text.replace(/\[Tab (\d+)(?::[^\]]+)?\]/g, (match, numStr) => {
+    const num = parseInt(numStr, 10);
+    const tc = map.get(num);
+    if (!tc) return match;
+    const label = `Tab ${tc.index}: ${escapeHtml(tc.title)}`;
+    const tabIdAttr = tc.tabId != null ? `data-tab-id="${tc.tabId}"` : 'data-tab-id="current"';
+    return `<button class="xwebagent-tab-citation-btn" ${tabIdAttr} title="Go to ${escapeHtml(tc.title)}">🗂 ${label} ↗</button>`;
+  });
+}
+
+/**
+ * Add a multi-tab unified answer message.
+ * Renders both [N:"text"] element citations (highlights on current page, clickable)
+ * and [Tab N] tab citations (navigation buttons to shared tabs).
+ */
+function addMultiTabMessage(content, tabCitations) {
+  const container = document.getElementById('xwebagent-messages');
+  if (!container) return;
+  hideTyping();
+  const msg = document.createElement('div');
+  // xwebagent-clickable enables the delegated click handler for [N:"text"] element citations
+  msg.className = 'xwebagent-message assistant xwebagent-clickable';
+  // Tag Tab 1 citations with the current (home) tab ID so clicking them still targets Tab 1
+  // even after the user has navigated to a shared tab.
+  const tab1Id = _homeTabId || currentTabId;
+  // markdown → page-element citations ([N:"text"]) → tab citations ([Tab N])
+  msg.innerHTML = parseTabCitations(parseCitations(parseMarkdown(content), false, tab1Id), tabCitations);
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+  chatMessages.push({ content, type: 'assistant', timestamp: Date.now() });
+}
+
+/**
+ * Render a per-tab answer bubble for a shared tab (from _broadcastFindToSharedTabs).
+ * Citations are tagged with data-tab-id so clicking them switches to the right tab.
+ * @param {string} answer - LLM answer text with [N:"text"] citations for that tab's elements
+ * @param {number} tabId - Chrome tab ID of the shared tab
+ * @param {string} tabTitle - Title of the shared tab
+ */
+function addSharedTabMessage(answer, tabId, tabTitle) {
+  const container = document.getElementById('xwebagent-messages');
+  if (!container) return;
+  const msg = document.createElement('div');
+  msg.className = 'xwebagent-message assistant xwebagent-shared-tab-msg';
+  // Tab attribution label with a switch-to-tab button
+  const label = document.createElement('div');
+  label.className = 'xwebagent-shared-tab-label';
+  label.innerHTML = `<button class="xwebagent-switch-tab-btn" data-switch-tab="${tabId}">🗂 ${escapeHtml(tabTitle)} ↗</button>`;
+  msg.appendChild(label);
+  // Answer content — citations carry data-tab-id so the click handler targets the right tab
+  const body = document.createElement('div');
+  body.innerHTML = parseCitations(parseMarkdown(answer), false, tabId);
+  msg.appendChild(body);
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+  chatMessages.push({ content: answer, type: 'shared-tab', tabId, tabTitle, timestamp: Date.now() });
+}
+
+/**
  * Escape HTML special characters
  */
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ===== Shared Tabs Feature =====
+
+/**
+ * Update the badge on the tabs button to reflect how many tabs are shared.
+ */
+function _updateTabsBadge() {
+  const badge = document.getElementById('xwebagent-tabs-badge');
+  const btn = document.getElementById('xwebagent-tabs-btn');
+  if (!badge || !btn) return;
+  if (sharedTabIds.size > 0) {
+    badge.textContent = sharedTabIds.size;
+    badge.style.display = 'inline-flex';
+    btn.classList.add('has-shared-tabs');
+  } else {
+    badge.style.display = 'none';
+    btn.classList.remove('has-shared-tabs');
+  }
+}
+
+/**
+ * Toggle a tab in/out of the shared set and update the picker item UI.
+ * When adding the first tab, locks in the current tab as the session home
+ * so all group members share one conversation.
+ * When adding a tab, inject content scripts so the agent can work on it.
+ */
+function _toggleSharedTab(tabId, itemEl) {
+  const cb = itemEl.querySelector('input[type="checkbox"]');
+  if (sharedTabIds.has(tabId)) {
+    sharedTabIds.delete(tabId);
+    itemEl.classList.remove('active');
+    if (cb) cb.checked = false;
+    // If no more shared tabs, release the home anchor
+    if (sharedTabIds.size === 0) _homeTabId = null;
+  } else {
+    // On first share, remember which tab "owns" the session
+    if (sharedTabIds.size === 0) _homeTabId = currentTabId;
+    sharedTabIds.add(tabId);
+    itemEl.classList.add('active');
+    if (cb) cb.checked = true;
+    // Inject content scripts into the newly shared tab (fire-and-forget)
+    chrome.runtime.sendMessage({ action: 'ensureContentScripts', tabId }).catch(() => {});
+  }
+  _updateTabsBadge();
+}
+
+/**
+ * Open (or close) the shared tabs picker dropdown.
+ * Queries all open tabs in the current window and renders a checkbox list.
+ */
+async function _openTabsPicker() {
+  const picker = document.getElementById('xwebagent-tabs-picker');
+  if (!picker) return;
+  if (picker.style.display !== 'none') {
+    picker.style.display = 'none';
+    return;
+  }
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const currentTab = tabs.find(t => t.id === currentTabId);
+  const otherTabs = tabs.filter(t =>
+    t.id !== currentTabId &&
+    t.url &&
+    !t.url.startsWith('chrome://') &&
+    !t.url.startsWith('chrome-extension://') &&
+    !t.url.startsWith('about:')
+  );
+
+  // Build current-tab row (always shown at top, always included in group — no checkbox)
+  const currentFavicon = currentTab?.favIconUrl
+    ? `<img src="${escapeHtml(currentTab.favIconUrl)}" class="xwebagent-tab-favicon" onerror="this.style.display='none'">`
+    : '';
+  const currentRow =
+    `<div class="xwebagent-tabs-picker-item xwebagent-current-tab-row">` +
+    currentFavicon +
+    `<span class="xwebagent-tab-title">${escapeHtml(currentTab?.title || 'Current tab')}</span>` +
+    `<span class="xwebagent-current-tab-badge">here</span>` +
+    `</div>`;
+
+  if (otherTabs.length === 0) {
+    picker.innerHTML =
+      '<div class="xwebagent-tabs-picker-header">Share tabs with agent</div>' +
+      currentRow +
+      '<div class="xwebagent-tabs-picker-empty">No other tabs to share</div>';
+  } else {
+    picker.innerHTML =
+      '<div class="xwebagent-tabs-picker-header">Share tabs with agent</div>' +
+      currentRow +
+      otherTabs.map(t => {
+        const isActive = sharedTabIds.has(t.id);
+        const faviconHtml = t.favIconUrl
+          ? `<img src="${escapeHtml(t.favIconUrl)}" class="xwebagent-tab-favicon" onerror="this.style.display='none'">`
+          : '';
+        return `<div class="xwebagent-tabs-picker-item${isActive ? ' active' : ''}" data-tab-id="${t.id}">` +
+          `<input type="checkbox"${isActive ? ' checked' : ''}>` +
+          faviconHtml +
+          `<span class="xwebagent-tab-title">${escapeHtml(t.title || t.url)}</span>` +
+          '</div>';
+      }).join('');
+    picker.querySelectorAll('.xwebagent-tabs-picker-item[data-tab-id]').forEach(item => {
+      item.addEventListener('click', () => _toggleSharedTab(parseInt(item.dataset.tabId, 10), item));
+    });
+  }
+  picker.style.display = 'flex';
+}
+
+/**
+ * Collect page context (URL, title, visible text) from all shared tabs.
+ * @param {number} textLimit - Max chars of visible text to fetch per tab (default 2000 for planner; pass 50000 for multi-tab find)
+ * @returns {Promise<Array<{tabId, url, title, text}>>}
+ */
+async function _collectSharedTabContexts(textLimit = 2000) {
+  const contexts = [];
+  for (const tabId of sharedTabIds) {
+    try {
+      const response = await new Promise(resolve => {
+        chrome.tabs.sendMessage(tabId, { action: 'getPageContext', textLimit }, res => {
+          resolve(chrome.runtime.lastError ? null : res);
+        });
+      });
+      if (response?.success) {
+        contexts.push({ tabId, url: response.url, title: response.title, text: response.text });
+      }
+    } catch (_) { /* skip unresponsive tabs */ }
+  }
+  return contexts;
+}
+
+/**
+ * Returns true if the query is a step-by-step guide request.
+ * Guide queries need interactive per-page UI and should NOT be routed to multi-tab find.
+ */
+function _isGuideQuery(query) {
+  const q = (query || '').toLowerCase().trim();
+  return /^(how (do|can|to|would)\b|guide me\b|help me (do|with)\b|walk me\b|step.{0,5}step\b)/i.test(q);
+}
+
+/**
+ * Broadcast a find query to all shared tabs so they can highlight on their own pages.
+ * Only runs for find-type results; guide/hide/answer stay on the current tab.
+ * Shows ONE compact "Also highlighted in: [Tab A] ↗ [Tab B] ↗" note — no extra answer bubbles.
+ * Clicking a tab pill switches to that tab so the user can see its highlights.
+ */
+async function _broadcastFindToSharedTabs(query, history, mainResult) {
+  // Only broadcast for find-type outcomes
+  const isFindResult = mainResult.routedTo === 'ask' ||
+    (Array.isArray(mainResult.steps) && mainResult.steps.some(s => s.tool === 'find'));
+  if (!isFindResult) return;
+
+  for (const tabId of sharedTabIds) {
+    try {
+      const r = await new Promise(resolve => {
+        // Use runFind (not handleQuery) to skip re-planning on shared tabs — saves one LLM
+        // call since the planner decision was already made on the home tab.
+        chrome.tabs.sendMessage(tabId, {
+          action: 'runFind',
+          query,
+          history: history.slice(-7)
+        }, res => resolve(chrome.runtime.lastError ? null : res));
+      });
+
+      if (!r?.success) continue;
+
+      const tabInfo = await chrome.tabs.get(tabId).catch(() => null);
+      const tabTitle = tabInfo?.title || 'Tab';
+      if (r.answer) {
+        // Render a proper per-tab answer bubble with clickable element citations
+        addSharedTabMessage(r.answer, tabId, tabTitle);
+      }
+    } catch (_) { /* skip unresponsive tabs */ }
+  }
 }
 
 /**
@@ -449,12 +723,37 @@ function _setupMessageContainerDelegate(container) {
       return;
     }
 
-    // 2. Web citation → scroll to index
+    // 2. Web citation → scroll to index (on the citation's source tab, or current tab)
     const webCit = e.target.closest('.xwebagent-citation');
     if (webCit) {
       e.stopPropagation();
       const index = parseInt(webCit.dataset.index, 10);
-      sendToContentScript({ action: 'scrollToIndex', index });
+      const citTabId = webCit.dataset.tabId ? parseInt(webCit.dataset.tabId, 10) : null;
+      if (citTabId) {
+        // Citation is from a shared tab — switch to it, then scroll to the element
+        chrome.tabs.update(citTabId, { active: true });
+        chrome.tabs.sendMessage(citTabId, { action: 'scrollToIndex', index });
+      } else {
+        sendToContentScript({ action: 'scrollToIndex', index });
+      }
+      return;
+    }
+
+    // 2b. Switch-to-tab button (shared tab result) → activate that tab
+    const switchBtn = e.target.closest('[data-switch-tab]');
+    if (switchBtn) {
+      e.stopPropagation();
+      const tabId = parseInt(switchBtn.dataset.switchTab, 10);
+      chrome.tabs.update(tabId, { active: true });
+      return;
+    }
+
+    // 2c. Tab citation button ([Tab N] in multi-tab unified answer) → switch to that tab
+    const tabCitBtn = e.target.closest('.xwebagent-tab-citation-btn');
+    if (tabCitBtn) {
+      e.stopPropagation();
+      const tabId = tabCitBtn.dataset.tabId;
+      if (tabId && tabId !== 'current') chrome.tabs.update(parseInt(tabId, 10), { active: true });
       return;
     }
 
@@ -1343,20 +1642,44 @@ async function sendMessage() {
           : null;
         result = guideResult || await _answerFromKnowledge(query, conversationHistory);
       } else {
-        // Normal routing via content script
-        result = await sendToContentScript({
-          action: 'handleQuery',
-          query: query,
-          history: conversationHistory.slice(0, -1),
-          hasImage: currentMessageHasImage,
-          hasImageInHistory: hasImageInConversation
-        });
+        if (sharedTabIds.size > 0 && !_isGuideQuery(query) && !currentMessageHasImage) {
+          // Multi-tab unified path: read all pages at once → ONE answer with [Tab N] citations.
+          // Guide queries stay on the normal path (they need interactive per-page UI).
+          // Image queries stay on the normal path (image context is local to current tab).
+          const tabContexts = await _collectSharedTabContexts(50000);
+          result = await sendToContentScript({
+            action: 'runMultiFind',
+            query,
+            history: conversationHistory.slice(0, -1),
+            tabContexts
+          });
+        } else {
+          // Normal single-tab routing via content script
+          const sharedTabsContext = sharedTabIds.size > 0 ? await _collectSharedTabContexts() : [];
+          result = await sendToContentScript({
+            action: 'handleQuery',
+            query,
+            history: conversationHistory.slice(0, -1),
+            hasImage: currentMessageHasImage,
+            hasImageInHistory: hasImageInConversation,
+            sharedTabsContext
+          });
+        }
       }
     }
     
     hideTyping();
     
     if (result && result.success) {
+      // ── Multi-tab unified result (runMultiFind) ────────────────────────────
+      if (result.isMultiTab) {
+        conversationHistory.push({ role: 'assistant', content: result.answer });
+        addMultiTabMessage(result.answer, result.tabCitations);
+        // Also highlight on shared tabs in the background (fire-and-forget).
+        // runFind skips re-planning; it only runs handleAsk (page index + find LLM call)
+        // so each shared tab gets its own highlights without an extra planner call.
+        _broadcastFindToSharedTabs(query, conversationHistory, result);
+      } else
       // ── Multi-step agentic result ──────────────────────────────────────────
       if (result.isMultiTool && Array.isArray(result.steps) && result.steps.length > 0) {
         // Render each step's result in order
@@ -1470,6 +1793,7 @@ async function sendMessage() {
           addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
         }
       }
+
     } else {
       addMessage(`❌ ${result?.error || 'Unknown error'}`, 'error');
       // Remove failed query from history
@@ -1660,6 +1984,13 @@ async function resetChat(showMessage = true) {
   if (_resettingChat) return;
   _resettingChat = true;
   guideActive = false;
+
+  // Clear shared tabs and dissolve the session group
+  sharedTabIds.clear();
+  _homeTabId = null;
+  _updateTabsBadge();
+  const tabsPicker = document.getElementById('xwebagent-tabs-picker');
+  if (tabsPicker) tabsPicker.style.display = 'none';
 
   // Discard any saved session for this tab so switching away+back starts fresh
   _tabSessions.delete(currentTabId);

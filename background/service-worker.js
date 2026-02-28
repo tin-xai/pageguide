@@ -302,6 +302,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ success: true });
     return false;
   }
+  if (request.action === 'ensureContentScripts') {
+    // Inject content scripts into a shared tab so the agent can work on it.
+    // Safe to call repeatedly — checks _xwebagentLoaded before injecting.
+    const tabId = request.tabId;
+    (async () => {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab.url?.startsWith('http')) {
+          sendResponse({ success: false, reason: 'restricted' });
+          return;
+        }
+        const [check] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => typeof window._xwebagentLoaded !== 'undefined'
+        });
+        if (!check?.result) {
+          await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPTS });
+          await chrome.scripting.insertCSS({ target: { tabId }, files: ['content/content.css'] });
+        }
+        sendResponse({ success: true });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+    })();
+    return true;
+  }
 });
 
 // ===== PDF Text Extraction via Offscreen Document =====
