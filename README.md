@@ -79,7 +79,7 @@ Ask questions about PDFs directly in the browser:
 3. Choose your LLM provider and enter your API key:
 
 | Provider | Recommended Model |
-|----------|-----------|-------------------|
+|----------|-------------------|
 | **Gemini** (default) | Gemini 2.5 Flash |
 | **OpenRouter** | Claude Sonnet 4.6 / Gemini 2.5 Flash |
 | **OpenAI** | GPT-5.2 |
@@ -185,3 +185,57 @@ npm run ci
 | `sidePanel` | Display the chat panel |
 | `offscreen` | Run PDF.js in an offscreen document |
 | `<all_urls>` | Work on any website |
+
+---
+
+## Privacy Policy
+
+**Last updated: March 2026**
+
+### What data does XWebAgent access?
+
+To answer your questions, the extension may read:
+- The **visible text content** of the current page
+- **Screenshots** of the current viewport (when Vision mode is enabled)
+- The **text of uploaded files** (PDF, images, CSV, TXT, MD) that you explicitly attach
+- Your **chat messages and questions** as you type them
+
+### What data is stored?
+
+| Data | Where | How long |
+|------|-------|----------|
+| API keys | Chrome local storage (on your device only) | Until you remove them in Settings |
+| Settings & preferences | Chrome local storage (on your device only) | Until you uninstall |
+| Chat history | Browser session memory (per tab) | Until the tab is closed or you clear it |
+| Saved conversations | Chrome local storage (on your device only) | Until you delete them |
+
+**No data is stored on any XWebAgent server.** There are no XWebAgent servers.
+
+### What data is transmitted — and where?
+
+Your questions and page content are sent **directly from your browser** to the LLM provider you configure in Settings:
+
+| Provider | Privacy policy |
+|----------|---------------|
+| Google Gemini | [ai.google.dev/terms](https://ai.google.dev/terms) |
+| OpenRouter | [openrouter.ai/privacy](https://openrouter.ai/privacy) |
+| OpenAI | [openai.com/policies/privacy-policy](https://openai.com/policies/privacy-policy) |
+
+XWebAgent acts as a **local proxy only** — it formats your request and forwards it to your chosen provider. It never sees, logs, or stores the response on your behalf.
+
+If you use the optional local Python backend for PDF processing, data is sent to `localhost:8000` only — it never leaves your machine.
+
+### What data is NOT collected
+
+- We do **not** collect any analytics, telemetry, or usage statistics
+- We do **not** transmit your browsing history
+- We do **not** read page content in the background — content is only read when you send a message
+- We do **not** share any data with third parties beyond your chosen LLM provider
+- API keys are **never** transmitted to anyone other than the provider they belong to
+
+### User controls
+
+- **Clear chat**: use the 🧹 button in the panel at any time
+- **Remove API key**: open ⚙️ Settings, clear the key field, and save
+- **Disable Vision**: turn off screenshot capture in ⚙️ Settings → Vision (Screenshot)
+- **Uninstall**: removing the extension from Chrome immediately deletes all locally stored data
