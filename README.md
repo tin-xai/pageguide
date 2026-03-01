@@ -58,13 +58,6 @@ Ask questions about PDFs directly in the browser:
 - Optional local Python backend (`localhost:8000`) for advanced processing
 - Built-in standalone PDF viewer (accessible via 📄 button)
 
-### 🤖 Agentic Multi-Step Planning
-Complex queries are automatically broken into a plan and executed sequentially:
-- Planner selects the right tool(s) for each sub-task
-- Executor runs steps in order, passing context between them
-- Panel UI shows each step's result with collapsible debug breakdown
-- Smart routing heuristic prevents misclassification of discovery-intent queries
-
 ---
 
 ## Installation
@@ -85,11 +78,11 @@ Complex queries are automatically broken into a plan and executed sequentially:
 2. Click the **⚙️ Settings** (gear icon) at the bottom
 3. Choose your LLM provider and enter your API key:
 
-| Provider | Free Tier | Recommended Model |
+| Provider | Recommended Model |
 |----------|-----------|-------------------|
-| **Gemini** (default) | Yes — [Get free key](https://aistudio.google.com/app/apikey) | Gemini 2.5 Flash |
-| **OpenRouter** | Yes | Claude Sonnet 4.6 / Gemini 2.5 Flash |
-| **OpenAI** | No | GPT-4o |
+| **Gemini** (default) | Gemini 2.5 Flash |
+| **OpenRouter** | Claude Sonnet 4.6 / Gemini 2.5 Flash |
+| **OpenAI** | GPT-5.2 |
 
 4. Click **Test & Save Connection** to validate your key
 5. Optionally configure:
@@ -106,10 +99,9 @@ Complex queries are automatically broken into a plan and executed sequentially:
 |---------------|--------------|
 | Find info on page | `What is the return policy?` |
 | Step-by-step task | `How do I change my password?` |
-| Navigate & act | `Go to YouTube and find a Python tutorial` |
 | Hide distractions | `Hide all ads and sidebars` |
 | General knowledge | *(toggle Page: Off)* `What is the capital of France?` |
-| Search by image | *(upload image via 📷)* `Find this product on the page` |
+| Search by image | *(upload image via 📎)* `Find this product on the page` |
 | Ask about a PDF | *(open PDF)* `Summarize section 3` |
 
 ### Chat Panel Controls
@@ -117,16 +109,16 @@ Complex queries are automatically broken into a plan and executed sequentially:
 | Button | Action |
 |--------|--------|
 | 🌐 Page: On/Off | Toggle whether page content is used as context |
-| 📷 | Upload or paste an image for visual search |
+| 📎 | Upload files (md, txt, csv, image etc) or paste an image for visual search |
 | 📄 | Open the built-in PDF viewer |
 | 🕐 | View and reload saved chat history |
 | 💾 | Save current conversation |
-| 🔄 | Start a new chat session |
+| ✏️ | Start a new chat session |
 | 🌙/☀️ | Toggle dark/light theme |
 | ⚙️ | Open settings |
+| 🧹 | Clear the chat |
 
 ### Tips
-- **Multi-tab support**: each tab keeps its own independent chat history
 - **Cross-site guidance**: start a guide on one site and it will follow you to another (e.g. "go to Amazon and buy X")
 - Use **Shift+Enter** for multi-line messages; **Enter** to send
 
