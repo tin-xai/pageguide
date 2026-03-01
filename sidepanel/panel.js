@@ -6,7 +6,10 @@ let conversationHistory = []; // Stores {role: 'user'|'assistant', content: stri
 let currentTabId = null;
 let uploadedImageBase64 = null; // Stores the uploaded image
 let hasImageInConversation = false; // Track if image was used in conversation
+let uploadedFileContent = null; // Text content of an attached file
+let uploadedFileName = null;    // Display name of the attached file
 let guideActive = false; // True while guide is generating steps (shows stop button)
+let noPageContext = false; // When true, skip page scraping and answer from AI knowledge only
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -66,18 +69,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
   });
   
-  // Image upload handling
+  // Chat history
+  document.getElementById('xwebagent-open-history')?.addEventListener('click', showHistoryPanel);
+  document.getElementById('xwebagent-history-close')?.addEventListener('click', hideHistoryPanel);
+  document.getElementById('xwebagent-history-back')?.addEventListener('click', () => renderHistoryList());
+  document.getElementById('xwebagent-save-chat')?.addEventListener('click', saveCurrentChat);
+
+  // No-page-context toggle
+  document.getElementById('xwebagent-no-page-ctx')?.addEventListener('click', () => {
+    noPageContext = !noPageContext;
+    const btn = document.getElementById('xwebagent-no-page-ctx');
+    if (btn) {
+      btn.textContent = noPageContext ? '💭 Page: Off' : '🌐 Page: On';
+      btn.classList.toggle('xwebagent-quick-btn--active', noPageContext);
+      btn.title = noPageContext
+        ? 'Page context OFF — answers from AI knowledge only. Click to re-enable.'
+        : 'Toggle: answer from AI knowledge only (ignore current page)';
+    }
+  });
+
+  // Combined upload handling (images + text files share one button)
   const imageUpload = document.getElementById('xwebagent-image-upload');
   const removeImageBtn = document.getElementById('xwebagent-remove-image');
-  
-  if (imageUpload) {
-    imageUpload.addEventListener('change', handleImageUpload);
-  }
-  
-  if (removeImageBtn) {
-    removeImageBtn.addEventListener('click', clearUploadedImage);
-  }
-  
+  const removeFileBtn = document.getElementById('xwebagent-remove-file');
+
+  if (imageUpload) imageUpload.addEventListener('change', handleUpload);
+  if (removeImageBtn) removeImageBtn.addEventListener('click', clearUploadedImage);
+  if (removeFileBtn) removeFileBtn.addEventListener('click', clearUploadedFile);
+
   // Paste image support (Ctrl+V / Cmd+V)
   document.addEventListener('paste', handlePasteImage);
   
@@ -757,10 +776,9 @@ async function handlePasteImage(event) {
             preview.style.display = 'flex';
           }
           
-          // Highlight upload button to show image is attached
-          if (uploadLabel) {
-            uploadLabel.classList.add('has-image');
-          }
+          // Highlight upload button and show image icon
+          if (uploadLabel) uploadLabel.classList.add('has-image');
+          _setUploadIcon('📷');
           
           // Send image to content script
           try {
@@ -790,6 +808,25 @@ async function handlePasteImage(event) {
       }
     }
   }
+}
+
+/**
+ * Route file uploads: images go to handleImageUpload, everything else to handleFileUpload.
+ */
+async function handleUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.type.startsWith('image/')) {
+    await handleImageUpload(event);
+  } else {
+    await handleFileUpload(event);
+  }
+}
+
+/** Update the combined upload button icon */
+function _setUploadIcon(emoji) {
+  const icon = document.getElementById('xwebagent-upload-icon');
+  if (icon) icon.textContent = emoji;
 }
 
 /**
@@ -829,11 +866,10 @@ async function handleImageUpload(event) {
         preview.style.display = 'flex';
       }
       
-      // Highlight upload button to show image is attached
-      if (uploadLabel) {
-        uploadLabel.classList.add('has-image');
-      }
-      
+      // Highlight upload button and show image icon
+      if (uploadLabel) uploadLabel.classList.add('has-image');
+      _setUploadIcon('📷');
+
       // Send image to content script
       try {
         await sendToContentScript({
@@ -881,17 +917,78 @@ async function clearUploadedImage() {
   }
   if (label) label.textContent = '📷 Image ready — ask about it!';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
+  _setUploadIcon('📎');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
-  
+
   // Clear from content script
   try {
     await sendToContentScript({ action: 'clearUploadedImage' });
   } catch (err) {
     console.warn('🖼️ Could not clear image in content script:', err);
   }
-  
+
   addMessage('🗑️ Image removed', 'system');
+}
+
+/**
+ * Handle text-file upload (.txt, .md, .csv, .json, etc.)
+ */
+async function handleFileUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  // Max 2 MB for text files
+  if (file.size > 2 * 1024 * 1024) {
+    addMessage('❌ File too large. Max size is 2 MB.', 'error');
+    event.target.value = '';
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    uploadedFileContent = text;
+    uploadedFileName = file.name;
+
+    // Show preview badge
+    const preview = document.getElementById('xwebagent-file-preview');
+    const label = document.getElementById('xwebagent-file-label');
+    const uploadLabel = document.getElementById('xwebagent-upload-label');
+    const input = document.getElementById('xwebagent-input');
+
+    if (preview) preview.style.display = 'flex';
+    if (label) label.textContent = `📎 ${file.name}`;
+    if (uploadLabel) uploadLabel.classList.add('has-image');
+    _setUploadIcon('📎');
+    if (input) input.placeholder = `Ask about ${file.name}…`;
+
+    addMessage(`📎 File attached: ${file.name}`, 'system');
+  } catch (err) {
+    addMessage(`❌ Could not read file: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Clear the attached text file
+ */
+function clearUploadedFile() {
+  uploadedFileContent = null;
+  uploadedFileName = null;
+
+  const preview = document.getElementById('xwebagent-file-preview');
+  const label = document.getElementById('xwebagent-file-label');
+  const uploadLabel = document.getElementById('xwebagent-upload-label');
+  const input = document.getElementById('xwebagent-input');
+  const fileInput = document.getElementById('xwebagent-image-upload');
+
+  if (preview) preview.style.display = 'none';
+  if (label) label.textContent = '📎 File attached';
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  _setUploadIcon('📎');
+  if (input) input.placeholder = 'Ask anything…';
+  if (fileInput) fileInput.value = '';
+
+  addMessage('🗑️ File removed', 'system');
 }
 
 /**
@@ -1155,14 +1252,25 @@ async function sendMessage() {
   if (currentMessageHasImage) {
     hasImageInConversation = true;
   }
-  
+
+  // If a text file is attached, build an augmented query that includes the file content.
+  // The original user-visible message stays clean; the enriched version goes to the LLM.
+  let effectiveQuery = query;
+  if (uploadedFileContent) {
+    const MAX_FILE_CHARS = 60000; // ~15k tokens — stay well within context limits
+    const snippet = uploadedFileContent.length > MAX_FILE_CHARS
+      ? uploadedFileContent.slice(0, MAX_FILE_CHARS) + '\n… [truncated]'
+      : uploadedFileContent;
+    effectiveQuery = `[Attached file: ${uploadedFileName}]\n---\n${snippet}\n---\n\nUser question: ${query}`;
+  }
+
   // Add to conversation history (mark if this message has an image)
-  conversationHistory.push({ 
-    role: 'user', 
-    content: query,
+  conversationHistory.push({
+    role: 'user',
+    content: effectiveQuery,
     hasImage: currentMessageHasImage
   });
-  
+
   addMessage(query, 'user');
   showTyping();
   
@@ -1173,7 +1281,39 @@ async function sendMessage() {
     
     let result;
     
-    if (isOnPdfViewer) {
+    if (noPageContext) {
+      // User explicitly disabled page context — answer from AI knowledge only
+      const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+        .replace('{pageContent}', '(No page context — user asked for AI knowledge only)')
+        .replace('{pageIndex}', '(No elements indexed)');
+
+      const messages = [
+        ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+        { role: 'user', content: effectiveQuery }
+      ];
+
+      const response = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          action: 'callLLM',
+          systemPrompt,
+          messages
+        }, (res) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(res);
+        });
+      });
+
+      if (response && !response.error) {
+        result = {
+          success: true,
+          answer: response.content || 'Could not generate an answer.',
+          highlightCount: 0,
+          hasHighlights: false
+        };
+      } else {
+        throw new Error(response?.error || 'Failed to call LLM');
+      }
+    } else if (isOnPdfViewer) {
       // Get PDF context from storage
       const pdfContext = await chrome.storage.session.get(['pdfViewerActive', 'pdfName', 'pdfTotalPages', 'pdfText']);
       
@@ -1186,7 +1326,7 @@ async function sendMessage() {
       
       if (pdfContext.pdfText?.length > 0) {
         // Handle PDF question directly
-        result = await handlePdfQuestion(query, pdfContext);
+        result = await handlePdfQuestion(effectiveQuery, pdfContext);
       } else {
         // No PDF loaded yet - show friendly message
         result = { 
@@ -1205,7 +1345,7 @@ async function sendMessage() {
         
       const messages = [
         ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-        { role: 'user', content: query }
+        { role: 'user', content: effectiveQuery }
       ];
       
       const response = await new Promise((resolve, reject) => {
@@ -1232,9 +1372,9 @@ async function sendMessage() {
     } else {
       // Normal routing via content script
       // Pass hasImage flag so router knows if image_ask is valid
-      result = await sendToContentScript({ 
-        action: 'handleQuery', 
-        query: query,
+      result = await sendToContentScript({
+        action: 'handleQuery',
+        query: effectiveQuery,
         history: conversationHistory.slice(0, -1),
         hasImage: currentMessageHasImage,
         hasImageInHistory: hasImageInConversation
@@ -1492,6 +1632,12 @@ function _restoreTabSession(session) {
   if (preview) preview.style.display = 'none';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   if (fileInput) fileInput.value = '';
+
+  // Clear text-file upload UI
+  uploadedFileContent = null;
+  uploadedFileName = null;
+  const filePreview = document.getElementById('xwebagent-file-preview');
+  if (filePreview) filePreview.style.display = 'none';
 }
 
 /**
@@ -1548,6 +1694,12 @@ async function resetChat(showMessage = true) {
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
 
+  // Clear text-file upload state
+  uploadedFileContent = null;
+  uploadedFileName = null;
+  const filePreview = document.getElementById('xwebagent-file-preview');
+  if (filePreview) filePreview.style.display = 'none';
+
   try {
     await sendToContentScript({ action: 'clearUploadedImage' });
   } catch (e) {
@@ -1571,6 +1723,206 @@ async function handleQuickAction(action) {
   if (action === 'reset') {
     await resetChat(true);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chat History
+// ---------------------------------------------------------------------------
+
+const HISTORY_STORAGE_KEY = 'xwebagent_history';
+const HISTORY_MAX_ITEMS = 50;
+
+/**
+ * Save the current chat to history in chrome.storage.local.
+ * Only saves text messages (user / assistant / system) — no HTML or highlights.
+ */
+async function saveCurrentChat() {
+  const textMessages = chatMessages.filter(m => m.content && m.content.trim());
+  if (textMessages.length === 0) {
+    addMessage('ℹ️ Nothing to save — chat is empty.', 'system');
+    return;
+  }
+
+  // Derive a title from the first user message
+  const firstUser = textMessages.find(m => m.type === 'user');
+  const rawTitle = firstUser ? firstUser.content : textMessages[0].content;
+  const title = rawTitle.length > 60 ? rawTitle.slice(0, 60) + '…' : rawTitle;
+
+  const entry = {
+    id: String(Date.now()),
+    title,
+    savedAt: new Date().toLocaleString(),
+    messages: textMessages.map(m => ({ content: m.content, type: m.type, timestamp: m.timestamp }))
+  };
+
+  try {
+    const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
+    const history = Array.isArray(data[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
+    history.unshift(entry); // newest first
+    if (history.length > HISTORY_MAX_ITEMS) history.length = HISTORY_MAX_ITEMS;
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: history });
+    addMessage('💾 Chat saved to history.', 'system');
+  } catch (err) {
+    addMessage(`❌ Could not save chat: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Show the history overlay and render the list view.
+ */
+function showHistoryPanel() {
+  const overlay = document.getElementById('xwebagent-history');
+  if (overlay) overlay.style.display = 'flex';
+  renderHistoryList();
+}
+
+/**
+ * Hide the history overlay.
+ */
+function hideHistoryPanel() {
+  const overlay = document.getElementById('xwebagent-history');
+  if (overlay) overlay.style.display = 'none';
+}
+
+/**
+ * Render the list of saved chats in the history body.
+ */
+async function renderHistoryList() {
+  const body = document.getElementById('xwebagent-history-body');
+  const backBtn = document.getElementById('xwebagent-history-back');
+  const titleEl = document.getElementById('xwebagent-history-hdr-title');
+  if (!body) return;
+
+  if (backBtn) backBtn.style.visibility = 'hidden';
+  if (titleEl) titleEl.textContent = 'Chat History';
+
+  body.innerHTML = '<div class="xwebagent-history-empty">Loading…</div>';
+
+  let history = [];
+  try {
+    const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
+    history = Array.isArray(data[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
+  } catch (err) {
+    body.innerHTML = `<div class="xwebagent-history-empty">❌ Could not load history: ${err.message}</div>`;
+    return;
+  }
+
+  if (history.length === 0) {
+    body.innerHTML = '<div class="xwebagent-history-empty">No saved chats yet.<br>Use 💾 Save to save a chat.</div>';
+    return;
+  }
+
+  body.innerHTML = '';
+  history.forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'xwebagent-history-item';
+
+    const main = document.createElement('div');
+    main.className = 'xwebagent-history-item-main';
+    main.addEventListener('click', () => renderHistoryDetail(entry));
+
+    const titleSpan = document.createElement('div');
+    titleSpan.className = 'xwebagent-history-item-title';
+    titleSpan.textContent = entry.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'xwebagent-history-item-meta';
+    meta.textContent = `${entry.savedAt} · ${entry.messages.length} messages`;
+
+    main.appendChild(titleSpan);
+    main.appendChild(meta);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'xwebagent-history-delete-btn';
+    delBtn.title = 'Delete this chat';
+    delBtn.textContent = '🗑';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteHistoryItem(entry.id);
+    });
+
+    item.appendChild(main);
+    item.appendChild(delBtn);
+    body.appendChild(item);
+  });
+}
+
+/**
+ * Render the detail view for a single saved chat.
+ * @param {Object} entry - { id, title, savedAt, messages }
+ */
+function renderHistoryDetail(entry) {
+  const body = document.getElementById('xwebagent-history-body');
+  const backBtn = document.getElementById('xwebagent-history-back');
+  const titleEl = document.getElementById('xwebagent-history-hdr-title');
+  if (!body) return;
+
+  if (backBtn) backBtn.style.visibility = 'visible';
+  if (titleEl) titleEl.textContent = entry.title.length > 30 ? entry.title.slice(0, 30) + '…' : entry.title;
+
+  body.innerHTML = '';
+
+  // "Load Chat" button
+  const loadBar = document.createElement('div');
+  loadBar.className = 'xwebagent-history-load-bar';
+  const loadBtn = document.createElement('button');
+  loadBtn.className = 'xwebagent-history-load-btn';
+  loadBtn.textContent = '↩ Load this chat';
+  loadBtn.addEventListener('click', () => {
+    loadHistoryChat(entry);
+    hideHistoryPanel();
+  });
+  loadBar.appendChild(loadBtn);
+  body.appendChild(loadBar);
+
+  // Messages
+  entry.messages.forEach(msg => {
+    const bubble = document.createElement('div');
+    bubble.className = `xwebagent-history-msg xwebagent-history-msg--${msg.type || 'system'}`;
+    bubble.textContent = msg.content;
+    body.appendChild(bubble);
+  });
+}
+
+/**
+ * Delete a saved chat entry by id and re-render the list.
+ * @param {string} id
+ */
+async function deleteHistoryItem(id) {
+  try {
+    const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
+    const history = Array.isArray(data[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
+    const updated = history.filter(e => e.id !== id);
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: updated });
+    renderHistoryList();
+  } catch (err) {
+    console.warn('History delete failed:', err);
+  }
+}
+
+/**
+ * Load a saved chat into the main panel, replacing the current conversation.
+ * @param {Object} entry
+ */
+function loadHistoryChat(entry) {
+  // Reset state first (silently)
+  conversationHistory = [];
+  chatMessages = [];
+  hasImageInConversation = false;
+  const container = document.getElementById('xwebagent-messages');
+  if (container) container.innerHTML = '';
+
+  // Restore messages
+  entry.messages.forEach(msg => {
+    addMessage(msg.content, msg.type || 'system');
+  });
+
+  // Rebuild minimal conversation history for follow-up queries
+  entry.messages.forEach(msg => {
+    if (msg.type === 'user' || msg.type === 'assistant') {
+      conversationHistory.push({ role: msg.type, content: msg.content });
+    }
+  });
 }
 
 // Listen for messages from content script and background

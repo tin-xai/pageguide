@@ -8,6 +8,17 @@
 </head>
 <body>
   <div class="xwebagent-panel">
+
+    <!-- History overlay (covers whole panel when visible) -->
+    <div class="xwebagent-history-overlay" id="xwebagent-history" style="display:none;">
+      <div class="xwebagent-history-hdr">
+        <button class="xwebagent-history-nav-btn" id="xwebagent-history-back" style="visibility:hidden;">← Back</button>
+        <span class="xwebagent-history-hdr-title" id="xwebagent-history-hdr-title">Chat History</span>
+        <button class="xwebagent-history-nav-btn" id="xwebagent-history-close">✕</button>
+      </div>
+      <div class="xwebagent-history-body" id="xwebagent-history-body"></div>
+    </div>
+
     <div class="xwebagent-chat-header">
       <div class="xwebagent-header-left">
         <img src="../icons/icon128.png" alt="XWebAgent" class="xwebagent-logo">
@@ -18,6 +29,7 @@
       </div>
       <div class="xwebagent-header-right">
         <button class="xwebagent-theme-btn" id="xwebagent-theme-toggle" title="Toggle light/dark mode">🌙</button>
+        <button class="xwebagent-new-chat-btn" id="xwebagent-open-history" title="Chat History">🕐</button>
         <button class="xwebagent-new-chat-btn" id="xwebagent-new-chat" title="New Chat">✏️</button>
         <button class="xwebagent-settings-btn" id="xwebagent-settings" title="Settings">⚙️</button>
       </div>
@@ -29,7 +41,9 @@
     <div class="xwebagent-chat-input-area">
       <div class="xwebagent-quick-actions">
         <button class="xwebagent-quick-btn" data-action="reset" title="Clear chat and highlights">🧹 Clear All</button>
+        <button class="xwebagent-quick-btn" id="xwebagent-save-chat" title="Save current chat to history">💾 Save</button>
         <button class="xwebagent-quick-btn xwebagent-pdf-reader-btn" id="xwebagent-pdf-reader" title="Open PDF Reader with AI chat">📄 PDF Reader</button>
+        <button class="xwebagent-quick-btn" id="xwebagent-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)">🌐 Page: On</button>
       </div>
       
       <!-- Image Preview Area (hidden by default) -->
@@ -47,10 +61,16 @@
       <!-- Slash command autocomplete dropdown -->
       <div class="xwebagent-slash-menu" id="xwebagent-slash-menu" style="display:none;"></div>
 
+      <!-- File Preview Area (hidden by default) -->
+      <div class="xwebagent-file-preview" id="xwebagent-file-preview" style="display: none;">
+        <span class="xwebagent-file-label" id="xwebagent-file-label">📎 File attached</span>
+        <button class="xwebagent-remove-image" id="xwebagent-remove-file" title="Remove file">✕</button>
+      </div>
+
       <div class="xwebagent-input-row">
-        <label class="xwebagent-upload-btn" id="xwebagent-upload-label" title="Upload image (or Ctrl+V to paste)">
-          📷
-          <input type="file" id="xwebagent-image-upload" accept="image/*" hidden>
+        <label class="xwebagent-upload-btn" id="xwebagent-upload-label" title="Upload image or file (or Ctrl+V to paste image)">
+          <span id="xwebagent-upload-icon">📎</span>
+          <input type="file" id="xwebagent-image-upload" accept="image/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.html,.htm,.py,.js,.ts,.css,.log" hidden>
         </label>
         <input type="text" class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything... (type / for commands)">
         <button class="xwebagent-send-btn" id="xwebagent-send">➤</button>
