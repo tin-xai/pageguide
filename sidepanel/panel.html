@@ -8,6 +8,17 @@
 </head>
 <body>
   <div class="xwebagent-panel">
+
+    <!-- History overlay (covers whole panel when visible) -->
+    <div class="xwebagent-history-overlay" id="xwebagent-history" style="display:none;">
+      <div class="xwebagent-history-hdr">
+        <button class="xwebagent-history-nav-btn" id="xwebagent-history-back" style="visibility:hidden;">← Back</button>
+        <span class="xwebagent-history-hdr-title" id="xwebagent-history-hdr-title">Chat History</span>
+        <button class="xwebagent-history-nav-btn" id="xwebagent-history-close">✕</button>
+      </div>
+      <div class="xwebagent-history-body" id="xwebagent-history-body"></div>
+    </div>
+
     <div class="xwebagent-chat-header">
       <div class="xwebagent-header-left">
         <img src="../icons/icon128.png" alt="XWebAgent" class="xwebagent-logo">
@@ -18,6 +29,7 @@
       </div>
       <div class="xwebagent-header-right">
         <button class="xwebagent-theme-btn" id="xwebagent-theme-toggle" title="Toggle light/dark mode">🌙</button>
+        <button class="xwebagent-new-chat-btn" id="xwebagent-open-history" title="Chat History">🕐</button>
         <button class="xwebagent-new-chat-btn" id="xwebagent-new-chat" title="New Chat">✏️</button>
         <button class="xwebagent-settings-btn" id="xwebagent-settings" title="Settings">⚙️</button>
       </div>
@@ -29,6 +41,7 @@
     <div class="xwebagent-chat-input-area">
       <div class="xwebagent-quick-actions">
         <button class="xwebagent-quick-btn" data-action="reset" title="Clear chat and highlights">🧹 Clear All</button>
+        <button class="xwebagent-quick-btn" id="xwebagent-save-chat" title="Save current chat to history">💾 Save</button>
         <button class="xwebagent-quick-btn xwebagent-pdf-reader-btn" id="xwebagent-pdf-reader" title="Open PDF Reader with AI chat">📄 PDF Reader</button>
         <button class="xwebagent-quick-btn" id="xwebagent-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)">🌐 Page: On</button>
       </div>

@@ -69,6 +69,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
   });
   
+  // Chat history
+  document.getElementById('xwebagent-open-history')?.addEventListener('click', showHistoryPanel);
+  document.getElementById('xwebagent-history-close')?.addEventListener('click', hideHistoryPanel);
+  document.getElementById('xwebagent-history-back')?.addEventListener('click', () => renderHistoryList());
+  document.getElementById('xwebagent-save-chat')?.addEventListener('click', saveCurrentChat);
+
   // No-page-context toggle
   document.getElementById('xwebagent-no-page-ctx')?.addEventListener('click', () => {
     noPageContext = !noPageContext;
@@ -1717,6 +1723,206 @@ async function handleQuickAction(action) {
   if (action === 'reset') {
     await resetChat(true);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chat History
+// ---------------------------------------------------------------------------
+
+const HISTORY_STORAGE_KEY = 'xwebagent_history';
+const HISTORY_MAX_ITEMS = 50;
+
+/**
+ * Save the current chat to history in chrome.storage.local.
+ * Only saves text messages (user / assistant / system) — no HTML or highlights.
+ */
+async function saveCurrentChat() {
+  const textMessages = chatMessages.filter(m => m.content && m.content.trim());
+  if (textMessages.length === 0) {
+    addMessage('ℹ️ Nothing to save — chat is empty.', 'system');
+    return;
+  }
+
+  // Derive a title from the first user message
+  const firstUser = textMessages.find(m => m.type === 'user');
+  const rawTitle = firstUser ? firstUser.content : textMessages[0].content;
+  const title = rawTitle.length > 60 ? rawTitle.slice(0, 60) + '…' : rawTitle;
+
+  const entry = {
+    id: String(Date.now()),
+    title,
+    savedAt: new Date().toLocaleString(),
+    messages: textMessages.map(m => ({ content: m.content, type: m.type, timestamp: m.timestamp }))
+  };
+
+  try {
+    const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
+    const history = Array.isArray(data[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
+    history.unshift(entry); // newest first
+    if (history.length > HISTORY_MAX_ITEMS) history.length = HISTORY_MAX_ITEMS;
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: history });
+    addMessage('💾 Chat saved to history.', 'system');
+  } catch (err) {
+    addMessage(`❌ Could not save chat: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Show the history overlay and render the list view.
+ */
+function showHistoryPanel() {
+  const overlay = document.getElementById('xwebagent-history');
+  if (overlay) overlay.style.display = 'flex';
+  renderHistoryList();
+}
+
+/**
+ * Hide the history overlay.
+ */
+function hideHistoryPanel() {
+  const overlay = document.getElementById('xwebagent-history');
+  if (overlay) overlay.style.display = 'none';
+}
+
+/**
+ * Render the list of saved chats in the history body.
+ */
+async function renderHistoryList() {
+  const body = document.getElementById('xwebagent-history-body');
+  const backBtn = document.getElementById('xwebagent-history-back');
+  const titleEl = document.getElementById('xwebagent-history-hdr-title');
+  if (!body) return;
+
+  if (backBtn) backBtn.style.visibility = 'hidden';
+  if (titleEl) titleEl.textContent = 'Chat History';
+
+  body.innerHTML = '<div class="xwebagent-history-empty">Loading…</div>';
+
+  let history = [];
+  try {
+    const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
+    history = Array.isArray(data[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
+  } catch (err) {
+    body.innerHTML = `<div class="xwebagent-history-empty">❌ Could not load history: ${err.message}</div>`;
+    return;
+  }
+
+  if (history.length === 0) {
+    body.innerHTML = '<div class="xwebagent-history-empty">No saved chats yet.<br>Use 💾 Save to save a chat.</div>';
+    return;
+  }
+
+  body.innerHTML = '';
+  history.forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'xwebagent-history-item';
+
+    const main = document.createElement('div');
+    main.className = 'xwebagent-history-item-main';
+    main.addEventListener('click', () => renderHistoryDetail(entry));
+
+    const titleSpan = document.createElement('div');
+    titleSpan.className = 'xwebagent-history-item-title';
+    titleSpan.textContent = entry.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'xwebagent-history-item-meta';
+    meta.textContent = `${entry.savedAt} · ${entry.messages.length} messages`;
+
+    main.appendChild(titleSpan);
+    main.appendChild(meta);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'xwebagent-history-delete-btn';
+    delBtn.title = 'Delete this chat';
+    delBtn.textContent = '🗑';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteHistoryItem(entry.id);
+    });
+
+    item.appendChild(main);
+    item.appendChild(delBtn);
+    body.appendChild(item);
+  });
+}
+
+/**
+ * Render the detail view for a single saved chat.
+ * @param {Object} entry - { id, title, savedAt, messages }
+ */
+function renderHistoryDetail(entry) {
+  const body = document.getElementById('xwebagent-history-body');
+  const backBtn = document.getElementById('xwebagent-history-back');
+  const titleEl = document.getElementById('xwebagent-history-hdr-title');
+  if (!body) return;
+
+  if (backBtn) backBtn.style.visibility = 'visible';
+  if (titleEl) titleEl.textContent = entry.title.length > 30 ? entry.title.slice(0, 30) + '…' : entry.title;
+
+  body.innerHTML = '';
+
+  // "Load Chat" button
+  const loadBar = document.createElement('div');
+  loadBar.className = 'xwebagent-history-load-bar';
+  const loadBtn = document.createElement('button');
+  loadBtn.className = 'xwebagent-history-load-btn';
+  loadBtn.textContent = '↩ Load this chat';
+  loadBtn.addEventListener('click', () => {
+    loadHistoryChat(entry);
+    hideHistoryPanel();
+  });
+  loadBar.appendChild(loadBtn);
+  body.appendChild(loadBar);
+
+  // Messages
+  entry.messages.forEach(msg => {
+    const bubble = document.createElement('div');
+    bubble.className = `xwebagent-history-msg xwebagent-history-msg--${msg.type || 'system'}`;
+    bubble.textContent = msg.content;
+    body.appendChild(bubble);
+  });
+}
+
+/**
+ * Delete a saved chat entry by id and re-render the list.
+ * @param {string} id
+ */
+async function deleteHistoryItem(id) {
+  try {
+    const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
+    const history = Array.isArray(data[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
+    const updated = history.filter(e => e.id !== id);
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: updated });
+    renderHistoryList();
+  } catch (err) {
+    console.warn('History delete failed:', err);
+  }
+}
+
+/**
+ * Load a saved chat into the main panel, replacing the current conversation.
+ * @param {Object} entry
+ */
+function loadHistoryChat(entry) {
+  // Reset state first (silently)
+  conversationHistory = [];
+  chatMessages = [];
+  hasImageInConversation = false;
+  const container = document.getElementById('xwebagent-messages');
+  if (container) container.innerHTML = '';
+
+  // Restore messages
+  entry.messages.forEach(msg => {
+    addMessage(msg.content, msg.type || 'system');
+  });
+
+  // Rebuild minimal conversation history for follow-up queries
+  entry.messages.forEach(msg => {
+    if (msg.type === 'user' || msg.type === 'assistant') {
+      conversationHistory.push({ role: msg.type, content: msg.content });
+    }
+  });
 }
 
 // Listen for messages from content script and background
