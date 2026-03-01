@@ -9,6 +9,7 @@ let hasImageInConversation = false; // Track if image was used in conversation
 let uploadedFileContent = null; // Text content of an attached file
 let uploadedFileName = null;    // Display name of the attached file
 let guideActive = false; // True while guide is generating steps (shows stop button)
+let noPageContext = false; // When true, skip page scraping and answer from AI knowledge only
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -68,6 +69,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
   });
   
+  // No-page-context toggle
+  document.getElementById('xwebagent-no-page-ctx')?.addEventListener('click', () => {
+    noPageContext = !noPageContext;
+    const btn = document.getElementById('xwebagent-no-page-ctx');
+    if (btn) {
+      btn.textContent = noPageContext ? '💭 Page: Off' : '🌐 Page: On';
+      btn.classList.toggle('xwebagent-quick-btn--active', noPageContext);
+      btn.title = noPageContext
+        ? 'Page context OFF — answers from AI knowledge only. Click to re-enable.'
+        : 'Toggle: answer from AI knowledge only (ignore current page)';
+    }
+  });
+
   // Combined upload handling (images + text files share one button)
   const imageUpload = document.getElementById('xwebagent-image-upload');
   const removeImageBtn = document.getElementById('xwebagent-remove-image');
@@ -1261,7 +1275,39 @@ async function sendMessage() {
     
     let result;
     
-    if (isOnPdfViewer) {
+    if (noPageContext) {
+      // User explicitly disabled page context — answer from AI knowledge only
+      const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+        .replace('{pageContent}', '(No page context — user asked for AI knowledge only)')
+        .replace('{pageIndex}', '(No elements indexed)');
+
+      const messages = [
+        ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+        { role: 'user', content: effectiveQuery }
+      ];
+
+      const response = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          action: 'callLLM',
+          systemPrompt,
+          messages
+        }, (res) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(res);
+        });
+      });
+
+      if (response && !response.error) {
+        result = {
+          success: true,
+          answer: response.content || 'Could not generate an answer.',
+          highlightCount: 0,
+          hasHighlights: false
+        };
+      } else {
+        throw new Error(response?.error || 'Failed to call LLM');
+      }
+    } else if (isOnPdfViewer) {
       // Get PDF context from storage
       const pdfContext = await chrome.storage.session.get(['pdfViewerActive', 'pdfName', 'pdfTotalPages', 'pdfText']);
       
