@@ -782,6 +782,29 @@ body {
   font-weight: 500;
 }
 
+/* File attachment preview strip */
+.xwebagent-file-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 200, 120, 0.08);
+  border: 1px solid rgba(0, 200, 120, 0.25);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+.xwebagent-file-label {
+  flex: 1;
+  font-size: 12px;
+  color: #00e096;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .xwebagent-input-row {
   display: flex;
   gap: 8px;
@@ -1262,6 +1285,15 @@ body.light-mode .xwebagent-image-preview {
 
 body.light-mode .xwebagent-image-label {
   color: #6040bb;
+}
+
+body.light-mode .xwebagent-file-preview {
+  background: rgba(0, 160, 90, 0.07);
+  border-color: rgba(0, 160, 90, 0.25);
+}
+
+body.light-mode .xwebagent-file-label {
+  color: #007a50;
 }
 
 body.light-mode .xwebagent-remove-image {

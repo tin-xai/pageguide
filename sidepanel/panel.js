@@ -6,6 +6,8 @@ let conversationHistory = []; // Stores {role: 'user'|'assistant', content: stri
 let currentTabId = null;
 let uploadedImageBase64 = null; // Stores the uploaded image
 let hasImageInConversation = false; // Track if image was used in conversation
+let uploadedFileContent = null; // Text content of an attached file
+let uploadedFileName = null;    // Display name of the attached file
 let guideActive = false; // True while guide is generating steps (shows stop button)
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
@@ -66,18 +68,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
   });
   
-  // Image upload handling
+  // Combined upload handling (images + text files share one button)
   const imageUpload = document.getElementById('xwebagent-image-upload');
   const removeImageBtn = document.getElementById('xwebagent-remove-image');
-  
-  if (imageUpload) {
-    imageUpload.addEventListener('change', handleImageUpload);
-  }
-  
-  if (removeImageBtn) {
-    removeImageBtn.addEventListener('click', clearUploadedImage);
-  }
-  
+  const removeFileBtn = document.getElementById('xwebagent-remove-file');
+
+  if (imageUpload) imageUpload.addEventListener('change', handleUpload);
+  if (removeImageBtn) removeImageBtn.addEventListener('click', clearUploadedImage);
+  if (removeFileBtn) removeFileBtn.addEventListener('click', clearUploadedFile);
+
   // Paste image support (Ctrl+V / Cmd+V)
   document.addEventListener('paste', handlePasteImage);
   
@@ -757,10 +756,9 @@ async function handlePasteImage(event) {
             preview.style.display = 'flex';
           }
           
-          // Highlight upload button to show image is attached
-          if (uploadLabel) {
-            uploadLabel.classList.add('has-image');
-          }
+          // Highlight upload button and show image icon
+          if (uploadLabel) uploadLabel.classList.add('has-image');
+          _setUploadIcon('📷');
           
           // Send image to content script
           try {
@@ -790,6 +788,25 @@ async function handlePasteImage(event) {
       }
     }
   }
+}
+
+/**
+ * Route file uploads: images go to handleImageUpload, everything else to handleFileUpload.
+ */
+async function handleUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.type.startsWith('image/')) {
+    await handleImageUpload(event);
+  } else {
+    await handleFileUpload(event);
+  }
+}
+
+/** Update the combined upload button icon */
+function _setUploadIcon(emoji) {
+  const icon = document.getElementById('xwebagent-upload-icon');
+  if (icon) icon.textContent = emoji;
 }
 
 /**
@@ -829,11 +846,10 @@ async function handleImageUpload(event) {
         preview.style.display = 'flex';
       }
       
-      // Highlight upload button to show image is attached
-      if (uploadLabel) {
-        uploadLabel.classList.add('has-image');
-      }
-      
+      // Highlight upload button and show image icon
+      if (uploadLabel) uploadLabel.classList.add('has-image');
+      _setUploadIcon('📷');
+
       // Send image to content script
       try {
         await sendToContentScript({
@@ -881,17 +897,78 @@ async function clearUploadedImage() {
   }
   if (label) label.textContent = '📷 Image ready — ask about it!';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
+  _setUploadIcon('📎');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
-  
+
   // Clear from content script
   try {
     await sendToContentScript({ action: 'clearUploadedImage' });
   } catch (err) {
     console.warn('🖼️ Could not clear image in content script:', err);
   }
-  
+
   addMessage('🗑️ Image removed', 'system');
+}
+
+/**
+ * Handle text-file upload (.txt, .md, .csv, .json, etc.)
+ */
+async function handleFileUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  // Max 2 MB for text files
+  if (file.size > 2 * 1024 * 1024) {
+    addMessage('❌ File too large. Max size is 2 MB.', 'error');
+    event.target.value = '';
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    uploadedFileContent = text;
+    uploadedFileName = file.name;
+
+    // Show preview badge
+    const preview = document.getElementById('xwebagent-file-preview');
+    const label = document.getElementById('xwebagent-file-label');
+    const uploadLabel = document.getElementById('xwebagent-upload-label');
+    const input = document.getElementById('xwebagent-input');
+
+    if (preview) preview.style.display = 'flex';
+    if (label) label.textContent = `📎 ${file.name}`;
+    if (uploadLabel) uploadLabel.classList.add('has-image');
+    _setUploadIcon('📎');
+    if (input) input.placeholder = `Ask about ${file.name}…`;
+
+    addMessage(`📎 File attached: ${file.name}`, 'system');
+  } catch (err) {
+    addMessage(`❌ Could not read file: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Clear the attached text file
+ */
+function clearUploadedFile() {
+  uploadedFileContent = null;
+  uploadedFileName = null;
+
+  const preview = document.getElementById('xwebagent-file-preview');
+  const label = document.getElementById('xwebagent-file-label');
+  const uploadLabel = document.getElementById('xwebagent-upload-label');
+  const input = document.getElementById('xwebagent-input');
+  const fileInput = document.getElementById('xwebagent-image-upload');
+
+  if (preview) preview.style.display = 'none';
+  if (label) label.textContent = '📎 File attached';
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  _setUploadIcon('📎');
+  if (input) input.placeholder = 'Ask anything…';
+  if (fileInput) fileInput.value = '';
+
+  addMessage('🗑️ File removed', 'system');
 }
 
 /**
@@ -1155,14 +1232,25 @@ async function sendMessage() {
   if (currentMessageHasImage) {
     hasImageInConversation = true;
   }
-  
+
+  // If a text file is attached, build an augmented query that includes the file content.
+  // The original user-visible message stays clean; the enriched version goes to the LLM.
+  let effectiveQuery = query;
+  if (uploadedFileContent) {
+    const MAX_FILE_CHARS = 60000; // ~15k tokens — stay well within context limits
+    const snippet = uploadedFileContent.length > MAX_FILE_CHARS
+      ? uploadedFileContent.slice(0, MAX_FILE_CHARS) + '\n… [truncated]'
+      : uploadedFileContent;
+    effectiveQuery = `[Attached file: ${uploadedFileName}]\n---\n${snippet}\n---\n\nUser question: ${query}`;
+  }
+
   // Add to conversation history (mark if this message has an image)
-  conversationHistory.push({ 
-    role: 'user', 
-    content: query,
+  conversationHistory.push({
+    role: 'user',
+    content: effectiveQuery,
     hasImage: currentMessageHasImage
   });
-  
+
   addMessage(query, 'user');
   showTyping();
   
@@ -1186,7 +1274,7 @@ async function sendMessage() {
       
       if (pdfContext.pdfText?.length > 0) {
         // Handle PDF question directly
-        result = await handlePdfQuestion(query, pdfContext);
+        result = await handlePdfQuestion(effectiveQuery, pdfContext);
       } else {
         // No PDF loaded yet - show friendly message
         result = { 
@@ -1205,7 +1293,7 @@ async function sendMessage() {
         
       const messages = [
         ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-        { role: 'user', content: query }
+        { role: 'user', content: effectiveQuery }
       ];
       
       const response = await new Promise((resolve, reject) => {
@@ -1232,9 +1320,9 @@ async function sendMessage() {
     } else {
       // Normal routing via content script
       // Pass hasImage flag so router knows if image_ask is valid
-      result = await sendToContentScript({ 
-        action: 'handleQuery', 
-        query: query,
+      result = await sendToContentScript({
+        action: 'handleQuery',
+        query: effectiveQuery,
         history: conversationHistory.slice(0, -1),
         hasImage: currentMessageHasImage,
         hasImageInHistory: hasImageInConversation
@@ -1492,6 +1580,12 @@ function _restoreTabSession(session) {
   if (preview) preview.style.display = 'none';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   if (fileInput) fileInput.value = '';
+
+  // Clear text-file upload UI
+  uploadedFileContent = null;
+  uploadedFileName = null;
+  const filePreview = document.getElementById('xwebagent-file-preview');
+  if (filePreview) filePreview.style.display = 'none';
 }
 
 /**
@@ -1547,6 +1641,12 @@ async function resetChat(showMessage = true) {
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
+
+  // Clear text-file upload state
+  uploadedFileContent = null;
+  uploadedFileName = null;
+  const filePreview = document.getElementById('xwebagent-file-preview');
+  if (filePreview) filePreview.style.display = 'none';
 
   try {
     await sendToContentScript({ action: 'clearUploadedImage' });

@@ -47,10 +47,16 @@
       <!-- Slash command autocomplete dropdown -->
       <div class="xwebagent-slash-menu" id="xwebagent-slash-menu" style="display:none;"></div>
 
+      <!-- File Preview Area (hidden by default) -->
+      <div class="xwebagent-file-preview" id="xwebagent-file-preview" style="display: none;">
+        <span class="xwebagent-file-label" id="xwebagent-file-label">📎 File attached</span>
+        <button class="xwebagent-remove-image" id="xwebagent-remove-file" title="Remove file">✕</button>
+      </div>
+
       <div class="xwebagent-input-row">
-        <label class="xwebagent-upload-btn" id="xwebagent-upload-label" title="Upload image (or Ctrl+V to paste)">
-          📷
-          <input type="file" id="xwebagent-image-upload" accept="image/*" hidden>
+        <label class="xwebagent-upload-btn" id="xwebagent-upload-label" title="Upload image or file (or Ctrl+V to paste image)">
+          <span id="xwebagent-upload-icon">📎</span>
+          <input type="file" id="xwebagent-image-upload" accept="image/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.html,.htm,.py,.js,.ts,.css,.log" hidden>
         </label>
         <input type="text" class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything... (type / for commands)">
         <button class="xwebagent-send-btn" id="xwebagent-send">➤</button>
