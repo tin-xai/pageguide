@@ -26,7 +26,8 @@ async function handleMessage(request) {
           request.query, 
           request.history || [],
           request.hasImage || false,
-          request.hasImageInHistory || false
+          request.hasImageInHistory || false,
+          request.forcedRoute || null
         );
       }
       return { success: false, error: 'Query handler not loaded' };
@@ -108,3 +109,32 @@ async function handleMessage(request) {
       return { error: 'Unknown action' };
   }
 }
+
+// Track selection changes to send context to sidepanel
+let selectionTimeout = null;
+document.addEventListener('selectionchange', () => {
+  // Clear any pending timeout
+  if (selectionTimeout) {
+    clearTimeout(selectionTimeout);
+  }
+  
+  // Debounce to avoid spamming messages while user is dragging
+  selectionTimeout = setTimeout(() => {
+    const selection = window.getSelection();
+    // Only send if we're not inside an input/textarea to avoid interfering with normal typing
+    const activeEl = document.activeElement;
+    const isInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
+    
+    if (!isInput) {
+      const selectedText = selection.toString().trim();
+      try {
+        chrome.runtime.sendMessage({ 
+          action: 'selectedText', 
+          text: selectedText 
+        });
+      } catch (err) {
+        // Extension context might be invalidated, ignore
+      }
+    }
+  }, 300); // 300ms debounce
+});

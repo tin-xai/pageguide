@@ -117,6 +117,23 @@ Answer: The main actors are Leonardo DiCaprio [23:"Leonardo DiCaprio"], Tom Hard
 
 Answer the user's question with citations:`,
 
+  // Knowledge Only - answer without any page context ("Page Off" mode)
+  KNOWLEDGE_ONLY: `You are a helpful general knowledge assistant. Answer the user's question using your own general knowledge base.
+
+INSTRUCTIONS:
+1. Provide a clear, detailed, and accurate answer to the user's question.
+2. You MUST include citations to real, valid source URLs using STANDARD MARKDOWN LINKS. Wrap the link in text so the user can click the hyperlink, e.g., [Text to display](https://url-of-source.com).
+3. Whenever possible, append Chrome Text Fragments ('#:~:text=exact%20phrase') to the URL. This allows the browser to automatically highlight the specific text when the user opens the citation.
+4. Consider conversation history for context if relevant.
+5. Do NOT mention that you cannot see the page unless explicitly asked, simply answer the question directly.
+
+CITATION EXAMPLE:
+Question: "Who directed the movie Inception?"
+Answer: The movie Inception was directed by [Christopher Nolan](https://en.wikipedia.org/wiki/Inception#:~:text=written%20and%20directed%20by%20Christopher%20Nolan).
+
+Answer the user's question:`,
+
+
   // Step-by-step guidance prompt for hidden elements / multi-step tasks
   STEP_BY_STEP_GUIDE: `You are a helpful guide assistant. Users ask "how to" questions and you provide step-by-step guidance.
 

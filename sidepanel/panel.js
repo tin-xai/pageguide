@@ -8,6 +8,7 @@ let uploadedImageBase64 = null; // Stores the uploaded image
 let hasImageInConversation = false; // Track if image was used in conversation
 let uploadedFileContent = null; // Text content of an attached file
 let uploadedFileName = null;    // Display name of the attached file
+let currentSelectedText = null; // Stores text selected on the webpage
 let guideActive = false; // True while guide is generating steps (shows stop button)
 let noPageContext = false; // When true, skip page scraping and answer from AI knowledge only
 
@@ -92,10 +93,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const imageUpload = document.getElementById('xwebagent-image-upload');
   const removeImageBtn = document.getElementById('xwebagent-remove-image');
   const removeFileBtn = document.getElementById('xwebagent-remove-file');
+  const removeSelectedTextBtn = document.getElementById('xwebagent-remove-selected-text');
 
   if (imageUpload) imageUpload.addEventListener('change', handleUpload);
   if (removeImageBtn) removeImageBtn.addEventListener('click', clearUploadedImage);
   if (removeFileBtn) removeFileBtn.addEventListener('click', clearUploadedFile);
+  if (removeSelectedTextBtn) {
+    removeSelectedTextBtn.addEventListener('click', clearSelectedText);
+  }
 
   // Paste image support (Ctrl+V / Cmd+V)
   document.addEventListener('paste', handlePasteImage);
@@ -484,7 +489,7 @@ function _setupMessageContainerDelegate(container) {
 /**
  * Add a message to the chat
  */
-function addMessage(content, type = 'assistant', clickable = false) {
+function addMessage(content, type = 'assistant', clickable = false, context = null) {
   const container = document.getElementById('xwebagent-messages');
   if (!container) return;
   
@@ -493,25 +498,58 @@ function addMessage(content, type = 'assistant', clickable = false) {
   const msg = document.createElement('div');
   msg.className = `xwebagent-message ${type}`;
   
+  let innerHTML = '';
+
+  // Prepend context pill if provided
+  if (type === 'user' && context) {
+    if (context.type === 'selectedText') {
+      const snippet = context.text.length > 80 ? context.text.substring(0, 80) + '...' : context.text;
+      const wordCount = context.text.split(/\\s+/).filter(w => w.length > 0).length;
+      innerHTML += `
+        <div class="xwebagent-msg-context-pill xwebagent-msg-context-selected">
+          <span class="xwebagent-msg-context-icon">📝</span>
+          <span class="xwebagent-msg-context-text" title="${escapeHtml(context.text)}">
+            "${escapeHtml(snippet)}" (${wordCount} words)
+          </span>
+        </div>
+      `;
+    } else if (context.type === 'file') {
+      innerHTML += `
+        <div class="xwebagent-msg-context-pill xwebagent-msg-context-file">
+          <span class="xwebagent-msg-context-icon">📎</span>
+          <span class="xwebagent-msg-context-text">${escapeHtml(context.name)}</span>
+        </div>
+      `;
+    } else if (context.type === 'image') {
+      innerHTML += `
+        <div class="xwebagent-msg-context-pill xwebagent-msg-context-image">
+          <span class="xwebagent-msg-context-icon">📷</span>
+          <span class="xwebagent-msg-context-text">Attached Image</span>
+        </div>
+      `;
+    }
+  }
+
   if (clickable) {
     msg.classList.add('xwebagent-clickable');
     // Parse markdown first, then citations
     const markdownParsed = parseMarkdown(content);
     // Parse citations to make them clickable (handles both web and PDF citations)
     const parsedContent = parseCitations(markdownParsed);
-    
-    msg.innerHTML = parsedContent;
-    // Click handlers for citations and message toggle are handled by the
-    // delegated listener on the container (_setupMessageContainerDelegate).
+    innerHTML += parsedContent;
   } else {
     // Apply markdown parsing for non-clickable messages too
-    msg.innerHTML = parseMarkdown(content);
+    innerHTML += parseMarkdown(content);
   }
+  
+  msg.innerHTML = innerHTML;
+  // Click handlers for citations and message toggle are handled by the
+  // delegated listener on the container (_setupMessageContainerDelegate).
   
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
   
-  chatMessages.push({ content, type, timestamp: Date.now() });
+  chatMessages.push({ content, type, timestamp: Date.now(), context });
 }
 
 /**
@@ -992,6 +1030,17 @@ function clearUploadedFile() {
 }
 
 /**
+ * Clear the selected text
+ */
+function clearSelectedText() {
+  currentSelectedText = null;
+  const preview = document.getElementById('xwebagent-selected-text-preview');
+  if (preview) preview.style.display = 'none';
+  const input = document.getElementById('xwebagent-input');
+  if (input) input.focus();
+}
+
+/**
  * Render clickable region overlays on the image preview wrapper.
  * Called after a successful image_ask response that includes imageRegions.
  * Each region is grounded to the LLM's answer: clicking scrolls to the
@@ -1049,6 +1098,9 @@ const SLASH_COMMANDS = [
   { command: '/status',     args: '',        description: 'Show current model, SOM, and vision settings' },
   { command: '/som',        args: 'on|off',  description: 'Enable or disable Set of Marks overlay' },
   { command: '/vision',     args: 'on|off',  description: 'Enable or disable vision (screenshot) mode' },
+  { command: '/find',       args: '<text>',  description: 'Force the agent to find information on the page' },
+  { command: '/guide',      args: '<text>',  description: 'Force the agent into step-by-step guide mode' },
+  { command: '/hide',       args: '<text>',  description: 'Force the agent to hide elements on the page' },
 ];
 
 /**
@@ -1231,21 +1283,70 @@ function _initSlashAutocomplete() {
 async function sendMessage() {
   const input = document.getElementById('xwebagent-input');
   const btn = document.getElementById('xwebagent-send');
-  if (!input?.value.trim()) return;
+  
+  const query = input?.value.trim() || '';
+  
+  // Only return early if we have no query AND no attached context
+  if (!query && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+    return;
+  }
 
   _hideSlashMenu();
+  if (input) input.value = '';
+  if (btn) btn.disabled = true;
 
-  const query = input.value.trim();
-  input.value = '';
-  btn.disabled = true;
+  // Track if a specific routing is forced by the user
+  let forcedRoute = null;
 
   // Handle slash commands before routing to agent
   if (query.startsWith('/')) {
-    btn.disabled = false;
-    input.focus();
-    await handleSlashCommand(query);
-    return;
+    // If it's a routing override command, strip it and set the forcedRoute flag
+    const lowerQuery = query.toLowerCase();
+    if (lowerQuery.startsWith('/find ') || lowerQuery === '/find') {
+      forcedRoute = 'ask';
+      // Strip the command from the query the LLM sees
+      // We do not return early here so it proceeds matching routing
+      input.value = query.substring(5).trim();
+      // Re-read query
+      const newQuery = input.value;
+      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+        addMessage('Please provide a query after /find', 'system');
+        if (btn) btn.disabled = false;
+        return;
+      }
+      // Reassign for downstream processing
+      input.value = '';
+    } else if (lowerQuery.startsWith('/guide ') || lowerQuery === '/guide') {
+      forcedRoute = 'guide';
+      input.value = query.substring(6).trim();
+      const newQuery = input.value;
+      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+        addMessage('Please provide a query after /guide', 'system');
+        if (btn) btn.disabled = false;
+        return;
+      }
+      input.value = '';
+    } else if (lowerQuery.startsWith('/hide ') || lowerQuery === '/hide') {
+      forcedRoute = 'hide';
+      input.value = query.substring(5).trim();
+      const newQuery = input.value;
+      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+        addMessage('Please provide a query after /hide', 'system');
+        if (btn) btn.disabled = false;
+        return;
+      }
+      input.value = '';
+    } else {
+      // Handle normal system slash commands that bypass LLM entirely
+      if (btn) btn.disabled = false;
+      if (input) input.focus();
+      await handleSlashCommand(query);
+      return;
+    }
   }
+  
+  // Re-evaluate query after potentially stripping forced route command
+  const activeQuery = forcedRoute ? (query.split(/\\s+/).slice(1).join(' ') || '') : query;
   
   // Check if current message has an image attached
   const currentMessageHasImage = !!uploadedImageBase64;
@@ -1253,15 +1354,38 @@ async function sendMessage() {
     hasImageInConversation = true;
   }
 
-  // If a text file is attached, build an augmented query that includes the file content.
+  // If a text file is attached or text is selected, build an augmented query
   // The original user-visible message stays clean; the enriched version goes to the LLM.
   let effectiveQuery = query;
-  if (uploadedFileContent) {
-    const MAX_FILE_CHARS = 60000; // ~15k tokens — stay well within context limits
-    const snippet = uploadedFileContent.length > MAX_FILE_CHARS
-      ? uploadedFileContent.slice(0, MAX_FILE_CHARS) + '\n… [truncated]'
-      : uploadedFileContent;
-    effectiveQuery = `[Attached file: ${uploadedFileName}]\n---\n${snippet}\n---\n\nUser question: ${query}`;
+  
+  if (uploadedFileContent || currentSelectedText) {
+    const parts = [];
+    
+    if (uploadedFileContent) {
+      const MAX_FILE_CHARS = 40000;
+      const snippet = uploadedFileContent.length > MAX_FILE_CHARS
+        ? uploadedFileContent.slice(0, MAX_FILE_CHARS) + '\n… [truncated]'
+        : uploadedFileContent;
+      parts.push(`[Attached file: ${uploadedFileName}]\n---\n${snippet}\n---`);
+    }
+    
+    if (currentSelectedText) {
+      const MAX_SELECTION_CHARS = 20000;
+      const selectionSnippet = currentSelectedText.length > MAX_SELECTION_CHARS
+        ? currentSelectedText.slice(0, MAX_SELECTION_CHARS) + '\n… [truncated]'
+        : currentSelectedText;
+      parts.push(`[Selected text from page]\n---\n${selectionSnippet}\n---`);
+    }
+    
+    if (activeQuery) {
+      effectiveQuery = `${parts.join('\n\n')}\n\nUser question: ${activeQuery}`;
+    } else {
+      // If user hit send with just context and no question, provide a default prompt
+      effectiveQuery = `${parts.join('\n\n')}\n\nPlease analyze or explain the provided content.`;
+    }
+  } else if (forcedRoute) {
+    // If no context was attached, just use the stripped query
+    effectiveQuery = activeQuery;
   }
 
   // Add to conversation history (mark if this message has an image)
@@ -1271,7 +1395,18 @@ async function sendMessage() {
     hasImage: currentMessageHasImage
   });
 
-  addMessage(query, 'user');
+  // Determine context for UI display
+  let msgContext = null;
+  if (currentSelectedText) {
+    msgContext = { type: 'selectedText', text: currentSelectedText };
+    clearSelectedText();
+  } else if (uploadedFileContent) {
+    msgContext = { type: 'file', name: uploadedFileName };
+  } else if (uploadedImageBase64) {
+    msgContext = { type: 'image' };
+  }
+
+  addMessage(query, 'user', false, msgContext);
   showTyping();
   
   try {
@@ -1283,7 +1418,7 @@ async function sendMessage() {
     
     if (noPageContext) {
       // User explicitly disabled page context — answer from AI knowledge only
-      const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+      const systemPrompt = PROMPTS.KNOWLEDGE_ONLY || PROMPTS.ANSWER_AND_HIGHLIGHT
         .replace('{pageContent}', '(No page context — user asked for AI knowledge only)')
         .replace('{pageIndex}', '(No elements indexed)');
 
@@ -1377,7 +1512,8 @@ async function sendMessage() {
         query: effectiveQuery,
         history: conversationHistory.slice(0, -1),
         hasImage: currentMessageHasImage,
-        hasImageInHistory: hasImageInConversation
+        hasImageInHistory: hasImageInConversation,
+        forcedRoute: forcedRoute
       });
     }
     
@@ -1700,6 +1836,11 @@ async function resetChat(showMessage = true) {
   const filePreview = document.getElementById('xwebagent-file-preview');
   if (filePreview) filePreview.style.display = 'none';
 
+  // Clear selected text state
+  currentSelectedText = null;
+  const selectedTextPreview = document.getElementById('xwebagent-selected-text-preview');
+  if (selectedTextPreview) selectedTextPreview.style.display = 'none';
+
   try {
     await sendToContentScript({ action: 'clearUploadedImage' });
   } catch (e) {
@@ -1955,6 +2096,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     addMessage(message.content, message.type, message.clickable);
   } else if (message.action === 'closePanel') {
     window.close();
+  } else if (message.action === 'selectedText') {
+    // Handle text selection passed from the content script
+    const preview = document.getElementById('xwebagent-selected-text-preview');
+    const label = document.getElementById('xwebagent-selected-text-label');
+    
+    if (message.text && message.text.length > 0) {
+      currentSelectedText = message.text;
+      if (preview && label) {
+        // Display snippet (max 80 chars)
+        const snippet = message.text.length > 80 
+          ? message.text.substring(0, 80) + '...' 
+          : message.text;
+        
+        // Count words for better context hint
+        const wordCount = message.text.split(/\s+/).filter(w => w.length > 0).length;
+        
+        label.textContent = `📝 "${snippet}" (${wordCount} words)`;
+        label.title = message.text; // Full text on hover
+        preview.style.display = 'flex';
+      }
+    } else if (currentSelectedText) {
+      // Clear selection only if they selected empty space on purpose
+      // (content script might just send empty text when clicking around)
+      // To not frustrate users, we only hide it when explicitly empty string.
+      if (message.text === '') {
+        currentSelectedText = null;
+        if (preview) preview.style.display = 'none';
+      }
+    }
   }
 });
 
