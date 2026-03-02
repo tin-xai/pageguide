@@ -99,8 +99,9 @@ async function routeQuery(query) {
  * @param {Array} history - Conversation history
  * @param {boolean} hasImage - Whether current message has an image attached
  * @param {boolean} hasImageInHistory - Whether any previous message had an image
+ * @param {string} forcedRoute - Whether a specific route is requested by user ('ask'|'hide'|'guide')
  */
-async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false) {
+async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false, forcedRoute = null) {
   // expandTruncatedContent is called AFTER routing (below), only for non-guide modes.
   // Calling it before routing would auto-click "See more" / "More" buttons on
   // social sites (X, LinkedIn) before guidance even starts, mutating the page
@@ -110,39 +111,51 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
   const imageAvailable = hasImage || hasImageInHistory || !!getUploadedImage?.();
   console.log('🎯 Image available:', imageAvailable, '(current:', hasImage, ', history:', hasImageInHistory, ')');
   
-  // If current message has an image attached, directly route to image_ask
-  // (don't ask the LLM router since it can't see the image)
-  if (hasImage && typeof handleImageAsk === 'function') {
-    console.log('🎯 Current message has image, routing directly to image_ask');
-    const result = await handleImageAsk(query);
-    if (result) {
-      result.routedTo = 'image_ask';
-      result.routeConfidence = 1.0;
-      result.routeReason = 'Image attached to current message';
-      return result;
-    }
-    // Fall through if image_ask fails
-  }
-  
-  // Check if we're on a PDF page first (bypass router for PDF pages)
-  if (typeof isPdfPage === 'function' && isPdfPage()) {
-    console.log('🎯 PDF page detected, routing to pdf_ask');
-    if (typeof handlePdfAsk === 'function') {
-      const result = await handlePdfAsk(query);
+  // Force route override from slash command if set
+  let route = null;
+  if (forcedRoute && ['ask', 'guide', 'hide'].includes(forcedRoute)) {
+    route = {
+      handler: forcedRoute,
+      confidence: 1.0,
+      reason: `User forced route via /${forcedRoute} command`
+    };
+    console.log(`🎯 Override routing to: ${route.handler} due to forced command`);
+  } else {
+    // If current message has an image attached, directly route to image_ask
+    // (don't ask the LLM router since it can't see the image)
+    if (hasImage && typeof handleImageAsk === 'function') {
+      console.log('🎯 Current message has image, routing directly to image_ask');
+      const result = await handleImageAsk(query);
       if (result) {
-        result.routedTo = 'pdf_ask';
+        result.routedTo = 'image_ask';
         result.routeConfidence = 1.0;
-        result.routeReason = 'PDF page detected';
+        result.routeReason = 'Image attached to current message';
         return result;
       }
+      // Fall through if image_ask fails
     }
-    // Fall through to regular ask if pdf handler returns null
+    
+    // Check if we're on a PDF page first (bypass router for PDF pages)
+    if (typeof isPdfPage === 'function' && isPdfPage()) {
+      console.log('🎯 PDF page detected, routing to pdf_ask');
+      if (typeof handlePdfAsk === 'function') {
+        const result = await handlePdfAsk(query);
+        if (result) {
+          result.routedTo = 'pdf_ask';
+          result.routeConfidence = 1.0;
+          result.routeReason = 'PDF page detected';
+          return result;
+        }
+      }
+      // Fall through to regular ask if pdf handler returns null
+    }
+    
+    // Route the query using LLM
+    route = await routeQuery(query);
+    console.log('🎯 LLM Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
   }
-  
-  // Route the query using LLM
-  const route = await routeQuery(query);
-  console.log('🎯 Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
-  
+
+
   // If router says image_ask but no image available, fall back to ask
   if (route.handler === 'image_ask' && !imageAvailable) {
     console.log('🎯 Router suggested image_ask but no image available, falling back to ask');
