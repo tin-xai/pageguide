@@ -51,11 +51,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('xwebagent-new-chat')?.addEventListener('click', () => resetChat());
   
   document.getElementById('xwebagent-send').addEventListener('click', sendMessage);
-  document.getElementById('xwebagent-input').addEventListener('keypress', e => {
-    if (e.key === 'Enter') {
+  document.getElementById('xwebagent-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
       const menu = document.getElementById('xwebagent-slash-menu');
       // If slash menu is open and an item is selected, let the keydown handler handle it
       if (menu && menu.style.display !== 'none' && _slashMenuIndex >= 0) return;
+      e.preventDefault();
       sendMessage();
     }
   });

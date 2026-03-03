@@ -1121,13 +1121,13 @@ body.light-mode .xwebagent-history-load-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 50%;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
   transition: all 0.2s;
   flex-shrink: 0;
 }
@@ -1148,12 +1148,17 @@ body.light-mode .xwebagent-history-load-btn:hover {
   flex: 1;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 24px;
+  border-radius: 16px;
   padding: 12px 18px;
   color: #fff;
   font-size: 14px;
   outline: none;
   transition: all 0.2s;
+  resize: vertical;
+  min-height: 48px;
+  max-height: 250px;
+  font-family: inherit;
+  line-height: 1.4;
 }
 
 .xwebagent-chat-input::placeholder {
@@ -1169,13 +1174,13 @@ body.light-mode .xwebagent-history-load-btn:hover {
   background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
   border: none;
   border-radius: 50%;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
   transition: all 0.2s;
   flex-shrink: 0;
 }
