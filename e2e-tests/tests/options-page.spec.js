@@ -96,6 +96,10 @@ test.describe('Options Page', () => {
   test('can enter and mask API key', async () => {
     const apiKeyInput = optionsPage.locator('#geminiApiKey');
 
+    // Ensure the input masks the value from the user visibly
+    const inputType = await apiKeyInput.getAttribute('type');
+    expect(inputType).toBe('password');
+
     await apiKeyInput.fill('test-api-key-12345');
 
     // Value should be set but displayed as dots (password field)
