@@ -9,7 +9,6 @@ e2e-tests/node_modules/
 # Test Artifacts
 e2e-tests/playwright-report/
 e2e-tests/.test-user-data*
-e2e-tests/tests/selected-slow.spec*
 
 # IDE
 .idea/
