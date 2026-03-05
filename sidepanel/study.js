@@ -247,7 +247,7 @@
     const cols = [
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
-      'confidence','helpfulness','question_or_task',
+      'confidence','helpfulness','chat_turn_count','question_or_task',
     ];
     const esc = v => {
       const str = (v === undefined || v === null) ? '' : String(v);
@@ -451,6 +451,7 @@
       $('study-close').onclick = closeStudyPanel;
       $('study-done-btn').onclick = () => {
         const elapsed = stopTimer();
+        s._chatSnap = snapshotChat();
         s.currentAnswer = null;
         s.currentPost = {};
         overlay.style.display = 'flex';
@@ -482,6 +483,7 @@
     };
     $('study-mini-done').onclick = () => {
       const elapsed = stopTimer();
+      s._chatSnap = snapshotChat();
       hideMiniBar();
       overlay.style.display = 'flex';
       s.currentAnswer = null;
@@ -492,6 +494,20 @@
 
   function hideMiniBar() {
     if (miniBar) miniBar.style.display = 'none';
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Chat snapshot (collected when Done is clicked)
+  // ─────────────────────────────────────────────────────────────────
+
+  function snapshotChat() {
+    const msgs = (typeof chatMessages !== 'undefined' && Array.isArray(chatMessages))
+      ? chatMessages
+      : [];
+    return {
+      chat_turn_count: msgs.filter(m => m.type === 'user').length,
+      chat_transcript: msgs.map(m => ({ role: m.type, content: m.content, ts: m.timestamp })),
+    };
   }
 
   function renderTaskAnswer(block, taskIdx, taskType, task, elapsed) {
@@ -621,6 +637,9 @@
       else if (taskType === 'guide') questionOrTask = task.task;
       else if (taskType === 'hide') questionOrTask = task.hide_query;
 
+      const snap = s._chatSnap || { chat_turn_count: 0, chat_transcript: [] };
+      s._chatSnap = null;
+
       const result = {
         participant_id:   s.participantId,
         session_id:       s.sessionId,
@@ -633,6 +652,8 @@
         answer_correct:   answerCorrect,
         confidence:       confSel.value,
         helpfulness:      helpSel ? helpSel.value : null,
+        chat_turn_count:  snap.chat_turn_count,
+        chat_transcript:  snap.chat_transcript,
         task_data:        task,
         question_or_task: questionOrTask,
       };
@@ -755,19 +776,29 @@
   // Open / Close
   // ─────────────────────────────────────────────────────────────────
 
-  function openStudyPanel() {
+  async function openStudyPanel() {
     if (!overlay) return;
+    // Save current SOM state then disable it for the study
+    try {
+      const stored = await chrome.storage.sync.get('somEnabled');
+      s._prevSom = stored.somEnabled;
+      await chrome.storage.sync.set({ somEnabled: false });
+    } catch (e) {}
     overlay.style.display = 'flex';
     s.open = true;
     renderWelcome();
   }
 
-  function closeStudyPanel() {
+  async function closeStudyPanel() {
     if (!overlay) return;
     overlay.style.display = 'none';
     hideMiniBar();
     s.open = false;
     stopTimer();
+    // Restore SOM to whatever it was before the study
+    try {
+      await chrome.storage.sync.set({ somEnabled: s._prevSom === true });
+    } catch (e) {}
   }
 
   // ─────────────────────────────────────────────────────────────────
