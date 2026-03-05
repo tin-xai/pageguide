@@ -612,7 +612,6 @@ function addGuideStep(result) {
       <span class="xwebagent-step-text">${result.answer}</span>
     </div>
     ${result.nextStepHint && !result.isLastStep ? `<div class="xwebagent-next-hint">💡 ${result.nextStepHint}</div>` : ''}
-    ${!result.isLastStep ? `<div class="xwebagent-guide-waiting">${result.action === 'click' ? '👆 Click the highlighted element, or press Next below' : '👆 Complete this step, then I\'ll show you the next one'}</div>` : ''}
   `;
 
   if (!result.isLastStep) {

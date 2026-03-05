@@ -691,12 +691,8 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 .xwebagent-clickable::after {
-  content: '👆 Click to expand citations';
-  display: block;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.4);
-  margin-top: 6px;
-  transition: opacity 0.2s;
+  content: '';
+  display: none;
 }
 
 .xwebagent-clickable.citations-expanded::after {
