@@ -247,7 +247,7 @@
     const cols = [
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
-      'confidence','helpfulness','chat_turn_count','question_or_task',
+      'confidence','helpfulness','chat_turn_count','hidden_count','question_or_task',
     ];
     const esc = v => {
       const str = (v === undefined || v === null) ? '' : String(v);
@@ -410,9 +410,13 @@
       </div>
     `);
     $('study-close').onclick = closeStudyPanel;
-    $('study-open-btn').onclick = () => {
+    $('study-open-btn').onclick = async () => {
       // Reset chat so each task starts with a clean conversation
       if (typeof resetChat === 'function') resetChat(false);
+      // For control hide task: set storage flag so content script auto-injects click-to-hide UI
+      if (s.conditionOrder[block] === 'control' && taskType === 'hide') {
+        try { await chrome.storage.local.set({ studyHideControl: { active: true, criteria: taskQuestion } }); } catch (e) {}
+      }
       openTaskPage(taskUrl);
       startTimer();
       renderTaskRunning(block, taskIdx, taskType, taskQuestion, task);
@@ -449,9 +453,21 @@
         </div>
       `);
       $('study-close').onclick = closeStudyPanel;
-      $('study-done-btn').onclick = () => {
+      $('study-done-btn').onclick = async () => {
         const elapsed = stopTimer();
         s._chatSnap = snapshotChat();
+        s._hiddenCount = 0;
+        // For control hide task: clean up click-to-hide UI and record how many items were hidden
+        if (taskType === 'hide') {
+          try {
+            await chrome.storage.local.set({ studyHideControl: { active: false } });
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tabs[0]) {
+              const resp = await chrome.tabs.sendMessage(tabs[0].id, { action: 'studyHideControlEnd' });
+              s._hiddenCount = resp && resp.hiddenCount ? resp.hiddenCount : 0;
+            }
+          } catch (e) {}
+        }
         s.currentAnswer = null;
         s.currentPost = {};
         overlay.style.display = 'flex';
@@ -469,7 +485,7 @@
       <div class="study-mini-bottom">
         <span class="study-mini-q">${escapeHTML(taskQuestion)}</span>
         <div class="study-mini-actions">
-          <button class="study-mini-copy-btn" id="study-mini-copy" title="Copy task to clipboard">📋</button>
+          <button class="study-mini-copy-btn" id="study-mini-copy" title="Copy task to clipboard">Copy</button>
           <button class="study-mini-done-btn" id="study-mini-done">✅ Done</button>
         </div>
       </div>
@@ -478,7 +494,7 @@
     $('study-mini-copy').onclick = () => {
       navigator.clipboard.writeText(taskQuestion).then(() => {
         const btn = $('study-mini-copy');
-        if (btn) { btn.textContent = '✅'; setTimeout(() => { btn.textContent = '📋'; }, 1500); }
+        if (btn) { btn.textContent = '✅ Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
       });
     };
     $('study-mini-done').onclick = () => {
@@ -525,7 +541,7 @@
       answerHTML = `
         <p class="study-question-text">Select the answer you found:</p>
         <div class="study-radio-group" id="study-answer-group">
-          ${options.map((opt, i) => `
+          ${options.map((opt) => `
             <label class="study-radio-btn">
               <input type="radio" name="study-answer" value="${escapeAttr(opt)}">
               <span>${escapeHTML(opt)}</span>
@@ -571,6 +587,7 @@
         </div>
       </div>
     `);
+
     $('study-close').onclick = closeStudyPanel;
     $('study-submit-btn').onclick = () => {
       const sel = overlay.querySelector('input[name="study-answer"]:checked');
@@ -654,6 +671,7 @@
         helpfulness:      helpSel ? helpSel.value : null,
         chat_turn_count:  snap.chat_turn_count,
         chat_transcript:  snap.chat_transcript,
+        hidden_count:     s._hiddenCount || 0,
         task_data:        task,
         question_or_task: questionOrTask,
       };
@@ -772,6 +790,16 @@
     return escapeHTML(str);
   }
 
+  // Escape passage text then wrap the correct answer in a <mark> for inline highlighting
+  function highlightInPassage(passage, answer) {
+    const escaped = escapeHTML(passage);
+    if (!answer) return escaped;
+    const escapedAnswer = escapeHTML(answer);
+    // Build a regex that matches the answer text case-insensitively
+    const pattern = escapedAnswer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return escaped.replace(new RegExp(pattern, 'i'), '<mark class="study-citation-mark">$&</mark>');
+  }
+
   // ─────────────────────────────────────────────────────────────────
   // Open / Close
   // ─────────────────────────────────────────────────────────────────
@@ -799,6 +827,8 @@
     try {
       await chrome.storage.sync.set({ somEnabled: s._prevSom === true });
     } catch (e) {}
+    // Clear any lingering hide-control flag (in case study is closed mid-task)
+    try { await chrome.storage.local.set({ studyHideControl: { active: false } }); } catch (e) {}
   }
 
   // ─────────────────────────────────────────────────────────────────

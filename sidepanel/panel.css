@@ -669,7 +669,8 @@ body.light-mode .xwebagent-history-load-btn:hover {
 
 /* Citation text - hidden by default */
 .xwebagent-citation-idx .citation-text {
-  display: none;
+  display: inline;
+  margin-right: 1px;
   font-size: inherit;
 }
 
@@ -679,10 +680,9 @@ body.light-mode .xwebagent-history-load-btn:hover {
   font-weight: 600;
 }
 
-/* When expanded, show citation text */
+/* When collapsed (click to toggle), hide citation text */
 .citations-expanded .xwebagent-citation-idx .citation-text {
-  display: inline;
-  margin-right: 1px;
+  display: none;
 }
 
 /* Toggle hint on clickable messages */
@@ -2126,6 +2126,61 @@ body.light-mode .study-mini-copy-btn {
   border-color: #00d9ff;
   color: #fff;
 }
+
+/* Find task — inline citation passage */
+.study-citation-block {
+  background: rgba(0, 217, 255, 0.05);
+  border: 1px solid rgba(0, 217, 255, 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.study-citation-summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #00d9ff;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.study-citation-arrow {
+  font-size: 11px;
+}
+
+.study-citation-hint {
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+}
+
+.study-citation-text {
+  margin: 0;
+  padding: 0 12px 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.55;
+}
+
+.study-citation-mark {
+  background: rgba(255, 220, 50, 0.35);
+  color: #ffe066;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 700;
+}
+
+body.light-mode .study-citation-block {
+  background: rgba(0, 119, 170, 0.05);
+  border-color: rgba(0, 119, 170, 0.2);
+}
+body.light-mode .study-citation-summary { color: #0077aa; }
+body.light-mode .study-citation-hint    { color: rgba(0,0,0,0.35); }
+body.light-mode .study-citation-text    { color: rgba(0,0,0,0.65); }
+body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color: #7a5c00; }
 
 /* Results table */
 .study-results-table {
