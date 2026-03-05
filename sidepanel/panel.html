@@ -9,6 +9,12 @@
 <body>
   <div class="xwebagent-panel">
 
+    <!-- User Study: mini bar shown during extension-condition tasks (chat stays usable) -->
+    <div class="study-mini-bar" id="study-mini-bar" style="display:none;"></div>
+
+    <!-- User Study overlay (covers whole panel when visible) -->
+    <div class="study-overlay" id="study-overlay" style="display:none;"></div>
+
     <!-- History overlay (covers whole panel when visible) -->
     <div class="xwebagent-history-overlay" id="xwebagent-history" style="display:none;">
       <div class="xwebagent-history-hdr">
@@ -31,6 +37,7 @@
         <button class="xwebagent-new-chat-btn" id="xwebagent-open-history" title="Chat History">🕐</button>
         <button class="xwebagent-new-chat-btn" id="xwebagent-new-chat" title="New Chat">✏️</button>
         <button class="xwebagent-settings-btn" id="xwebagent-settings" title="Settings">⚙️</button>
+        <button class="xwebagent-new-chat-btn" id="study-header-btn" title="User Study">📋</button>
       </div>
     </div>
     
@@ -86,5 +93,7 @@
   </div>
   <script src="../content/prompts.js"></script>
   <script src="panel.js"></script>
+  <script src="supabase_config.js"></script>
+  <script src="study.js"></script>
 </body>
 </html>
