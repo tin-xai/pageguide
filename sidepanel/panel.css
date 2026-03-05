@@ -1113,7 +1113,18 @@ body.light-mode .xwebagent-history-load-btn:hover {
 
 .xwebagent-input-row {
   display: flex;
+}
+
+.xwebagent-input-row .xwebagent-chat-input {
+  width: 100%;
+}
+
+.xwebagent-input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  margin-top: 6px;
 }
 
 /* Image Upload Button */

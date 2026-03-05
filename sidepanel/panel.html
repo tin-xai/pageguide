@@ -21,10 +21,9 @@
 
     <div class="xwebagent-chat-header">
       <div class="xwebagent-header-left">
-        <img src="../icons/icon128.png" alt="XWebAgent" class="xwebagent-logo">
+        <!-- <img src="../icons/icon128.png" alt="XWebAgent" class="xwebagent-logo"> -->
         <div class="xwebagent-header-text">
-          <h2>XWebAgent</h2>
-          <p>AI Web Assistant - Safe, Fun, Efficient</p>
+          <!-- <h2>XWebAgent</h2> -->
         </div>
       </div>
       <div class="xwebagent-header-right">
@@ -40,9 +39,9 @@
     
     <div class="xwebagent-chat-input-area">
       <div class="xwebagent-quick-actions">
-        <button class="xwebagent-quick-btn" data-action="reset" title="Clear chat and highlights">🧹 Clear All</button>
+        <button class="xwebagent-quick-btn" data-action="reset" title="Clear chat and highlights">🧹 Clear</button>
         <button class="xwebagent-quick-btn" id="xwebagent-save-chat" title="Save current chat to history">💾 Save</button>
-        <button class="xwebagent-quick-btn xwebagent-pdf-reader-btn" id="xwebagent-pdf-reader" title="Open PDF Reader with AI chat">📄 PDF Reader</button>
+        <button class="xwebagent-quick-btn xwebagent-pdf-reader-btn" id="xwebagent-pdf-reader" title="Open PDF Reader with AI chat">📄 PDF</button>
         <button class="xwebagent-quick-btn" id="xwebagent-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)">🌐 Page: On</button>
       </div>
       
@@ -74,11 +73,13 @@
       </div>
 
       <div class="xwebagent-input-row">
+        <textarea class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything... (type / for commands)" rows="3"></textarea>
+      </div>
+      <div class="xwebagent-input-actions">
         <label class="xwebagent-upload-btn" id="xwebagent-upload-label" title="Upload image or file (or Ctrl+V to paste image)">
           <span id="xwebagent-upload-icon">📎</span>
           <input type="file" id="xwebagent-image-upload" accept="image/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.html,.htm,.py,.js,.ts,.css,.log" hidden>
         </label>
-        <textarea class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything... (type / for commands)" rows="3"></textarea>
         <button class="xwebagent-send-btn" id="xwebagent-send">➤</button>
       </div>
     </div>

@@ -1,7 +1,7 @@
 {
   "name": "xwebagent",
   "version": "1.0.0",
-  "description": "<p align=\"center\">   <img src=\"icons/icon128.png\" width=\"128\" height=\"128\" alt=\"XWebAgent Icon\" /> </p> <h1 align=\"center\">XWebAgent Extension – A Chrome extension that makes browsing  <b>Safe</b> 🛡️, <b>Fun</b> 😄, and <b>Efficient</b> 🚀</h1>",
+  "description": "XWebAgent Extension – A Chrome extension that makes browsing Safe, Fun, and Efficient",
   "main": "config.js",
   "directories": {
     "example": "examples",
