@@ -2097,34 +2097,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'closePanel') {
     window.close();
   } else if (message.action === 'selectedText') {
-    // Handle text selection passed from the content script
-    const preview = document.getElementById('xwebagent-selected-text-preview');
-    const label = document.getElementById('xwebagent-selected-text-label');
-    
-    if (message.text && message.text.length > 0) {
-      currentSelectedText = message.text;
-      if (preview && label) {
-        // Display snippet (max 80 chars)
-        const snippet = message.text.length > 80 
-          ? message.text.substring(0, 80) + '...' 
-          : message.text;
-        
-        // Count words for better context hint
-        const wordCount = message.text.split(/\s+/).filter(w => w.length > 0).length;
-        
-        label.textContent = `📝 "${snippet}" (${wordCount} words)`;
-        label.title = message.text; // Full text on hover
-        preview.style.display = 'flex';
-      }
-    } else if (currentSelectedText) {
-      // Clear selection only if they selected empty space on purpose
-      // (content script might just send empty text when clicking around)
-      // To not frustrate users, we only hide it when explicitly empty string.
-      if (message.text === '') {
-        currentSelectedText = null;
-        if (preview) preview.style.display = 'none';
-      }
-    }
+    // Feature disabled — text selection is not surfaced in the chat panel
   }
 });
 

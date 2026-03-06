@@ -506,6 +506,27 @@ body.light-mode .xwebagent-history-load-btn:hover {
   list-style-type: decimal;
 }
 
+.xwebagent-message a {
+  color: #7dd3fc;
+  text-decoration: underline;
+  text-decoration-color: rgba(125, 211, 252, 0.45);
+  text-underline-offset: 2px;
+  word-break: break-word;
+}
+.xwebagent-message a:hover {
+  color: #bae6fd;
+  text-decoration-color: rgba(186, 230, 253, 0.7);
+}
+
+body.light-mode .xwebagent-message a {
+  color: #0369a1;
+  text-decoration-color: rgba(3, 105, 161, 0.4);
+}
+body.light-mode .xwebagent-message a:hover {
+  color: #075985;
+  text-decoration-color: rgba(7, 89, 133, 0.65);
+}
+
 .xwebagent-message.system {
   align-self: center;
   background: rgba(0, 255, 136, 0.1);
