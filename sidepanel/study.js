@@ -113,19 +113,34 @@
   async function loadDatasets() {
     const base = chrome.runtime.getURL('user_study_data/');
     try {
-      const [findJson, guideText, hideText] = await Promise.all([
-        fetch(chrome.runtime.getURL('user_study_data/find_html/find_tasks.json')).then(r => r.json()),
+      const [findText, guideText, hideText] = await Promise.all([
+        fetch(chrome.runtime.getURL('user_study_data/find_html/find_tasks.csv')).then(r => r.text()),
         fetch(base + 'guide_data.csv').then(r => r.text()),
         fetch(base + 'hide_data.json').then(r => r.text()),
       ]);
-      // Convert find_tasks.json { filename: {question, answer, distractors} } into an array
-      s.datasets.find = Object.entries(findJson).map(([filename, data]) => ({
-        filename,
-        url:           data.url,
-        question:      data.question,
-        short_answers: data.answer,
-        distractors:   data.distractors || [],
-      }));
+      // Parse find_tasks.csv — one row may yield 1 or 2 task entries (Q1/Q2)
+      // Columns: Website URL, Q1, Q2, A1, A2, D1_1, D1_2, D1_3, D2_1, D2_2, D2_3
+      const findRows = parseCSV(findText);
+      s.datasets.find = [];
+      findRows.forEach(row => {
+        const baseEntry = { url: (row['Website URL'] || '').trim() };
+        if (row['Q1'] && row['A1']) {
+          s.datasets.find.push({
+            ...baseEntry,
+            question:      row['Q1'].trim(),
+            short_answers: row['A1'].trim(),
+            distractors:   [row['D1_1'], row['D1_2'], row['D1_3']].map(d => (d || '').trim()).filter(Boolean),
+          });
+        }
+        if (row['Q2'] && row['A2']) {
+          s.datasets.find.push({
+            ...baseEntry,
+            question:      row['Q2'].trim(),
+            short_answers: row['A2'].trim(),
+            distractors:   [row['D2_1'], row['D2_2'], row['D2_3']].map(d => (d || '').trim()).filter(Boolean),
+          });
+        }
+      });
       s.datasets.guide = parseCSV(guideText).filter(r => r.task && r.website_url);
       const hideRaw    = JSON.parse(hideText);
       // Flatten annotations into individual tasks
