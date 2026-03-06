@@ -170,7 +170,7 @@
   },
   {
     "page_title": "Amazon.com ： organic baby food",
-    "html_file": "hide_data_website/Amazon.com ： organic baby food (1_30_2026 9：23：59 AM).html",
+    "html_file": "amazon.html",
     "annotations": [
       {
         "user_goal": "My baby does not like veggie food",
@@ -661,7 +661,7 @@
   },
   {
     "page_title": "Coursera ｜ Online Courses From Top Universities. Join for Free",
-    "html_file": "hide_data_website/Coursera ｜ Online Courses From Top Universities. Join for Free (1_30_2026 10：09：50 AM).html",
+    "html_file": "coursera.html",
     "annotations": [
       {
         "user_goal": "I don't want courses from IBM",
@@ -1053,7 +1053,7 @@
   },
   {
     "page_title": "Personal Finance",
-    "html_file": "hide_data_website/Personal Finance (1_30_2026 9：15：09 AM).html",
+    "html_file": "reddit_personal_finance.html",
     "annotations": [
       {
         "user_goal": "Find recent posts that are from 3 days ago or less",
@@ -1726,7 +1726,7 @@
   },
   {
     "page_title": "(5) Quora",
-    "html_file": "hide_data_website/(5) Quora (2_5_2026 3：11：42 PM).html",
+    "html_file": "quora.html",
     "annotations": [
       {
         "user_goal": "I don't care about posts that does not have a lot of upvotes and replies",

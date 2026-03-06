@@ -23,8 +23,14 @@
     hide:  'Use the extension to hide the specified content from the page.',
   };
 
-  // Allrecipes live search URL used for hide tasks
-  const ALLRECIPES_BASE = 'https://www.allrecipes.com/search?q=';
+  // Selected HTML files for hide tasks (must match html_file values in hide_data.json)
+  const SELECTED_HIDE_FILES = new Set([
+    'amazon.html',
+    'coursera.html',
+    'reddit_personal_finance.html',
+    'quora.html',
+  ]);
+
 
   // ─────────────────────────────────────────────────────────────────
   // State
@@ -143,8 +149,9 @@
       });
       s.datasets.guide = parseCSV(guideText).filter(r => r.task && r.website_url);
       const hideRaw    = JSON.parse(hideText);
-      // Flatten annotations into individual tasks
+      // Flatten annotations into individual tasks, only for selected HTML files
       hideRaw.forEach(page => {
+        if (!SELECTED_HIDE_FILES.has(page.html_file)) return;
         (page.annotations || []).forEach(ann => {
           s.datasets.hide.push({
             page_title: page.page_title,
@@ -361,7 +368,7 @@
             <div class="study-task-preview-title">You will complete:</div>
             <div class="study-task-pill">🔍 Find Information (Wikipedia)</div>
             <div class="study-task-pill">📘 Follow a Guide (various sites)</div>
-            <div class="study-task-pill">🙈 Hide Content (Allrecipes)</div>
+            <div class="study-task-pill">🙈 Hide Content</div>
           </div>
           <button class="study-btn study-btn-primary" id="study-begin-btn">Begin Block ${block + 1} →</button>
         </div>
@@ -399,11 +406,9 @@
       taskQuestion = task.task;
       openBtnLabel = `Open ${task.name || 'Website'} & Start Timer`;
     } else if (taskType === 'hide') {
-      // Build Allrecipes search URL from page title keyword
-      const keyword = (task.page_title || '').replace(/\[|\]|Results from Allrecipes/gi, '').trim();
-      taskUrl = ALLRECIPES_BASE + encodeURIComponent(keyword || 'chicken');
+      taskUrl = 'https://tin-xai.github.io/html_data/selected_hide_data/' + task.html_file;
       taskQuestion = task.hide_query;
-      openBtnLabel = 'Open Allrecipes & Start Timer';
+      openBtnLabel = 'Open Page & Start Timer';
     }
 
     const condLabel = condition === 'extension'

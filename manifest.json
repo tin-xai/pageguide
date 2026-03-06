@@ -60,7 +60,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json", "user_study_data/*", "user_study_data/find_html/*"],
+      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json", "user_study_data/*", "user_study_data/find_html/*", "user_study_data/selected_hide_data/*"],
       "matches": ["<all_urls>"]
     }
   ]

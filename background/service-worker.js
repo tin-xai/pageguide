@@ -54,21 +54,24 @@ const CONFIG = {
   defaultProvider: 'gemini'
 };
 
-// Content script files (in order - dependencies first)
+// Content script files (in order - must match manifest.json content_scripts load order)
 const CONTENT_SCRIPTS = [
   'content/prompts.js',
   'content/utils.js',
+  'content/functions/scroll.js',
   'content/functions/capture_screenshot.js',
   'content/functions/highlight.js',
   'content/functions/highlight_pdf.js',
-  'content/functions/scroll.js',
   'content/functions/main_router.js',
-  'content/tasks/protection.js',
-  'content/tasks/guide.js',
-  'content/tasks/guidev2.js',
   'content/tasks/ask.js',
   'content/tasks/ask_pdf.js',
+  'content/tasks/guide.js',
+  'content/tasks/guidev2.js',
+  'content/tasks/protection.js',
   'content/tasks/image_ask.js',
+  'content/tasks/answer.js',
+  'content/agent/planner.js',
+  'content/agent/executor.js',
   'content/content.js'
 ];
 
@@ -191,6 +194,8 @@ chrome.tabs.onCreated.addListener((tab) => {
     _gv2PreClickTs = 0; // consume the flag — one transfer per click
   }
 });
+
+
 
 // ===== Message Handler =====
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
