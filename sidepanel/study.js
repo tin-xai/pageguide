@@ -113,12 +113,19 @@
   async function loadDatasets() {
     const base = chrome.runtime.getURL('user_study_data/');
     try {
-      const [findText, guideText, hideText] = await Promise.all([
-        fetch(base + 'find_wiki_data.csv').then(r => r.text()),
+      const [findJson, guideText, hideText] = await Promise.all([
+        fetch(chrome.runtime.getURL('user_study_data/find_html/find_tasks.json')).then(r => r.json()),
         fetch(base + 'guide_data.csv').then(r => r.text()),
         fetch(base + 'hide_data.json').then(r => r.text()),
       ]);
-      s.datasets.find  = parseCSV(findText).filter(r => r.short_answers && r.short_answers.trim());
+      // Convert find_tasks.json { filename: {question, answer, distractors} } into an array
+      s.datasets.find = Object.entries(findJson).map(([filename, data]) => ({
+        filename,
+        url:           data.url,
+        question:      data.question,
+        short_answers: data.answer,
+        distractors:   data.distractors || [],
+      }));
       s.datasets.guide = parseCSV(guideText).filter(r => r.task && r.website_url);
       const hideRaw    = JSON.parse(hideText);
       // Flatten annotations into individual tasks
@@ -369,9 +376,9 @@
     let openBtnLabel = 'Open Page & Start Timer';
 
     if (taskType === 'find') {
-      taskUrl = task.document_url;
+      taskUrl = task.url;
       taskQuestion = task.question;
-      openBtnLabel = 'Open Wikipedia & Start Timer';
+      openBtnLabel = 'Open Page & Start Timer';
     } else if (taskType === 'guide') {
       taskUrl = task.website_url;
       taskQuestion = task.task;
@@ -548,7 +555,9 @@
 
     if (taskType === 'find') {
       const correct = task.short_answers;
-      const distractors = getDistractors(correct, s.datasets.find, 3);
+      const distractors = (task.distractors && task.distractors.length)
+        ? task.distractors.slice(0, 3)
+        : getDistractors(correct, s.datasets.find, 3);
       const options = [correct, ...distractors].sort(() => Math.random() - 0.5);
       const notesBlock = s._taskNotes ? `
         <div class="study-notes-display">
