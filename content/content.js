@@ -160,7 +160,7 @@ function _injectStudyHideControl(criteria) {
   window._studyHideActive = true;
   window._studyHiddenElements = [];
 
-  // Floating banner at top of page showing criteria + live count
+  // Banner at top of page
   const banner = document.createElement('div');
   banner.id = 'xwa-study-hide-banner';
   banner.style.cssText = [
@@ -175,106 +175,135 @@ function _injectStudyHideControl(criteria) {
   banner.innerHTML = `
     <span style="font-size:18px;flex-shrink:0">🙈</span>
     <div style="flex:1;min-width:0">
-      <div style="font-weight:700;color:#00d9ff;font-size:10px;text-transform:uppercase;letter-spacing:0.07em">Study Task — Click items below to hide them</div>
+      <div style="font-weight:700;color:#00d9ff;font-size:10px;text-transform:uppercase;letter-spacing:0.07em">Study Task — Hover any element and click Hide</div>
       <div style="margin-top:2px;color:rgba(255,255,255,0.9);line-height:1.3">${criteria}</div>
     </div>
     <span id="xwa-study-count-badge" style="flex-shrink:0;background:rgba(0,217,255,0.12);border:1px solid rgba(0,217,255,0.35);border-radius:8px;padding:4px 12px;color:#00d9ff;font-weight:700;font-size:12px">0 hidden</span>
   `;
   document.body.insertBefore(banner, document.body.firstChild);
-  // Push page content down
   document.body.style.setProperty('margin-top', banner.offsetHeight + 8 + 'px', 'important');
 
-  // Candidate selectors for recipe/item cards — ordered by specificity
-  const CARD_SELECTORS = [
-    '[id^="mntl-card-list-card--extendable"]',
-    '.card-list__item',
-    '.mntl-document-card',
-    '.comp.mntl-card-list-items',
-    'article',
-  ];
-  let cards = [];
-  for (const sel of CARD_SELECTORS) {
-    const found = document.querySelectorAll(sel);
-    if (found.length > 1) { cards = Array.from(found); break; }
+  // Floating hide button that follows hover
+  const floatBtn = document.createElement('button');
+  floatBtn.id = 'xwa-study-hide-btn';
+  floatBtn.textContent = '🙈 Hide';
+  floatBtn.style.cssText = [
+    'position:fixed;z-index:2147483646;display:none',
+    'background:rgba(180,30,30,0.92);color:#fff',
+    'border:1px solid rgba(255,100,100,0.5);border-radius:6px',
+    'padding:5px 11px;cursor:pointer',
+    'font-size:12px;font-weight:700;font-family:system-ui',
+    'pointer-events:auto;line-height:1.2',
+    'box-shadow:0 2px 8px rgba(0,0,0,0.5)',
+  ].join(';');
+  document.body.appendChild(floatBtn);
+
+  // Tags that should never be hidden or used as targets
+  const SKIP_TAGS = new Set(['HTML','BODY','HEAD','SCRIPT','STYLE','NOSCRIPT','META','LINK']);
+  const SKIP_IDS = new Set(['xwa-study-hide-banner','xwa-study-hide-btn']);
+  const MIN_AREA = 2000; // ~50×40 px minimum
+
+  let currentTarget = null;
+
+  function isEligible(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (SKIP_TAGS.has(el.tagName)) return false;
+    if (SKIP_IDS.has(el.id)) return false;
+    if (el.closest('#xwa-study-hide-banner')) return false;
+    if (el.id === 'xwa-study-hide-btn') return false;
+    const rect = el.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (area < MIN_AREA) return false;
+    // Skip full-viewport-width wrappers (layout containers)
+    if (rect.width >= window.innerWidth * 0.98) return false;
+    return true;
   }
 
-  cards.forEach((card, i) => {
-    if (card.dataset.xwaStudyHide) return;
-    card.dataset.xwaStudyHide = 'ready';
-    // Ensure relative positioning so the button can be placed absolutely
-    const pos = window.getComputedStyle(card).position;
-    if (pos === 'static') card.style.position = 'relative';
-
-    const btn = document.createElement('button');
-    btn.className = 'xwa-study-hide-btn';
-    btn.textContent = '🙈 Hide';
-    btn.style.cssText = [
-      'position:absolute;top:6px;right:6px;z-index:9999',
-      'background:rgba(0,0,0,0.72);color:#fff',
-      'border:1px solid rgba(255,255,255,0.28);border-radius:6px',
-      'padding:4px 9px;cursor:pointer',
-      'font-size:11px;font-weight:700;font-family:system-ui',
-      'transition:background 0.15s,border-color 0.15s',
-      'line-height:1.2',
-    ].join(';');
-
-    btn.addEventListener('mouseenter', () => {
-      btn.style.background = card.dataset.xwaStudyHide === 'hidden'
-        ? 'rgba(0,180,80,0.85)' : 'rgba(200,40,40,0.85)';
-    });
-    btn.addEventListener('mouseleave', () => {
-      btn.style.background = card.dataset.xwaStudyHide === 'hidden'
-        ? 'rgba(0,150,60,0.75)' : 'rgba(0,0,0,0.72)';
-    });
-
-    btn.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const id = card.id || `xwa-card-${i}`;
-      if (card.dataset.xwaStudyHide === 'hidden') {
-        // Restore
-        card.dataset.xwaStudyHide = 'ready';
-        card.style.opacity = '';
-        card.style.pointerEvents = '';
-        btn.textContent = '🙈 Hide';
-        btn.style.background = 'rgba(0,0,0,0.72)';
-        btn.style.borderColor = 'rgba(255,255,255,0.28)';
-        const idx = window._studyHiddenElements.indexOf(id);
-        if (idx > -1) window._studyHiddenElements.splice(idx, 1);
-      } else {
-        // Hide
-        card.dataset.xwaStudyHide = 'hidden';
-        card.style.opacity = '0.12';
-        card.style.pointerEvents = 'none';
-        btn.style.pointerEvents = 'auto'; // keep button clickable
-        btn.textContent = '👁 Show';
-        btn.style.background = 'rgba(0,150,60,0.75)';
-        btn.style.borderColor = 'rgba(0,255,100,0.4)';
-        window._studyHiddenElements.push(id);
+  const onMouseOver = (e) => {
+    if (floatBtn.contains(e.target)) return; // hovering the button itself — keep current target
+    let el = e.target;
+    // Walk up to find the smallest eligible ancestor
+    while (el && el !== document.documentElement) {
+      if (isEligible(el)) {
+        currentTarget = el;
+        const rect = el.getBoundingClientRect();
+        floatBtn.style.top  = Math.max(rect.top + 4, banner.offsetHeight + 6) + 'px';
+        floatBtn.style.left = (rect.right - floatBtn.offsetWidth - 8) + 'px';
+        floatBtn.style.display = 'block';
+        return;
       }
-      const badge = document.getElementById('xwa-study-count-badge');
-      if (badge) badge.textContent = window._studyHiddenElements.length + ' hidden';
-    });
+      el = el.parentElement;
+    }
+    floatBtn.style.display = 'none';
+    currentTarget = null;
+  };
 
-    card.appendChild(btn);
+  const onMouseOut = (e) => {
+    // Hide button only when leaving to somewhere outside both target and button
+    if (floatBtn.contains(e.relatedTarget)) return;
+    if (currentTarget && currentTarget.contains(e.relatedTarget)) return;
+    floatBtn.style.display = 'none';
+    currentTarget = null;
+  };
+
+  floatBtn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!currentTarget) return;
+    const alreadyHidden = currentTarget.dataset.xwaStudyHide === 'hidden';
+    if (alreadyHidden) {
+      currentTarget.style.opacity = '';
+      currentTarget.style.pointerEvents = '';
+      delete currentTarget.dataset.xwaStudyHide;
+      const idx = window._studyHiddenElements.indexOf(currentTarget);
+      if (idx > -1) window._studyHiddenElements.splice(idx, 1);
+      floatBtn.textContent = '🙈 Hide';
+      floatBtn.style.background = 'rgba(180,30,30,0.92)';
+    } else {
+      currentTarget.dataset.xwaStudyHide = 'hidden';
+      currentTarget.style.opacity = '0.08';
+      currentTarget.style.pointerEvents = 'none';
+      window._studyHiddenElements.push(currentTarget);
+      floatBtn.textContent = '👁 Unhide';
+      floatBtn.style.background = 'rgba(0,140,60,0.92)';
+    }
+    const badge = document.getElementById('xwa-study-count-badge');
+    if (badge) badge.textContent = window._studyHiddenElements.length + ' hidden';
+    floatBtn.style.display = 'none';
+    currentTarget = null;
   });
+
+  document.addEventListener('mouseover', onMouseOver, true);
+  document.addEventListener('mouseout',  onMouseOut,  true);
+
+  // Store listeners for cleanup
+  window._studyHideListeners = { onMouseOver, onMouseOut };
 }
 
 function _cleanupStudyHideControl() {
   const count = window._studyHiddenElements ? window._studyHiddenElements.length : 0;
   window._studyHideActive = false;
-  window._studyHiddenElements = [];
+
+  // Remove event listeners
+  if (window._studyHideListeners) {
+    document.removeEventListener('mouseover', window._studyHideListeners.onMouseOver, true);
+    document.removeEventListener('mouseout',  window._studyHideListeners.onMouseOut,  true);
+    window._studyHideListeners = null;
+  }
 
   const banner = document.getElementById('xwa-study-hide-banner');
   if (banner) banner.remove();
   document.body.style.removeProperty('margin-top');
 
-  document.querySelectorAll('[data-xwa-study-hide]').forEach(card => {
-    card.style.opacity = '';
-    card.style.pointerEvents = '';
-    if (card.dataset.xwaStudyHide !== 'ready') card.style.position = '';
-    delete card.dataset.xwaStudyHide;
-  });
-  document.querySelectorAll('.xwa-study-hide-btn').forEach(btn => btn.remove());
+  const floatBtn = document.getElementById('xwa-study-hide-btn');
+  if (floatBtn) floatBtn.remove();
 
+  // Restore hidden elements
+  document.querySelectorAll('[data-xwa-study-hide]').forEach(el => {
+    el.style.opacity = '';
+    el.style.pointerEvents = '';
+    delete el.dataset.xwaStudyHide;
+  });
+
+  window._studyHiddenElements = [];
   return count;
 }

@@ -448,6 +448,7 @@
               <span class="study-timer-label">⏱ Elapsed</span>
               <span class="study-timer" id="study-timer">00:00</span>
             </div>
+            <textarea class="study-notes-textarea" id="study-notes" placeholder="📝 Take notes here…" rows="3"></textarea>
             <button class="study-btn study-btn-done" id="study-done-btn">I'm Done — Stop Timer</button>
           </div>
         </div>
@@ -455,6 +456,7 @@
       $('study-close').onclick = closeStudyPanel;
       $('study-done-btn').onclick = async () => {
         const elapsed = stopTimer();
+        s._taskNotes = (overlay.querySelector('#study-notes') || {}).value || '';
         s._chatSnap = snapshotChat();
         s._hiddenCount = 0;
         // For control hide task: clean up click-to-hide UI and record how many items were hidden
@@ -489,6 +491,7 @@
           <button class="study-mini-done-btn" id="study-mini-done">✅ Done</button>
         </div>
       </div>
+      <textarea class="study-mini-notes" id="study-mini-notes" placeholder="📝 Take notes here…" rows="2"></textarea>
     `;
     miniBar.style.display = 'flex';
     $('study-mini-copy').onclick = () => {
@@ -499,6 +502,7 @@
     };
     $('study-mini-done').onclick = () => {
       const elapsed = stopTimer();
+      s._taskNotes = ($('study-mini-notes') || {}).value || '';
       s._chatSnap = snapshotChat();
       hideMiniBar();
       overlay.style.display = 'flex';
@@ -532,13 +536,27 @@
       ? '<span class="study-tag study-tag-ext">🤖 WITH Extension AI</span>'
       : '<span class="study-tag study-tag-ctrl">🙅 WITHOUT Extension AI</span>';
 
+    const taskQuestion = taskType === 'find' ? task.question
+                       : taskType === 'guide' ? task.task
+                       : task.hide_query;
+    const questionCard = `
+      <div class="study-task-card study-task-card-running" style="margin-bottom:10px;">
+        <div class="study-task-question">${escapeHTML(taskQuestion)}</div>
+      </div>`;
+
     let answerHTML = '';
 
     if (taskType === 'find') {
       const correct = task.short_answers;
       const distractors = getDistractors(correct, s.datasets.find, 3);
       const options = [correct, ...distractors].sort(() => Math.random() - 0.5);
+      const notesBlock = s._taskNotes ? `
+        <div class="study-notes-display">
+          <span class="study-notes-display-label">📝 Your notes</span>
+          <p class="study-notes-display-text">${escapeHTML(s._taskNotes)}</p>
+        </div>` : '';
       answerHTML = `
+        ${notesBlock}
         <p class="study-question-text">Select the answer you found:</p>
         <div class="study-radio-group" id="study-answer-group">
           ${options.map((opt) => `
@@ -577,6 +595,7 @@
         </div>
         <div class="study-progress">Block ${block + 1} · Task ${taskIdx + 1} of 3 &nbsp;${condLabel}</div>
         <div class="study-body">
+          ${questionCard}
           <div class="study-timer-display">
             <span class="study-timer-label">⏱ Your time</span>
             <span class="study-timer study-timer-stopped">${formatTime(elapsed)}</span>
@@ -587,6 +606,7 @@
         </div>
       </div>
     `);
+
 
     $('study-close').onclick = closeStudyPanel;
     $('study-submit-btn').onclick = () => {
