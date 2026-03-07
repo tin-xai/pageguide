@@ -423,11 +423,6 @@
           <div class="study-task-card">
             <div class="study-task-type-badge">${TASK_LABELS[taskType]}</div>
             <p class="study-task-desc">${TASK_DESCRIPTIONS[taskType]}</p>
-            <div class="study-task-question">${escapeHTML(taskQuestion)}</div>
-          </div>
-          <div class="study-timer-display">
-            <span class="study-timer-label">⏱ Time</span>
-            <span class="study-timer" id="study-timer">00:00</span>
           </div>
           <button class="study-btn study-btn-primary" id="study-open-btn">${openBtnLabel}</button>
         </div>
@@ -443,15 +438,37 @@
       }
       openTaskPage(taskUrl);
 
-      // Wait 5 seconds for the page to fully load before counting time
-      const openBtn = $('study-open-btn');
-      if (openBtn) { openBtn.disabled = true; openBtn.textContent = 'Page loading…'; }
-      const timerEl = $('study-timer');
+      // Replace screen with a countdown + rules view (hides the task question)
+      const condLabel = s.conditionOrder[block] === 'extension'
+        ? '<span class="study-tag study-tag-ext">🤖 WITH Extension AI</span>'
+        : '<span class="study-tag study-tag-ctrl">🙅 WITHOUT Extension AI</span>';
+      const TASK_RULES = {
+        find:  '🚫 Do not use Google, ChatGPT, or any external search tools.',
+        guide: '✅ You may use Google, ChatGPT, or other tools if needed.',
+        hide:  '',
+      };
+      const ruleText = TASK_RULES[taskType] || '';
+      setHTML(`
+        <div class="study-screen">
+          <div class="study-header">
+            <span class="study-title">${TASK_LABELS[taskType]}</span>
+          </div>
+          <div class="study-progress">Block ${block + 1} · Task ${taskIdx + 1} of 3 &nbsp;${condLabel}</div>
+          <div class="study-body" style="align-items:center;text-align:center;justify-content:center;gap:16px;">
+            <p style="color:#aaa;font-size:14px;margin:0;">Page loading — timer starts in</p>
+            <div class="study-timer-display">
+              <span class="study-timer" id="study-timer" style="font-size:52px;font-weight:700;">5</span>
+            </div>
+            ${ruleText ? `<div style="padding:12px 16px;background:rgba(255,255,255,0.05);border-radius:8px;font-size:13px;color:#ccc;max-width:300px;line-height:1.5;">${ruleText}</div>` : ''}
+          </div>
+        </div>
+      `);
+
       let countdown = 5;
-      if (timerEl) timerEl.textContent = countdown + 's';
       const cdInterval = setInterval(() => {
         countdown--;
-        if (timerEl) timerEl.textContent = countdown > 0 ? countdown + 's' : 'Go!';
+        const timerEl = $('study-timer');
+        if (timerEl) timerEl.textContent = countdown > 0 ? String(countdown) : 'Go!';
         if (countdown <= 0) {
           clearInterval(cdInterval);
           startTimer();
