@@ -1,60 +1,7 @@
 [
   {
-    "page_title": "[chicken stir fries] Results from Allrecipes",
-    "html_file": "hide_data_website/[chicken stir fries] Results from Allrecipes (1_30_2026 10：35：12 AM).html",
-    "annotations": [
-      {
-        "user_goal": "Find food that aligned with my dietary restrictions",
-        "hide_query": "Hide all food that contains avocado, broccoli and teriyaki sauce",
-        "difficulty": "Hard",
-        "hidden_elements": [
-          "#mntl-card-list-card--extendable_12-0",
-          "#mntl-card-list-card--extendable_8-0",
-          "#mntl-card-list-card--extendable_3-0",
-          "#mntl-card-list-card--extendable_2-0",
-          "#mntl-card-list-card--extendable_23-0"
-        ],
-        "category": "HEALTH_SAFETY"
-      },
-      {
-        "user_goal": "Find food that aligned with my taste",
-        "hide_query": "Hide all food that contain pineapple, pepper and ginger.",
-        "difficulty": "Easy",
-        "hidden_elements": [
-          "a#mntl-card-list-card--extendable_12-0 > div.card__content",
-          "a#mntl-card-list-card--extendable_14-0 > div.card__content",
-          "#mntl-card-list-card--extendable_22-0",
-          "#mntl-card-list-card--extendable_10-0",
-          "#mntl-card-list-card--extendable_20-0"
-        ],
-        "category": "HEALTH_SAFETY"
-      },
-      {
-        "user_goal": "Find food that fits my needs",
-        "hide_query": "Hide all food that contains broccoli and basil",
-        "difficulty": "Medium",
-        "hidden_elements": [
-          "#mntl-card-list-card--extendable_4-0",
-          "#mntl-card-list-card--extendable_2-0",
-          "#mntl-card-list-card--extendable_23-0"
-        ],
-        "category": "TASTE_INTERESTS"
-      },
-      {
-        "user_goal": "Find food that matches my preferences",
-        "hide_query": "Hide all food that have coconut or cauliflower",
-        "difficulty": "Medium",
-        "hidden_elements": [
-          "#mntl-card-list-card--extendable_19-0",
-          "#mntl-card-list-card--extendable_22-0"
-        ],
-        "category": "TASTE_INTERESTS"
-      }
-    ]
-  },
-  {
     "page_title": "AI News & Artificial Intelligence ｜ TechCrunch",
-    "html_file": "hide_data_website/AI News & Artificial Intelligence ｜ TechCrunch (1_30_2026 9：36：17 AM).html",
+    "html_file": "techcrunch.html",
     "annotations": [
       {
         "user_goal": "I don't want to read about AI investment posts",
@@ -502,7 +449,7 @@
   },
   {
     "page_title": "Asian Groceries in ｜ Get Delivery： Weee! Asian Market",
-    "html_file": "hide_data_website/Asian Groceries in ｜ Get Delivery： Weee! Asian Market (1_30_2026 9：47：19 AM).html",
+    "html_file": "wee.html",
     "annotations": [
       {
         "user_goal": "I am allergic to fish",
@@ -628,7 +575,7 @@
   },
   {
     "page_title": "AskCulinary",
-    "html_file": "hide_data_website/AskCulinary (1_30_2026 9：14：20 AM).html",
+    "html_file": "reddit_cullinary.html",
     "annotations": [
       {
         "user_goal": "I don't want advertisement and promotes",
@@ -703,7 +650,7 @@
   },
   {
     "page_title": "Feed ｜ LinkedIn",
-    "html_file": "hide_data_website/Feed ｜ LinkedIn (1_30_2026 9：32：43 AM).html",
+    "html_file": "linkedin.html",
     "annotations": [
       {
         "user_goal": "I don't want to read about conference acceptance",
@@ -734,7 +681,7 @@
   },
   {
     "page_title": "Home - Netflix",
-    "html_file": "hide_data_website/Home - Netflix (1_30_2026 9：44：30 AM).html",
+    "html_file": "netflix.html",
     "annotations": [
       {
         "user_goal": "I am not a fan of horror movies",
@@ -761,7 +708,7 @@
   },
   {
     "page_title": "Home _ X",
-    "html_file": "hide_data_website/Home _ X (1_30_2026 9：31：05 AM).html",
+    "html_file": "x.html",
     "annotations": [
       {
         "user_goal": "Protect my feed from scammers",
@@ -800,103 +747,8 @@
     ]
   },
   {
-    "page_title": "Machine Learning",
-    "html_file": "hide_data_website/Machine Learning (1_30_2026 9：13：33 AM).html",
-    "annotations": [
-      {
-        "user_goal": "I don't want to read about ICML",
-        "hide_query": "Hide posts about ICML",
-        "hidden_elements": [
-          "#t3_1qlf3ba > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq3rzb > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qmhyin > a.absolute.inset-0:nth-child(1)"
-        ],
-        "difficulty": "Easy",
-        "category": "TASTE_INTERESTS"
-      },
-      {
-        "user_goal": "I want high quality posts in the past 24 hours",
-        "hide_query": "Hide all posts that are older than 24 hours ago or contain less than 50 upvotes or less than 5 replies",
-        "difficulty": "Hard",
-        "hidden_elements": [
-          "#t3_1qqxzce > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qjgjro > shreddit-dynamic-ad-link.absolute.inset-0:nth-child(1)",
-          "#t3_1qno68x > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qmhyin > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr56dv > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr5cbw > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr1sl9 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qjv18y > shreddit-dynamic-ad-link.absolute.inset-0:nth-child(1)",
-          "#t3_1qm32o6 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qqpgkm > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qmi3oe > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr4wpg > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qktalg > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qqfl8x > a.absolute.inset-0:nth-child(1)",
-          "#t3_1pk34qa > shreddit-dynamic-ad-link.absolute.inset-0:nth-child(1)",
-          "#t3_1qlhs05 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq4sn4 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qqhqi2 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qp6s3c > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq0sly > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq3rzb > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq0xcl > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq4lnc > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qqxstn > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr7dfx > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qpc4ap > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qltk8x > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qlf3ba > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qnbipe > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qo6sai > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qpe5vq > a.absolute.inset-0:nth-child(1)"
-        ],
-        "category": "ATTENTION_RECENCY"
-      },
-      {
-        "user_goal": "I want high quality posts in the past 2 days",
-        "hide_query": "Hide all posts that are more than 2 days ago or contain less than 100 upvotes or contain less than 20 replies",
-        "difficulty": "Hard",
-        "hidden_elements": [
-          "#t3_1qpc4ap > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qltk8x > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qlf3ba > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qnbipe > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qpe5vq > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qo6sai > a.absolute.inset-0:nth-child(1)",
-          "#t3_1pt1yfi > shreddit-dynamic-ad-link.absolute.inset-0:nth-child(1)",
-          "#t3_1qq0xcl > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq3rzb > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq0sly > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qqhqi2 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq4sn4 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qlhs05 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1pk34qa > shreddit-dynamic-ad-link.absolute.inset-0:nth-child(1)",
-          "#t3_1qqfl8x > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qktalg > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr4wpg > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qq4lnc > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qmi3oe > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qqpgkm > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qm32o6 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qjv18y > shreddit-dynamic-ad-link.absolute.inset-0:nth-child(1)",
-          "#t3_1qr1sl9 > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr5cbw > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr56dv > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qmhyin > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qqxstn > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qr7dfx > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qno68x > a.absolute.inset-0:nth-child(1)",
-          "#t3_1qjgjro > shreddit-dynamic-ad-link.absolute.inset-0:nth-child(1)",
-          "#t3_1qqxzce > a.absolute.inset-0:nth-child(1)"
-        ],
-        "category": "ATTENTION_RECENCY"
-      }
-    ]
-  },
-  {
     "page_title": "Optimal Transport： Using 18th Century Math To Accelerate 21st Century Science - YouTube",
-    "html_file": "hide_data_website/Optimal Transport： Using 18th Century Math To Accelerate 21st Century Science - YouTube (1_30_2026 9：12：10 AM).html",
+    "html_file": "youtube_optimal_transport.html",
     "annotations": [
       {
         "user_goal": "Just want to watch optimal transport video",
@@ -1246,88 +1098,8 @@
     ]
   },
   {
-    "page_title": "Results for ＂bookshelf＂ in all - Instructables",
-    "html_file": "hide_data_website/Results for ＂bookshelf＂ in all - Instructables (1_30_2026 10：33：17 AM).html",
-    "annotations": [
-      {
-        "user_goal": "I want posts that garners more a lot of likes",
-        "hide_query": "Hide posts less than 100 likes",
-        "hidden_elements": [
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(1)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(2)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(5)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(8)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(12)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(11)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(15)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(23)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(27)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(25)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(28)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(29)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(30)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(31)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(32)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(36)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(39)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(38)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(44)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(49)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(56)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(55)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(57)"
-        ],
-        "difficulty": "Easy",
-        "category": "VALUE_QUALITY"
-      },
-      {
-        "user_goal": "I want posts that get a lot of views",
-        "hide_query": "Hide all posts that are less than 10K views",
-        "hidden_elements": [
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(1)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(2)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(3)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(5)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(11)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(12)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(15)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(16)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(19)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(23)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(27)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(25)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(29)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(28)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(30)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(32)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(36)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(39)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(38)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(44)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(43)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(49)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(53)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(55)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(56)"
-        ],
-        "difficulty": "Easy",
-        "category": "VALUE_QUALITY"
-      },
-      {
-        "user_goal": "I don't care about inverted bookshelf or ceiling bookshelf",
-        "hide_query": "Hide all posts about ceiling bookshelf and inverted bookshelf",
-        "hidden_elements": [
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(43)",
-          "#react-container > section._browseWrapper_1uayx_1 > div._cards_15nuy_1:nth-child(4) > div._ibleCard_68y45_11:nth-child(52)"
-        ],
-        "difficulty": "Medium",
-        "category": "TASTE_INTERESTS"
-      }
-    ]
-  },
-  {
     "page_title": "Rotten Tomatoes： Movies ｜ TV Shows ｜ Movie Trailers ｜ Reviews ｜ Rotten Tomatoes",
-    "html_file": "hide_data_website/Rotten Tomatoes： Movies ｜ TV Shows ｜ Movie Trailers ｜ Reviews ｜ Rotten Tomatoes (1_30_2026 9：29：29 AM).html",
+    "html_file": "rotten_tomatoes.html",
     "annotations": [
       {
         "user_goal": "I only want to see movie to watch but not other distracting sections",
@@ -1356,7 +1128,7 @@
   },
   {
     "page_title": "Search results ｜ Udemy",
-    "html_file": "hide_data_website/Search results ｜ Udemy (1_30_2026 10：32：41 AM).html",
+    "html_file": "udemy.html",
     "annotations": [
       {
         "user_goal": "I want to find posts for \"xxx\" days to learn a topic",
@@ -1386,7 +1158,7 @@
   },
   {
     "page_title": "Search ＂ui ux＂ on Substack",
-    "html_file": "hide_data_website/Search ＂ui ux＂ on Substack (1_30_2026 9：55：56 AM).html",
+    "html_file": "substack.html",
     "annotations": [
       {
         "user_goal": "I don't want to read about AI in UI/UX",
@@ -1415,7 +1187,7 @@
   },
   {
     "page_title": "The best productivity tools to try in 2026 ｜ Product Hunt",
-    "html_file": "hide_data_website/The best productivity tools to try in 2026 ｜ Product Hunt (1_30_2026 10：13：05 AM).html",
+    "html_file": "product_hunt.html",
     "annotations": [
       {
         "user_goal": "I don't want applications that do not generate a lot of reviews",
@@ -1493,7 +1265,7 @@
   },
   {
     "page_title": "TOP 10 BEST INDIAN FOOD IN SAN FRANCISCO, CA - UPDATED 2026 - YELP",
-    "html_file": "hide_data_website/TOP 10 BEST INDIAN FOOD IN SAN FRANCISCO, CA - UPDATED 2026 - YELP (1_30_2026 9：10：12 AM).html",
+    "html_file": "yelp.html",
     "annotations": [
       {
         "user_goal": "I want to find restaurants that fit with my needs",
@@ -1524,7 +1296,7 @@
   },
   {
     "page_title": "Top Songs - USA ｜ Spotify Playlist",
-    "html_file": "hide_data_website/Top Songs - USA ｜ Spotify Playlist (1_30_2026 10：08：44 AM).html",
+    "html_file": "spotify.html",
     "annotations": [
       {
         "user_goal": "I don't like Taylor Swift",
@@ -1577,7 +1349,7 @@
   },
   {
     "page_title": "US UK music results on SoundCloud",
-    "html_file": "hide_data_website/US UK music results on SoundCloud (1_30_2026 10：29：04 AM).html",
+    "html_file": "soundcloud.html",
     "annotations": [
       {
         "user_goal": "I do not like Taylor Swift and Ariana Grande",
@@ -1598,128 +1370,6 @@
           "#content > div > div.l-search.l-fixed-fluid > div.l-main:nth-child(3) > div.search > div.search__listWrapper > div.searchList.lazyLoadingList > ul.lazyLoadingList__list.sc-list-nostyle:nth-child(1) > li.searchList__item.sc-mt-3x:nth-child(20) > div.searchItem > div.sound.searchItem__trackItem > div.sound__body > div.sound__content:nth-child(2) > div.sound__footer.g-all-transitions-300:nth-child(3) > div.sound__trackList:nth-child(1) > div.compactTrackList.sc-border-light > div.compactTrackList__listWrapper:nth-child(1) > div.compactTrackList__listContainer > ul.trackList__item.sc-border-light-bottom > li.compactTrackList__item:nth-child(5) > div.trackItem.g-flex-row"
         ],
         "difficulty": "Easy",
-        "category": "TASTE_INTERESTS"
-      }
-    ]
-  },
-  {
-    "page_title": "craigslist： auburn jobs, apartments, for sale, services, community, and events",
-    "html_file": "hide_data_website/craigslist： auburn jobs, apartments, for sale, services, community, and events (2_5_2026 3：02：44 PM).html",
-    "annotations": [
-      {
-        "user_goal": "I don't care about apple, arts, boats and books",
-        "hide_query": "Hide all items about apple, arts boats and books.",
-        "hidden_elements": [
-          "#forums0 > li:nth-child(1) > a",
-          "#sss0 > li:nth-child(13) > a.boo",
-          "#sss0 > li:nth-child(14) > a.bka",
-          "#sss0 > li:nth-child(12) > a.bpa",
-          "#forums0 > li:nth-child(2) > a",
-          "#sss0 > li:nth-child(3) > a.ara"
-        ],
-        "difficulty": "Hard",
-        "category": "TASTE_INTERESTS"
-      },
-      {
-        "user_goal": "I don't care about computer and electronics",
-        "hide_query": "Hide all items about computers and electronics",
-        "hidden_elements": [
-          "#sss0 > li:nth-child(21) > a.syp > span.txt",
-          "#sss0 > li:nth-child(22) > a.sya",
-          "#sss0 > li:nth-child(23) > a.ela",
-          "#sss0 > li:nth-child(18) > a.moa",
-          "#ggg0 > li:nth-child(1) > a.cpg > span.txt",
-          "#sss0 > li:nth-child(17) > a.ema"
-        ],
-        "difficulty": "Medium",
-        "category": "TASTE_INTERESTS"
-      }
-    ]
-  },
-  {
-    "page_title": "Kalshi - Prediction Market for Trading the Future",
-    "html_file": "hide_data_website/Kalshi - Prediction Market for Trading the Future (2_5_2026 3：09：42 PM).html",
-    "annotations": [
-      {
-        "user_goal": "I only care about entries that have a high probability",
-        "hide_query": "Hide posts that have the probability of Yes less than 80%.",
-        "hidden_elements": [
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.relative:nth-child(1) > div.relative.flex:nth-child(1) > div.flex-shrink-0.w-full:nth-child(1) > div.flex.flex-col > div.relative.flex:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col > div.flex.flex-col:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(6) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(6) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)"
-        ],
-        "difficulty": "Easy",
-        "category": "TASTE_INTERESTS"
-      },
-      {
-        "user_goal": "I only want entries that have a high volume",
-        "hide_query": "Hide entries that have at least 15 million in total volume.",
-        "hidden_elements": [
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(6) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(6) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(6) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(6) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(5) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(4) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)"
-        ],
-        "difficulty": "Easy",
-        "category": "TASTE_INTERESTS"
-      },
-      {
-        "user_goal": "I don't care about football",
-        "hide_query": "Hide all bets on football",
-        "hidden_elements": [
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)"
-        ],
-        "difficulty": "Easy",
-        "category": "TASTE_INTERESTS"
-      },
-      {
-        "user_goal": "I don't care about certain people",
-        "hide_query": "Hide all posts about Trump, Taylor Swift, Logan Paul",
-        "hidden_elements": [
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(3)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(2)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(3) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(4)",
-          "#top-level-layout > div.box-border.w-full:nth-child(4) > div.px-3.sm:px-1 > div.flex-1.min-w-0:nth-child(1) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.flex-col:nth-child(2) > div.flex.justify-center > div.w-full > div.relative:nth-child(1) > div.grid.gap-2 > div.no-underline.!text-text-x10:nth-child(1)"
-        ],
-        "difficulty": "Hard",
         "category": "TASTE_INTERESTS"
       }
     ]
@@ -1789,7 +1439,7 @@
   },
   {
     "page_title": "Auburn AL Real Estate - Auburn AL Homes For Sale ｜ Zillow",
-    "html_file": "hide_data_website/Auburn AL Real Estate - Auburn AL Homes For Sale ｜ Zillow (2_5_2026 3：13：37 PM).html",
+    "html_file": "homes.html",
     "annotations": [
       {
         "user_goal": "I only want house that are less than 400K",

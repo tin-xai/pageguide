@@ -23,13 +23,6 @@
     hide:  'Use the extension to hide the specified content from the page.',
   };
 
-  // Selected HTML files for hide tasks (must match html_file values in hide_data.json)
-  const SELECTED_HIDE_FILES = new Set([
-    'amazon.html',
-    'coursera.html',
-    'reddit_personal_finance.html',
-    'quora.html',
-  ]);
 
 
   // ─────────────────────────────────────────────────────────────────
@@ -121,8 +114,8 @@
     try {
       const [findText, guideText, hideText] = await Promise.all([
         fetch(chrome.runtime.getURL('user_study_data/find_html/find_tasks.csv')).then(r => r.text()),
-        fetch(base + 'guide_data.csv').then(r => r.text()),
-        fetch(base + 'hide_data.json').then(r => r.text()),
+        fetch(base + 'selected_guide_data.json').then(r => r.text()),
+        fetch(base + 'selected_hide_data.json').then(r => r.text()),
       ]);
       // Parse find_tasks.csv — one row may yield 1 or 2 task entries (Q1/Q2)
       // Columns: Website URL, Q1, Q2, A1, A2, D1_1, D1_2, D1_3, D2_1, D2_2, D2_3
@@ -147,11 +140,10 @@
           });
         }
       });
-      s.datasets.guide = parseCSV(guideText).filter(r => r.task && r.website_url);
+      s.datasets.guide = JSON.parse(guideText).filter(r => r.task && r.website_url);
       const hideRaw    = JSON.parse(hideText);
-      // Flatten annotations into individual tasks, only for selected HTML files
+      // Flatten annotations into individual tasks
       hideRaw.forEach(page => {
-        if (!SELECTED_HIDE_FILES.has(page.html_file)) return;
         (page.annotations || []).forEach(ann => {
           s.datasets.hide.push({
             page_title: page.page_title,
