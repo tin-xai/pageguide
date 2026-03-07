@@ -276,7 +276,7 @@ function markContent(items) {
 
     badgeNum++;
     container.setAttribute('data-xwebagent-marked', String(badgeNum));
-    container.style.outline = '2px solid rgba(255,71,87,0.8)';
+    container.style.outline = '4px solid rgba(255,71,87,0.9)';
     container.style.outlineOffset = '2px';
     container.style.backgroundColor = 'rgba(255,71,87,0.05)';
 
@@ -429,6 +429,7 @@ function _escDialog(str) {
  * Show confirmation dialog with a per-item checklist.
  * Resolves with { confirmed: bool, selectedSet: Set<number> } where
  * selectedSet contains the 1-based badge numbers the user kept checked.
+ * The dialog floats (no dark overlay) and can be dragged by its header.
  */
 function showHideDialog(count, message, items) {
   return new Promise(resolve => {
@@ -463,16 +464,31 @@ function showHideDialog(count, message, items) {
         </label>`;
     }).join('');
 
+    // Floating panel — no full-screen overlay so the page remains fully visible.
+    // Semi-transparent + backdrop-blur so content behind it is still readable.
     dialog.innerHTML = `
-      <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);
-                  z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:16px;">
-        <div style="background:#1a1a2e;padding:22px 24px 20px;border-radius:14px;
-                    max-width:460px;width:100%;color:white;font-family:system-ui,sans-serif;
-                    box-shadow:0 8px 32px rgba(0,0,0,0.6);">
+      <div id="xwebagent-dialog-panel"
+           style="position:fixed;top:20px;right:20px;z-index:2147483647;
+                  background:rgba(26,26,46,0.88);
+                  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+                  border:1px solid rgba(255,255,255,0.12);
+                  border-radius:14px;max-width:460px;width:calc(100vw - 40px);
+                  color:white;font-family:system-ui,sans-serif;
+                  box-shadow:0 8px 32px rgba(0,0,0,0.5);user-select:none;">
 
-          <h3 style="margin:0 0 4px;font-size:17px;color:#a78bfa;">🛡️ Found ${count} item${count !== 1 ? 's' : ''} to hide</h3>
-          <p style="margin:0 0 14px;color:#aaa;font-size:13px;">${_escDialog(message || 'Uncheck any item you want to keep visible.')}</p>
+        <!-- drag handle -->
+        <div id="xwebagent-drag-handle"
+             style="padding:16px 20px 12px;cursor:grab;border-radius:14px 14px 0 0;
+                    border-bottom:1px solid rgba(255,255,255,0.08);
+                    display:flex;align-items:flex-start;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <h3 style="margin:0 0 4px;font-size:17px;color:#a78bfa;">🛡️ Found ${count} item${count !== 1 ? 's' : ''} to hide</h3>
+            <p style="margin:0;color:#aaa;font-size:13px;">${_escDialog(message || 'Uncheck any item you want to keep visible.')}</p>
+          </div>
+          <span title="Drag to move" style="color:#555;font-size:18px;line-height:1;margin-top:2px;flex-shrink:0;">⠿</span>
+        </div>
 
+        <div style="padding:14px 20px 20px;">
           <!-- checklist -->
           <div id="xwebagent-hide-list"
                style="max-height:260px;overflow-y:auto;padding-right:2px;margin-bottom:14px;">
@@ -511,6 +527,46 @@ function showHideDialog(count, message, items) {
 
     document.body.appendChild(dialog);
 
+    // --- drag logic ---
+    const panel  = dialog.querySelector('#xwebagent-dialog-panel');
+    const handle = dialog.querySelector('#xwebagent-drag-handle');
+    let dragging = false, startX, startY, origLeft, origTop;
+
+    handle.addEventListener('mousedown', e => {
+      dragging = true;
+      const rect = panel.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      origLeft = rect.left;
+      origTop  = rect.top;
+      panel.style.right = 'auto';
+      panel.style.left  = origLeft + 'px';
+      panel.style.top   = origTop  + 'px';
+      handle.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+
+    function onMove(e) {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      panel.style.left = Math.max(0, Math.min(origLeft + dx, window.innerWidth  - panel.offsetWidth))  + 'px';
+      panel.style.top  = Math.max(0, Math.min(origTop  + dy, window.innerHeight - panel.offsetHeight)) + 'px';
+    }
+
+    function onUp() {
+      dragging = false;
+      handle.style.cursor = 'grab';
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+
+    function cleanup() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }
+
     // --- helpers ---
     const getChecked = () =>
       new Set([...dialog.querySelectorAll('input[data-num]:checked')]
@@ -522,23 +578,15 @@ function showHideDialog(count, message, items) {
       dialog.querySelector('#xwebagent-confirm').disabled = n === 0;
     };
 
-    const highlightRow = (num, on) => {
-      const row = dialog.querySelector(`label[data-row="${num}"]`);
-      if (row) row.style.background = on ? 'rgba(102,126,234,0.15)' : 'rgba(255,255,255,0.04)';
-    };
-
     // Sync checkbox state → page badge highlight
     dialog.querySelector('#xwebagent-hide-list').addEventListener('change', e => {
       if (e.target.type !== 'checkbox') return;
       const num = parseInt(e.target.dataset.num, 10);
-      // Dim the badge on the page when unchecked
-      const badge = document.querySelector(`.xwebagent-hide-badge:nth-of-type(1)`);
-      // Find the container with this badge number
       const container = [...document.querySelectorAll('[data-xwebagent-marked]')]
         .find(el => el.getAttribute('data-xwebagent-marked') === String(num));
       if (container) {
         container.style.outline = e.target.checked
-          ? '2px solid rgba(255,71,87,0.8)'
+          ? '4px solid rgba(255,71,87,0.9)'
           : '2px dashed rgba(255,71,87,0.25)';
         container.style.backgroundColor = e.target.checked
           ? 'rgba(255,71,87,0.05)' : 'transparent';
@@ -572,10 +620,12 @@ function showHideDialog(count, message, items) {
     dialog.querySelector('#xwebagent-confirm').onclick = () => {
       const sel = getChecked();
       dialog.remove();
+      cleanup();
       resolve({ confirmed: sel.size > 0, selectedSet: sel });
     };
     dialog.querySelector('#xwebagent-cancel').onclick = () => {
       dialog.remove();
+      cleanup();
       resolve({ confirmed: false, selectedSet: new Set() });
     };
   });

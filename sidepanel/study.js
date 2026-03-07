@@ -442,8 +442,22 @@
         try { await chrome.storage.local.set({ studyHideControl: { active: true, criteria: taskQuestion } }); } catch (e) {}
       }
       openTaskPage(taskUrl);
-      startTimer();
-      renderTaskRunning(block, taskIdx, taskType, taskQuestion, task);
+
+      // Wait 5 seconds for the page to fully load before counting time
+      const openBtn = $('study-open-btn');
+      if (openBtn) { openBtn.disabled = true; openBtn.textContent = 'Page loading…'; }
+      const timerEl = $('study-timer');
+      let countdown = 5;
+      if (timerEl) timerEl.textContent = countdown + 's';
+      const cdInterval = setInterval(() => {
+        countdown--;
+        if (timerEl) timerEl.textContent = countdown > 0 ? countdown + 's' : 'Go!';
+        if (countdown <= 0) {
+          clearInterval(cdInterval);
+          startTimer();
+          renderTaskRunning(block, taskIdx, taskType, taskQuestion, task);
+        }
+      }, 1000);
     };
   }
 
@@ -502,7 +516,13 @@
     }
   }
 
+  // Slash-command prefix per task type — forces correct routing in the extension
+  const TASK_PREFIX = { find: '/find', guide: '/guide', hide: '/hide' };
+
   function showMiniBar(block, taskIdx, taskType, taskQuestion, task) {
+    const prefix = TASK_PREFIX[taskType] || '';
+    const prefixedQuery = prefix ? `${prefix} ${taskQuestion}` : taskQuestion;
+
     miniBar.innerHTML = `
       <div class="study-mini-top">
         <span class="study-mini-label">${TASK_LABELS[taskType]} · Block ${block + 1} · Task ${taskIdx + 1}/3</span>
@@ -518,8 +538,19 @@
       <textarea class="study-mini-notes" id="study-mini-notes" placeholder="📝 Take notes here…" rows="2"></textarea>
     `;
     miniBar.style.display = 'flex';
+
+    // Pre-fill the chat input with the clean task text.
+    // Store the routing prefix in a data attribute so sendMessage() can apply it
+    // invisibly — the prefix never appears in the input box or chat bubble.
+    const chatInput = document.getElementById('xwebagent-input');
+    if (chatInput) {
+      chatInput.value = taskQuestion;
+      if (prefix) chatInput.dataset.studyPrefix = prefix;
+    }
+
+    // Copy button copies the prefixed version so pasting into chat also routes correctly
     $('study-mini-copy').onclick = () => {
-      navigator.clipboard.writeText(taskQuestion).then(() => {
+      navigator.clipboard.writeText(prefixedQuery).then(() => {
         const btn = $('study-mini-copy');
         if (btn) { btn.textContent = '✅ Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
       });

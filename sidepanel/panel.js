@@ -1297,45 +1297,45 @@ async function sendMessage() {
 
   // Track if a specific routing is forced by the user
   let forcedRoute = null;
+  let strippedQuery = '';
+
+  // Study mode: hidden prefix set via data attribute — apply routing without showing the tag
+  const _studyPrefix = input?.dataset.studyPrefix || '';
+  if (_studyPrefix && input) {
+    delete input.dataset.studyPrefix;
+    if (_studyPrefix === '/find')  { forcedRoute = 'ask';   strippedQuery = query; }
+    else if (_studyPrefix === '/guide') { forcedRoute = 'guide'; strippedQuery = query; }
+    else if (_studyPrefix === '/hide')  { forcedRoute = 'hide';  strippedQuery = query; }
+  }
 
   // Handle slash commands before routing to agent
-  if (query.startsWith('/')) {
+  if (!forcedRoute && query.startsWith('/')) {
     // If it's a routing override command, strip it and set the forcedRoute flag
     const lowerQuery = query.toLowerCase();
     if (lowerQuery.startsWith('/find ') || lowerQuery === '/find') {
       forcedRoute = 'ask';
-      // Strip the command from the query the LLM sees
-      // We do not return early here so it proceeds matching routing
-      input.value = query.substring(5).trim();
-      // Re-read query
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      strippedQuery = query.substring(5).trim();
+      if (!strippedQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /find', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      // Reassign for downstream processing
-      input.value = '';
     } else if (lowerQuery.startsWith('/guide ') || lowerQuery === '/guide') {
       forcedRoute = 'guide';
-      input.value = query.substring(6).trim();
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      strippedQuery = query.substring(6).trim();
+      if (!strippedQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /guide', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      input.value = '';
     } else if (lowerQuery.startsWith('/hide ') || lowerQuery === '/hide') {
       forcedRoute = 'hide';
-      input.value = query.substring(5).trim();
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      strippedQuery = query.substring(5).trim();
+      if (!strippedQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /hide', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      input.value = '';
     } else {
       // Handle normal system slash commands that bypass LLM entirely
       if (btn) btn.disabled = false;
@@ -1344,9 +1344,9 @@ async function sendMessage() {
       return;
     }
   }
-  
+
   // Re-evaluate query after potentially stripping forced route command
-  const activeQuery = forcedRoute ? (query.split(/\\s+/).slice(1).join(' ') || '') : query;
+  const activeQuery = forcedRoute ? strippedQuery : query;
   
   // Check if current message has an image attached
   const currentMessageHasImage = !!uploadedImageBase64;
