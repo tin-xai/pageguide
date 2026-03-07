@@ -114,7 +114,7 @@
     try {
       const [findText, guideText, hideText] = await Promise.all([
         fetch(chrome.runtime.getURL('user_study_data/find_html/find_tasks.csv')).then(r => r.text()),
-        fetch(base + 'selected_guide_data.json').then(r => r.text()),
+        fetch(base + 'guide_data.csv').then(r => r.text()),
         fetch(base + 'selected_hide_data.json').then(r => r.text()),
       ]);
       // Parse find_tasks.csv — one row may yield 1 or 2 task entries (Q1/Q2)
@@ -140,7 +140,12 @@
           });
         }
       });
-      s.datasets.guide = JSON.parse(guideText).filter(r => r.task && r.website_url);
+      s.datasets.guide = parseCSV(guideText).filter(r => r.Task && r['Website URL']).map(r => ({
+        name:        r.Name.trim(),
+        level:       r.Level.trim(),
+        task:        r.Task.trim(),
+        website_url: r['Website URL'].trim(),
+      }));
       const hideRaw    = JSON.parse(hideText);
       // Flatten annotations into individual tasks
       hideRaw.forEach(page => {
