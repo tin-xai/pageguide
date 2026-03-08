@@ -258,6 +258,9 @@
       if (res.ok) {
         const json = await res.json();
         return json[0] || null;
+      } else {
+        const errText = await res.text();
+        console.error(`[Study] Supabase ${res.status} on ${table}:`, errText);
       }
     } catch (e) {
       console.error('[Study] Supabase error:', e);
@@ -831,6 +834,9 @@
 
   function renderStudyComplete() {
     const supaConfigured = SUPABASE_URL && !SUPABASE_URL.includes('YOUR_PROJECT');
+    const saveStatusHTML = supaConfigured
+      ? '<p class="study-save-status" style="color:#4caf50;">✅ Results saved to Supabase after each task.</p>'
+      : '<p class="study-save-notice">⚠️ Supabase not configured — download the CSV to keep your results.</p>';
 
     setHTML(`
       <div class="study-screen">
@@ -843,10 +849,7 @@
             <div class="study-complete-emoji">🎉</div>
             <p>Thank you, <strong>${escapeHTML(s.participantId)}</strong>!</p>
             <p>You completed all 6 tasks across 2 conditions.</p>
-            ${supaConfigured
-              ? '<p class="study-save-status" id="study-save-status">💾 Saving results to database…</p>'
-              : '<p class="study-save-notice">⚠️ Supabase not configured — results will only be in the downloaded CSV.</p>'
-            }
+            ${saveStatusHTML}
           </div>
           <button class="study-btn study-btn-primary" id="study-download-btn">⬇️ Download Results CSV</button>
           <button class="study-btn study-btn-secondary" id="study-close-final">Close Panel</button>
@@ -856,14 +859,6 @@
     $('study-close').onclick = closeStudyPanel;
     $('study-download-btn').onclick = downloadResultsCSV;
     $('study-close-final').onclick = closeStudyPanel;
-
-    // Show save status (Supabase is already saved per task, just update UI)
-    if (supaConfigured) {
-      setTimeout(() => {
-        const el = $('study-save-status');
-        if (el) el.textContent = '✅ Results saved to database.';
-      }, 1500);
-    }
   }
 
   // ─────────────────────────────────────────────────────────────────
