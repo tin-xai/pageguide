@@ -46,6 +46,7 @@
         "content/tasks/guidev2.js",
         "content/tasks/protection.js",
         "content/tasks/image_ask.js",
+        "content/study_tracker.js",
         "content/content.js"
       ],
       "css": ["content/content.css"],

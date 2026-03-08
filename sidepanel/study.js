@@ -269,6 +269,42 @@
   }
 
   // ─────────────────────────────────────────────────────────────────
+  // Behavior tracking helpers
+  // ─────────────────────────────────────────────────────────────────
+
+  async function startBehaviorTracking() {
+    try {
+      chrome.runtime.sendMessage({ action: 'studyTracker_start' }).catch(() => {});
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'studyTracker_start' }).catch(() => {});
+      }
+    } catch (e) {}
+  }
+
+  async function stopBehaviorTracking() {
+    const out = { scroll_count: 0, ctrl_f_count: 0, text_select_count: 0, page_visit_count: 0, page_visit_urls: [] };
+    try {
+      // Flush content script batch before reading SW totals
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]) {
+        await chrome.tabs.sendMessage(tabs[0].id, { action: 'studyTracker_stop' }).catch(() => {});
+      }
+      const data = await chrome.runtime.sendMessage({ action: 'studyTracker_getData' });
+      if (data) {
+        out.scroll_count      = data.scroll      || 0;
+        out.ctrl_f_count      = data.ctrlF       || 0;
+        out.text_select_count = data.textSelect  || 0;
+        out.page_visit_count  = (data.pages || []).length;
+        out.page_visit_urls   = (data.pages || []).map(p => p.url);
+      }
+    } catch (e) {
+      console.error('[Study] stopBehaviorTracking:', e);
+    }
+    return out;
+  }
+
+  // ─────────────────────────────────────────────────────────────────
   // CSV download
   // ─────────────────────────────────────────────────────────────────
 
@@ -277,9 +313,12 @@
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
       'confidence','helpfulness','chat_turn_count','hidden_count','question_or_task',
+      'scroll_count','ctrl_f_count','text_select_count','page_visit_count','page_visit_urls',
     ];
     const esc = v => {
-      const str = (v === undefined || v === null) ? '' : String(v);
+      const str = (v === undefined || v === null) ? ''
+        : Array.isArray(v) ? JSON.stringify(v)
+        : String(v);
       return str.includes(',') || str.includes('"') || str.includes('\n')
         ? `"${str.replace(/"/g, '""')}"`
         : str;
@@ -475,6 +514,7 @@
         if (countdown <= 0) {
           clearInterval(cdInterval);
           startTimer();
+          startBehaviorTracking();
           renderTaskRunning(block, taskIdx, taskType, taskQuestion, task);
         }
       }, 1000);
@@ -514,6 +554,7 @@
       $('study-close').onclick = closeStudyPanel;
       $('study-done-btn').onclick = async () => {
         const elapsed = stopTimer();
+        s._behaviorData = await stopBehaviorTracking();
         s._taskNotes = (overlay.querySelector('#study-notes') || {}).value || '';
         s._chatSnap = snapshotChat();
         s._hiddenCount = 0;
@@ -575,8 +616,9 @@
         if (btn) { btn.textContent = '✅ Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
       });
     };
-    $('study-mini-done').onclick = () => {
+    $('study-mini-done').onclick = async () => {
       const elapsed = stopTimer();
+      s._behaviorData = await stopBehaviorTracking();
       s._taskNotes = ($('study-mini-notes') || {}).value || '';
       s._chatSnap = snapshotChat();
       hideMiniBar();
@@ -753,6 +795,8 @@
 
       const snap = s._chatSnap || { chat_turn_count: 0, chat_transcript: [] };
       s._chatSnap = null;
+      const beh = s._behaviorData || {};
+      s._behaviorData = null;
 
       const result = {
         participant_id:   s.participantId,
@@ -768,9 +812,14 @@
         helpfulness:      helpSel ? helpSel.value : null,
         chat_turn_count:  snap.chat_turn_count,
         chat_transcript:  snap.chat_transcript,
-        hidden_count:     s._hiddenCount || 0,
-        task_data:        task,
-        question_or_task: questionOrTask,
+        hidden_count:      s._hiddenCount || 0,
+        task_data:         task,
+        question_or_task:  questionOrTask,
+        scroll_count:      beh.scroll_count      || 0,
+        ctrl_f_count:      beh.ctrl_f_count      || 0,
+        text_select_count: beh.text_select_count || 0,
+        page_visit_count:  beh.page_visit_count  || 0,
+        page_visit_urls:   beh.page_visit_urls   || [],
       };
       s.results.push(result);
 

@@ -197,6 +197,16 @@ chrome.tabs.onCreated.addListener((tab) => {
 
 
 
+// ===== Study Behavior Tracker =====
+// Accumulates per-task behavioral events across page navigations.
+let _studyTracker = null; // { active, scroll, ctrlF, textSelect, pages: [{url,ts}] }
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (_studyTracker && _studyTracker.active && changeInfo.url) {
+    _studyTracker.pages.push({ url: changeInfo.url, ts: Date.now() });
+  }
+});
+
 // ===== Message Handler =====
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'panelClosed') {
@@ -304,6 +314,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // even when tab.openerTabId is not available.
     _gv2PreClickTs = Date.now();
     sendResponse({ success: true });
+    return false;
+  }
+  if (request.action === 'studyTracker_start') {
+    _studyTracker = { active: true, scroll: 0, ctrlF: 0, textSelect: 0, pages: [] };
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (request.action === 'studyTracker_batch') {
+    if (_studyTracker && _studyTracker.active) {
+      _studyTracker.scroll     += request.scroll     || 0;
+      _studyTracker.ctrlF      += request.ctrlF      || 0;
+      _studyTracker.textSelect += request.textSelect || 0;
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (request.action === 'studyTracker_getData') {
+    const data = _studyTracker
+      ? { scroll: _studyTracker.scroll, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, pages: [..._studyTracker.pages] }
+      : { scroll: 0, ctrlF: 0, textSelect: 0, pages: [] };
+    _studyTracker = null;
+    sendResponse(data);
     return false;
   }
 });
