@@ -280,6 +280,8 @@
   // Behavior tracking helpers
   // ─────────────────────────────────────────────────────────────────
 
+  let _sidepanelCtrlFListener = null;
+
   async function startBehaviorTracking() {
     try {
       chrome.runtime.sendMessage({ action: 'studyTracker_start' }).catch(() => {});
@@ -288,9 +290,24 @@
         chrome.tabs.sendMessage(tabs[0].id, { action: 'studyTracker_start' }).catch(() => {});
       }
     } catch (e) {}
+
+    // Also track Ctrl/Cmd+F pressed while the sidepanel has focus
+    if (_sidepanelCtrlFListener) {
+      window.removeEventListener('keydown', _sidepanelCtrlFListener, true);
+    }
+    _sidepanelCtrlFListener = (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        chrome.runtime.sendMessage({ action: 'studyTracker_batch', scroll: 0, ctrlF: 1, textSelect: 0 }).catch(() => {});
+      }
+    };
+    window.addEventListener('keydown', _sidepanelCtrlFListener, true);
   }
 
   async function stopBehaviorTracking() {
+    if (_sidepanelCtrlFListener) {
+      window.removeEventListener('keydown', _sidepanelCtrlFListener, true);
+      _sidepanelCtrlFListener = null;
+    }
     const out = { scroll_count: 0, ctrl_f_count: 0, text_select_count: 0, page_visit_count: 0, page_visit_urls: [] };
     try {
       // Flush content script batch before reading SW totals
