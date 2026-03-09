@@ -117,6 +117,39 @@ async function handleMessage(request) {
       return { success: true, hiddenCount };
     }
 
+    case 'studyHideCheckAccuracy': {
+      const selectors = request.selectors || [];
+      let matched = 0;
+      for (const sel of selectors) {
+        try {
+          const el = document.querySelector(sel);
+          if (el) {
+            // Check ancestors: protection.js may hide a parent container
+            let isHidden = false;
+            let node = el;
+            while (node && node !== document.documentElement) {
+              if (node.hasAttribute('data-xwebagent-hidden')) { isHidden = true; break; }
+              if (node.dataset && node.dataset.xwaStudyHide === 'hidden') { isHidden = true; break; }
+              const cs = window.getComputedStyle(node);
+              if (cs.display === 'none' || cs.visibility === 'hidden') { isHidden = true; break; }
+              node = node.parentElement;
+            }
+            // Check descendants: protection.js may hide a child element inside the
+            // annotated container (e.g. hides a comment body inside a comment wrapper)
+            if (!isHidden) {
+              isHidden = !!(
+                el.querySelector('[data-xwebagent-hidden]') ||
+                el.querySelector('[data-xwa-study-hide="hidden"]')
+              );
+            }
+            if (isHidden) matched++;
+          }
+        } catch (e) {}
+      }
+      const hiddenCount = document.querySelectorAll('[data-xwebagent-hidden]').length;
+      return { matched, total: selectors.length, hiddenCount };
+    }
+
     default:
       return { error: 'Unknown action' };
   }

@@ -113,11 +113,11 @@
     const base = chrome.runtime.getURL('user_study_data/');
     try {
       const [findText, guideText, hideText] = await Promise.all([
-        fetch(chrome.runtime.getURL('user_study_data/find_html/find_tasks.csv')).then(r => r.text()),
+        fetch(base + 'find_wiki_data.csv').then(r => r.text()),
         fetch(base + 'guide_data.csv').then(r => r.text()),
         fetch(base + 'selected_hide_data.json').then(r => r.text()),
       ]);
-      // Parse find_tasks.csv — one row may yield 1 or 2 task entries (Q1/Q2)
+      // Parse find_wiki_data.csv — one row may yield 1 or 2 task entries (Q1/Q2)
       // Columns: Website URL, Q1, Q2, A1, A2, D1_1, D1_2, D1_3, D2_1, D2_2, D2_3
       const findRows = parseCSV(findText);
       s.datasets.find = [];
@@ -184,12 +184,20 @@
   // Distractors for Find task
   // ─────────────────────────────────────────────────────────────────
 
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
   function getDistractors(correct, pool, n) {
     const others = pool
       .map(r => r.short_answers)
       .filter(a => a && a.trim() && a.trim().toLowerCase() !== correct.toLowerCase());
-    const shuffled = others.sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, n);
+    return shuffle(others).slice(0, n);
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -312,7 +320,7 @@
     const cols = [
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
-      'confidence','helpfulness','chat_turn_count','hidden_count','question_or_task',
+      'confidence','helpfulness','chat_turn_count','hidden_count','hide_recall','question_or_task',
       'scroll_count','ctrl_f_count','text_select_count','page_visit_count','page_visit_urls',
     ];
     const esc = v => {
@@ -558,12 +566,21 @@
         s._taskNotes = (overlay.querySelector('#study-notes') || {}).value || '';
         s._chatSnap = snapshotChat();
         s._hiddenCount = 0;
-        // For control hide task: clean up click-to-hide UI and record how many items were hidden
+        s._hideAccuracy = null;
+        // For control hide task: check accuracy first, then clean up click-to-hide UI
         if (taskType === 'hide') {
           try {
             await chrome.storage.local.set({ studyHideControl: { active: false } });
             const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
             if (tabs[0]) {
+              // Check accuracy BEFORE cleanup restores element visibility
+              if (task.hidden_elements && task.hidden_elements.length) {
+                const accResp = await chrome.tabs.sendMessage(tabs[0].id, {
+                  action: 'studyHideCheckAccuracy',
+                  selectors: task.hidden_elements,
+                });
+                if (accResp) s._hideAccuracy = { matched: accResp.matched, total: accResp.total };
+              }
               const resp = await chrome.tabs.sendMessage(tabs[0].id, { action: 'studyHideControlEnd' });
               s._hiddenCount = resp && resp.hiddenCount ? resp.hiddenCount : 0;
             }
@@ -621,6 +638,24 @@
       s._behaviorData = await stopBehaviorTracking();
       s._taskNotes = ($('study-mini-notes') || {}).value || '';
       s._chatSnap = snapshotChat();
+      s._hiddenCount = 0;
+      s._hideAccuracy = null;
+      // For extension hide tasks: check accuracy against ground truth annotations
+      if (taskType === 'hide' && task.hidden_elements && task.hidden_elements.length) {
+        try {
+          const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (tabs[0]) {
+            const accResp = await chrome.tabs.sendMessage(tabs[0].id, {
+              action: 'studyHideCheckAccuracy',
+              selectors: task.hidden_elements,
+            });
+            if (accResp) {
+              s._hideAccuracy = { matched: accResp.matched, total: accResp.total };
+              s._hiddenCount = accResp.hiddenCount || 0;
+            }
+          }
+        } catch (e) {}
+      }
       hideMiniBar();
       overlay.style.display = 'flex';
       s.currentAnswer = null;
@@ -668,7 +703,7 @@
       const distractors = (task.distractors && task.distractors.length)
         ? task.distractors.slice(0, 3)
         : getDistractors(correct, s.datasets.find, 3);
-      const options = [correct, ...distractors].sort(() => Math.random() - 0.5);
+      const options = shuffle([correct, ...distractors]);
       const notesBlock = s._taskNotes ? `
         <div class="study-notes-display">
           <span class="study-notes-display-label">📝 Your notes</span>
@@ -696,7 +731,15 @@
         </div>
       `;
     } else if (taskType === 'hide') {
+      const acc = s._hideAccuracy;
+      const accDisplay = acc
+        ? `<div style="background:rgba(0,217,255,0.07);border:1px solid rgba(0,217,255,0.25);border-radius:10px;padding:8px 12px 10px;margin-bottom:12px;">
+            <div style="font-size:11px;font-weight:700;color:rgba(0,217,255,0.7);text-transform:uppercase;letter-spacing:0.06em;">🎯 Accuracy</div>
+            <p style="margin:4px 0 0;font-size:13px;color:rgba(255,255,255,0.85);"><strong>${acc.matched} / ${acc.total}</strong> target items hidden (${Math.round(acc.matched / acc.total * 100)}%)</p>
+           </div>`
+        : '';
       answerHTML = `
+        ${accDisplay}
         <p class="study-question-text">Did you successfully hide the content?</p>
         <div class="study-radio-group" id="study-answer-group">
           <label class="study-radio-btn"><input type="radio" name="study-answer" value="completed"><span>✅ Yes, all specified content hidden</span></label>
@@ -797,6 +840,8 @@
       s._chatSnap = null;
       const beh = s._behaviorData || {};
       s._behaviorData = null;
+      const hideAcc = s._hideAccuracy;
+      s._hideAccuracy = null;
 
       const result = {
         participant_id:   s.participantId,
@@ -813,6 +858,7 @@
         chat_turn_count:  snap.chat_turn_count,
         chat_transcript:  snap.chat_transcript,
         hidden_count:      s._hiddenCount || 0,
+        hide_recall:       hideAcc ? parseFloat((hideAcc.matched / hideAcc.total).toFixed(3)) : null,
         task_data:         task,
         question_or_task:  questionOrTask,
         scroll_count:      beh.scroll_count      || 0,
@@ -840,14 +886,24 @@
 
   function renderBlockDone(block) {
     const blockResults = s.results.filter(r => r.block_index === block);
-    const rows = blockResults.map(r => `
-      <tr>
-        <td>${TASK_LABELS[r.task_type]}</td>
-        <td>${formatTime(r.time_ms)}</td>
-        <td>${r.answer || '—'}</td>
-        <td>${r.answer_correct === true ? '✅' : r.answer_correct === false ? '❌' : '—'}</td>
-      </tr>
-    `).join('');
+    const rows = blockResults.map(r => {
+      let correctDisplay;
+      if (r.task_type === 'find') {
+        correctDisplay = r.answer_correct === true ? '✅' : r.answer_correct === false ? '❌' : '—';
+      } else if (r.task_type === 'hide' && r.hide_recall != null) {
+        correctDisplay = Math.round(r.hide_recall * 100) + '% recall';
+      } else {
+        correctDisplay = '—';
+      }
+      return `
+        <tr>
+          <td>${TASK_LABELS[r.task_type]}</td>
+          <td>${formatTime(r.time_ms)}</td>
+          <td>${r.answer || '—'}</td>
+          <td>${correctDisplay}</td>
+        </tr>
+      `;
+    }).join('');
 
     const isLastBlock = block === 1;
 
@@ -928,15 +984,6 @@
     return escapeHTML(str);
   }
 
-  // Escape passage text then wrap the correct answer in a <mark> for inline highlighting
-  function highlightInPassage(passage, answer) {
-    const escaped = escapeHTML(passage);
-    if (!answer) return escaped;
-    const escapedAnswer = escapeHTML(answer);
-    // Build a regex that matches the answer text case-insensitively
-    const pattern = escapedAnswer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return escaped.replace(new RegExp(pattern, 'i'), '<mark class="study-citation-mark">$&</mark>');
-  }
 
   // ─────────────────────────────────────────────────────────────────
   // Open / Close
