@@ -113,37 +113,60 @@ async function handleMessage(request) {
       return { success: true }; // Silently succeed even if function not loaded
 
     case 'studyHideControlEnd': {
-      const hiddenCount = _cleanupStudyHideControl();
-      return { success: true, hiddenCount };
+      const { count: hiddenCount, selectors: hiddenSelectors } = _cleanupStudyHideControl();
+      return { success: true, hiddenCount, hiddenSelectors };
     }
 
     case 'studyHideCheckAccuracy': {
       const selectors = request.selectors || [];
+
+      // Pages like YouTube reuse the same id (e.g. "sections", "contents") across
+      // multiple custom elements / former shadow roots.  document.querySelector()
+      // only returns the first match, which is often the wrong section.
+      // This helper tries all elements that share the same leading #id so that
+      // we don't miss the correct ancestor.
+      function _findGTEl(sel) {
+        try {
+          const el = document.querySelector(sel);
+          if (el) return [el];
+        } catch (e) {}
+        // Fallback: sel starts with #id > ...  — try every element with that id
+        const m = sel.match(/^#([\w-]+)\s*>([\s\S]*)$/);
+        if (!m) return [];
+        const allRoots = document.querySelectorAll('[id="' + m[1] + '"]');
+        const results = [];
+        for (const root of allRoots) {
+          try {
+            const found = root.querySelectorAll(':scope >' + m[2]);
+            results.push(...found);
+          } catch (e) {}
+        }
+        return results;
+      }
+
+      function _isElHidden(el) {
+        // Check ancestors: protection.js hides a parent container
+        let node = el;
+        while (node && node !== document.documentElement) {
+          if (node.hasAttribute('data-xwebagent-hidden')) return true;
+          if (node.dataset && node.dataset.xwaStudyHide === 'hidden') return true;
+          const cs = window.getComputedStyle(node);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+          node = node.parentElement;
+        }
+        // Check descendants: protection.js may hide a child element inside the
+        // annotated container (e.g. hides a comment body inside a comment wrapper)
+        return !!(
+          el.querySelector('[data-xwebagent-hidden]') ||
+          el.querySelector('[data-xwa-study-hide="hidden"]')
+        );
+      }
+
       let matched = 0;
       for (const sel of selectors) {
         try {
-          const el = document.querySelector(sel);
-          if (el) {
-            // Check ancestors: protection.js may hide a parent container
-            let isHidden = false;
-            let node = el;
-            while (node && node !== document.documentElement) {
-              if (node.hasAttribute('data-xwebagent-hidden')) { isHidden = true; break; }
-              if (node.dataset && node.dataset.xwaStudyHide === 'hidden') { isHidden = true; break; }
-              const cs = window.getComputedStyle(node);
-              if (cs.display === 'none' || cs.visibility === 'hidden') { isHidden = true; break; }
-              node = node.parentElement;
-            }
-            // Check descendants: protection.js may hide a child element inside the
-            // annotated container (e.g. hides a comment body inside a comment wrapper)
-            if (!isHidden) {
-              isHidden = !!(
-                el.querySelector('[data-xwebagent-hidden]') ||
-                el.querySelector('[data-xwa-study-hide="hidden"]')
-              );
-            }
-            if (isHidden) matched++;
-          }
+          const candidates = _findGTEl(sel);
+          if (candidates.some(_isElHidden)) matched++;
         } catch (e) {}
       }
       const hiddenCount = document.querySelectorAll('[data-xwebagent-hidden]').length;
@@ -188,10 +211,39 @@ document.addEventListener('selectionchange', () => {
 // Study: Click-to-hide control (Option A manual hide for control condition)
 // ─────────────────────────────────────────────────────────────────
 
+// Generate a unique-enough CSS selector for a DOM element.
+// Used to record which elements the user manually hid so precision/recall/F1
+// can be computed against the ground-truth hidden_elements selectors offline.
+function _generateSelector(el) {
+  if (!el || el === document.documentElement) return '';
+  if (el.id) return '#' + CSS.escape(el.id);
+  const parts = [];
+  let node = el;
+  while (node && node !== document.documentElement && node !== document.body) {
+    if (node.id) { parts.unshift('#' + CSS.escape(node.id)); break; }
+    const tag = node.tagName.toLowerCase();
+    const parent = node.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children).filter(c => c.tagName === node.tagName);
+      if (siblings.length > 1) {
+        parts.unshift(tag + ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')');
+      } else {
+        parts.unshift(tag);
+      }
+    } else {
+      parts.unshift(tag);
+    }
+    node = node.parentElement;
+  }
+  if (node === document.body) parts.unshift('body');
+  return parts.join(' > ');
+}
+
 function _injectStudyHideControl(criteria) {
   if (window._studyHideActive) return;
   window._studyHideActive = true;
   window._studyHiddenElements = [];
+  window._studyHiddenSelectors = [];
 
   // Banner at top of page
   const banner = document.createElement('div');
@@ -315,12 +367,16 @@ function _injectStudyHideControl(criteria) {
       currentTarget.style.opacity = '';
       delete currentTarget.dataset.xwaStudyHide;
       const idx = window._studyHiddenElements.indexOf(currentTarget);
-      if (idx > -1) window._studyHiddenElements.splice(idx, 1);
+      if (idx > -1) {
+        window._studyHiddenElements.splice(idx, 1);
+        window._studyHiddenSelectors.splice(idx, 1);
+      }
     } else {
       currentTarget.dataset.xwaStudyHide = 'hidden';
       currentTarget.style.opacity = '0.08';
       // NOTE: intentionally no pointerEvents:none — keeps element hoverable so unhide works
       window._studyHiddenElements.push(currentTarget);
+      window._studyHiddenSelectors.push(_generateSelector(currentTarget));
     }
     const badge = document.getElementById('xwa-study-count-badge');
     if (badge) badge.textContent = window._studyHiddenElements.length + ' hidden';
@@ -337,6 +393,7 @@ function _injectStudyHideControl(criteria) {
 
 function _cleanupStudyHideControl() {
   const count = window._studyHiddenElements ? window._studyHiddenElements.length : 0;
+  const selectors = window._studyHiddenSelectors ? [...window._studyHiddenSelectors] : [];
   window._studyHideActive = false;
 
   // Remove event listeners and restore any lingering outlines
@@ -366,5 +423,6 @@ function _cleanupStudyHideControl() {
   });
 
   window._studyHiddenElements = [];
-  return count;
+  window._studyHiddenSelectors = [];
+  return { count, selectors };
 }

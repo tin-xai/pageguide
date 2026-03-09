@@ -53,7 +53,12 @@ CREATE TABLE study_task_results (
   time_ms            bigint,                 -- milliseconds taken
   answer             text,                   -- selected answer / completion status
   answer_correct     boolean,               -- null for non-find tasks
-  hidden_count       integer     DEFAULT 0,  -- items hidden (hide tasks only)
+  hidden_count            integer     DEFAULT 0,   -- items hidden (hide tasks only)
+  hide_recall             float,                   -- TP / ground-truth total (hide tasks)
+  user_hidden_selectors   jsonb       DEFAULT '[]'::jsonb,
+                                                   -- CSS selectors of elements user manually hid
+                                                   -- (control condition only; use with hidden_count
+                                                   --  and task_data.hidden_elements to compute P/R/F1)
 
   -- Post-task ratings
   confidence         text,                   -- 'very' | 'somewhat' | 'notsure' | 'guessed'
@@ -109,10 +114,12 @@ ALTER TABLE study_task_results
   ADD COLUMN IF NOT EXISTS chat_turn_count    integer     DEFAULT 0,
   ADD COLUMN IF NOT EXISTS chat_transcript    jsonb       DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS scroll_count       integer     DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS ctrl_f_count       integer     DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS text_select_count  integer     DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS page_visit_count   integer     DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS page_visit_urls    jsonb       DEFAULT '[]'::jsonb;
+  ADD COLUMN IF NOT EXISTS ctrl_f_count             integer     DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS text_select_count        integer     DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS page_visit_count         integer     DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS page_visit_urls          jsonb       DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS hide_recall              float,
+  ADD COLUMN IF NOT EXISTS user_hidden_selectors    jsonb       DEFAULT '[]'::jsonb;
 ```
 
 ---
@@ -151,5 +158,7 @@ Each `study_task_results` row links back to `study_sessions` via `session_id`.
 | `page_visit_count` | int | Number of URL navigations during the task |
 | `page_visit_urls` | jsonb | List of visited URLs `["https://..."]` |
 | `hidden_count` | int | Elements hidden (hide tasks only) |
+| `hide_recall` | float | TP / ground-truth total — recall score for hide tasks |
+| `user_hidden_selectors` | jsonb | CSS selectors of elements user manually hid (`["#id > tag", ...]`); control condition only |
 | `task_data` | jsonb | Full raw task object from the dataset |
 | `question_or_task` | text | The task question / instruction shown to participant |

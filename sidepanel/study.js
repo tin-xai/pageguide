@@ -337,7 +337,7 @@
     const cols = [
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
-      'confidence','helpfulness','chat_turn_count','hidden_count','hide_recall','question_or_task',
+      'confidence','helpfulness','chat_turn_count','hidden_count','hide_recall','user_hidden_selectors','question_or_task',
       'scroll_count','ctrl_f_count','text_select_count','page_visit_count','page_visit_urls',
     ];
     const esc = v => {
@@ -584,6 +584,7 @@
         s._chatSnap = snapshotChat();
         s._hiddenCount = 0;
         s._hideAccuracy = null;
+        s._hiddenSelectors = [];
         // For control hide task: check accuracy first, then clean up click-to-hide UI
         if (taskType === 'hide') {
           try {
@@ -600,6 +601,7 @@
               }
               const resp = await chrome.tabs.sendMessage(tabs[0].id, { action: 'studyHideControlEnd' });
               s._hiddenCount = resp && resp.hiddenCount ? resp.hiddenCount : 0;
+              s._hiddenSelectors = resp && resp.hiddenSelectors ? resp.hiddenSelectors : [];
             }
           } catch (e) {}
         }
@@ -859,6 +861,8 @@
       s._behaviorData = null;
       const hideAcc = s._hideAccuracy;
       s._hideAccuracy = null;
+      const hiddenSelectors = s._hiddenSelectors || [];
+      s._hiddenSelectors = [];
 
       const result = {
         participant_id:   s.participantId,
@@ -874,8 +878,9 @@
         helpfulness:      helpSel ? helpSel.value : null,
         chat_turn_count:  snap.chat_turn_count,
         chat_transcript:  snap.chat_transcript,
-        hidden_count:      s._hiddenCount || 0,
-        hide_recall:       hideAcc ? parseFloat((hideAcc.matched / hideAcc.total).toFixed(3)) : null,
+        hidden_count:           s._hiddenCount || 0,
+        hide_recall:            hideAcc ? parseFloat((hideAcc.matched / hideAcc.total).toFixed(3)) : null,
+        user_hidden_selectors:  hiddenSelectors,
         task_data:         task,
         question_or_task:  questionOrTask,
         scroll_count:      beh.scroll_count      || 0,
