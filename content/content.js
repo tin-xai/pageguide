@@ -216,7 +216,7 @@ function _injectStudyHideControl(criteria) {
   document.body.insertBefore(banner, document.body.firstChild);
   document.body.style.setProperty('margin-top', banner.offsetHeight + 8 + 'px', 'important');
 
-  // Floating hide button that follows hover
+  // Floating hide/unhide button that follows hover
   const floatBtn = document.createElement('button');
   floatBtn.id = 'xwa-study-hide-btn';
   floatBtn.textContent = '🙈 Hide';
@@ -237,6 +237,24 @@ function _injectStudyHideControl(criteria) {
   const MIN_AREA = 2000; // ~50×40 px minimum
 
   let currentTarget = null;
+  const outlineModified = new Set(); // track elements we've set outline on for cleanup
+
+  function applyHighlight(el) {
+    if (el._xwaOrigOutline === undefined) {
+      el._xwaOrigOutline = el.style.outline;
+      el._xwaOrigOutlineOffset = el.style.outlineOffset;
+    }
+    el.style.outline = '2px solid #00d9ff';
+    el.style.outlineOffset = '2px';
+    outlineModified.add(el);
+  }
+
+  function removeHighlight(el) {
+    if (!el) return;
+    el.style.outline = el._xwaOrigOutline !== undefined ? el._xwaOrigOutline : '';
+    el.style.outlineOffset = el._xwaOrigOutlineOffset !== undefined ? el._xwaOrigOutlineOffset : '';
+    outlineModified.delete(el);
+  }
 
   function isEligible(el) {
     if (!el || el.nodeType !== 1) return false;
@@ -258,15 +276,23 @@ function _injectStudyHideControl(criteria) {
     // Walk up to find the smallest eligible ancestor
     while (el && el !== document.documentElement) {
       if (isEligible(el)) {
-        currentTarget = el;
+        if (currentTarget !== el) {
+          removeHighlight(currentTarget);
+          currentTarget = el;
+          applyHighlight(el);
+        }
         const rect = el.getBoundingClientRect();
         floatBtn.style.top  = Math.max(rect.top + 4, banner.offsetHeight + 6) + 'px';
         floatBtn.style.left = (rect.right - floatBtn.offsetWidth - 8) + 'px';
+        const isHidden = el.dataset.xwaStudyHide === 'hidden';
+        floatBtn.textContent = isHidden ? '👁 Unhide' : '🙈 Hide';
+        floatBtn.style.background = isHidden ? 'rgba(0,140,60,0.92)' : 'rgba(180,30,30,0.92)';
         floatBtn.style.display = 'block';
         return;
       }
       el = el.parentElement;
     }
+    removeHighlight(currentTarget);
     floatBtn.style.display = 'none';
     currentTarget = null;
   };
@@ -275,6 +301,7 @@ function _injectStudyHideControl(criteria) {
     // Hide button only when leaving to somewhere outside both target and button
     if (floatBtn.contains(e.relatedTarget)) return;
     if (currentTarget && currentTarget.contains(e.relatedTarget)) return;
+    removeHighlight(currentTarget);
     floatBtn.style.display = 'none';
     currentTarget = null;
   };
@@ -283,21 +310,17 @@ function _injectStudyHideControl(criteria) {
     e.preventDefault(); e.stopPropagation();
     if (!currentTarget) return;
     const alreadyHidden = currentTarget.dataset.xwaStudyHide === 'hidden';
+    removeHighlight(currentTarget);
     if (alreadyHidden) {
       currentTarget.style.opacity = '';
-      currentTarget.style.pointerEvents = '';
       delete currentTarget.dataset.xwaStudyHide;
       const idx = window._studyHiddenElements.indexOf(currentTarget);
       if (idx > -1) window._studyHiddenElements.splice(idx, 1);
-      floatBtn.textContent = '🙈 Hide';
-      floatBtn.style.background = 'rgba(180,30,30,0.92)';
     } else {
       currentTarget.dataset.xwaStudyHide = 'hidden';
       currentTarget.style.opacity = '0.08';
-      currentTarget.style.pointerEvents = 'none';
+      // NOTE: intentionally no pointerEvents:none — keeps element hoverable so unhide works
       window._studyHiddenElements.push(currentTarget);
-      floatBtn.textContent = '👁 Unhide';
-      floatBtn.style.background = 'rgba(0,140,60,0.92)';
     }
     const badge = document.getElementById('xwa-study-count-badge');
     if (badge) badge.textContent = window._studyHiddenElements.length + ' hidden';
@@ -308,18 +331,24 @@ function _injectStudyHideControl(criteria) {
   document.addEventListener('mouseover', onMouseOver, true);
   document.addEventListener('mouseout',  onMouseOut,  true);
 
-  // Store listeners for cleanup
-  window._studyHideListeners = { onMouseOver, onMouseOut };
+  // Store listeners + outline set for cleanup
+  window._studyHideListeners = { onMouseOver, onMouseOut, outlineModified };
 }
 
 function _cleanupStudyHideControl() {
   const count = window._studyHiddenElements ? window._studyHiddenElements.length : 0;
   window._studyHideActive = false;
 
-  // Remove event listeners
+  // Remove event listeners and restore any lingering outlines
   if (window._studyHideListeners) {
     document.removeEventListener('mouseover', window._studyHideListeners.onMouseOver, true);
     document.removeEventListener('mouseout',  window._studyHideListeners.onMouseOut,  true);
+    if (window._studyHideListeners.outlineModified) {
+      window._studyHideListeners.outlineModified.forEach(el => {
+        el.style.outline = el._xwaOrigOutline !== undefined ? el._xwaOrigOutline : '';
+        el.style.outlineOffset = el._xwaOrigOutlineOffset !== undefined ? el._xwaOrigOutlineOffset : '';
+      });
+    }
     window._studyHideListeners = null;
   }
 
@@ -333,7 +362,6 @@ function _cleanupStudyHideControl() {
   // Restore hidden elements
   document.querySelectorAll('[data-xwa-study-hide]').forEach(el => {
     el.style.opacity = '';
-    el.style.pointerEvents = '';
     delete el.dataset.xwaStudyHide;
   });
 
