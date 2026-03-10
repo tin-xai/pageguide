@@ -317,7 +317,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
   if (request.action === 'studyTracker_start') {
-    _studyTracker = { active: true, scroll: 0, ctrlF: 0, textSelect: 0, pages: [] };
+    _studyTracker = { active: true, scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
     sendResponse({ ok: true });
     return false;
   }
@@ -326,14 +326,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       _studyTracker.scroll     += request.scroll     || 0;
       _studyTracker.ctrlF      += request.ctrlF      || 0;
       _studyTracker.textSelect += request.textSelect || 0;
+      _studyTracker.click      += request.click      || 0;
+      _studyTracker.mouseMove  += request.mouseMove  || 0;
     }
     sendResponse({ ok: true });
     return false;
   }
   if (request.action === 'studyTracker_getData') {
     const data = _studyTracker
-      ? { scroll: _studyTracker.scroll, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, pages: [..._studyTracker.pages] }
-      : { scroll: 0, ctrlF: 0, textSelect: 0, pages: [] };
+      ? { scroll: _studyTracker.scroll, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, click: _studyTracker.click, mouseMove: _studyTracker.mouseMove, pages: [..._studyTracker.pages] }
+      : { scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
     _studyTracker = null;
     sendResponse(data);
     return false;

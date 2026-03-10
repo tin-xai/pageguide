@@ -7,20 +7,24 @@
 
   let active = false;
   let scrollTimer = null;
-  const batch = { scroll: 0, ctrlF: 0, textSelect: 0 };
+  const batch = { scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0 };
 
   function flush() {
     if (!active) return;
-    if (batch.scroll === 0 && batch.ctrlF === 0 && batch.textSelect === 0) return;
+    if (batch.scroll === 0 && batch.ctrlF === 0 && batch.textSelect === 0 && batch.click === 0 && batch.mouseMove === 0) return;
     chrome.runtime.sendMessage({
       action: 'studyTracker_batch',
       scroll: batch.scroll,
       ctrlF: batch.ctrlF,
       textSelect: batch.textSelect,
+      click: batch.click,
+      mouseMove: batch.mouseMove,
     }).catch(() => {});
     batch.scroll = 0;
     batch.ctrlF = 0;
     batch.textSelect = 0;
+    batch.click = 0;
+    batch.mouseMove = 0;
   }
 
   // Flush every 2 s and on page unload (best-effort)
@@ -50,6 +54,27 @@
       batch.textSelect++;
     }
   }, { capture: true });
+
+  // Mouse clicks
+  window.addEventListener('mousedown', () => {
+    if (!active) return;
+    batch.click++;
+  }, { capture: true });
+
+  // Mouse movement distance (throttled to every 50 ms)
+  let lastMoveX = null, lastMoveY = null, moveThrottle = null;
+  window.addEventListener('mousemove', (e) => {
+    if (!active) return;
+    if (moveThrottle) return;
+    moveThrottle = setTimeout(() => { moveThrottle = null; }, 50);
+    if (lastMoveX !== null) {
+      const dx = e.clientX - lastMoveX;
+      const dy = e.clientY - lastMoveY;
+      batch.mouseMove += Math.round(Math.sqrt(dx * dx + dy * dy));
+    }
+    lastMoveX = e.clientX;
+    lastMoveY = e.clientY;
+  }, { passive: true, capture: true });
 
   // Messages from the sidepanel
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

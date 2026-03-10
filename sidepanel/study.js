@@ -372,7 +372,7 @@
       window.removeEventListener('keydown', _sidepanelCtrlFListener, true);
       _sidepanelCtrlFListener = null;
     }
-    const out = { scroll_count: 0, ctrl_f_count: 0, text_select_count: 0, page_visit_count: 0, page_visit_urls: [] };
+    const out = { scroll_count: 0, ctrl_f_count: 0, text_select_count: 0, click_count: 0, mouse_move_px: 0, page_visit_count: 0, page_visit_urls: [] };
     try {
       // Flush content script batch before reading SW totals
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -384,6 +384,8 @@
         out.scroll_count      = data.scroll      || 0;
         out.ctrl_f_count      = data.ctrlF       || 0;
         out.text_select_count = data.textSelect  || 0;
+        out.click_count       = data.click       || 0;
+        out.mouse_move_px     = data.mouseMove   || 0;
         out.page_visit_count  = (data.pages || []).length;
         out.page_visit_urls   = (data.pages || []).map(p => p.url);
       }
@@ -402,7 +404,7 @@
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
       'question_index','confidence','helpfulness','chat_turn_count','hidden_count','hide_recall','user_hidden_selectors','guide_screenshot','question_or_task',
-      'scroll_count','ctrl_f_count','text_select_count','page_visit_count','page_visit_urls',
+      'scroll_count','ctrl_f_count','text_select_count','click_count','mouse_move_px','page_visit_count','page_visit_urls',
     ];
     const esc = v => {
       const str = (v === undefined || v === null) ? ''
@@ -958,6 +960,8 @@
         scroll_count:      beh.scroll_count      || 0,
         ctrl_f_count:      beh.ctrl_f_count      || 0,
         text_select_count: beh.text_select_count || 0,
+        click_count:       beh.click_count       || 0,
+        mouse_move_px:     beh.mouse_move_px     || 0,
         page_visit_count:  beh.page_visit_count  || 0,
         page_visit_urls:   beh.page_visit_urls   || [],
       };
