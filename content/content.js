@@ -112,6 +112,26 @@ async function handleMessage(request) {
       }
       return { success: true }; // Silently succeed even if function not loaded
 
+    case 'studyLockPage': {
+      if (!document.getElementById('xwa-study-lock')) {
+        const lock = document.createElement('div');
+        lock.id = 'xwa-study-lock';
+        lock.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.45);cursor:not-allowed;';
+        lock.addEventListener('wheel',     e => e.preventDefault(), { passive: false });
+        lock.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+        document.documentElement.style.overflow = 'hidden';
+        document.body.appendChild(lock);
+      }
+      return { success: true };
+    }
+
+    case 'studyUnlockPage': {
+      const lock = document.getElementById('xwa-study-lock');
+      if (lock) lock.remove();
+      document.documentElement.style.overflow = '';
+      return { success: true };
+    }
+
     case 'studyHideControlEnd': {
       const { count: hiddenCount, selectors: hiddenSelectors } = _cleanupStudyHideControl();
       return { success: true, hiddenCount, hiddenSelectors };

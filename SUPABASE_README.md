@@ -45,6 +45,7 @@ CREATE TABLE study_task_results (
   -- Task metadata
   block_index        integer     NOT NULL,   -- 0 or 1
   task_index         integer     NOT NULL,   -- 0, 1, or 2
+  question_index     integer     DEFAULT 0,  -- 0–2 within the task type
   task_type          text        NOT NULL,   -- 'find' | 'guide' | 'hide'
   condition          text        NOT NULL,   -- 'control' | 'extension'
   question_or_task   text,
@@ -76,6 +77,9 @@ CREATE TABLE study_task_results (
   page_visit_count   integer     DEFAULT 0,  -- number of URL navigations
   page_visit_urls    jsonb       DEFAULT '[]'::jsonb,
                                              -- ["https://...", ...]
+
+  -- Guide screenshot
+  guide_screenshot   text,                   -- base64 PNG of last guide step (guide tasks, with consent)
 
   -- Raw task object
   task_data          jsonb                   -- full task row from dataset
@@ -119,7 +123,9 @@ ALTER TABLE study_task_results
   ADD COLUMN IF NOT EXISTS page_visit_count         integer     DEFAULT 0,
   ADD COLUMN IF NOT EXISTS page_visit_urls          jsonb       DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS hide_recall              float,
-  ADD COLUMN IF NOT EXISTS user_hidden_selectors    jsonb       DEFAULT '[]'::jsonb;
+  ADD COLUMN IF NOT EXISTS user_hidden_selectors    jsonb       DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS question_index           integer     DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS guide_screenshot         text;
 ```
 
 ---
@@ -160,5 +166,7 @@ Each `study_task_results` row links back to `study_sessions` via `session_id`.
 | `hidden_count` | int | Elements hidden (hide tasks only) |
 | `hide_recall` | float | TP / ground-truth total — recall score for hide tasks |
 | `user_hidden_selectors` | jsonb | CSS selectors of elements user manually hid (`["#id > tag", ...]`); control condition only |
+| `question_index` | int | 0–2 — which of the 3 questions within this task type |
+| `guide_screenshot` | text | Base64 PNG of the last guide step (guide tasks only, captured with user consent) |
 | `task_data` | jsonb | Full raw task object from the dataset |
 | `question_or_task` | text | The task question / instruction shown to participant |

@@ -29,23 +29,28 @@
   // State
   // ─────────────────────────────────────────────────────────────────
 
+  const QUESTIONS_PER_TYPE = 3;         // questions per task type per block
+  const TASK_TIME_LIMIT_MS = 3 * 60 * 1000; // 3-minute countdown per question
+
   const s = {
     participantId: '',
     sessionId: null,
     conditionOrder: [],   // ['control','extension'] or reversed
     datasets: { find: [], guide: [], hide: [] },
     sampledTasks: [
-      { find: null, guide: null, hide: null },  // block 0
-      { find: null, guide: null, hide: null },  // block 1
+      { find: [], guide: [], hide: [] },  // block 0 — arrays of QUESTIONS_PER_TYPE
+      { find: [], guide: [], hide: [] },  // block 1
     ],
     results: [],          // all collected task results
     block: 0,             // current block (0 or 1)
-    taskIdx: 0,           // current task index within block (0-2)
+    taskIdx: 0,           // current task type index within block (0-2)
+    questionIdx: 0,       // current question within task type (0 to QUESTIONS_PER_TYPE-1)
     timerInterval: null,
     timerStart: null,
     timerElapsed: 0,      // ms when timer was stopped
     currentAnswer: null,  // selected radio value
     currentPost: {},      // { confidence, helpfulness }
+    _guideScreenshot: null, // base64 screenshot taken at guide task completion
     open: false,
   };
 
@@ -166,17 +171,18 @@
   // Task sampling — different rows for each block
   // ─────────────────────────────────────────────────────────────────
 
-  function randInt(max) { return Math.floor(Math.random() * max); }
-
   function sampleTasks() {
     TASK_TYPES.forEach(type => {
       const pool = s.datasets[type];
       if (!pool.length) return;
-      const i0 = randInt(pool.length);
-      let i1 = randInt(pool.length - 1);
-      if (i1 >= i0) i1++;
-      s.sampledTasks[0][type] = pool[i0];
-      s.sampledTasks[1][type] = pool[i1];
+      // Shuffle indices and take up to QUESTIONS_PER_TYPE * 2 unique ones
+      const indices = shuffle([...Array(pool.length).keys()]);
+      const need = QUESTIONS_PER_TYPE * 2; // 3 per block × 2 blocks
+      const picked = indices.slice(0, Math.min(need, pool.length));
+      // If pool is smaller than needed, repeat with wrap-around
+      while (picked.length < need) picked.push(picked[picked.length % pool.length]);
+      s.sampledTasks[0][type] = picked.slice(0, QUESTIONS_PER_TYPE).map(i => pool[i]);
+      s.sampledTasks[1][type] = picked.slice(QUESTIONS_PER_TYPE, need).map(i => pool[i]);
     });
   }
 
@@ -208,12 +214,21 @@
     s.timerStart = Date.now();
     s.timerElapsed = 0;
     s.timerInterval = setInterval(() => {
-      const t = formatTime(Date.now() - s.timerStart);
-      // update whichever timer display is currently visible
+      const elapsed   = Date.now() - s.timerStart;
+      const remaining = Math.max(0, TASK_TIME_LIMIT_MS - elapsed);
+      const t = formatTime(remaining);
+      const urgent = remaining <= 30_000;
+
       const el = $('study-timer');
-      if (el) el.textContent = t;
+      if (el) { el.textContent = t; el.style.color = urgent ? '#ff4757' : ''; }
       const mini = $('study-mini-timer');
-      if (mini) mini.textContent = t;
+      if (mini) { mini.textContent = t; mini.style.color = urgent ? '#ff4757' : ''; }
+
+      // Auto-submit when time runs out
+      if (remaining <= 0) {
+        const doneBtn = $('study-done-btn') || $('study-mini-done');
+        if (doneBtn) doneBtn.click();
+      }
     }, 1000);
   }
 
@@ -282,6 +297,55 @@
 
   let _sidepanelCtrlFListener = null;
 
+  // Inject a full-screen blocking overlay on the active tab so the page stays
+  // visible but the participant cannot scroll or interact with it.
+  async function lockTab() {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]) await chrome.tabs.sendMessage(tabs[0].id, { action: 'studyLockPage' });
+    } catch (e) {}
+  }
+
+  // Ask the participant for screenshot permission and, if granted, capture the
+  // current tab via the existing captureScreenshot service-worker action.
+  async function captureGuideScreenshot() {
+    const allowed = await new Promise(resolve => {
+      const modal = document.createElement('div');
+      modal.style.cssText = [
+        'position:fixed;inset:0;z-index:99999',
+        'display:flex;align-items:center;justify-content:center',
+        'background:rgba(0,0,0,0.72)',
+      ].join(';');
+      modal.innerHTML = `
+        <div style="background:#1a1a2e;border:1px solid rgba(0,217,255,0.3);border-radius:12px;
+                    padding:24px 20px;max-width:260px;text-align:center;font-family:system-ui;color:#fff;">
+          <div style="font-size:32px;margin-bottom:10px">📸</div>
+          <div style="font-weight:700;font-size:15px;margin-bottom:8px">Take a screenshot?</div>
+          <div style="font-size:13px;color:#aaa;margin-bottom:20px;line-height:1.5">
+            We'd like to capture the current page to record your guide result.
+            No personal data outside the visible tab is collected.
+          </div>
+          <div style="display:flex;gap:8px">
+            <button id="ss-deny"  style="flex:1;padding:10px;border-radius:8px;
+              border:1px solid rgba(255,255,255,0.2);background:transparent;color:#ccc;
+              cursor:pointer;font-size:13px">No thanks</button>
+            <button id="ss-allow" style="flex:1;padding:10px;border-radius:8px;
+              border:none;background:#00d9ff;color:#000;cursor:pointer;
+              font-size:13px;font-weight:700">Allow</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+      modal.querySelector('#ss-allow').onclick = () => { modal.remove(); resolve(true);  };
+      modal.querySelector('#ss-deny').onclick  = () => { modal.remove(); resolve(false); };
+    });
+
+    if (!allowed) return null;
+    try {
+      const resp = await chrome.runtime.sendMessage({ action: 'captureScreenshot' });
+      return resp?.imageBase64 || null;
+    } catch (e) { return null; }
+  }
+
   async function startBehaviorTracking() {
     try {
       chrome.runtime.sendMessage({ action: 'studyTracker_start' }).catch(() => {});
@@ -337,7 +401,7 @@
     const cols = [
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
-      'confidence','helpfulness','chat_turn_count','hidden_count','hide_recall','user_hidden_selectors','question_or_task',
+      'question_index','confidence','helpfulness','chat_turn_count','hidden_count','hide_recall','user_hidden_selectors','guide_screenshot','question_or_task',
       'scroll_count','ctrl_f_count','text_select_count','page_visit_count','page_visit_urls',
     ];
     const esc = v => {
@@ -441,6 +505,7 @@
     $('study-close').onclick = closeStudyPanel;
     $('study-begin-btn').onclick = () => {
       s.taskIdx = 0;
+      s.questionIdx = 0;
       renderTaskSetup();
     };
   }
@@ -448,9 +513,10 @@
   function renderTaskSetup() {
     const block = s.block;
     const taskIdx = s.taskIdx;
+    const questionIdx = s.questionIdx;
     const taskType = TASK_TYPES[taskIdx];
     const condition = s.conditionOrder[block];
-    const task = s.sampledTasks[block][taskType];
+    const task = s.sampledTasks[block][taskType][questionIdx];
 
     if (!task) {
       setHTML(`<div class="study-screen"><div class="study-body"><p class="study-error">No task data available for ${taskType}. Please check the datasets.</p></div></div>`);
@@ -485,7 +551,7 @@
           <span class="study-title">${TASK_LABELS[taskType]}</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
-        <div class="study-progress">Block ${block + 1} · Task ${taskIdx + 1} of 3 &nbsp;${condLabel}</div>
+        <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
         <div class="study-body">
           <div class="study-task-card">
             <div class="study-task-type-badge">${TASK_LABELS[taskType]}</div>
@@ -520,7 +586,7 @@
           <div class="study-header">
             <span class="study-title">${TASK_LABELS[taskType]}</span>
           </div>
-          <div class="study-progress">Block ${block + 1} · Task ${taskIdx + 1} of 3 &nbsp;${condLabel}</div>
+          <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
           <div class="study-body" style="align-items:center;text-align:center;justify-content:center;gap:16px;">
             <p style="color:#aaa;font-size:14px;margin:0;">Page loading — timer starts in</p>
             <div class="study-timer-display">
@@ -562,16 +628,16 @@
             <span class="study-title">${TASK_LABELS[taskType]}</span>
             <button class="study-close-btn" id="study-close">✕</button>
           </div>
-          <div class="study-progress">Block ${block + 1} · Task ${taskIdx + 1} of 3 &nbsp;${condLabel}</div>
+          <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
           <div class="study-body">
             <div class="study-task-card study-task-card-running">
               <div class="study-task-question">${escapeHTML(taskQuestion)}</div>
             </div>
             <div class="study-timer-display study-timer-running">
-              <span class="study-timer-label">⏱ Elapsed</span>
-              <span class="study-timer" id="study-timer">00:00</span>
+              <span class="study-timer-label">⏳ Remaining</span>
+              <span class="study-timer" id="study-timer">03:00</span>
             </div>
-            <textarea class="study-notes-textarea" id="study-notes" placeholder="📝 Take notes here…" rows="3"></textarea>
+            ${taskType === 'find' ? `<textarea class="study-notes-textarea" id="study-notes" placeholder="📝 Take notes here…" rows="3"></textarea>` : ''}
             <button class="study-btn study-btn-done" id="study-done-btn">I'm Done — Stop Timer</button>
           </div>
         </div>
@@ -581,6 +647,8 @@
         const elapsed = stopTimer();
         s._behaviorData = await stopBehaviorTracking();
         s._taskNotes = (overlay.querySelector('#study-notes') || {}).value || '';
+        s._guideScreenshot = null;
+        if (taskType === 'guide') s._guideScreenshot = await captureGuideScreenshot();
         s._chatSnap = snapshotChat();
         s._hiddenCount = 0;
         s._hideAccuracy = null;
@@ -607,6 +675,7 @@
         }
         s.currentAnswer = null;
         s.currentPost = {};
+        await lockTab();
         overlay.style.display = 'flex';
         renderTaskAnswer(block, taskIdx, taskType, task, elapsed);
       };
@@ -622,8 +691,8 @@
 
     miniBar.innerHTML = `
       <div class="study-mini-top">
-        <span class="study-mini-label">${TASK_LABELS[taskType]} · Block ${block + 1} · Task ${taskIdx + 1}/3</span>
-        <span class="study-mini-timer" id="study-mini-timer">00:00</span>
+        <span class="study-mini-label">${TASK_LABELS[taskType]} · Block ${block + 1} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE}</span>
+        <span class="study-mini-timer" id="study-mini-timer">03:00</span>
       </div>
       <div class="study-mini-bottom">
         <span class="study-mini-q">${escapeHTML(taskQuestion)}</span>
@@ -632,7 +701,7 @@
           <button class="study-mini-done-btn" id="study-mini-done">✅ Done</button>
         </div>
       </div>
-      <textarea class="study-mini-notes" id="study-mini-notes" placeholder="📝 Take notes here…" rows="2"></textarea>
+      ${taskType === 'find' ? `<textarea class="study-mini-notes" id="study-mini-notes" placeholder="📝 Take notes here…" rows="2"></textarea>` : ''}
     `;
     miniBar.style.display = 'flex';
 
@@ -656,6 +725,8 @@
       const elapsed = stopTimer();
       s._behaviorData = await stopBehaviorTracking();
       s._taskNotes = ($('study-mini-notes') || {}).value || '';
+      s._guideScreenshot = null;
+      if (taskType === 'guide') s._guideScreenshot = await captureGuideScreenshot();
       s._chatSnap = snapshotChat();
       s._hiddenCount = 0;
       s._hideAccuracy = null;
@@ -676,6 +747,7 @@
         } catch (e) {}
       }
       hideMiniBar();
+      await lockTab();
       overlay.style.display = 'flex';
       s.currentAnswer = null;
       s.currentPost = {};
@@ -750,15 +822,7 @@
         </div>
       `;
     } else if (taskType === 'hide') {
-      const acc = s._hideAccuracy;
-      const accDisplay = acc
-        ? `<div style="background:rgba(0,217,255,0.07);border:1px solid rgba(0,217,255,0.25);border-radius:10px;padding:8px 12px 10px;margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:700;color:rgba(0,217,255,0.7);text-transform:uppercase;letter-spacing:0.06em;">🎯 Accuracy</div>
-            <p style="margin:4px 0 0;font-size:13px;color:rgba(255,255,255,0.85);"><strong>${acc.matched} / ${acc.total}</strong> target items hidden (${Math.round(acc.matched / acc.total * 100)}%)</p>
-           </div>`
-        : '';
       answerHTML = `
-        ${accDisplay}
         <p class="study-question-text">Did you successfully hide the content?</p>
         <div class="study-radio-group" id="study-answer-group">
           <label class="study-radio-btn"><input type="radio" name="study-answer" value="completed"><span>✅ Yes, all specified content hidden</span></label>
@@ -774,11 +838,11 @@
           <span class="study-title">Answer</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
-        <div class="study-progress">Block ${block + 1} · Task ${taskIdx + 1} of 3 &nbsp;${condLabel}</div>
+        <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
         <div class="study-body">
           ${questionCard}
           <div class="study-timer-display">
-            <span class="study-timer-label">⏱ Your time</span>
+            <span class="study-timer-label">⏱ Time used</span>
             <span class="study-timer study-timer-stopped">${formatTime(elapsed)}</span>
           </div>
           ${answerHTML}
@@ -829,7 +893,10 @@
           </div>
           ${helpHTML}
           <div id="study-post-error" class="study-error" style="display:none;">Please answer all questions.</div>
-          <button class="study-btn study-btn-primary" id="study-next-btn">${taskIdx < 2 ? 'Next Task →' : 'Finish Block'}</button>
+          <button class="study-btn study-btn-primary" id="study-next-btn">${
+            s.questionIdx < QUESTIONS_PER_TYPE - 1 ? `Next Question → (${s.questionIdx + 2}/${QUESTIONS_PER_TYPE})` :
+            taskIdx < 2 ? 'Next Task →' : 'Finish Block'
+          }</button>
         </div>
       </div>
     `);
@@ -863,12 +930,16 @@
       s._hideAccuracy = null;
       const hiddenSelectors = s._hiddenSelectors || [];
       s._hiddenSelectors = [];
+      const guideScreenshot = s._guideScreenshot || null;
+      s._guideScreenshot = null;
+      const questionIdx = s.questionIdx; // capture before advancing
 
       const result = {
         participant_id:   s.participantId,
         session_id:       s.sessionId,
         block_index:      block,
         task_index:       taskIdx,
+        question_index:   questionIdx,
         task_type:        taskType,
         condition:        condition,
         time_ms:          elapsed,
@@ -881,6 +952,7 @@
         hidden_count:           s._hiddenCount || 0,
         hide_recall:            hideAcc ? parseFloat((hideAcc.matched / hideAcc.total).toFixed(3)) : null,
         user_hidden_selectors:  hiddenSelectors,
+        guide_screenshot:       guideScreenshot,
         task_data:         task,
         question_or_task:  questionOrTask,
         scroll_count:      beh.scroll_count      || 0,
@@ -897,10 +969,16 @@
       supaData.task_data = task; // will be serialised as JSONB
       supabaseInsert('study_task_results', supaData);
 
-      if (taskIdx < 2) {
+      // Advance: question within type → type → block
+      if (s.questionIdx < QUESTIONS_PER_TYPE - 1) {
+        s.questionIdx++;
+        renderTaskSetup();
+      } else if (taskIdx < 2) {
+        s.questionIdx = 0;
         s.taskIdx = taskIdx + 1;
         renderTaskSetup();
       } else {
+        s.questionIdx = 0;
         renderBlockDone(block);
       }
     };
@@ -929,6 +1007,16 @@
 
     const isLastBlock = block === 1;
 
+    const hideResults = blockResults.filter(r => r.task_type === 'hide' && r.hide_recall != null);
+    const avgAccHTML = hideResults.length ? (() => {
+      const avg = hideResults.reduce((sum, r) => sum + r.hide_recall, 0) / hideResults.length;
+      return `
+        <div style="background:rgba(0,217,255,0.07);border:1px solid rgba(0,217,255,0.25);border-radius:10px;padding:10px 14px;margin-top:12px;">
+          <div style="font-size:11px;font-weight:700;color:rgba(0,217,255,0.7);text-transform:uppercase;letter-spacing:0.06em;">🎯 Hide Task — Avg Accuracy</div>
+          <p style="margin:4px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">${Math.round(avg * 100)}% <span style="font-size:12px;color:#aaa;">(across ${hideResults.length} question${hideResults.length > 1 ? 's' : ''})</span></p>
+        </div>`;
+    })() : '';
+
     setHTML(`
       <div class="study-screen">
         <div class="study-header">
@@ -940,6 +1028,7 @@
             <thead><tr><th>Task</th><th>Time</th><th>Answer</th><th>Correct</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
+          ${avgAccHTML}
           ${isLastBlock
             ? '<button class="study-btn study-btn-primary" id="study-final-btn">Finish Study →</button>'
             : '<button class="study-btn study-btn-primary" id="study-next-block-btn">Begin Block 2 →</button>'
@@ -954,6 +1043,7 @@
       $('study-next-block-btn').onclick = () => {
         s.block = 1;
         s.taskIdx = 0;
+        s.questionIdx = 0;
         renderBlockIntro();
       };
     }
