@@ -171,18 +171,34 @@
   // Task sampling — different rows for each block
   // ─────────────────────────────────────────────────────────────────
 
-  function sampleTasks() {
+  // Returns the deduplication key (website) for a task entry.
+  function taskSiteKey(type, task) {
+    if (type === 'find')  return task.url || '';
+    if (type === 'guide') return task.website_url || '';
+    if (type === 'hide')  return task.html_file || '';
+    return '';
+  }
+
+  // Deterministic task selection: participant N gets a rolling 3-task slice.
+  // offset = ((N-1) * 3) % poolSize  →  gcd(3,10)=1 so all 10 offsets are hit
+  // across 10 consecutive participants, giving fair coverage with no randomness.
+  // Within each feature, no two selected questions share the same website.
+  function sampleTasks(N) {
     TASK_TYPES.forEach(type => {
       const pool = s.datasets[type];
       if (!pool.length) return;
-      // Shuffle indices and take up to QUESTIONS_PER_TYPE * 2 unique ones
-      const indices = shuffle([...Array(pool.length).keys()]);
-      const need = QUESTIONS_PER_TYPE * 2; // 3 per block × 2 blocks
-      const picked = indices.slice(0, Math.min(need, pool.length));
-      // If pool is smaller than needed, repeat with wrap-around
-      while (picked.length < need) picked.push(picked[picked.length % pool.length]);
-      s.sampledTasks[0][type] = picked.slice(0, QUESTIONS_PER_TYPE).map(i => pool[i]);
-      s.sampledTasks[1][type] = picked.slice(QUESTIONS_PER_TYPE, need).map(i => pool[i]);
+      const offset = ((N - 1) * QUESTIONS_PER_TYPE) % pool.length;
+      const tasks = [];
+      const seenSites = new Set();
+      for (let i = 0; i < pool.length && tasks.length < QUESTIONS_PER_TYPE; i++) {
+        const task = pool[(offset + i) % pool.length];
+        const site = taskSiteKey(type, task);
+        if (!seenSites.has(site)) {
+          seenSites.add(site);
+          tasks.push(task);
+        }
+      }
+      s.sampledTasks[0][type] = tasks;
     });
   }
 
@@ -439,32 +455,79 @@
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
         <div class="study-body">
-          <p class="study-intro">Welcome! This study has <strong>2 blocks × 3 tasks</strong>. You will do each task type once <em>without</em> the AI assistant, and once <em>with</em> it.</p>
-          <label class="study-label" for="study-pid">Participant ID</label>
-          <input class="study-input" id="study-pid" type="text" placeholder="e.g. P01" autocomplete="off">
-          <div id="study-pid-error" class="study-error" style="display:none;">Please enter a participant ID.</div>
+          <p class="study-intro">Welcome! You will complete <strong>9 tasks</strong> across 3 feature types: Find, Guide, and Hide.</p>
+          <label class="study-label" for="study-pid">Your Name</label>
+          <input class="study-input" id="study-pid" type="text" placeholder="e.g. Alice" autocomplete="off">
+          <div id="study-pid-error" class="study-error" style="display:none;">Please enter your name.</div>
           <button class="study-btn study-btn-primary" id="study-start-btn">Start Study →</button>
         </div>
       </div>
     `);
     $('study-close').onclick = closeStudyPanel;
-    $('study-start-btn').onclick = () => {
-      const pid = $('study-pid').value.trim();
-      if (!pid) { $('study-pid-error').style.display = ''; return; }
+    $('study-start-btn').onclick = async () => {
+      const name = $('study-pid').value.trim();
+      if (!name) { $('study-pid-error').style.display = ''; return; }
       $('study-pid-error').style.display = 'none';
-      s.participantId = pid;
-      // Determine condition order by numeric suffix (or whole string if numeric)
-      const num = parseInt(pid.replace(/\D/g, ''), 10);
-      const isOdd = isNaN(num) ? true : (num % 2 !== 0);
-      s.conditionOrder = isOdd ? ['control', 'extension'] : ['extension', 'control'];
-      sampleTasks();
+
+      const btn = $('study-start-btn');
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+
+      // If datasets didn't load at init time (e.g. sidepanel opened before SW ready), retry now.
+      if (!s.datasets.find.length || !s.datasets.guide.length || !s.datasets.hide.length) {
+        await loadDatasets();
+      }
+      if (!s.datasets.find.length || !s.datasets.guide.length || !s.datasets.hide.length) {
+        $('study-pid-error').textContent = 'Could not load task data. Please reload the extension and try again.';
+        $('study-pid-error').style.display = '';
+        btn.disabled = false;
+        btn.textContent = 'Start Study →';
+        return;
+      }
+
+      s.participantId = name;
+
+      // Insert session first to get an atomic, globally-unique participant number (N = row.id).
+      // Two simultaneous inserts always get different IDs from Postgres serial, preventing
+      // condition/task collisions even if two users start at the same time.
+      const row = await supabaseInsert('study_sessions', {
+        participant_id: name,
+        condition_order: 'pending',
+      });
+
+      let N;
+      if (row && row.id) {
+        N = row.id;
+        s.sessionId = row.id;
+      } else {
+        // Fallback when Supabase is not configured: local counter
+        const localN = parseInt(localStorage.getItem('xwa_study_n') || '0', 10) + 1;
+        localStorage.setItem('xwa_study_n', String(localN));
+        N = localN;
+      }
+
+      // Batch condition: every group of 5 participants alternates control ↔ extension
+      const batchGroup = Math.floor((N - 1) / 5);
+      const condition = batchGroup % 2 === 0 ? 'control' : 'extension';
+      s.conditionOrder = [condition];
+
+      // Update session row with resolved condition (fire and forget)
+      if (row && row.id && SUPABASE_URL && !SUPABASE_URL.includes('YOUR_PROJECT')) {
+        fetch(`${SUPABASE_URL}/rest/v1/study_sessions?id=eq.${row.id}`, {
+          method: 'PATCH',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ condition_order: condition }),
+        }).catch(() => {});
+      }
+
+      sampleTasks(N);
       s.block = 0;
       s.taskIdx = 0;
-      // Save session to Supabase (async, don't block)
-      supabaseInsert('study_sessions', {
-        participant_id: s.participantId,
-        condition_order: s.conditionOrder.join('_then_'),
-      }).then(row => { if (row) s.sessionId = row.id; });
+      s.questionIdx = 0;
       renderBlockIntro();
     };
     // Allow Enter key on input
@@ -485,7 +548,7 @@
     setHTML(`
       <div class="study-screen">
         <div class="study-header">
-          <span class="study-title">Block ${block + 1} of 2</span>
+          <span class="study-title">Your Study Session</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
         <div class="study-body">
@@ -500,7 +563,7 @@
             <div class="study-task-pill">📘 Follow a Guide (various sites)</div>
             <div class="study-task-pill">🙈 Hide Content</div>
           </div>
-          <button class="study-btn study-btn-primary" id="study-begin-btn">Begin Block ${block + 1} →</button>
+          <button class="study-btn study-btn-primary" id="study-begin-btn">Begin →</button>
         </div>
       </div>
     `);
@@ -553,7 +616,7 @@
           <span class="study-title">${TASK_LABELS[taskType]}</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
-        <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+        <div class="study-progress">${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
         <div class="study-body">
           <div class="study-task-card">
             <div class="study-task-type-badge">${TASK_LABELS[taskType]}</div>
@@ -588,7 +651,7 @@
           <div class="study-header">
             <span class="study-title">${TASK_LABELS[taskType]}</span>
           </div>
-          <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+          <div class="study-progress">${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
           <div class="study-body" style="align-items:center;text-align:center;justify-content:center;gap:16px;">
             <p style="color:#aaa;font-size:14px;margin:0;">Page loading — timer starts in</p>
             <div class="study-timer-display">
@@ -630,7 +693,7 @@
             <span class="study-title">${TASK_LABELS[taskType]}</span>
             <button class="study-close-btn" id="study-close">✕</button>
           </div>
-          <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+          <div class="study-progress">${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
           <div class="study-body">
             <div class="study-task-card study-task-card-running">
               <div class="study-task-question">${escapeHTML(taskQuestion)}</div>
@@ -693,7 +756,7 @@
 
     miniBar.innerHTML = `
       <div class="study-mini-top">
-        <span class="study-mini-label">${TASK_LABELS[taskType]} · Block ${block + 1} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE}</span>
+        <span class="study-mini-label">${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE}</span>
         <span class="study-mini-timer" id="study-mini-timer">03:00</span>
       </div>
       <div class="study-mini-bottom">
@@ -840,7 +903,7 @@
           <span class="study-title">Answer</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
-        <div class="study-progress">Block ${block + 1} · ${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+        <div class="study-progress">${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
         <div class="study-body">
           ${questionCard}
           <div class="study-timer-display">
@@ -1009,8 +1072,6 @@
       `;
     }).join('');
 
-    const isLastBlock = block === 1;
-
     const hideResults = blockResults.filter(r => r.task_type === 'hide' && r.hide_recall != null);
     const avgAccHTML = hideResults.length ? (() => {
       const avg = hideResults.reduce((sum, r) => sum + r.hide_recall, 0) / hideResults.length;
@@ -1024,7 +1085,7 @@
     setHTML(`
       <div class="study-screen">
         <div class="study-header">
-          <span class="study-title">Block ${block + 1} Complete!</span>
+          <span class="study-title">Session Complete!</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
         <div class="study-body">
@@ -1033,24 +1094,12 @@
             <tbody>${rows}</tbody>
           </table>
           ${avgAccHTML}
-          ${isLastBlock
-            ? '<button class="study-btn study-btn-primary" id="study-final-btn">Finish Study →</button>'
-            : '<button class="study-btn study-btn-primary" id="study-next-block-btn">Begin Block 2 →</button>'
-          }
+          <button class="study-btn study-btn-primary" id="study-final-btn">Finish Study →</button>
         </div>
       </div>
     `);
     $('study-close').onclick = closeStudyPanel;
-    if (isLastBlock) {
-      $('study-final-btn').onclick = () => renderStudyComplete();
-    } else {
-      $('study-next-block-btn').onclick = () => {
-        s.block = 1;
-        s.taskIdx = 0;
-        s.questionIdx = 0;
-        renderBlockIntro();
-      };
-    }
+    $('study-final-btn').onclick = () => renderStudyComplete();
   }
 
   function renderStudyComplete() {
@@ -1069,7 +1118,7 @@
           <div class="study-complete-msg">
             <div class="study-complete-emoji">🎉</div>
             <p>Thank you, <strong>${escapeHTML(s.participantId)}</strong>!</p>
-            <p>You completed all 6 tasks across 2 conditions.</p>
+            <p>You completed all 9 tasks across 3 feature types.</p>
             ${saveStatusHTML}
           </div>
           <button class="study-btn study-btn-primary" id="study-download-btn">⬇️ Download Results CSV</button>
