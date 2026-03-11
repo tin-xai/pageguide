@@ -1621,7 +1621,7 @@ async function sendMessage() {
         msg.includes('Receiving end does not exist') ||
         msg.includes('Cannot access') ||
         msg.includes('No active tab')) {
-      addMessage('⚠️ This extension cannot run on this page.\n\nPlease navigate to a regular website (not `chrome://` or extension pages) and try again.', 'error');
+      addMessage('⚠️ This extension cannot run on this page.\n\nIf the page is still loading, please **wait for it to fully load** and try again. Otherwise, navigate to a regular website (not `chrome://` or extension pages).', 'error');
     } else {
       addMessage(`❌ ${msg || 'Unknown error'}`, 'error');
     }
