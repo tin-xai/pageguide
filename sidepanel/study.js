@@ -763,6 +763,8 @@
       `);
       $('study-close').onclick = closeStudyPanel;
       $('study-done-btn').onclick = async () => {
+        const doneBtn = $('study-done-btn');
+        if (doneBtn) { doneBtn.disabled = true; doneBtn.textContent = 'Processing…'; }
         const elapsed = stopTimer();
         s._behaviorData = await stopBehaviorTracking();
         s._taskNotes = (overlay.querySelector('#study-notes') || {}).value || '';
@@ -841,6 +843,8 @@
       });
     };
     $('study-mini-done').onclick = async () => {
+      const miniDoneBtn = $('study-mini-done');
+      if (miniDoneBtn) { miniDoneBtn.disabled = true; miniDoneBtn.textContent = '⏳ Processing…'; }
       const elapsed = stopTimer();
       s._behaviorData = await stopBehaviorTracking();
       s._taskNotes = ($('study-mini-notes') || {}).value || '';
