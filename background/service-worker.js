@@ -199,7 +199,7 @@ chrome.tabs.onCreated.addListener((tab) => {
 
 // ===== Study Behavior Tracker =====
 // Accumulates per-task behavioral events across page navigations.
-let _studyTracker = null; // { active, scroll, ctrlF, textSelect, pages: [{url,ts}] }
+let _studyTracker = null; // { active, scrollUser, scrollAgent, ctrlF, textSelect, click, mouseMove, agentThinkMs, pages: [{url,ts}] }
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (_studyTracker && _studyTracker.active && changeInfo.url) {
@@ -317,25 +317,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
   if (request.action === 'studyTracker_start') {
-    _studyTracker = { active: true, scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
+    _studyTracker = { active: true, scrollUser: 0, scrollAgent: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, agentThinkMs: [], pages: [] };
     sendResponse({ ok: true });
     return false;
   }
   if (request.action === 'studyTracker_batch') {
     if (_studyTracker && _studyTracker.active) {
-      _studyTracker.scroll     += request.scroll     || 0;
-      _studyTracker.ctrlF      += request.ctrlF      || 0;
-      _studyTracker.textSelect += request.textSelect || 0;
-      _studyTracker.click      += request.click      || 0;
-      _studyTracker.mouseMove  += request.mouseMove  || 0;
+      _studyTracker.scrollUser  += request.scrollUser  || 0;
+      _studyTracker.scrollAgent += request.scrollAgent || 0;
+      _studyTracker.ctrlF       += request.ctrlF       || 0;
+      _studyTracker.textSelect  += request.textSelect  || 0;
+      _studyTracker.click       += request.click       || 0;
+      _studyTracker.mouseMove   += request.mouseMove   || 0;
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (request.action === 'studyTracker_agentThink') {
+    if (_studyTracker && _studyTracker.active) {
+      _studyTracker.agentThinkMs.push(request.durationMs || 0);
     }
     sendResponse({ ok: true });
     return false;
   }
   if (request.action === 'studyTracker_getData') {
     const data = _studyTracker
-      ? { scroll: _studyTracker.scroll, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, click: _studyTracker.click, mouseMove: _studyTracker.mouseMove, pages: [..._studyTracker.pages] }
-      : { scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
+      ? { scrollUser: _studyTracker.scrollUser, scrollAgent: _studyTracker.scrollAgent, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, click: _studyTracker.click, mouseMove: _studyTracker.mouseMove, agentThinkMs: [..._studyTracker.agentThinkMs], pages: [..._studyTracker.pages] }
+      : { scrollUser: 0, scrollAgent: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, agentThinkMs: [], pages: [] };
     _studyTracker = null;
     sendResponse(data);
     return false;

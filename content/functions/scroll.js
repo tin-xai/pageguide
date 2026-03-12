@@ -19,6 +19,9 @@ function scrollToHighlight(index = 0) {
   const element = highlights[targetIndex];
   
   if (element) {
+    window._xwaAgentScrolling = true;
+    clearTimeout(window._xwaAgentScrollTimer);
+    window._xwaAgentScrollTimer = setTimeout(() => { window._xwaAgentScrolling = false; }, 800);
     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     // Flash effect
     const originalBg = element.style.backgroundColor;
@@ -42,7 +45,11 @@ function scrollToIndex(index) {
   }
   
   console.log('🤖 Scrolling to index', index, ':', element.tagName, element.textContent?.slice(0, 30));
-  
+
+  window._xwaAgentScrolling = true;
+  clearTimeout(window._xwaAgentScrollTimer);
+  window._xwaAgentScrollTimer = setTimeout(() => { window._xwaAgentScrolling = false; }, 800);
+
   // Scroll to the element
   element.scrollIntoView({ behavior: 'smooth', block: 'center' });
   

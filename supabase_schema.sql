@@ -109,11 +109,13 @@ create table if not exists study_task_results (
   guide_screenshot       text,                          -- base64 PNG, null if denied
 
   -- Behaviour tracking
-  scroll_count           integer      not null default 0,
+  scroll_user_count      integer      not null default 0,
+  scroll_agent_count     integer      not null default 0,
   ctrl_f_count           integer      not null default 0,
   text_select_count      integer      not null default 0,
   click_count            integer      not null default 0,
   mouse_move_px          bigint       not null default 0,
+  agent_think_ms         jsonb,                          -- array of per-step LLM latencies in ms (guide task)
   page_visit_count       integer      not null default 0,
   page_visit_urls        jsonb,
 

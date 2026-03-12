@@ -388,7 +388,7 @@
       window.removeEventListener('keydown', _sidepanelCtrlFListener, true);
       _sidepanelCtrlFListener = null;
     }
-    const out = { scroll_count: 0, ctrl_f_count: 0, text_select_count: 0, click_count: 0, mouse_move_px: 0, page_visit_count: 0, page_visit_urls: [] };
+    const out = { scroll_user_count: 0, scroll_agent_count: 0, ctrl_f_count: 0, text_select_count: 0, click_count: 0, mouse_move_px: 0, agent_think_ms: [], page_visit_count: 0, page_visit_urls: [] };
     try {
       // Flush content script batch before reading SW totals
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -397,13 +397,15 @@
       }
       const data = await chrome.runtime.sendMessage({ action: 'studyTracker_getData' });
       if (data) {
-        out.scroll_count      = data.scroll      || 0;
-        out.ctrl_f_count      = data.ctrlF       || 0;
-        out.text_select_count = data.textSelect  || 0;
-        out.click_count       = data.click       || 0;
-        out.mouse_move_px     = data.mouseMove   || 0;
-        out.page_visit_count  = (data.pages || []).length;
-        out.page_visit_urls   = (data.pages || []).map(p => p.url);
+        out.scroll_user_count  = data.scrollUser   || 0;
+        out.scroll_agent_count = data.scrollAgent  || 0;
+        out.ctrl_f_count       = data.ctrlF        || 0;
+        out.text_select_count  = data.textSelect   || 0;
+        out.click_count        = data.click        || 0;
+        out.mouse_move_px      = data.mouseMove    || 0;
+        out.agent_think_ms     = data.agentThinkMs || [];
+        out.page_visit_count   = (data.pages || []).length;
+        out.page_visit_urls    = (data.pages || []).map(p => p.url);
       }
     } catch (e) {
       console.error('[Study] stopBehaviorTracking:', e);
@@ -420,7 +422,7 @@
       'participant_id','block_index','task_index','task_type',
       'condition','time_ms','answer','answer_correct',
       'question_index','confidence','helpfulness','chat_turn_count','hidden_count','hide_recall','user_hidden_selectors','guide_screenshot','question_or_task',
-      'scroll_count','ctrl_f_count','text_select_count','click_count','mouse_move_px','page_visit_count','page_visit_urls',
+      'scroll_user_count','scroll_agent_count','ctrl_f_count','text_select_count','click_count','mouse_move_px','agent_think_ms','page_visit_count','page_visit_urls',
     ];
     const esc = v => {
       const str = (v === undefined || v === null) ? ''
@@ -1020,13 +1022,15 @@
         guide_screenshot:       guideScreenshot,
         task_data:         task,
         question_or_task:  questionOrTask,
-        scroll_count:      beh.scroll_count      || 0,
-        ctrl_f_count:      beh.ctrl_f_count      || 0,
-        text_select_count: beh.text_select_count || 0,
-        click_count:       beh.click_count       || 0,
-        mouse_move_px:     beh.mouse_move_px     || 0,
-        page_visit_count:  beh.page_visit_count  || 0,
-        page_visit_urls:   beh.page_visit_urls   || [],
+        scroll_user_count:  beh.scroll_user_count  || 0,
+        scroll_agent_count: beh.scroll_agent_count || 0,
+        ctrl_f_count:       beh.ctrl_f_count       || 0,
+        text_select_count:  beh.text_select_count  || 0,
+        click_count:        beh.click_count        || 0,
+        mouse_move_px:      beh.mouse_move_px      || 0,
+        agent_think_ms:     beh.agent_think_ms     || [],
+        page_visit_count:   beh.page_visit_count   || 0,
+        page_visit_urls:    beh.page_visit_urls    || [],
       };
       s.results.push(result);
 

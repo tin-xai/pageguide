@@ -477,6 +477,7 @@ Use these as a reference guide but map each step to the actual elements visible 
   }
 
   try {
+    const _thinkStart = Date.now();
     const response = await safeSendMessage({
       action: 'callLLM',
       systemPrompt: GUIDE_V2_PROMPT,
@@ -500,6 +501,8 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
 Provide the next step as JSON.`
       }]
     });
+    const _thinkMs = Date.now() - _thinkStart;
+    try { chrome.runtime.sendMessage({ action: 'studyTracker_agentThink', durationMs: _thinkMs }); } catch (e2) {}
 
     if (_guidev2Stopped) return null;
 

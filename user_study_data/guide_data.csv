@@ -1,9 +1,8 @@
 Name,Level,Task,Website URL,Ground Truth,Reference Length
-Gmail,Medium,How do I turn on vacation responder?,https://mail.google.com/,https://support.google.com/mail/answer/25922,7
-Gmail,Hard,How do I set up email forwarding in Gmail?,https://mail.google.com/,https://support.google.com/mail/answer/10957?hl=en,14
-Gmail,Medium,How to send an automatic reply when you are out of office? ,https://mail.google.com/,https://support.google.com/mail/answer/25922?hl=en&ref_topic=3394219&sjid=6471034434878831642-NA,7
-Gmail,Easy,How to create email signature? ,https://mail.google.com/,https://support.google.com/mail/answer/8395?hl=en&sjid=6471034434878831642-NA,4
-Google Sheet,Medium,How can you highlight duplicate values in a column using conditional formatting?,https://docs.google.com/spreadsheets/d/1coqgvCPCLqo1fO8R7vXI84BRqFm-nV5-N2rgyKGR3Mc/edit?usp=sharing,,
-Google Sheet,Easy,How can you freeze the first row in a Google Sheet so it stays visible when scrolling?,https://docs.google.com/spreadsheets/d/1coqgvCPCLqo1fO8R7vXI84BRqFm-nV5-N2rgyKGR3Mc/edit?usp=sharing,,
-YouTube,Medium,How do I change my user ID,https://www.youtube.com/,https://support.google.com/youtube/answer/7663906?hl=en&co=GENIE.Platform%3DAndroid,6
-Youtube,Medium,How to delete my watch history?,https://www.youtube.com/,https://support.google.com/youtube/answer/95725?hl=en&ref_topic=9257111&sjid=6471034434878831642-NA,7
+Google Sheet,Medium,How can you highlight duplicate values in a column using conditional formatting?,https://docs.google.com/spreadsheets/u/0/,,
+Google Sheet,Easy,How can you freeze the first row in a Google Sheet so it stays visible when scrolling?,https://docs.google.com/spreadsheets/u/0/,,
+Google Docs,,How can you add page numbers to a Google Doc but start numbering from page 2 instead of page 1?,https://docs.google.com/document/u/0/,,
+Google Slides,, How can you change the position of slide numbers for all slides in a Google Slides presentation?,https://docs.google.com/presentation/u/0/,,
+Coda,,How can you create a view that only shows tasks marked as “Completed”?,coda.io,,
+TradingView,,How can you move the price scale so it appears on the left side of the chart instead of the default position?,https://www.tradingview.com/chart/,,
+Scratch,,Make the sprite move to the mouse pointer continuously.,https://scratch.mit.edu/projects/1286152835/editor/,,
