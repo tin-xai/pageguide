@@ -655,14 +655,66 @@
           </div>
           <div class="study-progress">${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
           <div class="study-body" style="align-items:center;text-align:center;justify-content:center;gap:16px;">
-            <p style="color:#aaa;font-size:14px;margin:0;">Page loading — timer starts in</p>
+            <p style="color:#aaa;font-size:14px;margin:0;">Loading the website… timer starts in</p>
             <div class="study-timer-display">
               <span class="study-timer" id="study-timer" style="font-size:52px;font-weight:700;">5</span>
+            </div>
+            <div style="font-size:11px;color:#555;word-break:break-all;max-width:100%;padding:0 8px;line-height:1.4;">
+              ${escapeHTML(taskUrl)}
+            </div>
+            <div id="study-load-fail" style="display:none;padding:10px 14px;background:rgba(248,113,113,0.1);
+                 border:1px solid rgba(248,113,113,0.3);border-radius:8px;text-align:center;">
+              <p style="margin:0 0 8px;color:#f87171;font-size:13px;">The page didn't load?</p>
+              <button id="study-load-manually-btn"
+                      style="padding:7px 16px;border:none;border-radius:6px;
+                             background:#f87171;color:#fff;font-size:13px;font-weight:600;
+                             cursor:pointer;">
+                Load manually →
+              </button>
             </div>
             ${ruleText ? `<div style="padding:12px 16px;background:rgba(255,255,255,0.05);border-radius:8px;font-size:13px;color:#ccc;max-width:300px;line-height:1.5;">${ruleText}</div>` : ''}
           </div>
         </div>
       `);
+
+      // Show "Load manually" if the tab ends up on an error page
+      try {
+        const _loadTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (_loadTabs[0]) {
+          const _tabId = _loadTabs[0].id;
+          const _tabLoadListener = (tid, changeInfo, tab) => {
+            if (tid !== _tabId) return;
+            if (changeInfo.status !== 'complete') return;
+            chrome.tabs.onUpdated.removeListener(_tabLoadListener);
+            const isError = tab.url && (
+              tab.url.startsWith('chrome-error://') ||
+              tab.url.startsWith('about:') ||
+              tab.url.includes('net::ERR_')
+            );
+            if (isError) {
+              const failDiv = $('study-load-fail');
+              if (failDiv) failDiv.style.display = 'block';
+            }
+          };
+          chrome.tabs.onUpdated.addListener(_tabLoadListener);
+          // Also reveal the button after 8 s as a safety net
+          setTimeout(() => {
+            chrome.tabs.onUpdated.removeListener(_tabLoadListener);
+            const failDiv = $('study-load-fail');
+            if (failDiv && failDiv.style.display === 'none') failDiv.style.display = 'block';
+          }, 8000);
+        }
+      } catch (e) {}
+
+      // Wire up the manual load button (may be clicked before countdown finishes)
+      overlay.addEventListener('click', function _manualLoadHandler(e) {
+        if (e.target && e.target.id === 'study-load-manually-btn') {
+          openTaskPage(taskUrl);
+          overlay.removeEventListener('click', _manualLoadHandler);
+          const failDiv = $('study-load-fail');
+          if (failDiv) failDiv.style.display = 'none';
+        }
+      });
 
       let countdown = 5;
       const cdInterval = setInterval(() => {

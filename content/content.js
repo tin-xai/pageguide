@@ -355,7 +355,7 @@ function _injectStudyHideControl(criteria) {
         }
         const rect = el.getBoundingClientRect();
         floatBtn.style.top  = Math.max(rect.top + 4, banner.offsetHeight + 6) + 'px';
-        floatBtn.style.left = (rect.right - floatBtn.offsetWidth - 8) + 'px';
+        floatBtn.style.left = (rect.left + 8) + 'px';
         const isHidden = el.dataset.xwaStudyHide === 'hidden';
         floatBtn.textContent = isHidden ? '👁 Unhide' : '🙈 Hide';
         floatBtn.style.background = isHidden ? 'rgba(0,140,60,0.92)' : 'rgba(180,30,30,0.92)';
