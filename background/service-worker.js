@@ -35,6 +35,12 @@ try {
 // ===== Configuration =====
 const CONFIG = {
   providers: {
+    // Supabase proxy — API key lives server-side, never exposed to users
+    supabase: {
+      // Set SUPABASE_PROXY_URL in config.js or via the Options page
+      endpoint: (typeof CONFIG_KEYS !== 'undefined' && CONFIG_KEYS.SUPABASE_PROXY_URL) || '',
+      defaultModel: 'google/gemini-flash-3-preview'
+    },
     gemini: {
       endpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
       defaultModel: 'gemini-2.5-flash',
@@ -51,7 +57,7 @@ const CONFIG = {
       defaultApiKey: (typeof CONFIG_KEYS !== 'undefined' && CONFIG_KEYS.OPENAI_KEY) || ''
     }
   },
-  defaultProvider: 'gemini'
+  defaultProvider: 'supabase'
 };
 
 // Content script files (in order - must match manifest.json content_scripts load order)
@@ -446,7 +452,7 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
   let settings;
   try {
     settings = await chrome.storage.sync.get([
-      'provider',
+      'provider', 'supabaseProxyUrl',
       'geminiApiKey', 'geminiModel',
       'openrouterApiKey', 'openrouterModel',
       'openaiApiKey', 'openaiModel'
@@ -455,12 +461,15 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
     stopKeepAlive();
     return { error: 'Failed to load settings' };
   }
-  
+
   const provider = settings.provider || CONFIG.defaultProvider;
-  
+
   let result;
   try {
     switch (provider) {
+      case 'supabase':
+        result = await callSupabase(messages, systemPrompt, settings, images);
+        break;
       case 'gemini':
         result = await callGeminiMultiImage(messages, systemPrompt, settings, images);
         break;
@@ -494,7 +503,7 @@ async function callRouterLLM(messages, systemPrompt) {
   let settings = {};
   try {
     settings = await chrome.storage.sync.get([
-      'geminiApiKey', 'provider',
+      'geminiApiKey', 'provider', 'supabaseProxyUrl',
       'openrouterApiKey', 'openrouterModel',
       'openaiApiKey', 'openaiModel'
     ]);
@@ -551,11 +560,11 @@ async function callRouterLLM(messages, systemPrompt) {
 async function callLLM(messages, systemPrompt, imageBase64 = null) {
   // Start keep-alive to prevent service worker from going inactive
   startKeepAlive();
-  
+
   let settings;
   try {
     settings = await chrome.storage.sync.get([
-      'provider',
+      'provider', 'supabaseProxyUrl',
       'geminiApiKey', 'geminiModel',
       'openrouterApiKey', 'openrouterModel',
       'openaiApiKey', 'openaiModel'
@@ -564,12 +573,15 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
     stopKeepAlive();
     return { error: 'Failed to load settings' };
   }
-  
+
   const provider = settings.provider || CONFIG.defaultProvider;
-  
+
   let result;
   try {
     switch (provider) {
+      case 'supabase':
+        result = await callSupabase(messages, systemPrompt, settings, imageBase64 ? [{ base64: imageBase64 }] : []);
+        break;
       case 'gemini':
         result = await callGemini(messages, systemPrompt, settings, imageBase64);
         break;
@@ -589,6 +601,39 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
   // Stop keep-alive after LLM call completes
   stopKeepAlive();
   return result;
+}
+
+// ===== Supabase Proxy Call =====
+// Handles both text-only and multi-image requests through the same endpoint.
+async function callSupabase(messages, systemPrompt, settings, images = []) {
+  const config = CONFIG.providers.supabase;
+  const endpoint = (settings.supabaseProxyUrl || config.endpoint || '').trim();
+
+  if (!endpoint) {
+    return { error: 'Supabase proxy URL not configured. Set SUPABASE_PROXY_URL in config.js or ⚙️ Settings.' };
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, systemPrompt, images, model: config.defaultModel })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return { error: `Proxy error: ${data.error || response.status}` };
+    }
+
+    if (!data.content) {
+      return { error: 'Empty response from proxy' };
+    }
+
+    return { content: data.content };
+  } catch (error) {
+    return { error: `Proxy network error: ${error.message}` };
+  }
 }
 
 // ===== Gemini API Call =====
