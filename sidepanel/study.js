@@ -29,7 +29,7 @@
   // State
   // ─────────────────────────────────────────────────────────────────
 
-  const QUESTIONS_PER_TYPE = 3;         // questions per task type per block
+  const QUESTIONS_PER_TYPE = 2;         // questions per task type per block
   const TASK_TIME_LIMIT_MS = 3 * 60 * 1000; // 3-minute countdown per question
 
   const s = {
@@ -623,6 +623,11 @@
           <div class="study-task-card">
             <div class="study-task-type-badge">${TASK_LABELS[taskType]}</div>
             <p class="study-task-desc">${TASK_DESCRIPTIONS[taskType]}</p>
+          </div>
+          <div style="padding:12px 14px;background:rgba(255,200,0,0.08);border:1px solid rgba(255,200,0,0.3);border-radius:8px;font-size:12px;color:#e0c97f;line-height:1.6;margin-bottom:4px;">
+            <div style="font-weight:700;margin-bottom:4px;">⚠️ Important Reminders</div>
+            <div>• Once in the experiment, please <strong>DO NOT use the Back button</strong>, or close the window.</div>
+            <div>• Please <strong>DO NOT randomly click on the choices</strong> — it will bias the study results.</div>
           </div>
           <button class="study-btn study-btn-primary" id="study-open-btn">${openBtnLabel}</button>
         </div>
