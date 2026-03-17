@@ -71,7 +71,7 @@ create index if not exists idx_sessions_participant
 -- ────────────────────────────────────────────────────────────
 -- Table 2: study_task_results
 --   One row per completed task question.
---   9 rows total per participant (3 task types × 3 questions).
+--   6 rows total per participant (3 task types × 2 questions).
 -- ────────────────────────────────────────────────────────────
 
 create table if not exists study_task_results (

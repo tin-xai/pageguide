@@ -35,16 +35,14 @@
   const s = {
     participantId: '',
     sessionId: null,
-    conditionOrder: [],   // ['control','extension'] or reversed
+    conditionOrder: [],   // 6-entry array, one condition per task in taskSequence
+    taskSequence: [],     // [{taskType, questionIdx}, …] — 6 entries
+    seqIdx: 0,            // current position in taskSequence (0-5)
     datasets: { find: [], guide: [], hide: [] },
     sampledTasks: [
       { find: [], guide: [], hide: [] },  // block 0 — arrays of QUESTIONS_PER_TYPE
-      { find: [], guide: [], hide: [] },  // block 1
     ],
     results: [],          // all collected task results
-    block: 0,             // current block (0 or 1)
-    taskIdx: 0,           // current task type index within block (0-2)
-    questionIdx: 0,       // current question within task type (0 to QUESTIONS_PER_TYPE-1)
     timerInterval: null,
     timerStart: null,
     timerElapsed: 0,      // ms when timer was stopped
@@ -457,18 +455,15 @@
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
         <div class="study-body">
-          <p class="study-intro">Welcome! You will complete <strong>9 tasks</strong> across 3 feature types: Find, Guide, and Hide.</p>
-          <label class="study-label" for="study-pid">Your Name</label>
-          <input class="study-input" id="study-pid" type="text" placeholder="e.g. Alice" autocomplete="off">
-          <div id="study-pid-error" class="study-error" style="display:none;">Please enter your name.</div>
+          <p class="study-intro">Welcome! You will complete <strong>6 tasks</strong> across 3 feature types: Find, Guide, and Hide.</p>
+          <div id="study-pid-error" class="study-error" style="display:none;"></div>
           <button class="study-btn study-btn-primary" id="study-start-btn">Start Study →</button>
         </div>
       </div>
     `);
     $('study-close').onclick = closeStudyPanel;
     $('study-start-btn').onclick = async () => {
-      const name = $('study-pid').value.trim();
-      if (!name) { $('study-pid-error').style.display = ''; return; }
+      const name = 'Anon';
       $('study-pid-error').style.display = 'none';
 
       const btn = $('study-start-btn');
@@ -508,12 +503,22 @@
         N = localN;
       }
 
-      // Batch condition: every group of 5 participants alternates control ↔ extension
-      const batchGroup = Math.floor((N - 1) / 5);
-      const condition = batchGroup % 2 === 0 ? 'control' : 'extension';
-      s.conditionOrder = [condition];
+      // Each participant alternates which condition comes first (odd vs even N).
+      // For every feature type the participant does one task control + one task extension.
+      const condFirst  = N % 2 === 0 ? 'control' : 'extension';
+      const condSecond = condFirst === 'control' ? 'extension' : 'control';
+      // 6 tasks: find×2, guide×2, hide×2 — each pair is condFirst then condSecond
+      s.conditionOrder = [condFirst, condSecond, condFirst, condSecond, condFirst, condSecond];
+      s.taskSequence = [
+        { taskType: 'find',  questionIdx: 0 },
+        { taskType: 'find',  questionIdx: 1 },
+        { taskType: 'guide', questionIdx: 0 },
+        { taskType: 'guide', questionIdx: 1 },
+        { taskType: 'hide',  questionIdx: 0 },
+        { taskType: 'hide',  questionIdx: 1 },
+      ];
 
-      // Update session row with resolved condition (fire and forget)
+      // Update session row with resolved condition order (fire and forget)
       if (row && row.id && SUPABASE_URL && !SUPABASE_URL.includes('YOUR_PROJECT')) {
         fetch(`${SUPABASE_URL}/rest/v1/study_sessions?id=eq.${row.id}`, {
           method: 'PATCH',
@@ -522,68 +527,23 @@
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ condition_order: condition }),
+          body: JSON.stringify({ condition_order: `${condFirst},${condSecond}` }),
         }).catch(() => {});
       }
 
       sampleTasks(N);
-      s.block = 0;
-      s.taskIdx = 0;
-      s.questionIdx = 0;
-      renderBlockIntro();
-    };
-    // Allow Enter key on input
-    $('study-pid').onkeydown = (e) => { if (e.key === 'Enter') $('study-start-btn').click(); };
-  }
-
-  function renderBlockIntro() {
-    const block = s.block;
-    const condition = s.conditionOrder[block];
-    const isExtension = condition === 'extension';
-    const condLabel = isExtension
-      ? '<span class="study-tag study-tag-ext">🤖 WITH Extension AI</span>'
-      : '<span class="study-tag study-tag-ctrl">🙅 WITHOUT Extension AI</span>';
-    const condNote = isExtension
-      ? 'Use the <strong>XWebAgent chat</strong> to help you complete each task.'
-      : 'Complete each task <strong>on your own</strong> — do not use the chat.';
-
-    setHTML(`
-      <div class="study-screen">
-        <div class="study-header">
-          <span class="study-title">Your Study Session</span>
-          <button class="study-close-btn" id="study-close">✕</button>
-        </div>
-        <div class="study-body">
-          <div class="study-condition-card">
-            <div class="study-condition-label">Condition</div>
-            ${condLabel}
-            <p class="study-condition-note">${condNote}</p>
-          </div>
-          <div class="study-task-preview">
-            <div class="study-task-preview-title">You will complete:</div>
-            <div class="study-task-pill">🔍 Find Information (Wikipedia)</div>
-            <div class="study-task-pill">📘 Follow a Guide (various sites)</div>
-            <div class="study-task-pill">🙈 Hide Content</div>
-          </div>
-          <button class="study-btn study-btn-primary" id="study-begin-btn">Begin →</button>
-        </div>
-      </div>
-    `);
-    $('study-close').onclick = closeStudyPanel;
-    $('study-begin-btn').onclick = () => {
-      s.taskIdx = 0;
-      s.questionIdx = 0;
+      s.seqIdx = 0;
       renderTaskSetup();
     };
   }
 
   function renderTaskSetup() {
-    const block = s.block;
-    const taskIdx = s.taskIdx;
-    const questionIdx = s.questionIdx;
-    const taskType = TASK_TYPES[taskIdx];
-    const condition = s.conditionOrder[block];
-    const task = s.sampledTasks[block][taskType][questionIdx];
+    const seqIdx     = s.seqIdx;
+    const seqEntry   = s.taskSequence[seqIdx];
+    const taskType   = seqEntry.taskType;
+    const questionIdx = seqEntry.questionIdx;
+    const condition  = s.conditionOrder[seqIdx];
+    const task       = s.sampledTasks[0][taskType][questionIdx];
 
     if (!task) {
       setHTML(`<div class="study-screen"><div class="study-body"><p class="study-error">No task data available for ${taskType}. Please check the datasets.</p></div></div>`);
@@ -618,11 +578,15 @@
           <span class="study-title">${TASK_LABELS[taskType]}</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
-        <div class="study-progress">${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+        <div class="study-progress">Task ${seqIdx + 1}/6 · ${TASK_LABELS[taskType]} &nbsp;${condLabel}</div>
         <div class="study-body">
           <div class="study-task-card">
             <div class="study-task-type-badge">${TASK_LABELS[taskType]}</div>
-            <p class="study-task-desc">${TASK_DESCRIPTIONS[taskType]}</p>
+            <p class="study-task-desc">${
+              taskType === 'hide' && condition === 'control'
+                ? 'Hover over any element on the page — a 🙈 hide icon will appear. Click it to hide that element. Repeat until all specified content is hidden.'
+                : TASK_DESCRIPTIONS[taskType]
+            }</p>
           </div>
           <div style="padding:12px 14px;background:rgba(255,200,0,0.08);border:1px solid rgba(255,200,0,0.3);border-radius:8px;font-size:12px;color:#e0c97f;line-height:1.6;margin-bottom:4px;">
             <div style="font-weight:700;margin-bottom:4px;">⚠️ Important Reminders</div>
@@ -638,13 +602,13 @@
       // Reset chat so each task starts with a clean conversation
       if (typeof resetChat === 'function') resetChat(false);
       // For control hide task: set storage flag so content script auto-injects click-to-hide UI
-      if (s.conditionOrder[block] === 'control' && taskType === 'hide') {
+      if (condition === 'control' && taskType === 'hide') {
         try { await chrome.storage.local.set({ studyHideControl: { active: true, criteria: taskQuestion } }); } catch (e) {}
       }
       openTaskPage(taskUrl);
 
       // Replace screen with a countdown + rules view (hides the task question)
-      const condLabel = s.conditionOrder[block] === 'extension'
+      const condLabel = condition === 'extension'
         ? '<span class="study-tag study-tag-ext">🤖 WITH Extension AI</span>'
         : '<span class="study-tag study-tag-ctrl">🙅 WITHOUT Extension AI</span>';
       const TASK_RULES = {
@@ -658,7 +622,7 @@
           <div class="study-header">
             <span class="study-title">${TASK_LABELS[taskType]}</span>
           </div>
-          <div class="study-progress">${TASK_LABELS[taskType]} · Q${questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+          <div class="study-progress">Task ${seqIdx + 1}/6 · ${TASK_LABELS[taskType]} &nbsp;${condLabel}</div>
           <div class="study-body" style="align-items:center;text-align:center;justify-content:center;gap:16px;">
             <p style="color:#aaa;font-size:14px;margin:0;">Loading the website… timer starts in</p>
             <div class="study-timer-display">
@@ -730,19 +694,19 @@
           clearInterval(cdInterval);
           startTimer();
           startBehaviorTracking();
-          renderTaskRunning(block, taskIdx, taskType, taskQuestion, task);
+          renderTaskRunning(seqIdx, taskType, taskQuestion, task);
         }
       }, 1000);
     };
   }
 
-  function renderTaskRunning(block, taskIdx, taskType, taskQuestion, task) {
+  function renderTaskRunning(block, taskType, taskQuestion, task) {
     const condition = s.conditionOrder[block];
 
     if (condition === 'extension') {
       // Hide overlay so the chat is accessible; show a compact mini bar instead
       overlay.style.display = 'none';
-      showMiniBar(block, taskIdx, taskType, taskQuestion, task);
+      showMiniBar(block, taskType, taskQuestion, task);
     } else {
       // Control condition: keep overlay up so participant can't use the chat
       const condLabel = '<span class="study-tag study-tag-ctrl">🙅 WITHOUT Extension AI</span>';
@@ -752,7 +716,7 @@
             <span class="study-title">${TASK_LABELS[taskType]}</span>
             <button class="study-close-btn" id="study-close">✕</button>
           </div>
-          <div class="study-progress">${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+          <div class="study-progress">Task ${block + 1}/6 · ${TASK_LABELS[taskType]} &nbsp;${condLabel}</div>
           <div class="study-body">
             <div class="study-task-card study-task-card-running">
               <div class="study-task-question">${escapeHTML(taskQuestion)}</div>
@@ -803,7 +767,7 @@
         s.currentPost = {};
         await lockTab();
         overlay.style.display = 'flex';
-        renderTaskAnswer(block, taskIdx, taskType, task, elapsed);
+        renderTaskAnswer(block, taskType, task, elapsed);
       };
     }
   }
@@ -811,13 +775,13 @@
   // Slash-command prefix per task type — forces correct routing in the extension
   const TASK_PREFIX = { find: '/find', guide: '/guide', hide: '/hide' };
 
-  function showMiniBar(block, taskIdx, taskType, taskQuestion, task) {
+  function showMiniBar(block, taskType, taskQuestion, task) {
     const prefix = TASK_PREFIX[taskType] || '';
     const prefixedQuery = prefix ? `${prefix} ${taskQuestion}` : taskQuestion;
 
     miniBar.innerHTML = `
       <div class="study-mini-top">
-        <span class="study-mini-label">${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE}</span>
+        <span class="study-mini-label">Task ${block + 1}/6 · ${TASK_LABELS[taskType]}</span>
         <span class="study-mini-timer" id="study-mini-timer">03:00</span>
       </div>
       <div class="study-mini-bottom">
@@ -879,7 +843,7 @@
       overlay.style.display = 'flex';
       s.currentAnswer = null;
       s.currentPost = {};
-      renderTaskAnswer(block, taskIdx, taskType, task, elapsed);
+      renderTaskAnswer(block, taskType, task, elapsed);
     };
   }
 
@@ -901,7 +865,7 @@
     };
   }
 
-  function renderTaskAnswer(block, taskIdx, taskType, task, elapsed) {
+  function renderTaskAnswer(block, taskType, task, elapsed) {
     const condition = s.conditionOrder[block];
     const condLabel = condition === 'extension'
       ? '<span class="study-tag study-tag-ext">🤖 WITH Extension AI</span>'
@@ -966,7 +930,7 @@
           <span class="study-title">Answer</span>
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
-        <div class="study-progress">${TASK_LABELS[taskType]} · Q${s.questionIdx + 1}/${QUESTIONS_PER_TYPE} &nbsp;${condLabel}</div>
+        <div class="study-progress">Task ${block + 1}/6 · ${TASK_LABELS[taskType]} &nbsp;${condLabel}</div>
         <div class="study-body">
           ${questionCard}
           <div class="study-timer-display">
@@ -987,11 +951,11 @@
       if (!sel) { $('study-answer-error').style.display = ''; return; }
       $('study-answer-error').style.display = 'none';
       s.currentAnswer = sel.value;
-      renderTaskPost(block, taskIdx, taskType, task, elapsed, sel.value);
+      renderTaskPost(block, taskType, task, elapsed, sel.value);
     };
   }
 
-  function renderTaskPost(block, taskIdx, taskType, task, elapsed, answer) {
+  function renderTaskPost(block, taskType, task, elapsed, answer) {
     const condition = s.conditionOrder[block];
     const isExtension = condition === 'extension';
 
@@ -1022,8 +986,7 @@
           ${helpHTML}
           <div id="study-post-error" class="study-error" style="display:none;">Please answer all questions.</div>
           <button class="study-btn study-btn-primary" id="study-next-btn">${
-            s.questionIdx < QUESTIONS_PER_TYPE - 1 ? `Next Question → (${s.questionIdx + 2}/${QUESTIONS_PER_TYPE})` :
-            taskIdx < 2 ? 'Next Task →' : 'Finish Block'
+            block < s.taskSequence.length - 1 ? 'Next Task →' : 'Finish Study'
           }</button>
         </div>
       </div>
@@ -1060,14 +1023,12 @@
       s._hiddenSelectors = [];
       const guideScreenshot = s._guideScreenshot || null;
       s._guideScreenshot = null;
-      const questionIdx = s.questionIdx; // capture before advancing
-
       const result = {
         participant_id:   s.participantId,
         session_id:       s.sessionId,
         block_index:      block,
-        task_index:       taskIdx,
-        question_index:   questionIdx,
+        task_index:       TASK_TYPES.indexOf(taskType),
+        question_index:   s.taskSequence[block].questionIdx,
         task_type:        taskType,
         condition:        condition,
         time_ms:          elapsed,
@@ -1101,70 +1062,14 @@
       supaData.task_data = task; // will be serialised as JSONB
       supabaseInsert('study_task_results', supaData);
 
-      // Advance: question within type → type → block
-      if (s.questionIdx < QUESTIONS_PER_TYPE - 1) {
-        s.questionIdx++;
-        renderTaskSetup();
-      } else if (taskIdx < 2) {
-        s.questionIdx = 0;
-        s.taskIdx = taskIdx + 1;
+      // Advance to next task, or finish
+      s.seqIdx++;
+      if (s.seqIdx < s.taskSequence.length) {
         renderTaskSetup();
       } else {
-        s.questionIdx = 0;
-        renderBlockDone(block);
+        renderStudyComplete();
       }
     };
-  }
-
-  function renderBlockDone(block) {
-    const blockResults = s.results.filter(r => r.block_index === block);
-    const rows = blockResults.map(r => {
-      let correctDisplay;
-      if (r.task_type === 'find') {
-        correctDisplay = r.answer_correct === true ? '✅' : r.answer_correct === false ? '❌' : '—';
-      } else if (r.task_type === 'hide' && r.hide_recall != null) {
-        correctDisplay = Math.round(r.hide_recall * 100) + '% recall';
-      } else {
-        correctDisplay = '—';
-      }
-      return `
-        <tr>
-          <td>${TASK_LABELS[r.task_type]}</td>
-          <td>${formatTime(r.time_ms)}</td>
-          <td>${r.answer || '—'}</td>
-          <td>${correctDisplay}</td>
-        </tr>
-      `;
-    }).join('');
-
-    const hideResults = blockResults.filter(r => r.task_type === 'hide' && r.hide_recall != null);
-    const avgAccHTML = hideResults.length ? (() => {
-      const avg = hideResults.reduce((sum, r) => sum + r.hide_recall, 0) / hideResults.length;
-      return `
-        <div style="background:rgba(0,217,255,0.07);border:1px solid rgba(0,217,255,0.25);border-radius:10px;padding:10px 14px;margin-top:12px;">
-          <div style="font-size:11px;font-weight:700;color:rgba(0,217,255,0.7);text-transform:uppercase;letter-spacing:0.06em;">🎯 Hide Task — Avg Accuracy</div>
-          <p style="margin:4px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">${Math.round(avg * 100)}% <span style="font-size:12px;color:#aaa;">(across ${hideResults.length} question${hideResults.length > 1 ? 's' : ''})</span></p>
-        </div>`;
-    })() : '';
-
-    setHTML(`
-      <div class="study-screen">
-        <div class="study-header">
-          <span class="study-title">Session Complete!</span>
-          <button class="study-close-btn" id="study-close">✕</button>
-        </div>
-        <div class="study-body">
-          <table class="study-results-table">
-            <thead><tr><th>Task</th><th>Time</th><th>Answer</th><th>Correct</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          ${avgAccHTML}
-          <button class="study-btn study-btn-primary" id="study-final-btn">Finish Study →</button>
-        </div>
-      </div>
-    `);
-    $('study-close').onclick = closeStudyPanel;
-    $('study-final-btn').onclick = () => renderStudyComplete();
   }
 
   function renderStudyComplete() {
@@ -1183,7 +1088,7 @@
           <div class="study-complete-msg">
             <div class="study-complete-emoji">🎉</div>
             <p>Thank you, <strong>${escapeHTML(s.participantId)}</strong>!</p>
-            <p>You completed all 9 tasks across 3 feature types.</p>
+            <p>You completed all 6 tasks across 3 feature types.</p>
             ${saveStatusHTML}
           </div>
           <button class="study-btn study-btn-primary" id="study-download-btn">⬇️ Download Results CSV</button>
