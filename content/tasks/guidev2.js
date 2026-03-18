@@ -480,6 +480,7 @@ Use these as a reference guide but map each step to the actual elements visible 
     const _thinkStart = Date.now();
     const response = await safeSendMessage({
       action: 'callLLM',
+      thinkingBudget: 1024,
       systemPrompt: GUIDE_V2_PROMPT,
       messages: [{
         role: 'user',

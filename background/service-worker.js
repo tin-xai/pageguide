@@ -228,7 +228,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'callLLM') {
-    callLLM(request.messages, request.systemPrompt, request.imageBase64)
+    callLLM(request.messages, request.systemPrompt, request.imageBase64, request.thinkingBudget)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -557,7 +557,7 @@ async function callRouterLLM(messages, systemPrompt) {
 }
 
 // ===== Main LLM Router =====
-async function callLLM(messages, systemPrompt, imageBase64 = null) {
+async function callLLM(messages, systemPrompt, imageBase64 = null, thinkingBudget = null) {
   // Start keep-alive to prevent service worker from going inactive
   startKeepAlive();
 
@@ -580,7 +580,7 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
   try {
     switch (provider) {
       case 'supabase':
-        result = await callSupabase(messages, systemPrompt, settings, imageBase64 ? [{ base64: imageBase64 }] : []);
+        result = await callSupabase(messages, systemPrompt, settings, imageBase64 ? [{ base64: imageBase64 }] : [], thinkingBudget);
         break;
       case 'gemini':
         result = await callGemini(messages, systemPrompt, settings, imageBase64);
@@ -605,7 +605,7 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
 
 // ===== Supabase Proxy Call =====
 // Handles both text-only and multi-image requests through the same endpoint.
-async function callSupabase(messages, systemPrompt, settings, images = []) {
+async function callSupabase(messages, systemPrompt, settings, images = [], thinkingBudget = null) {
   const config = CONFIG.providers.supabase;
   const endpoint = (settings.supabaseProxyUrl || config.endpoint || '').trim();
 
@@ -617,7 +617,7 @@ async function callSupabase(messages, systemPrompt, settings, images = []) {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, systemPrompt, images, model: config.defaultModel })
+      body: JSON.stringify({ messages, systemPrompt, images, model: config.defaultModel, ...(thinkingBudget ? { thinkingBudget } : {}) })
     });
 
     const data = await response.json();

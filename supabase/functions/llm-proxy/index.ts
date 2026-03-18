@@ -33,14 +33,14 @@ serve(async (req: Request) => {
     return json({ error: "Proxy not configured (missing OPENROUTER_API_KEY secret)" }, 500);
   }
 
-  let body: { messages?: any[]; systemPrompt?: string; images?: any[]; model?: string };
+  let body: { messages?: any[]; systemPrompt?: string; images?: any[]; model?: string; thinkingBudget?: number };
   try {
     body = await req.json();
   } catch {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const { messages = [], systemPrompt = "", images = [], model = DEFAULT_MODEL } = body;
+  const { messages = [], systemPrompt = "", images = [], model = DEFAULT_MODEL, thinkingBudget } = body;
 
   // Build the user content string (extension sends single-turn messages)
   let userText = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : "";
@@ -84,6 +84,7 @@ serve(async (req: Request) => {
         messages: [{ role: "user", content }],
         temperature: 0.1,
         max_tokens,
+        ...(thinkingBudget ? { thinking: { budget_tokens: thinkingBudget } } : {}),
       }),
     });
 
