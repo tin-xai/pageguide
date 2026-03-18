@@ -38,7 +38,8 @@
     conditionOrder: [],   // 6-entry array, one condition per task in taskSequence
     taskSequence: [],     // [{taskType, questionIdx}, …] — 6 entries
     seqIdx: 0,            // current position in taskSequence (0-5)
-    datasets: { find: [], guide: [], hide: [] },
+    linkIndex: 0,         // (N-1) % 100 — which row in the per-task link CSVs to use
+    datasets: { find: [], guide: [], hide: [], links: { freeze: [], highlight: [], pagenumbers: [] } },
     sampledTasks: [
       { find: [], guide: [], hide: [] },  // block 0 — arrays of QUESTIONS_PER_TYPE
     ],
@@ -115,10 +116,13 @@
   async function loadDatasets() {
     const base = chrome.runtime.getURL('user_study_data/');
     try {
-      const [findText, guideText, hideText] = await Promise.all([
+      const [findText, guideText, hideText, freezeText, highlightText, pagenumbersText] = await Promise.all([
         fetch(base + 'find_wiki_data.csv').then(r => r.text()),
         fetch(base + 'guide_data.csv').then(r => r.text()),
         fetch(base + 'selected_hide_data.json').then(r => r.text()),
+        fetch(base + 'userstudy_freeze_columns_%20links.csv').then(r => r.text()),
+        fetch(base + 'userstudy_highlight_duplicate_values_links.csv').then(r => r.text()),
+        fetch(base + 'userstudy_pagenumbers_links.csv').then(r => r.text()),
       ]);
       // Parse find_wiki_data.csv — one row may yield 1 or 2 task entries (Q1/Q2)
       // Columns: Website URL, Q1, Q2, A1, A2, D1_1, D1_2, D1_3, D2_1, D2_2, D2_3
@@ -144,11 +148,15 @@
         }
       });
       s.datasets.guide = parseCSV(guideText).filter(r => r.Task && r['Website URL']).map(r => ({
-        name:        r.Name.trim(),
-        level:       r.Level.trim(),
-        task:        r.Task.trim(),
-        website_url: r['Website URL'].trim(),
+        name:         r.Name.trim(),
+        level:        r.Level.trim(),
+        task:         r.Task.trim(),
+        website_url:  r['Website URL'].trim(),
+        link_csv_key: (r.link_csv_key || '').trim(),
       }));
+      s.datasets.links.freeze       = parseCSV(freezeText);
+      s.datasets.links.highlight    = parseCSV(highlightText);
+      s.datasets.links.pagenumbers  = parseCSV(pagenumbersText);
       const hideRaw    = JSON.parse(hideText);
       // Flatten annotations into individual tasks
       hideRaw.forEach(page => {
@@ -502,6 +510,7 @@
         localStorage.setItem('xwa_study_n', String(localN));
         N = localN;
       }
+      s.linkIndex = (N - 1) % 100;
 
       // Each participant alternates which condition comes first (odd vs even N).
       // For every feature type the participant does one task control + one task extension.
@@ -559,7 +568,12 @@
       taskQuestion = task.question;
       openBtnLabel = 'Open Page & Start Timer';
     } else if (taskType === 'guide') {
-      taskUrl = task.website_url;
+      if (task.link_csv_key && s.datasets.links[task.link_csv_key]) {
+        const linkRow = s.datasets.links[task.link_csv_key][s.linkIndex];
+        taskUrl = linkRow ? linkRow.URL : task.website_url;
+      } else {
+        taskUrl = task.website_url;
+      }
       taskQuestion = task.task;
       openBtnLabel = `Open ${task.name || 'Website'} & Start Timer`;
     } else if (taskType === 'hide') {
