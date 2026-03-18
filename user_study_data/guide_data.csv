@@ -1,5 +1,5 @@
 Name,Level,Task,Website URL,Ground Truth,Reference Length,link_csv_key
-Google Sheet,Medium,How can you highlight duplicate values in a column using conditional formatting?,https://docs.google.com/spreadsheets/u/0/,,,highlight
+Google Sheet,Medium,"How can you highlight duplicate values in a column using conditional formatting?",https://docs.google.com/spreadsheets/u/0/,,,highlight
 Google Sheet,Easy,How can you freeze the first row in a Google Sheet so it stays visible when scrolling?,https://docs.google.com/spreadsheets/u/0/,,,freeze
 Google Docs,,How can you add page numbers to a Google Doc but start numbering from page 2 instead of page 1?,https://docs.google.com/document/u/0/,,,pagenumbers
 Google Slides,, How can you change the position of slide numbers for all slides in a Google Slides presentation?,https://docs.google.com/presentation/u/0/,,,slides

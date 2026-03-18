@@ -820,6 +820,25 @@
       if (prefix) chatInput.dataset.studyPrefix = prefix;
     }
 
+    // For the highlight task: inject a hardcoded Step 0 before the agent starts.
+    // The Next button submits the task question to kick off the real guide.
+    if (taskType === 'guide' && task.link_csv_key === 'highlight') {
+      const msgContainer = document.getElementById('xwebagent-messages');
+      if (msgContainer) {
+        const step0 = document.createElement('div');
+        step0.className = 'xwebagent-message guide';
+        step0.innerHTML = `
+          <div class="xwebagent-guide-step">
+            <span class="xwebagent-step-badge">Step 0</span>
+            <span class="xwebagent-step-text">Click on the column A header to select the entire column.</span>
+          </div>
+          <div class="xwebagent-next-hint">💡 When done, press Enter in the chat box below to let the agent guide the next steps.</div>
+        `;
+        msgContainer.appendChild(step0);
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+      }
+    }
+
     // Copy button copies the prefixed version so pasting into chat also routes correctly
     $('study-mini-copy').onclick = () => {
       navigator.clipboard.writeText(prefixedQuery).then(() => {
