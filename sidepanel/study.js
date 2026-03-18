@@ -39,7 +39,7 @@
     taskSequence: [],     // [{taskType, questionIdx}, …] — 6 entries
     seqIdx: 0,            // current position in taskSequence (0-5)
     linkIndex: 0,         // (N-1) % 100 — which row in the per-task link CSVs to use
-    datasets: { find: [], guide: [], hide: [], links: { freeze: [], highlight: [], pagenumbers: [] } },
+    datasets: { find: [], guide: [], hide: [], links: { freeze: [], highlight: [], pagenumbers: [], slides: [] } },
     sampledTasks: [
       { find: [], guide: [], hide: [] },  // block 0 — arrays of QUESTIONS_PER_TYPE
     ],
@@ -116,13 +116,14 @@
   async function loadDatasets() {
     const base = chrome.runtime.getURL('user_study_data/');
     try {
-      const [findText, guideText, hideText, freezeText, highlightText, pagenumbersText] = await Promise.all([
+      const [findText, guideText, hideText, freezeText, highlightText, pagenumbersText, slidesText] = await Promise.all([
         fetch(base + 'find_wiki_data.csv').then(r => r.text()),
         fetch(base + 'guide_data.csv').then(r => r.text()),
         fetch(base + 'selected_hide_data.json').then(r => r.text()),
         fetch(base + 'userstudy_freeze_columns_%20links.csv').then(r => r.text()),
         fetch(base + 'userstudy_highlight_duplicate_values_links.csv').then(r => r.text()),
         fetch(base + 'userstudy_pagenumbers_links.csv').then(r => r.text()),
+        fetch(base + 'userstudy_gg_slides_links.csv').then(r => r.text()),
       ]);
       // Parse find_wiki_data.csv — one row may yield 1 or 2 task entries (Q1/Q2)
       // Columns: Website URL, Q1, Q2, A1, A2, D1_1, D1_2, D1_3, D2_1, D2_2, D2_3
@@ -157,6 +158,7 @@
       s.datasets.links.freeze       = parseCSV(freezeText);
       s.datasets.links.highlight    = parseCSV(highlightText);
       s.datasets.links.pagenumbers  = parseCSV(pagenumbersText);
+      s.datasets.links.slides       = parseCSV(slidesText);
       const hideRaw    = JSON.parse(hideText);
       // Flatten annotations into individual tasks
       hideRaw.forEach(page => {
