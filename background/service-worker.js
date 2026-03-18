@@ -39,7 +39,7 @@ const CONFIG = {
     supabase: {
       // Set SUPABASE_PROXY_URL in config.js or via the Options page
       endpoint: (typeof CONFIG_KEYS !== 'undefined' && CONFIG_KEYS.SUPABASE_PROXY_URL) || '',
-      defaultModel: 'google/gemini-flash-3-preview'
+      defaultModel: 'google/gemini-3-flash-preview'
     },
     gemini: {
       endpoint: 'https://generativelanguage.googleapis.com/v1beta/models',

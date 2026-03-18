@@ -10,7 +10,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const OPENROUTER_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? "";
-const DEFAULT_MODEL   = "google/gemini-flash-3-preview";
+const DEFAULT_MODEL   = "google/gemini-3-flash-preview";
 const OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions";
 
 const CORS = {

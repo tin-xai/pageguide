@@ -362,6 +362,7 @@ function parseMarkdown(text) {
  */
 async function showModelStatus() {
   const PROVIDER_LABELS = {
+    supabase: 'Supabase (OpenRouter)',
     gemini: 'Gemini',
     openrouter: 'OpenRouter',
     openai: 'OpenAI'
@@ -377,27 +378,30 @@ async function showModelStatus() {
     ]);
   } catch (e) { /* storage unavailable */ }
 
-  const provider = settings.provider || 'gemini';
+  const provider = settings.provider || 'supabase';
   const providerLabel = PROVIDER_LABELS[provider] || provider;
 
-  let apiKey = '';
+  let configured = false;
   let modelRaw = '';
 
-  if (provider === 'gemini') {
-    apiKey = settings.geminiApiKey || '';
+  if (provider === 'supabase') {
+    configured = true; // key lives server-side, always ready
+    modelRaw = 'google/gemini-3-flash-preview';
+  } else if (provider === 'gemini') {
+    configured = !!(settings.geminiApiKey || '').trim();
     modelRaw = settings.geminiModel || 'gemini-2.5-flash';
   } else if (provider === 'openrouter') {
-    apiKey = settings.openrouterApiKey || '';
+    configured = !!(settings.openrouterApiKey || '').trim();
     modelRaw = settings.openrouterModel || '';
   } else if (provider === 'openai') {
-    apiKey = settings.openaiApiKey || '';
+    configured = !!(settings.openaiApiKey || '').trim();
     modelRaw = settings.openaiModel || '';
   }
 
   // Shorten "org/model-name" → "model-name" for display
   const modelDisplay = modelRaw.includes('/') ? modelRaw.split('/').pop() : modelRaw;
 
-  if (!apiKey) {
+  if (!configured) {
     addMessage(
       `⚙️ No API key configured. Click **⚙️ Settings** to add your ${providerLabel} key and get started.`,
       'system'
