@@ -1126,7 +1126,13 @@
             <p>You completed all 6 tasks across 3 feature types.</p>
             ${saveStatusHTML}
           </div>
-          <button class="study-btn study-btn-primary" id="study-download-btn">⬇️ Download Results CSV</button>
+          <a class="study-btn study-btn-primary" id="study-form-btn"
+            href="https://docs.google.com/forms/d/1HVIYOcltAtOdKoTRTDRvRd9TAx97vI9Ksb0CVQlINAY/viewform"
+            target="_blank" rel="noopener"
+            style="display:block;text-align:center;text-decoration:none;">
+            📝 Fill Out Qualitative Survey
+          </a>
+          <button class="study-btn study-btn-secondary" id="study-download-btn">⬇️ Download Results CSV</button>
           <button class="study-btn study-btn-secondary" id="study-close-final">Close Panel</button>
         </div>
       </div>
