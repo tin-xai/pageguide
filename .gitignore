@@ -32,4 +32,9 @@ ANTIGRAVITY.md
 CODEX.md
 
 analyze_user_study/__pycache__
+analyze_user_study/screenshots/
+analyze_user_study/plots/
+analyze_user_study/supabase/
+
+
 
