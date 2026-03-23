@@ -1,0 +1,4 @@
+metric,task_type,n,mean_ctrl,mean_ext,mean_diff,wilcoxon_p,ttest_p,cohens_d
+time_s,find,38,82.71,74.5,8.2,0.328,0.4294,0.131
+time_s,guide,39,87.39,112.98,-25.59,0.0155,0.023,-0.384
+time_s,hide,34,83.59,41.47,42.12,0.0001,0.0,0.816
