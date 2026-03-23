@@ -105,7 +105,8 @@ def load_data():
             _compute_hide_recall, axis=1)
 
     # Exclude specific participants
-    EXCLUDE_PARTICIPANTS = {'Tina', 'luna', 'Brian', 'Alice2', 'logan bolton', 'Reza', 'Hung'}
+    # EXCLUDE_PARTICIPANTS = {'Tina', 'luna', 'Brian', 'Alice2', 'logan bolton', 'Reza', 'Hung'}
+    EXCLUDE_PARTICIPANTS = {'Tina'}
     tasks = tasks[~tasks['participant_id'].isin(EXCLUDE_PARTICIPANTS)].reset_index(drop=True)
     if not sessions.empty and 'participant_id' in sessions.columns:
         sessions = sessions[~sessions['participant_id'].isin(EXCLUDE_PARTICIPANTS)].reset_index(drop=True)

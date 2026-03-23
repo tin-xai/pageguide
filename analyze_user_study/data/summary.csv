@@ -1,4 +1,49 @@
 participant_id,session_id,block_index,task_index,question_index,task_type,condition,time_s,answer,answer_correct,confidence,helpfulness,chat_turn_count,hidden_count,hide_recall,ctrl_f_count,text_select_count,click_count,mouse_move_px,page_visit_count,question_or_task
+9,9,0,0,0,find,extension,21.909,Approximately $2.08 billion,True,very,very,1,0,,0,0,0,249,0,How much did Taylor Swift earn from the Eras Tour?
+9,9,0,0,1,find,extension,53.331,Dejima,True,very,very,1,0,,0,0,0,198,0,Which small artificial island in Nagasaki Bay was used to confine foreign traders during Japan's isolation period?
+9,9,0,0,2,find,extension,50.902,About 2°F (1°C) warmer,True,very,very,1,0,,0,0,0,0,0,How much has global temperature increased since the late 19th century?
+9,9,0,1,0,guide,extension,89.707,completed,,very,very,1,0,,0,0,8,13848,2,How to create an appointment schedule and a booking page?
+9,9,0,1,1,guide,extension,45.203,completed,,very,very,1,0,,0,0,2,1445,3,How do I change my user ID
+9,9,0,1,2,guide,extension,65.036,completed,,very,very,1,0,,0,0,0,0,3,How do I turn on vacation responder?
+9,9,0,2,0,hide,extension,32.293,completed,,very,very,1,10,0.636,0,0,1,214,0,Hide posts about credit
+9,9,0,2,1,hide,extension,26.461,completed,,very,very,1,7,0.6,0,0,0,0,0,Hide negative comments about ronaldo
+9,9,0,2,2,hide,extension,124.509,completed,,very,very,2,11,1.0,0,0,0,0,0,"Hide posts about openclaw or clawbot, etc"
+12,12,0,0,0,find,control,53.006,This phase begins once the third review has been submitted,True,very,,0,0,,0,1,1,963,0,when could the authors reply back to the reviewers comments
+12,12,0,0,1,find,control,78.815,Lighting that allows playing at night,True,somewhat,,0,0,,1,1,2,2569,0,What makes the Chanhassen Pickleball Complex appealing to players after sunset?
+12,12,0,0,2,find,control,177.65,Scoring was simplified to a point system,False,somewhat,,0,0,,0,2,3,3543,2,What is one major change in the rules compared with the early version of tennis?
+12,12,0,1,0,guide,control,76.563,completed,,very,,0,0,,0,0,13,7747,10,How do I set up email forwarding in Gmail?
+12,12,0,1,1,guide,control,33.329,failed,,notsure,,0,0,,0,0,5,2679,0,How can you highlight duplicate values in a column using conditional formatting?
+12,12,0,1,2,guide,control,64.238,partial,,guessed,,0,0,,0,0,9,3408,11,How do I change my user ID
+12,12,0,2,0,hide,control,107.359,partial,,somewhat,,0,1,0.0,0,0,0,0,0,hide negative comments about jobs
+12,12,0,2,1,hide,control,116.442,completed,,somewhat,,0,17,0.636,1,0,17,10333,0,Hide posts about credit
+12,12,0,2,2,hide,control,41.78,completed,,somewhat,,0,5,0.6,0,0,6,2718,0,Hide negative comments about ronaldo
+16,16,0,0,0,find,extension,169.315,It immediately ended armed resistance inside France,False,somewhat,not,1,0,,0,0,0,0,0,Why did the execution of Louis XVI intensify the conflict between revolutionary and counter-revolutionary forces?
+16,16,0,0,1,find,extension,20.282,This phase begins once the third review has been submitted,True,somewhat,somewhat,1,0,,0,1,1,1915,0,when could the authors reply back to the reviewers comments
+16,16,0,0,2,find,extension,105.433,Lighting that allows playing at night,True,somewhat,somewhat,1,0,,0,0,4,4737,0,What makes the Chanhassen Pickleball Complex appealing to players after sunset?
+16,16,0,1,0,guide,extension,139.314,failed,,notsure,not,1,0,,0,0,5,3165,0,How can you freeze the first row in a Google Sheet so it stays visible when scrolling?
+16,16,0,1,1,guide,extension,37.73,completed,,very,very,1,0,,0,0,5,5642,2,How do I change my user ID
+16,16,0,1,2,guide,extension,93.811,completed,,very,very,1,0,,0,0,12,8787,4,How do I turn on vacation responder?
+16,16,0,2,0,hide,extension,64.19,completed,,very,very,1,15,0.2,0,0,20,3036,0,Hide negative comments about ronaldo
+16,16,0,2,1,hide,extension,32.38,completed,,very,very,1,5,0.375,0,0,7,901,0,"Hide posts about openclaw or clawbot, etc"
+16,16,0,2,2,hide,extension,47.897,completed,,somewhat,somewhat,1,5,0.0,0,0,8,5436,0,hideo videos that have advance skills of badminton
+38,38,0,0,0,find,extension,87.535,The net height was standardized and service rules changed,True,somewhat,somewhat,1,0,,0,0,0,2599,0,What is one major change in the rules compared with the early version of tennis?
+38,38,0,0,1,find,extension,21.818,Approximately $2.08 billion,True,very,very,1,0,,0,0,1,1397,0,How much did Taylor Swift earn from the Eras Tour?
+38,38,0,1,0,guide,extension,134.474,partial,,notsure,somewhat,0,0,,0,0,1,855,7,How can you create a view that only shows tasks marked as “Completed”?
+38,38,0,1,1,guide,extension,43.012,completed,,very,very,1,0,,0,0,12,4348,0,How can you move the price scale so it appears on the left side of the chart instead of the default position?
+38,38,0,2,0,hide,extension,35.729,completed,,notsure,somewhat,1,11,0.636,0,0,0,0,0,Hide posts about credit
+38,38,0,2,1,hide,extension,31.048,completed,,somewhat,very,1,7,0.6,0,0,1,883,0,Hide negative comments about ronaldo
+39,39,0,0,0,find,extension,37.658,Approximately $2.08 billion,True,very,very,1,0,,0,0,1,1255,0,How much did Taylor Swift earn from the Eras Tour?
+39,39,0,0,1,find,extension,21.896,Dejima,True,somewhat,very,1,0,,0,0,0,0,0,Which small artificial island in Nagasaki Bay was used to confine foreign traders during Japan's isolation period?
+39,39,0,1,0,guide,extension,50.662,partial,,very,very,1,0,,0,0,5,510,0,Make the sprite move to the mouse pointer continuously.
+39,39,0,1,1,guide,extension,92.898,completed,,very,very,1,0,,0,0,5,4825,3,How can you highlight duplicate values in a column using conditional formatting?
+39,39,0,2,0,hide,extension,27.46,completed,,very,very,1,11,1.0,0,0,3,1239,0,"Hide posts about openclaw or clawbot, etc"
+39,39,0,2,1,hide,extension,40.631,failed,,very,not,1,15,0.342,0,0,3,3646,0,hideo videos that have advance skills of badminton
+40,40,0,0,0,find,extension,26.598,About 2°F (1°C) warmer,True,very,very,1,0,,0,0,0,916,0,How much has global temperature increased since the late 19th century?
+40,40,0,0,1,find,extension,33.28,It has significantly increased over the decades,True,somewhat,somewhat,1,0,,0,0,0,2051,0,How has the prevalence of diagnosed diabetes changed over time?
+40,40,0,1,0,guide,extension,53.942,completed,,very,very,1,0,,0,0,1,602,3,How can you freeze the first row in a Google Sheet so it stays visible when scrolling?
+40,40,0,1,1,guide,extension,65.046,completed,,very,very,1,0,,0,0,1,1310,2,How can you add page numbers to a Google Doc but start numbering from page 2 instead of page 1?
+40,40,0,2,0,hide,extension,60.98,failed,,somewhat,not,1,15,0.317,0,0,1,2151,0,Hide videos that are not related to Optimal Transport
+40,40,0,2,1,hide,extension,31.744,completed,,very,very,1,15,0.0,0,0,1,4195,0,hide negative comments about taylor swift
 72,72,0,0,0,find,control,40.928,Dejima,True,very,,0,0,,1,0,1,1793,0,Which small artificial island in Nagasaki Bay was used to confine foreign traders during Japan's isolation period?
 78,78,0,0,0,find,control,42.806,Approximately $2.08 billion,True,very,,0,0,,0,1,1,5251,0,How much did Taylor Swift earn from the Eras Tour?
 71,71,0,0,0,find,extension,61.334,Edgbaston (Birmingham) England in the 1860s,True,somewhat,somewhat,1,0,,0,0,1,5071,0,Where and when was tennis first played in something like its modern form?
@@ -225,3 +270,66 @@ participant_id,session_id,block_index,task_index,question_index,task_type,condit
 103,103,3,1,1,guide,control,180.029,failed,,guessed,,0,0,,0,0,24,20849,4,How can you add page numbers to a Google Doc but start numbering from page 2 instead of page 1?
 111,111,3,1,1,guide,control,65.815,failed,,notsure,,0,0,,1,0,2,5914,7,How can you create a view that only shows tasks marked as “Completed”?
 111,111,4,2,0,hide,extension,28.909,completed,,somewhat,very,1,12,1.0,0,0,1,219,0,hide negative comments about this movie
+108,108,4,2,0,hide,control,167.089,completed,,very,,0,5,0.455,0,0,0,0,0,Hide posts about credit
+111,111,5,2,1,hide,control,56.143,failed,,notsure,,0,1,0.0,1,0,7,7077,0,Hide conference acceptance notifitcations
+103,103,4,2,0,hide,extension,119.508,failed,,guessed,not,0,0,0.0,0,0,5,6876,1,Hide posts about credit
+108,108,5,2,1,hide,extension,75.223,completed,,very,very,1,7,0.6,0,0,3,5471,0,Hide negative comments about ronaldo
+103,103,5,2,1,hide,control,103.105,partial,,notsure,,0,1,0.0,0,0,0,0,0,Hide negative comments about ronaldo
+118,118,0,0,0,find,control,32.621,About 2°F (1°C) warmer,True,very,,0,0,,1,0,1,1422,0,How much has global temperature increased since the late 19th century?
+126,126,0,0,0,find,control,53.549,The Fasting Blood Glucose Test — requires 8+ hours of fasting; measures baseline blood glucose level,True,somewhat,,0,0,,0,0,0,0,0,"Which diabetes diagnostic test requires fasting beforehand, and what does the test measure?"
+122,122,0,0,0,find,control,65.789,Lighting that allows playing at night,True,very,,0,0,,0,0,0,0,0,What makes the Chanhassen Pickleball Complex appealing to players after sunset?
+123,123,0,0,0,find,extension,43.707,Edgbaston (Birmingham) England in the 1860s,True,guessed,unused,1,0,,0,0,0,3466,0,Where and when was tennis first played in something like its modern form?
+127,127,0,0,0,find,extension,33.834,About 20% has been cleared or degraded,True,very,very,1,0,,0,0,0,3266,0,How much of the Amazon rainforest has been lost?
+119,119,0,0,0,find,extension,147.869,It has significantly increased over the decades,True,somewhat,somewhat,1,0,,1,1,3,7482,1,How has the prevalence of diagnosed diabetes changed over time?
+129,129,0,0,0,find,extension,17.894,The net height was standardized and service rules changed,True,very,somewhat,1,0,,0,0,0,83,0,What is one major change in the rules compared with the early version of tennis?
+123,123,1,0,1,find,control,12.476,Approximately $2.08 billion,True,very,,0,0,,0,0,0,1346,0,How much did Taylor Swift earn from the Eras Tour?
+126,126,1,0,1,find,extension,38.095,Quebrada Carhuasanta,True,very,very,1,0,,0,0,0,0,0,Which stream emerges from Nevado Mismi before eventually contributing to the Apurímac River system?
+118,118,1,0,1,find,extension,74.147,It has significantly increased over the decades,True,somewhat,unused,0,0,,1,0,2,5738,0,How has the prevalence of diagnosed diabetes changed over time?
+120,120,0,0,0,find,control,159.702,Quebrada Carhuasanta,True,guessed,,0,0,,0,0,1,4097,2,Which stream emerges from Nevado Mismi before eventually contributing to the Apurímac River system?
+124,124,0,0,0,find,control,153.21,Dejima,True,somewhat,,0,0,,1,6,13,10808,0,Which small artificial island in Nagasaki Bay was used to confine foreign traders during Japan's isolation period?
+118,118,2,1,0,guide,control,13.798,completed,,very,,0,0,,0,0,1,3543,1,How can you change the position of slide numbers for all slides in a Google Slides presentation?
+119,119,1,0,1,find,control,45.51,Quebrada Carhuasanta,True,somewhat,,0,0,,1,1,1,3633,0,Which stream emerges from Nevado Mismi before eventually contributing to the Apurímac River system?
+126,126,2,1,0,guide,control,43.383,completed,,very,,0,0,,0,0,11,12108,0,How can you move the price scale so it appears on the left side of the chart instead of the default position?
+127,127,1,0,1,find,control,56.831,It united European monarchies against France,True,somewhat,,0,0,,1,0,0,6962,0,Why did the execution of Louis XVI intensify the conflict between revolutionary and counter-revolutionary forces?
+118,118,3,1,1,guide,extension,10.862,failed,,guessed,unused,0,0,,0,0,1,2255,0,How can you create a view that only shows tasks marked as “Completed”?
+125,125,0,0,0,find,extension,177.413,Ocean acidification,False,somewhat,very,1,0,,0,0,0,5119,0,Which type of evidence shows that oceans are absorbing excess heat from global warming?
+118,118,4,2,0,hide,control,7.127,failed,,guessed,,0,0,0.0,0,0,0,28,0,Hide posts about credit
+122,122,1,0,1,find,extension,135.281,The net height was standardized and service rules changed,True,very,somewhat,1,0,,0,0,1,1000,3,What is one major change in the rules compared with the early version of tennis?
+120,120,1,0,1,find,extension,79.945,About 20% has been cleared or degraded,True,very,somewhat,1,0,,0,0,5,3459,3,How much of the Amazon rainforest has been lost?
+118,118,5,2,1,hide,extension,19.131,failed,,somewhat,not,1,6,0.4,0,0,8,2919,0,Hide negative comments about ronaldo
+124,124,1,0,1,find,extension,133.923,About 5°F warmer,False,guessed,not,1,0,,0,1,2,6329,0,How much has global temperature increased since the late 19th century?
+119,119,2,1,0,guide,extension,133.812,completed,,very,very,1,0,,0,0,7,13702,0,How can you move the price scale so it appears on the left side of the chart instead of the default position?
+123,123,2,1,0,guide,extension,180.009,failed,,notsure,not,1,0,,0,0,21,38705,0,Make the sprite move to the mouse pointer continuously.
+124,124,2,1,0,guide,control,32.314,completed,,very,,0,0,,0,0,0,0,3,How can you freeze the first row in a Google Sheet so it stays visible when scrolling?
+123,123,3,1,1,guide,control,41.376,failed,,guessed,,0,0,,0,0,1,4574,0,How can you highlight duplicate values in a column using conditional formatting?
+119,119,3,1,1,guide,control,57.529,failed,,notsure,,0,0,,0,0,14,8110,0,Make the sprite move to the mouse pointer continuously.
+125,125,1,0,1,find,control,167.711,It has significantly increased over the decades,True,notsure,,0,0,,0,0,0,5308,0,How has the prevalence of diagnosed diabetes changed over time?
+127,127,2,1,0,guide,extension,180.015,partial,,notsure,somewhat,3,0,,0,0,19,27396,0,How can you highlight duplicate values in a column using conditional formatting?
+126,126,3,1,1,guide,extension,180.007,partial,,notsure,somewhat,1,0,,0,0,0,0,0,Make the sprite move to the mouse pointer continuously.
+123,123,4,2,0,hide,extension,22.722,completed,,very,very,1,15,0.636,0,0,1,1393,0,Hide posts about credit
+122,122,2,1,0,guide,control,163.555,completed,,somewhat,,0,0,,0,0,0,0,0,How can you create a view that only shows tasks marked as “Completed”?
+119,119,4,2,0,hide,extension,22.966,completed,,somewhat,very,1,11,1.0,0,0,2,1802,0,"Hide posts about openclaw or clawbot, etc"
+127,127,3,1,1,guide,control,27.67,completed,,very,,0,0,,0,0,20,8963,1,How can you add page numbers to a Google Doc but start numbering from page 2 instead of page 1?
+120,120,2,1,0,guide,control,180.001,partial,,somewhat,,0,0,,0,0,0,0,0,How can you highlight duplicate values in a column using conditional formatting?
+119,119,5,2,1,hide,control,30.061,partial,,somewhat,,0,8,0.038,0,0,8,6983,0,hideo videos that have advance skills of badminton
+126,126,4,2,0,hide,control,47.523,partial,,somewhat,,0,4,0.75,0,0,5,10224,0,hide negative comments about this movie
+123,123,5,2,1,hide,control,65.856,partial,,somewhat,,0,6,0.4,0,0,8,10999,0,Hide negative comments about ronaldo
+124,124,3,1,1,guide,extension,116.966,completed,,somewhat,somewhat,1,0,,0,0,13,13442,0,How can you add page numbers to a Google Doc but start numbering from page 2 instead of page 1?
+126,126,5,2,1,hide,extension,39.257,completed,,somewhat,very,1,5,1.0,0,0,1,2631,0,Hide conference acceptance notifitcations
+120,120,3,1,1,guide,extension,87.843,completed,,very,somewhat,1,0,,0,0,19,13791,3,How can you add page numbers to a Google Doc but start numbering from page 2 instead of page 1?
+125,125,2,1,0,guide,extension,172.164,completed,,very,somewhat,1,0,,0,0,32,37473,20,How can you change the position of slide numbers for all slides in a Google Slides presentation?
+122,122,3,1,1,guide,extension,180.009,failed,,very,not,1,0,,0,0,31,24661,0,How can you move the price scale so it appears on the left side of the chart instead of the default position?
+127,127,4,2,0,hide,extension,174.195,failed,,notsure,not,4,0,0.0,0,0,25,23509,2,Hide advertisements
+124,124,4,2,0,hide,control,167.272,partial,,somewhat,,0,3,0.125,0,0,4,12118,0,"Hide posts about openclaw or clawbot, etc"
+124,124,5,2,1,hide,extension,19.595,completed,,somewhat,very,1,15,0.481,0,0,1,1213,0,hideo videos that have advance skills of badminton
+127,127,5,2,1,hide,control,90.519,completed,,somewhat,,0,8,0.231,0,0,11,8714,0,hide negative comments about jobs
+125,125,3,1,1,guide,control,180.012,failed,,somewhat,,0,0,,0,0,0,0,0,How can you create a view that only shows tasks marked as “Completed”?
+122,122,4,2,0,hide,control,180.002,partial,,somewhat,,0,83,0.5,0,0,99,41077,3,Hide advertisements
+125,125,4,2,0,hide,extension,47.064,completed,,very,very,1,15,0.292,0,0,1,3985,0,Hide videos that are not related to Optimal Transport
+122,122,5,2,1,hide,extension,91.975,completed,,somewhat,very,1,13,0.692,0,0,6,5067,0,hide negative comments about jobs
+125,125,5,2,1,hide,control,180.011,partial,,somewhat,,0,35,0.75,0,0,44,14583,0,hide negative comments about taylor swift
+129,129,1,0,1,find,control,29.482,Approximately $2.08 billion,True,very,,0,0,,1,0,2,2205,0,How much did Taylor Swift earn from the Eras Tour?
+129,129,2,1,0,guide,extension,180.01,failed,,notsure,not,2,0,,0,0,0,0,0,How can you create a view that only shows tasks marked as “Completed”?
+129,129,3,1,1,guide,control,46.684,completed,,very,,0,0,,0,0,24,14406,0,How can you move the price scale so it appears on the left side of the chart instead of the default position?
+129,129,4,2,0,hide,extension,49.641,completed,,very,very,1,11,1.0,1,0,2,7498,0,"Hide posts about openclaw or clawbot, etc"
+129,129,5,2,1,hide,control,111.44,completed,,somewhat,,0,21,0.127,0,0,30,21745,0,hideo videos that have advance skills of badminton
