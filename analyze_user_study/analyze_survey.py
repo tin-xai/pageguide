@@ -252,6 +252,94 @@ def plot_dimension_comparison(df, pdf):
     _save('survey_dimensions.png', pdf)
 
 
+# ── Section 6: Diverging stacked Likert chart ──────────────────────────────────
+# Color scheme: dark-pink→light-pink | neutral | light-green→dark-green
+LIKERT_COLORS = {
+    1: '#C2185B', 2: '#F06292', 3: '#F8BBD0',
+    4: '#EEEEEE',
+    5: '#C5E1A5', 6: '#66BB6A', 7: '#2E7D32',
+}
+
+def plot_diverging_likert(df, pdf):
+    """
+    Diverging stacked bar chart — one panel per task (Find / Guide / Hide).
+    Bars centered at 0%; negative ratings (1–3) go left, positive (5–7) go right,
+    neutral (4) is split. % of positive responses (≥5) annotated on the right.
+    """
+    # Group questions by task
+    task_questions = {task: [] for task in TASK_ORDER}
+    for key, (task, dim, _) in QUESTIONS.items():
+        if key in df.columns:
+            task_questions[task].append((key, dim.replace('\n', ' ')))
+
+    panels = [(t, qs) for t, qs in task_questions.items() if qs]
+    if not panels:
+        return
+
+    n_panels = len(panels)
+    fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, max(3, 1.1 * max(len(q) for _, q in panels))),
+                             sharey=False)
+    if n_panels == 1:
+        axes = [axes]
+
+    for ax, (task, qs) in zip(axes, panels):
+        n = len(df)
+        y_pos = np.arange(len(qs))
+        row_labels = [dim for _, dim in qs]
+
+        for i, (key, dim) in enumerate(qs):
+            counts = df[key].dropna().value_counts()
+            pcts   = {r: counts.get(r, 0) / n * 100 for r in range(1, 8)}
+
+            # Left side: 3, 2, 1 (drawn right-to-left from center)
+            # Neutral (4) split evenly
+            neutral_half = pcts[4] / 2
+            left_start   = -(neutral_half + pcts[3] + pcts[2] + pcts[1])
+            right_start  = 0
+
+            # Draw neutral half on left
+            ax.barh(i, -neutral_half, left=0, color=LIKERT_COLORS[4], height=0.6)
+            # Draw 3, 2, 1 stacking left
+            cursor = -neutral_half
+            for r in [3, 2, 1]:
+                ax.barh(i, -pcts[r], left=cursor, color=LIKERT_COLORS[r], height=0.6)
+                cursor -= pcts[r]
+            # Draw neutral half on right
+            ax.barh(i, neutral_half, left=0, color=LIKERT_COLORS[4], height=0.6)
+            # Draw 5, 6, 7 stacking right
+            cursor = neutral_half
+            for r in [5, 6, 7]:
+                ax.barh(i, pcts[r], left=cursor, color=LIKERT_COLORS[r], height=0.6)
+                cursor += pcts[r]
+
+            # Annotate % positive (≥5) on the right
+            pct_pos = sum(pcts[r] for r in [5, 6, 7])
+            ax.text(102, i, f'{pct_pos:.0f}%', va='center', ha='left', fontsize=9,
+                    fontweight='bold', color='#2E7D32')
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(row_labels, fontsize=9)
+        ax.axvline(0, color='#555', linewidth=0.8)
+        ax.set_xlim(-100, 115)
+        ax.set_xticks([-75, -50, -25, 0, 25, 50, 75, 100])
+        ax.set_xticklabels(['75%', '50%', '25%', '0%', '25%', '50%', '75%', '100%'],
+                           fontsize=8)
+        ax.set_xlabel('← Disagree / Agree →', fontsize=9)
+        ax.set_title(f'{task.upper()}', fontsize=13, fontweight='bold',
+                     color=TASK_COLORS[task])
+        ax.spines[['top', 'right']].set_visible(False)
+
+    # Shared legend
+    legend_handles = [mpatches.Patch(color=LIKERT_COLORS[r], label=str(r))
+                      for r in range(1, 8)]
+    fig.legend(handles=legend_handles, title='Rating\n(1=Strongly Disagree\n7=Strongly Agree)',
+               loc='lower center', ncol=7, bbox_to_anchor=(0.5, -0.08), fontsize=9)
+    fig.suptitle('Post-Study Survey — Diverging Likert Chart (% positive annotated)',
+                 fontsize=13, fontweight='bold')
+    plt.tight_layout()
+    _save('survey_diverging_likert.png', pdf)
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 def _save(name, pdf=None):
     path = os.path.join(PLOT_DIR, name)
@@ -270,6 +358,7 @@ def main():
     pdf_path = os.path.join(PLOT_DIR, 'survey_report.pdf')
     with PdfPages(pdf_path) as pdf:
         print_summary(df)
+        plot_diverging_likert(df, pdf)
         plot_per_task(df, pdf)
         plot_likert_heatmap(df, pdf)
         plot_violins(df, pdf)
