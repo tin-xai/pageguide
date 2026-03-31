@@ -86,12 +86,13 @@ def load_data():
         axis=1,
     )
 
-    # Numeric behaviour columns
-    for col in ['scroll_count', 'ctrl_f_count', 'text_select_count',
+    # Numeric behaviour columns — create with 0 if absent so plots always show them
+    for col in ['scroll_user_count', 'ctrl_f_count', 'text_select_count',
                 'page_visit_count', 'chat_turn_count', 'hidden_count',
                 'click_count', 'mouse_move_px']:
-        if col in tasks.columns:
-            tasks[col] = pd.to_numeric(tasks[col], errors='coerce').fillna(0).astype(int)
+        if col not in tasks.columns:
+            tasks[col] = 0
+        tasks[col] = pd.to_numeric(tasks[col], errors='coerce').fillna(0).astype(int)
 
     # Compute hide_recall from user_hidden_selectors vs task_data.hidden_elements
     # when the column is absent or all-null (older data)
@@ -331,7 +332,7 @@ def plot_success_rates(tasks):
 # ── Section 4: Behavioural metrics ────────────────────────────────────────────
 def plot_behavioral_metrics(tasks):
     beh_cols = {
-        'scroll_count':      'Scroll gestures',
+        'scroll_user_count': 'Scroll gestures',
         'ctrl_f_count':      'Ctrl+F presses',
         'text_select_count': 'Text selections',
         'click_count':       'Mouse clicks',
@@ -629,18 +630,39 @@ def plot_adjusted_time_analysis(tasks):
         print(paired.groupby('task_type')[['diff_s', 'speedup_pct']].mean().round(2).to_string())
         print()
 
-        fig, ax = plt.subplots(figsize=(8, 5))
         task_colors = {'find': '#2196F3', 'guide': '#4CAF50', 'hide': '#FF9800'}
-        for _, row in paired.iterrows():
-            c = task_colors.get(row['task_type'], '#888')
-            ax.plot(['Control', 'Extension\n(adjusted)'],
-                    [row['control'], row['extension']],
-                    'o-', color=c, alpha=0.6, linewidth=1.5, markersize=6)
-        legend_handles = [mpatches.Patch(color=c, label=t.capitalize())
-                          for t, c in task_colors.items()]
-        ax.legend(handles=legend_handles, title='Task type')
-        ax.set_ylabel('Time (s)')
-        ax.set_title('Paired Completion Times — Thinking Time Deducted',
+
+        # Percent speedup per participant, one subplot per task type
+        fig, axes = plt.subplots(1, len(TASK_ORDER), figsize=(14, 5), sharey=False)
+        for ax, ttype in zip(axes, TASK_ORDER):
+            sub = paired[paired['task_type'] == ttype].sort_values('speedup_pct')
+            if sub.empty:
+                ax.axis('off')
+                continue
+
+            color  = task_colors.get(ttype, '#888')
+            mean_v = sub['speedup_pct'].mean()
+
+            y = np.arange(len(sub))
+            bars = ax.barh(y, sub['speedup_pct'], color=[
+                color if v >= 0 else '#E57373' for v in sub['speedup_pct']
+            ], edgecolor='white', height=0.6, alpha=0.85)
+
+            # Mean line
+            ax.axvline(mean_v, color='#333', linewidth=1.5, linestyle='--', zorder=3)
+            ax.axvline(0, color='#888', linewidth=0.8, zorder=2)
+
+            ax.text(mean_v + 1, len(sub) - 0.3, f'mean\n{mean_v:.1f}%',
+                    fontsize=8, color='#333', va='top')
+
+            ax.set_yticks(y)
+            ax.set_yticklabels([f'P{i+1}' for i in range(len(sub))], fontsize=8)
+            ax.set_xlabel('Speedup (%)')
+            ax.set_title(ttype.capitalize(), fontsize=13, fontweight='bold', color=color)
+            ax.spines[['top', 'right']].set_visible(False)
+
+        fig.suptitle('% Time Reduction per Participant — Extension vs Control\n'
+                     '(thinking time deducted; positive = faster with extension)',
                      fontsize=13, fontweight='bold')
         plt.tight_layout()
         _save('paired_times_adjusted.png')
@@ -760,6 +782,98 @@ def show_guide_screenshots(tasks):
     print(f'  Grid saved → plots/guide_screenshots.png')
 
 
+# ── Section 9b: Thinking time vs task time ─────────────────────────────────────
+def plot_thinking_time_impact(tasks):
+    """
+    Shows per task type:
+      - Mean control time
+      - Mean extension time broken into: adjusted (active) + thinking (waiting)
+    A second panel shows thinking time as % of total extension time, with a
+    reference line at 20% to flag where waiting dominates.
+    """
+    ext = tasks[tasks['condition'] == 'extension'].copy()
+    ctrl = tasks[tasks['condition'] == 'control'].copy()
+    if ext.empty or 'agent_think_total_s' not in ext.columns:
+        return
+
+    task_colors = {'find': '#2196F3', 'guide': '#4CAF50', 'hide': '#FF9800'}
+
+    stats = []
+    for ttype in TASK_ORDER:
+        e = ext[ext['task_type'] == ttype]
+        c = ctrl[ctrl['task_type'] == ttype]
+        mean_ctrl     = c['time_s'].mean() if not c.empty else np.nan
+        mean_ext_raw  = e['time_s'].mean() if not e.empty else np.nan
+        mean_thinking = e['agent_think_total_s'].mean() if not e.empty else 0
+        mean_ext_adj  = e['time_s_adjusted'].mean() if not e.empty else np.nan
+        think_pct     = (mean_thinking / mean_ext_raw * 100) if mean_ext_raw else np.nan
+        stats.append({
+            'task': ttype,
+            'ctrl':      mean_ctrl,
+            'ext_adj':   mean_ext_adj,
+            'thinking':  mean_thinking,
+            'ext_raw':   mean_ext_raw,
+            'think_pct': think_pct,
+        })
+
+    stats_df = pd.DataFrame(stats).set_index('task')
+    print('─' * 40)
+    print('THINKING TIME IMPACT')
+    print('─' * 40)
+    print(stats_df.round(2).to_string())
+    print()
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    # ── Left: stacked bar (ext_adj + thinking) vs control ──────────────────────
+    x   = np.arange(len(TASK_ORDER))
+    w   = 0.35
+    for i, ttype in enumerate(TASK_ORDER):
+        row   = stats_df.loc[ttype]
+        color = task_colors[ttype]
+        # Control bar
+        ax1.bar(i - w/2, row['ctrl'], width=w, color=color,
+                alpha=0.4, edgecolor='white', label='_')
+        # Extension: adjusted (solid) + thinking (hatched)
+        ax1.bar(i + w/2, row['ext_adj'], width=w, color=color,
+                alpha=0.9, edgecolor='white')
+        ax1.bar(i + w/2, row['thinking'], width=w, bottom=row['ext_adj'],
+                color='#B0BEC5', edgecolor='white', hatch='//', alpha=0.9)
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([t.capitalize() for t in TASK_ORDER])
+    ax1.set_ylabel('Time (s)')
+    ax1.set_title('Mean Task Time: Control vs Extension\n(hatched = AI waiting time)',
+                  fontsize=12, fontweight='bold')
+    legend_patches = [
+        mpatches.Patch(color='#90A4AE', alpha=0.5, label='Control'),
+        mpatches.Patch(color='#546E7A', alpha=0.9, label='Extension (active)'),
+        mpatches.Patch(facecolor='#B0BEC5', hatch='//', label='Extension (AI wait)'),
+    ]
+    ax1.legend(handles=legend_patches, fontsize=9)
+    ax1.spines[['top', 'right']].set_visible(False)
+
+    # ── Right: thinking time as % of total extension time ──────────────────────
+    pcts   = [stats_df.loc[t, 'think_pct'] for t in TASK_ORDER]
+    colors = [task_colors[t] for t in TASK_ORDER]
+    bars   = ax2.bar(x, pcts, color=colors, edgecolor='white', alpha=0.85, width=0.5)
+    ax2.axhline(20, color='#E53935', linewidth=1.2, linestyle='--',
+                label='20% reference')
+    for bar, pct in zip(bars, pcts):
+        ax2.text(bar.get_x() + bar.get_width()/2, pct + 0.5,
+                 f'{pct:.1f}%', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([t.capitalize() for t in TASK_ORDER])
+    ax2.set_ylabel('AI waiting time (% of total extension time)')
+    ax2.set_title('Does Waiting Time Matter?\n(% of extension task time spent waiting for AI)',
+                  fontsize=12, fontweight='bold')
+    ax2.legend(fontsize=9)
+    ax2.spines[['top', 'right']].set_visible(False)
+
+    plt.tight_layout()
+    _save('thinking_time_impact.png')
+
+
 # ── Section 10: Summary export ──────────────────────────────────────────────────
 def export_summary(tasks):
     keep = ['participant_id', 'session_id', 'block_index', 'task_index',
@@ -803,6 +917,7 @@ def main():
         plot_chat_usage(tasks)
         run_stats(tasks)
         plot_adjusted_time_analysis(tasks)
+        plot_thinking_time_impact(tasks)
         show_guide_screenshots(tasks)
         export_summary(tasks)
 

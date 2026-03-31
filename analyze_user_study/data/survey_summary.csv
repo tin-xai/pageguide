@@ -1,9 +1,9 @@
 Task,Question,N,Mean,Median,SD,Min,Max
-FIND,Difficulty without XWebAgent,18,4.06,4.0,1.55,2,7
-FIND,Ease with XWebAgent,19,5.63,6.0,1.34,2,7
-FIND,Accuracy,19,5.95,6.0,0.78,5,7
-GUIDE,Difficulty without XWebAgent,19,4.53,4.0,1.74,1,7
-GUIDE,Ease with XWebAgent,19,5.16,6.0,1.83,1,7
-GUIDE,Accuracy,18,5.33,6.0,1.5,2,7
-HIDE,Difficulty without XWebAgent,19,5.42,5.0,1.26,3,7
-HIDE,Ease with XWebAgent,19,5.74,6.0,1.66,1,7
+FIND,Difficulty without XWebAgent,46,4.37,5.0,1.68,1,7
+FIND,Ease with XWebAgent,47,5.66,6.0,1.59,1,7
+FIND,Accuracy,47,5.96,6.0,1.02,3,7
+GUIDE,Difficulty without XWebAgent,47,4.77,5.0,1.55,1,7
+GUIDE,Ease with XWebAgent,47,5.55,6.0,1.57,1,7
+GUIDE,Accuracy,46,5.52,6.0,1.44,2,7
+HIDE,Difficulty without XWebAgent,47,5.47,6.0,1.47,2,7
+HIDE,Ease with XWebAgent,47,5.94,6.0,1.36,1,7
