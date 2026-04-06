@@ -305,35 +305,92 @@ def plot_success_rates(tasks):
             plt.tight_layout()
             _save('hide_accuracy.png')
 
-    # ── Stacked outcome chart for guide + hide ─────────────────────────────────
+    # ── Stacked outcome chart for guide + hide (combined into one plot) ──────────
     other = tasks[tasks['task_type'].isin(['guide', 'hide'])]
     if not other.empty:
         answer_order  = ['completed', 'partial', 'failed']
         answer_colors = {'completed': '#4CAF50', 'partial': '#FFC107', 'failed': '#F44336'}
+        label_map     = {'control': 'Control', 'extension': 'PageGuide'}
 
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-        for ax, ttype in zip(axes, ['guide', 'hide']):
+        # Build combined data: x-axis groups = Guide Control, Guide Extension, Hide Control, Hide Extension
+        CR_TICK_FS   = 32
+        CR_LABEL_FS  = 32
+        CR_TITLE_FS  = 34
+        CR_LEGEND_FS = 28
+
+        fig, ax = plt.subplots(figsize=(14, 6))
+        bar_width = 0.3
+        x = 0
+        group_mid = {}   # ttype → midpoint x for group label
+        cond_positions = {}  # ttype → [x_ctrl, x_ext]
+
+        for pi, ttype in enumerate(['guide', 'hide']):
             sub = other[other['task_type'] == ttype]
-            ct = sub.groupby(['condition', 'answer']).size().unstack(fill_value=0)
+            ct = sub.groupby('condition')['answer'].value_counts().unstack(fill_value=0)
             ct_pct = ct.div(ct.sum(axis=1), axis=0).mul(100)
             valid = [a for a in answer_order if a in ct_pct.columns]
-            ct_pct[valid].plot(kind='bar', ax=ax, stacked=True,
-                               color=[answer_colors[a] for a in valid],
-                               edgecolor='white', rot=0)
-            ax.set_title(f'{ttype.capitalize()} Task Outcome', fontsize=12, fontweight='bold')
-            ax.set_xlabel('')
-            ax.set_ylabel('% participants')
-            ax.set_ylim(0, 100)
-            ax.legend(title='Outcome', bbox_to_anchor=(1, 1), loc='upper left')
+            xs = []
+            for cond in ['control', 'extension']:
+                if cond not in ct_pct.index:
+                    continue
+                bottom = 0
+                for ans in valid:
+                    val = ct_pct.loc[cond, ans] if ans in ct_pct.columns else 0
+                    ax.bar(x, val, bottom=bottom, width=bar_width,
+                           color=answer_colors[ans], edgecolor='white')
+                    bottom += val
+                xs.append(x)
+                x += bar_width + 0.08
+            group_mid[ttype] = (xs[0] + xs[-1]) / 2 if xs else x
+            cond_positions[ttype] = xs
+            x += 0.4  # gap between groups
+
+        # Individual bar labels: Control / PageGuide
+        all_xs = []
+        all_labels = []
+        for ttype in ['guide', 'hide']:
+            for xi, cond in zip(cond_positions.get(ttype, []), ['control', 'extension']):
+                all_xs.append(xi)
+                all_labels.append(label_map[cond])
+        ax.set_xticks(all_xs)
+        ax.set_xticklabels(all_labels, fontsize=CR_TICK_FS - 6, fontweight='bold')
+
+        # Centered group labels below x-axis: a) Guide, b) Hide
+        for pi, ttype in enumerate(['guide', 'hide']):
+            ax.text(group_mid[ttype], -0.22, f'{"ab"[pi]}) {ttype.capitalize()}',
+                    ha='center', va='top', fontsize=CR_TICK_FS,
+                    fontweight='bold', transform=ax.get_xaxis_transform())
+
+        ax.set_ylabel('% Participants', fontsize=CR_LABEL_FS, fontweight='bold')
+        ax.set_ylim(0, 110)
+        ax.set_yticks(range(0, 101, 20))
+        ax.tick_params(axis='y', labelsize=CR_TICK_FS)
+        for lbl in ax.get_yticklabels():
+            lbl.set_fontweight('bold')
+        ax.set_title('')
+        ax.spines[['top', 'right', 'left']].set_visible(False)
+        ax.yaxis.grid(False)
+        ax.set_axisbelow(False)
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.5)
+
+        # Horizontal legend above the figure
+        legend_handles = [mpatches.Patch(color=answer_colors[a],
+                                         label=a.capitalize()) for a in answer_order]
+        leg = fig.legend(handles=legend_handles, loc='upper center', ncol=3,
+                         fontsize=CR_LEGEND_FS, frameon=True,
+                         bbox_to_anchor=(0.5, 1.12))
+        for text in leg.get_texts():
+            text.set_fontweight('bold')
         plt.tight_layout()
-        _save('completion_rates.png')
+        _save('completion_rates.pdf')
 
 
 # ── Section 4: Behavioural metrics ────────────────────────────────────────────
 def plot_behavioral_metrics(tasks):
     beh_cols = {
-        'scroll_user_count': 'Scroll gestures',
-        'ctrl_f_count':      'Ctrl+F presses',
+        'scroll_user_count': 'Scroll count',
+        'ctrl_f_count':      'Ctrl+F',
         'text_select_count': 'Text selections',
         'click_count':       'Mouse clicks',
         'mouse_move_px':     'Mouse distance (px)',
@@ -351,38 +408,71 @@ def plot_behavioral_metrics(tasks):
     print(means.rename(columns=available).to_string())
     print()
 
-    # Bar chart: mean ± SE by condition
+    TICK_FS   = 32
+    LABEL_FS  = 32
+    TITLE_FS  = 34
+    LEGEND_FS = 28
+    letters   = 'abcdefghijklmnopqrstuvwxyz'
+
+    def _style_ax(ax, title, letter, show_ylabel=False):
+        ax.set_title(f'{letter}) {title}', fontsize=TITLE_FS, fontweight='bold')
+        ax.set_xlabel('')
+        if show_ylabel:
+            ax.set_ylabel('Mean count', fontsize=LABEL_FS, fontweight='bold')
+        else:
+            ax.set_ylabel('')
+        ax.tick_params(axis='both', labelsize=TICK_FS, labelcolor='black')
+        for lbl in ax.get_yticklabels():
+            lbl.set_fontweight('bold')
+        ax.yaxis.grid(False)
+        ax.set_axisbelow(False)
+        ax.spines[['top', 'right']].set_visible(False)
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.5)
+
+    # ── behavioral_overview: mean ± SE by condition ─────────────────────────────
     n = len(available)
-    fig, axes = plt.subplots(1, n, figsize=(4 * n, 4))
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 7))
     if n == 1:
         axes = [axes]
-    for ax, (col, label) in zip(axes, available.items()):
+    for i, (ax, (col, label)) in enumerate(zip(axes, available.items())):
         sns.barplot(data=tasks, x='condition', y=col, order=['control', 'extension'],
                     palette=COND_COLORS, ax=ax, errorbar='se', capsize=0.12)
-        ax.set_title(label, fontsize=11)
-        ax.set_xlabel('')
-        ax.set_ylabel('Mean count')
+        ax.set_xticklabels(['Control', 'PageGuide'], fontsize=TICK_FS)
+        _style_ax(ax, label, letters[i], show_ylabel=(i == 0))
     fig.suptitle('Behavioral Metrics by Condition (mean ± SE)',
-                 fontsize=13, fontweight='bold')
+                 fontsize=TITLE_FS + 1, fontweight='bold')
     plt.tight_layout()
-    _save('behavioral_overview.png')
+    _save('behavioral_overview.pdf')
 
-    # Grouped bar: per task type
-    fig, axes = plt.subplots(1, n, figsize=(4 * n, 4))
+    # ── behavioral_by_task: grouped bar per task type ───────────────────────────
+    task_label_map = {'find': 'Find', 'guide': 'Guide', 'hide': 'Hide'}
+    tasks_labeled  = tasks.copy()
+    tasks_labeled['task_type'] = tasks_labeled['task_type'].map(task_label_map).fillna(tasks_labeled['task_type'])
+    task_order_cap = ['Find', 'Guide', 'Hide']
+
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 7))
     if n == 1:
         axes = [axes]
-    for ax, (col, label) in zip(axes, available.items()):
-        sns.barplot(data=tasks, x='task_type', y=col, hue='condition',
-                    order=TASK_ORDER, hue_order=['control', 'extension'],
+    shared_handles = None
+    for i, (ax, (col, label)) in enumerate(zip(axes, available.items())):
+        sns.barplot(data=tasks_labeled, x='task_type', y=col, hue='condition',
+                    order=task_order_cap, hue_order=['control', 'extension'],
                     palette=COND_COLORS, ax=ax, errorbar='se', capsize=0.08)
-        ax.set_title(label, fontsize=11)
-        ax.set_xlabel('')
-        ax.set_ylabel('Mean count')
-        ax.legend(title='', fontsize=9)
-    fig.suptitle('Behavioral Metrics by Task Type',
-                 fontsize=13, fontweight='bold')
+        ax.set_xticklabels(task_order_cap, fontsize=TICK_FS, fontweight='bold')
+        _style_ax(ax, label, letters[i], show_ylabel=(i == 0))
+        if shared_handles is None:
+            shared_handles, _ = ax.get_legend_handles_labels()
+        ax.legend_.remove()
+    leg = fig.legend(handles=shared_handles, labels=['Control', 'PageGuide'],
+                     loc='lower center', ncol=2, fontsize=LEGEND_FS,
+                     frameon=True, bbox_to_anchor=(0.5, -0.04))
+    for text in leg.get_texts():
+        text.set_fontweight('bold')
+    fig.suptitle('')
     plt.tight_layout()
-    _save('behavioral_by_task.png')
+    plt.subplots_adjust(bottom=0.18)
+    _save('behavioral_by_task.pdf')
 
     # Top visited domains (control condition — "searching on their own")
     if 'page_visit_urls' in tasks.columns:
@@ -918,7 +1008,6 @@ def main():
         run_stats(tasks)
         plot_adjusted_time_analysis(tasks)
         plot_thinking_time_impact(tasks)
-        show_guide_screenshots(tasks)
         export_summary(tasks)
 
         _pdf_pages = None
