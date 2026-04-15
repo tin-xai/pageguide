@@ -31,7 +31,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <a id="demo-find"></a>
 ### 🔍 Find
 
-<video src="videos/find.mp4" autoplay loop muted playsinline width="100%"></video>
+<video src="videos/find.gif" autoplay loop muted playsinline width="100%"></video>
 
 > Ask a question — PageGuide highlights the exact answer on the page.
 
@@ -40,7 +40,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <a id="demo-guide"></a>
 ### 🎯 Guide
 
-<video src="videos/guide.mp4" autoplay loop muted playsinline width="100%"></video>
+<video src="videos/guide.gif" autoplay loop muted playsinline width="100%"></video>
 
 > Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.
 
@@ -49,7 +49,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <a id="demo-hide"></a>
 ### 🛡️ Hide
 
-<video src="videos/hide.mp4" autoplay loop muted playsinline width="100%"></video>
+<video src="videos/hide.gif" autoplay loop muted playsinline width="100%"></video>
 
 > Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.
 
@@ -58,7 +58,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <a id="demo-image"></a>
 ### 🖼️ Image
 
-<video src="videos/visual_question_answering.mp4" autoplay loop muted playsinline width="100%"></video>
+<video src="videos/visual_question_answering.gif" autoplay loop muted playsinline width="100%"></video>
 
 > Upload or paste an image — PageGuide visually searches the page and finds a match.
 
