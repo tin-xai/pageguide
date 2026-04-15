@@ -1,6 +1,5 @@
 <h1 align="center"> &nbsp;🍊 PageGuide</h1>
-<p align="center"><i>AI Web Assistant for Chrome & Edge</i></p>
-<p align="center">A Chrome extension that makes browsing <b>Safe</b> 🛡️, <b>Smart</b> 🧠, and <b>Efficient</b> 🚀</p>
+<p align="center">Web Extension that makes browsing <b>Safe</b> 🛡️, <b>Smart</b> 🧠, and <b>Efficient</b> 🚀</p>
 
 <div align="center">
 
@@ -10,9 +9,76 @@
 
 <br/>
 
-<img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="20" alt="Chrome"> Chrome &nbsp;&nbsp; <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="20" alt="Edge"> Edge
+Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="20" alt="Chrome"> Chrome &nbsp;&nbsp; <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="20" alt="Edge"> Edge
 
 </div>
+
+---
+
+## Demo
+
+<p align="center">
+  <a href="#demo-find"><kbd>🔍 Find</kbd></a> &nbsp;
+  <a href="#demo-guide"><kbd>🎯 Guide</kbd></a> &nbsp;
+  <a href="#demo-hide"><kbd>🛡️ Hide</kbd></a> &nbsp;
+  <a href="#demo-answer"><kbd>💬 Answer</kbd></a> &nbsp;
+  <a href="#demo-image"><kbd>🖼️ Image</kbd></a> &nbsp;
+  <a href="#demo-pdf"><kbd>📄 PDF</kbd></a>
+</p>
+
+<br/>
+
+<a id="demo-find"></a>
+### 🔍 Find
+
+<video src="videos/find.mp4" autoplay loop muted playsinline width="100%"></video>
+
+> Ask a question — PageGuide highlights the exact answer on the page.
+
+---
+
+<a id="demo-guide"></a>
+### 🎯 Guide
+
+<video src="videos/guide.mp4" autoplay loop muted playsinline width="100%"></video>
+
+> Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.
+
+---
+
+<a id="demo-hide"></a>
+### 🛡️ Hide
+
+<video src="videos/hide.mp4" autoplay loop muted playsinline width="100%"></video>
+
+> Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.
+
+---
+
+<a id="demo-answer"></a>
+### 💬 Answer
+
+<video src="videos/answer.mp4" autoplay loop muted playsinline width="100%"></video>
+
+> Toggle **Page: Off** and ask anything — PageGuide answers from the AI's knowledge base.
+
+---
+
+<a id="demo-image"></a>
+### 🖼️ Image
+
+<video src="videos/image.mp4" autoplay loop muted playsinline width="100%"></video>
+
+> Upload or paste an image — PageGuide visually searches the page and finds a match.
+
+---
+
+<a id="demo-pdf"></a>
+### 📄 PDF
+
+<video src="videos/pdf.mp4" autoplay loop muted playsinline width="100%"></video>
+
+> Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.
 
 ---
 
