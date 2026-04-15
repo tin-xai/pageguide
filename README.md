@@ -55,19 +55,10 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ---
 
-<a id="demo-answer"></a>
-### 💬 Answer
-
-<video src="videos/answer.mp4" autoplay loop muted playsinline width="100%"></video>
-
-> Toggle **Page: Off** and ask anything — PageGuide answers from the AI's knowledge base.
-
----
-
 <a id="demo-image"></a>
 ### 🖼️ Image
 
-<video src="videos/image.mp4" autoplay loop muted playsinline width="100%"></video>
+<video src="videos/visual_question_answering.mp4" autoplay loop muted playsinline width="100%"></video>
 
 > Upload or paste an image — PageGuide visually searches the page and finds a match.
 
@@ -76,7 +67,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <a id="demo-pdf"></a>
 ### 📄 PDF
 
-<video src="videos/pdf.mp4" autoplay loop muted playsinline width="100%"></video>
+<video src="videos/pdf_asking.mp4" autoplay loop muted playsinline width="100%"></video>
 
 > Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.
 
