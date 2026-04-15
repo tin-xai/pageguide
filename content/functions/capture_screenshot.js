@@ -1,4 +1,4 @@
-// XWebAgent - Screenshot Capture
+// PageGuide - Screenshot Capture
 // Captures viewport screenshots for vision analysis
 
 /**

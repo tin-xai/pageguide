@@ -13,7 +13,7 @@ function loadScript(filename) {
 describe('Content Extraction Logic (content/utils.js)', () => {
   beforeAll(() => {
     // Mock window properties if needed
-    window._xwebagentIndex = window._xwebagentIndex || {};
+    window._pageguideIndex = window._pageguideIndex || {};
     // Mock CSS.escape for JSDOM (used in label[for] queries)
     window.CSS = window.CSS || {};
     window.CSS.escape = window.CSS.escape || ((str) => str.replace(/([^\w-])/g, '\\$1'));

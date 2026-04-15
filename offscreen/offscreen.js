@@ -1,4 +1,4 @@
-// XWebAgent Offscreen Document - PDF Text Extraction
+// PageGuide Offscreen Document - PDF Text Extraction
 // This runs in a document context where PDF.js can work properly
 
 console.log('📄 Offscreen document loaded');

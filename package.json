@@ -1,7 +1,7 @@
 {
-  "name": "xwebagent",
+  "name": "pageguide",
   "version": "1.0.0",
-  "description": "XWebAgent Extension – A Chrome extension that makes browsing Safe, Fun, and Efficient",
+  "description": "PageGuide Extension – A Chrome extension that makes browsing Safe, Fun, and Efficient",
   "main": "config.js",
   "directories": {
     "example": "examples",

@@ -1,9 +1,9 @@
-// XWebAgent - Web Protection Module
+// PageGuide - Web Protection Module
 // Detects and hides unwanted content using LLM, then auto-hides new matches on scroll.
 
 // ===== AUTO-HIDE (MutationObserver for infinite scroll) =====
 
-window._xwebagentAutoHide = null;
+window._pageguideAutoHide = null;
 let _autoHideObserver = null;
 let _autoHidePending = new Set();
 let _autoHideTimer = null;
@@ -13,10 +13,10 @@ let _autoHideToastTimer = null;
 
 function _showAutoHideToast(count) {
   // Reuse existing toast if still visible, just update the count
-  let toast = document.getElementById('xwebagent-autohide-toast');
+  let toast = document.getElementById('pageguide-autohide-toast');
   if (!toast) {
     toast = document.createElement('div');
-    toast.id = 'xwebagent-autohide-toast';
+    toast.id = 'pageguide-autohide-toast';
     toast.style.cssText = `
       position: fixed;
       bottom: 24px;
@@ -46,7 +46,7 @@ function _showAutoHideToast(count) {
 
 async function _flushAutoHideQueue() {
   _autoHideTimer = null;
-  const state = window._xwebagentAutoHide;
+  const state = window._pageguideAutoHide;
   if (!state || _autoHidePending.size === 0) { _autoHidePending.clear(); return; }
   if (_autoHideRunning) return; // skip if LLM call already in progress
 
@@ -61,7 +61,7 @@ async function _flushAutoHideQueue() {
 
   for (const node of newNodes) {
     if (!node.isConnected) continue;
-    if (node.hasAttribute?.('data-xwebagent-hidden')) continue; // already hidden
+    if (node.hasAttribute?.('data-pageguide-hidden')) continue; // already hidden
     const text = (node.textContent || '').trim();
     if (text.length < 15) continue;
     indexLines.push(`[${idx}] ${text.substring(0, 300)}`);
@@ -99,9 +99,9 @@ async function _flushAutoHideQueue() {
       const node = nodeMap.get(item.index);
       if (!node || !node.isConnected) continue;
       const container = findContainer(node);
-      if (container && !container.hasAttribute('data-xwebagent-hidden')) {
+      if (container && !container.hasAttribute('data-pageguide-hidden')) {
         container.style.display = 'none';
-        container.setAttribute('data-xwebagent-hidden', 'true');
+        container.setAttribute('data-pageguide-hidden', 'true');
         hiddenCount++;
         console.log('🛡️ Auto-hid new content:', item.snippet);
       }
@@ -116,7 +116,7 @@ async function _flushAutoHideQueue() {
 function startAutoHide(query) {
   stopAutoHide(); // clear any previous session
 
-  window._xwebagentAutoHide = { query };
+  window._pageguideAutoHide = { query };
   console.log('🛡️ Auto-hide active — will re-check new content against:', query);
 
   _autoHideObserver = new MutationObserver(mutations => {
@@ -142,8 +142,8 @@ function stopAutoHide() {
   _autoHideTimer = null;
   _autoHidePending.clear();
   _autoHideRunning = false;
-  window._xwebagentAutoHide = null;
-  document.getElementById('xwebagent-autohide-toast')?.remove();
+  window._pageguideAutoHide = null;
+  document.getElementById('pageguide-autohide-toast')?.remove();
 }
 
 // Stop when the user navigates away (full-page nav)
@@ -271,11 +271,11 @@ function markContent(items) {
     if (!el) return;
 
     const container = findContainer(el);
-    if (container.hasAttribute('data-xwebagent-marked') || seen.has(container)) return;
+    if (container.hasAttribute('data-pageguide-marked') || seen.has(container)) return;
     seen.add(container);
 
     badgeNum++;
-    container.setAttribute('data-xwebagent-marked', String(badgeNum));
+    container.setAttribute('data-pageguide-marked', String(badgeNum));
     container.style.outline = '2px solid rgba(255,71,87,0.8)';
     container.style.outlineOffset = '2px';
     container.style.backgroundColor = 'rgba(255,71,87,0.05)';
@@ -284,12 +284,12 @@ function markContent(items) {
     const computedPos = getComputedStyle(container).position;
     if (computedPos === 'static') {
       container.style.position = 'relative';
-      container.setAttribute('data-xwebagent-pos-changed', 'true');
+      container.setAttribute('data-pageguide-pos-changed', 'true');
     }
 
     // Inject numbered badge
     const badge = document.createElement('div');
-    badge.className = 'xwebagent-hide-badge';
+    badge.className = 'pageguide-hide-badge';
     Object.assign(badge.style, {
       position: 'absolute',
       top: '6px',
@@ -332,7 +332,7 @@ function hideContent(items, selectedSet) {
     if (selectedSet && !selectedSet.has(badgeNum)) return; // user unchecked this one
 
     container.style.display = 'none';
-    container.setAttribute('data-xwebagent-hidden', 'true');
+    container.setAttribute('data-pageguide-hidden', 'true');
   });
 }
 
@@ -370,22 +370,22 @@ function findContainer(el) {
  * Clear all markings (outlines, badges, background tints)
  */
 function clearMarkings() {
-  document.querySelectorAll('[data-xwebagent-marked]').forEach(el => {
+  document.querySelectorAll('[data-pageguide-marked]').forEach(el => {
     el.style.outline = '';
     el.style.outlineOffset = '';
     el.style.backgroundColor = '';
-    if (el.hasAttribute('data-xwebagent-pos-changed')) {
+    if (el.hasAttribute('data-pageguide-pos-changed')) {
       el.style.position = '';
-      el.removeAttribute('data-xwebagent-pos-changed');
+      el.removeAttribute('data-pageguide-pos-changed');
     }
-    el.removeAttribute('data-xwebagent-marked');
+    el.removeAttribute('data-pageguide-marked');
   });
 
-  document.querySelectorAll('.xwebagent-hide-badge').forEach(el => el.remove());
+  document.querySelectorAll('.pageguide-hide-badge').forEach(el => el.remove());
 
-  document.querySelectorAll('[data-xwebagent-hidden]').forEach(el => {
+  document.querySelectorAll('[data-pageguide-hidden]').forEach(el => {
     el.style.display = '';
-    el.removeAttribute('data-xwebagent-hidden');
+    el.removeAttribute('data-pageguide-hidden');
   });
 }
 
@@ -433,7 +433,7 @@ function _escDialog(str) {
 function showHideDialog(count, message, items) {
   return new Promise(resolve => {
     const dialog = document.createElement('div');
-    dialog.id = 'xwebagent-dialog';
+    dialog.id = 'pageguide-dialog';
 
     // Build checklist rows (one per unique container; badge number = row index + 1)
     const rows = (items || []).map((item, i) => {
@@ -474,19 +474,19 @@ function showHideDialog(count, message, items) {
           <p style="margin:0 0 14px;color:#aaa;font-size:13px;">${_escDialog(message || 'Uncheck any item you want to keep visible.')}</p>
 
           <!-- checklist -->
-          <div id="xwebagent-hide-list"
+          <div id="pageguide-hide-list"
                style="max-height:260px;overflow-y:auto;padding-right:2px;margin-bottom:14px;">
             ${rows}
           </div>
 
           <!-- select all / none -->
           <div style="display:flex;gap:8px;margin-bottom:14px;">
-            <button id="xwebagent-select-all"
+            <button id="pageguide-select-all"
                     style="flex:1;padding:6px;border:1px solid #444;border-radius:6px;
                            background:transparent;color:#ccc;font-size:12px;cursor:pointer;">
               ☑ Select all
             </button>
-            <button id="xwebagent-select-none"
+            <button id="pageguide-select-none"
                     style="flex:1;padding:6px;border:1px solid #444;border-radius:6px;
                            background:transparent;color:#ccc;font-size:12px;cursor:pointer;">
               ☐ Deselect all
@@ -495,15 +495,15 @@ function showHideDialog(count, message, items) {
 
           <!-- action buttons -->
           <div style="display:flex;gap:12px;">
-            <button id="xwebagent-cancel"
+            <button id="pageguide-cancel"
                     style="flex:1;padding:10px;border:none;border-radius:6px;
                            background:#2a2a40;color:#ccc;cursor:pointer;font-size:14px;">
               Keep visible
             </button>
-            <button id="xwebagent-confirm"
+            <button id="pageguide-confirm"
                     style="flex:1;padding:10px;border:none;border-radius:6px;
                            background:#667eea;color:white;cursor:pointer;font-size:14px;font-weight:600;">
-              Hide selected (<span id="xwebagent-hide-count">${count}</span>)
+              Hide selected (<span id="pageguide-hide-count">${count}</span>)
             </button>
           </div>
         </div>
@@ -518,8 +518,8 @@ function showHideDialog(count, message, items) {
 
     const updateCount = () => {
       const n = getChecked().size;
-      dialog.querySelector('#xwebagent-hide-count').textContent = n;
-      dialog.querySelector('#xwebagent-confirm').disabled = n === 0;
+      dialog.querySelector('#pageguide-hide-count').textContent = n;
+      dialog.querySelector('#pageguide-confirm').disabled = n === 0;
     };
 
     const highlightRow = (num, on) => {
@@ -528,53 +528,53 @@ function showHideDialog(count, message, items) {
     };
 
     // Sync checkbox state → page badge highlight
-    dialog.querySelector('#xwebagent-hide-list').addEventListener('change', e => {
+    dialog.querySelector('#pageguide-hide-list').addEventListener('change', e => {
       if (e.target.type !== 'checkbox') return;
       const num = parseInt(e.target.dataset.num, 10);
       // Dim the badge on the page when unchecked
-      const badge = document.querySelector(`.xwebagent-hide-badge:nth-of-type(1)`);
+      const badge = document.querySelector(`.pageguide-hide-badge:nth-of-type(1)`);
       // Find the container with this badge number
-      const container = [...document.querySelectorAll('[data-xwebagent-marked]')]
-        .find(el => el.getAttribute('data-xwebagent-marked') === String(num));
+      const container = [...document.querySelectorAll('[data-pageguide-marked]')]
+        .find(el => el.getAttribute('data-pageguide-marked') === String(num));
       if (container) {
         container.style.outline = e.target.checked
           ? '2px solid rgba(255,71,87,0.8)'
           : '2px dashed rgba(255,71,87,0.25)';
         container.style.backgroundColor = e.target.checked
           ? 'rgba(255,71,87,0.05)' : 'transparent';
-        const b = container.querySelector('.xwebagent-hide-badge');
+        const b = container.querySelector('.pageguide-hide-badge');
         if (b) b.style.opacity = e.target.checked ? '1' : '0.3';
       }
       updateCount();
     });
 
     // Jump-to button: scroll page to the element and flash it
-    dialog.querySelector('#xwebagent-hide-list').addEventListener('click', e => {
+    dialog.querySelector('#pageguide-hide-list').addEventListener('click', e => {
       const jumpBtn = e.target.closest('[data-jump]');
       if (!jumpBtn) return;
       e.preventDefault();
       const num = parseInt(jumpBtn.dataset.jump, 10);
-      const container = [...document.querySelectorAll('[data-xwebagent-marked]')]
-        .find(el => el.getAttribute('data-xwebagent-marked') === String(num));
+      const container = [...document.querySelectorAll('[data-pageguide-marked]')]
+        .find(el => el.getAttribute('data-pageguide-marked') === String(num));
       if (container) {
         container.scrollIntoView({ behavior: 'smooth', block: 'center' });
         _flashElement(container);
       }
     });
 
-    dialog.querySelector('#xwebagent-select-all').onclick = () => {
+    dialog.querySelector('#pageguide-select-all').onclick = () => {
       dialog.querySelectorAll('input[data-num]').forEach(cb => { cb.checked = true; cb.dispatchEvent(new Event('change', {bubbles:true})); });
     };
-    dialog.querySelector('#xwebagent-select-none').onclick = () => {
+    dialog.querySelector('#pageguide-select-none').onclick = () => {
       dialog.querySelectorAll('input[data-num]').forEach(cb => { cb.checked = false; cb.dispatchEvent(new Event('change', {bubbles:true})); });
     };
 
-    dialog.querySelector('#xwebagent-confirm').onclick = () => {
+    dialog.querySelector('#pageguide-confirm').onclick = () => {
       const sel = getChecked();
       dialog.remove();
       resolve({ confirmed: sel.size > 0, selectedSet: sel });
     };
-    dialog.querySelector('#xwebagent-cancel').onclick = () => {
+    dialog.querySelector('#pageguide-cancel').onclick = () => {
       dialog.remove();
       resolve({ confirmed: false, selectedSet: new Set() });
     };

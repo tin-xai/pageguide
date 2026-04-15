@@ -1,4 +1,4 @@
-// XWebAgent - Step-by-Step Guidance v2
+// PageGuide - Step-by-Step Guidance v2
 //
 // Architecture (SeeAct-inspired):
 //   • Service worker (SW) owns the guidance state in memory.
@@ -56,23 +56,23 @@ settings there, then click the Print or Save button to finish."`;
 
 // ===== CONSTANTS =====
 
-const _GV2_KEY = 'xwebagentGuidanceV2';
+const _GV2_KEY = 'pageguideGuidanceV2';
 const _GV2_MAX_AGE = 10 * 60 * 1000; // 10 minutes
 
 // ===== PAGE INDICATOR =====
 
-const _GV2_INDICATOR_ID = 'xwebagent-gv2-indicator';
+const _GV2_INDICATOR_ID = 'pageguide-gv2-indicator';
 let _gv2IndicatorInjected = false;
 
 function _gv2ShowIndicator(text = 'Agent thinking…') {
   if (!_gv2IndicatorInjected) {
     _gv2IndicatorInjected = true;
     const style = document.createElement('style');
-    style.id = 'xwebagent-gv2-indicator-css';
+    style.id = 'pageguide-gv2-indicator-css';
     style.textContent = `
-#xwebagent-gv2-indicator{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);z-index:2147483647;display:flex;align-items:center;gap:10px;padding:10px 18px;border-radius:999px;background:rgba(20,20,30,.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);box-shadow:0 4px 24px rgba(0,0,0,.45);color:#e8e8f0;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none;opacity:0;transition:opacity .22s ease,transform .22s ease}
-#xwebagent-gv2-indicator.gv2-visible{opacity:1;transform:translateX(-50%) translateY(0)}
-#xwebagent-gv2-indicator .gv2-spinner{width:14px;height:14px;border:2px solid rgba(160,120,255,.35);border-top-color:#a078ff;border-radius:50%;animation:gv2spin .75s linear infinite;flex-shrink:0}
+#pageguide-gv2-indicator{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);z-index:2147483647;display:flex;align-items:center;gap:10px;padding:10px 18px;border-radius:999px;background:rgba(20,20,30,.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);box-shadow:0 4px 24px rgba(0,0,0,.45);color:#e8e8f0;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none;opacity:0;transition:opacity .22s ease,transform .22s ease}
+#pageguide-gv2-indicator.gv2-visible{opacity:1;transform:translateX(-50%) translateY(0)}
+#pageguide-gv2-indicator .gv2-spinner{width:14px;height:14px;border:2px solid rgba(160,120,255,.35);border-top-color:#a078ff;border-radius:50%;animation:gv2spin .75s linear infinite;flex-shrink:0}
 @keyframes gv2spin{to{transform:rotate(360deg)}}`;
     document.head.appendChild(style);
   }
@@ -532,7 +532,7 @@ Provide the next step as JSON.`
 }
 
 /**
- * Find the best matching element index in window._xwebagentIndex by text.
+ * Find the best matching element index in window._pageguideIndex by text.
  *
  * Two-step approach: the LLM often gets element.index wrong but gets
  * element.text right. We search all indexed elements by their accessible
@@ -544,7 +544,7 @@ Provide the next step as JSON.`
  */
 function gv2FindElementByText(searchText) {
   if (!searchText) return null;
-  const indexMap = window._xwebagentIndex;
+  const indexMap = window._pageguideIndex;
   if (!indexMap || Object.keys(indexMap).length === 0) return null;
 
   const normalize = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -608,7 +608,7 @@ async function gv2ProcessResponse(content) {
 
     // Clear previous highlights
     if (typeof clearHighlights === 'function') clearHighlights();
-    window._xwebagentHighlights = [];
+    window._pageguideHighlights = [];
 
     // Highlight target element — two-step approach:
     //   Step 1: find the element by text match (more reliable than LLM index)
@@ -630,14 +630,14 @@ async function gv2ProcessResponse(content) {
       }
 
       highlightCount = applyIndexedHighlight(idxToUse, step.element.text, style);
-      if (window._xwebagentHighlights?.length > 0) {
+      if (window._pageguideHighlights?.length > 0) {
         setTimeout(() => { if (typeof scrollToHighlight === 'function') scrollToHighlight(0); }, 300);
       }
 
       // Store the resolved target element and its text so gv2NextStep can click
       // it reliably even if React's reconciliation removes the highlight span
       // before the user presses "Next →".
-      g.currentTargetEl   = window._xwebagentIndex[idxToUse] || null;
+      g.currentTargetEl   = window._pageguideIndex[idxToUse] || null;
       g.currentTargetText = step.element.text || null;
     } else {
       g.currentTargetEl   = null;
@@ -701,8 +701,8 @@ function _gv2SetupClickListener() {
   _guidev2WaitingForClick = true;
 
   const handler = async (e) => {
-    const onHighlight = e.target.closest('[data-xwebagent-styled]') ||
-                        e.target.hasAttribute('data-xwebagent-styled');
+    const onHighlight = e.target.closest('[data-pageguide-styled]') ||
+                        e.target.hasAttribute('data-pageguide-styled');
     if (!onHighlight) return;
 
     console.log('[guidev2] User clicked highlighted element');
@@ -841,7 +841,7 @@ async function _gv2AutoType(step) {
   if (!step.typeText) {
     console.warn('[guidev2] autoType: no typeText in step');
   } else {
-    const highlighted = document.querySelector('[data-xwebagent-styled]');
+    const highlighted = document.querySelector('[data-pageguide-styled]');
     const input = highlighted
       ? (highlighted.matches('input,textarea,[contenteditable]')
           ? highlighted
@@ -954,8 +954,8 @@ window.gv2NextStep = async function () {
   //      that removes injected highlight spans from the DOM).
   //   2. Fresh text-based lookup via gv2FindElementByText (handles the case where
   //      React replaced the element node itself since the last step was generated).
-  //   3. Fallback: query for [data-xwebagent-styled] (whole-element highlight path,
-  //      where data-xwebagent-styled is on the real element, not an injected span).
+  //   3. Fallback: query for [data-pageguide-styled] (whole-element highlight path,
+  //      where data-pageguide-styled is on the real element, not an injected span).
   //
   // After finding the node, walk up to the nearest real interactive ancestor so
   // React/SPA event handlers (attached to <a>/<button>/[role="button"]) fire correctly.
@@ -980,7 +980,7 @@ window.gv2NextStep = async function () {
   if (!toClick && window._guidev2?.currentTargetText) {
     const freshIdx = gv2FindElementByText(window._guidev2.currentTargetText);
     if (freshIdx !== null) {
-      const freshEl = window._xwebagentIndex?.[freshIdx];
+      const freshEl = window._pageguideIndex?.[freshIdx];
       toClick = _resolveClickTarget(freshEl);
       if (toClick) console.log('[guidev2] Using fresh text-match target:', toClick.tagName, toClick.textContent?.slice(0, 60));
     }
@@ -988,7 +988,7 @@ window.gv2NextStep = async function () {
 
   // 3. Highlight-span fallback
   if (!toClick) {
-    const highlighted = document.querySelector('[data-xwebagent-styled]');
+    const highlighted = document.querySelector('[data-pageguide-styled]');
     toClick = _resolveClickTarget(highlighted);
     if (toClick) console.log('[guidev2] Using highlight-span fallback:', toClick.tagName, toClick.textContent?.slice(0, 60));
   }
@@ -1025,7 +1025,7 @@ window.gv2StopGuide = function () {
 
 window.handleStepByStepGuide = function (question, continueFromStep = false) {
   // continueFromStep=true comes from guide.js's continueGuidance() which won't fire
-  // when v2 is active (_xwebagentGuidance.active = false). Handle defensively anyway.
+  // when v2 is active (_pageguideGuidance.active = false). Handle defensively anyway.
   if (continueFromStep) return gv2GenerateNextStep();
   return _handleStepByStepGuideV2(question);
 };

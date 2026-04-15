@@ -64,9 +64,9 @@ test.describe('Error Handling', () => {
     await panelPage.waitForLoadState('domcontentloaded');
     await panelPage.waitForTimeout(500);
 
-    const input = panelPage.locator('#xwebagent-input');
-    const sendBtn = panelPage.locator('#xwebagent-send');
-    const messagesContainer = panelPage.locator('#xwebagent-messages');
+    const input = panelPage.locator('#pageguide-input');
+    const sendBtn = panelPage.locator('#pageguide-send');
+    const messagesContainer = panelPage.locator('#pageguide-messages');
 
     // Clear input and try to send
     await input.fill('');
@@ -74,7 +74,7 @@ test.describe('Error Handling', () => {
 
     // Should not add a message for empty input
     await panelPage.waitForTimeout(500);
-    const userMessages = await messagesContainer.locator('.xwebagent-message.user').count();
+    const userMessages = await messagesContainer.locator('.pageguide-message.user').count();
 
     // Empty input should not create a message
     expect(userMessages).toBe(0);
@@ -90,8 +90,8 @@ test.describe('Error Handling', () => {
     await panelPage.waitForLoadState('domcontentloaded');
     await panelPage.waitForTimeout(500);
 
-    const input = panelPage.locator('#xwebagent-input');
-    const sendBtn = panelPage.locator('#xwebagent-send');
+    const input = panelPage.locator('#pageguide-input');
+    const sendBtn = panelPage.locator('#pageguide-send');
 
     // Try to send only whitespace
     await input.fill('   ');
@@ -128,7 +128,7 @@ test.describe('Error Handling', () => {
     await panelPage.waitForLoadState('domcontentloaded');
     await panelPage.waitForTimeout(500);
 
-    const input = panelPage.locator('#xwebagent-input');
+    const input = panelPage.locator('#pageguide-input');
 
     // Generate a very long string
     const longText = 'a'.repeat(10000);
@@ -154,7 +154,7 @@ test.describe('Error Handling', () => {
     await panelPage.waitForLoadState('domcontentloaded');
     await panelPage.waitForTimeout(500);
 
-    const input = panelPage.locator('#xwebagent-input');
+    const input = panelPage.locator('#pageguide-input');
 
     // Test various special characters
     const specialChars = '!@#$%^&*()_+-=[]{}|;\':",.<>?/\\`~';
@@ -174,7 +174,7 @@ test.describe('Error Handling', () => {
     await panelPage.waitForLoadState('domcontentloaded');
     await panelPage.waitForTimeout(500);
 
-    const input = panelPage.locator('#xwebagent-input');
+    const input = panelPage.locator('#pageguide-input');
 
     // Test unicode and emoji
     const unicodeText = '🔍 Search for café ñ 中文 العربية';
@@ -194,8 +194,8 @@ test.describe('Error Handling', () => {
     await panelPage.waitForLoadState('domcontentloaded');
     await panelPage.waitForTimeout(500);
 
-    const input = panelPage.locator('#xwebagent-input');
-    const sendBtn = panelPage.locator('#xwebagent-send');
+    const input = panelPage.locator('#pageguide-input');
+    const sendBtn = panelPage.locator('#pageguide-send');
 
     // Rapidly send multiple messages
     for (let i = 0; i < 3; i++) {

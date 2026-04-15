@@ -1,8 +1,8 @@
-# XWebAgent Extension - Architecture
+# PageGuide Extension - Architecture
 
 ## Overview
 
-XWebAgent is a Chrome extension that provides an AI-powered web assistant. Users can ask questions about page content, get step-by-step guidance, and detect unsafe content.
+PageGuide is a Chrome extension that provides an AI-powered web assistant. Users can ask questions about page content, get step-by-step guidance, and detect unsafe content.
 
 ## Flow Diagram
 

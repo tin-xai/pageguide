@@ -1,4 +1,4 @@
-// XWebAgent Options Page Script
+// PageGuide Options Page Script
 // Supports Gemini, OpenRouter, and OpenAI providers
 
 let currentProvider = 'gemini';
@@ -163,7 +163,7 @@ async function testOpenRouter(resultDiv) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
       'HTTP-Referer': chrome.runtime.getURL(''),
-      'X-Title': 'XWebAgent'
+      'X-Title': 'PageGuide'
     },
     body: JSON.stringify({
       model: model,

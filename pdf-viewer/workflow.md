@@ -2,7 +2,7 @@
 
 ## Overview
 
-The XWebAgent PDF Reader allows users to upload PDFs, ask questions about them using AI, and get answers with clickable citations that highlight the exact text in the document.
+The PageGuide PDF Reader allows users to upload PDFs, ask questions about them using AI, and get answers with clickable citations that highlight the exact text in the document.
 
 ---
 
@@ -215,7 +215,7 @@ Regex: /\[Page\s*(\d+):\s*["']([^"']+)["']\]/gi
          │
          ▼
 Creates clickable citation spans:
-<span class="xwebagent-pdf-citation" 
+<span class="pageguide-pdf-citation" 
       data-page="1" 
       data-text="We propose a novel method...">
   📄 We propose a novel method...

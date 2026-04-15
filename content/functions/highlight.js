@@ -1,4 +1,4 @@
-// XWebAgent - Highlight Functions
+// PageGuide - Highlight Functions
 // All highlighting related functionality
 
 /**
@@ -59,17 +59,17 @@ function getRandomHighlightStyle(isDarkPage = false) {
 }
 
 /**
- * Reset all custom styles applied by XWebAgent
+ * Reset all custom styles applied by PageGuide
  */
 function resetCustomStyles() {
   let count = 0;
   
   // Remove injected style tag
-  const style = document.getElementById('xwebagent-custom-style');
+  const style = document.getElementById('pageguide-custom-style');
   if (style) style.remove();
   
   // Remove highlight spans (unwrap them back to text)
-  document.querySelectorAll('span.xwebagent-highlight').forEach(span => {
+  document.querySelectorAll('span.pageguide-highlight').forEach(span => {
     const text = document.createTextNode(span.textContent);
     span.parentNode.replaceChild(text, span);
     count++;
@@ -79,9 +79,9 @@ function resetCustomStyles() {
   const styledProps = ['color', 'backgroundColor', 'fontWeight', 'outline', 
     'outlineOffset', 'border', 'textDecoration', 'boxShadow'];
   
-  document.querySelectorAll('[data-xwebagent-styled]').forEach(el => {
+  document.querySelectorAll('[data-pageguide-styled]').forEach(el => {
     styledProps.forEach(prop => el.style[prop] = '');
-    el.removeAttribute('data-xwebagent-styled');
+    el.removeAttribute('data-pageguide-styled');
     count++;
   });
   
@@ -93,16 +93,16 @@ function resetCustomStyles() {
  */
 function clearHighlights() {
   // Clear highlights array
-  window._xwebagentHighlights = [];
+  window._pageguideHighlights = [];
   
-  // Remove ALL xwebagent highlight-related classes
-  document.querySelectorAll('[class*="xwebagent-highlight"], [class*="xwebagent-guide"]').forEach(el => {
+  // Remove ALL pageguide highlight-related classes
+  document.querySelectorAll('[class*="pageguide-highlight"], [class*="pageguide-guide"]').forEach(el => {
     const classes = Array.from(el.classList).filter(c => 
-      c.startsWith('xwebagent-highlight') || c.startsWith('xwebagent-guide')
+      c.startsWith('pageguide-highlight') || c.startsWith('pageguide-guide')
     );
     classes.forEach(c => el.classList.remove(c));
-    el.style.removeProperty('--xwebagent-color');
-    el.removeAttribute('data-xwebagent-styled');
+    el.style.removeProperty('--pageguide-color');
+    el.removeAttribute('data-pageguide-styled');
     // Also remove inline styles that might have been added
     el.style.removeProperty('background-color');
     el.style.removeProperty('outline');
@@ -110,7 +110,7 @@ function clearHighlights() {
   });
   
   // Unwrap highlight spans
-  document.querySelectorAll('.xwebagent-highlight').forEach(span => {
+  document.querySelectorAll('.pageguide-highlight').forEach(span => {
     const parent = span.parentNode;
     if (parent) {
       parent.replaceChild(document.createTextNode(span.textContent), span);
@@ -129,12 +129,12 @@ function clearHighlights() {
  */
 function applyIndexedHighlight(index, text, style = {}) {
   console.log('🎨 applyIndexedHighlight called with index:', index, 'text:', text);
-  console.log('🎨 Current _xwebagentIndex keys:', Object.keys(window._xwebagentIndex || {}));
+  console.log('🎨 Current _pageguideIndex keys:', Object.keys(window._pageguideIndex || {}));
   
   const element = getIndexedElement(index);
   if (!element) {
-    console.warn('🤖 Index', index, 'not found in _xwebagentIndex!');
-    console.warn('🤖 Available indices:', Object.keys(window._xwebagentIndex || {}));
+    console.warn('🤖 Index', index, 'not found in _pageguideIndex!');
+    console.warn('🤖 Available indices:', Object.keys(window._pageguideIndex || {}));
     return 0;
   }
   
@@ -152,7 +152,7 @@ function applyIndexedHighlight(index, text, style = {}) {
   
   // Otherwise highlight the whole element
   applyAnimatedHighlight(element, color, animation);
-  window._xwebagentHighlights.push(element);
+  window._pageguideHighlights.push(element);
   return 1;
 }
 
@@ -161,18 +161,18 @@ function applyIndexedHighlight(index, text, style = {}) {
  */
 function applyAnimatedHighlight(element, color, animation) {
   // Set CSS variable for the color
-  element.style.setProperty('--xwebagent-color', color);
+  element.style.setProperty('--pageguide-color', color);
   
   // Add animation class
-  const animClass = `xwebagent-highlight-${animation}`;
-  element.classList.add('xwebagent-highlight', animClass);
-  element.setAttribute('data-xwebagent-styled', 'true');
+  const animClass = `pageguide-highlight-${animation}`;
+  element.classList.add('pageguide-highlight', animClass);
+  element.setAttribute('data-pageguide-styled', 'true');
   
   // For block elements using shimmer, use the block variant
   const display = window.getComputedStyle(element).display;
   if (animation === 'shimmer' && display !== 'inline') {
     element.classList.remove(animClass);
-    element.classList.add('xwebagent-highlight-shimmer-block');
+    element.classList.add('pageguide-highlight-shimmer-block');
   }
 }
 
@@ -220,7 +220,7 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
           child.style.borderRadius = '3px';
           child.style.padding = '1px 4px';
           
-          window._xwebagentHighlights.push(child);
+          window._pageguideHighlights.push(child);
           count++;
           break;
         }
@@ -243,7 +243,7 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
     const descWalker = document.createTreeWalker(element, NodeFilter.SHOW_ELEMENT);
     let descEl;
     while ((descEl = descWalker.nextNode())) {
-      if (isXWebAgentElement(descEl)) continue;
+      if (isPageGuideElement(descEl)) continue;
       const descLen = descEl.textContent?.length || 0;
       if (descLen < targetLen) {
         const descTextLower = descEl.textContent?.toLowerCase().trim() || '';
@@ -298,12 +298,12 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
 
       // Create highlight span with LLM-chosen style
       const span = document.createElement('span');
-      span.className = `xwebagent-highlight xwebagent-highlight-${animation}`;
-      span.style.setProperty('--xwebagent-color', color);
+      span.className = `pageguide-highlight pageguide-highlight-${animation}`;
+      span.style.setProperty('--pageguide-color', color);
       span.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
       span.style.borderRadius = '3px';
       span.style.padding = '1px 4px';
-      span.setAttribute('data-xwebagent-styled', 'true');
+      span.setAttribute('data-pageguide-styled', 'true');
       span.textContent = match;
 
       const fragment = document.createDocumentFragment();
@@ -312,7 +312,7 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
       if (after) fragment.appendChild(document.createTextNode(after));
 
       textNode.parentNode.replaceChild(fragment, textNode);
-      window._xwebagentHighlights.push(span);
+      window._pageguideHighlights.push(span);
       count++;
     }
 
@@ -325,7 +325,7 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
       applyAnimatedHighlight(targetEl, color, animation);
       targetEl.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
       targetEl.style.borderRadius = '3px';
-      window._xwebagentHighlights.push(targetEl);
+      window._pageguideHighlights.push(targetEl);
       count++;
     }
   }
@@ -334,7 +334,7 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
   if (count === 0) {
     console.log('🤖 No text match, highlighting whole element');
     applyAnimatedHighlight(element, color, animation);
-    window._xwebagentHighlights.push(element);
+    window._pageguideHighlights.push(element);
     count = 1;
   }
   
@@ -351,9 +351,9 @@ function applyElementHighlight(selector, style = {}) {
   
   try {
     document.querySelectorAll(selector).forEach(el => {
-      if (!isXWebAgentElement(el)) {
+      if (!isPageGuideElement(el)) {
         applyAnimatedHighlight(el, color, animation);
-        window._xwebagentHighlights.push(el);
+        window._pageguideHighlights.push(el);
         count++;
       }
     });
@@ -407,9 +407,9 @@ function showSetOfMarks(pageIndex) {
   // Remove existing SoM first
   hideSetOfMarks();
   
-  const indexMap = pageIndex?.indexMap || window._xwebagentIndex || {};
+  const indexMap = pageIndex?.indexMap || window._pageguideIndex || {};
   const container = document.createElement('div');
-  container.id = 'xwebagent-som-container';
+  container.id = 'pageguide-som-container';
   container.style.cssText = 'position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; z-index: 999999;';
   
   // Color palette for variety
@@ -445,7 +445,7 @@ function showSetOfMarks(pageIndex) {
       
       // Create bounding box around the element
       const box = document.createElement('div');
-      box.className = 'xwebagent-som-box';
+      box.className = 'pageguide-som-box';
       box.dataset.somIndex = idx;
       box.style.cssText = `
         position: absolute;
@@ -463,7 +463,7 @@ function showSetOfMarks(pageIndex) {
       
       // Create mark label - positioned at top-right of element
       const mark = document.createElement('div');
-      mark.className = 'xwebagent-som-mark';
+      mark.className = 'pageguide-som-mark';
       mark.dataset.somIndex = idx;
       mark.textContent = idx;
       
@@ -501,7 +501,7 @@ function showSetOfMarks(pageIndex) {
  * Hide/remove Set of Marks
  */
 function hideSetOfMarks() {
-  const container = document.getElementById('xwebagent-som-container');
+  const container = document.getElementById('pageguide-som-container');
   if (container) {
     container.remove();
     console.log('🏷️ SoM hidden');
@@ -512,13 +512,13 @@ function hideSetOfMarks() {
  * Update SoM positions (call on scroll/resize)
  */
 function updateSetOfMarks() {
-  const container = document.getElementById('xwebagent-som-container');
+  const container = document.getElementById('pageguide-som-container');
   if (!container) return;
   
-  const indexMap = window._xwebagentIndex || {};
+  const indexMap = window._pageguideIndex || {};
   
   // Update marks
-  container.querySelectorAll('.xwebagent-som-mark').forEach(mark => {
+  container.querySelectorAll('.pageguide-som-mark').forEach(mark => {
     const idx = mark.dataset.somIndex;
     const element = indexMap[idx];
     if (element) {
@@ -537,7 +537,7 @@ function updateSetOfMarks() {
   });
   
   // Update boxes
-  container.querySelectorAll('.xwebagent-som-box').forEach(box => {
+  container.querySelectorAll('.pageguide-som-box').forEach(box => {
     const idx = box.dataset.somIndex;
     const element = indexMap[idx];
     if (element) {
@@ -571,7 +571,7 @@ async function showSomIfEnabled(pageIndex) {
     window.addEventListener('scroll', scrollHandler, { passive: true });
     
     // Store handler for cleanup
-    window._xwebagentSomScrollHandler = scrollHandler;
+    window._pageguideSomScrollHandler = scrollHandler;
   }
   return enabled;
 }
@@ -583,9 +583,9 @@ function cleanupSom() {
   hideSetOfMarks();
   
   // Remove scroll listener
-  if (window._xwebagentSomScrollHandler) {
-    window.removeEventListener('scroll', window._xwebagentSomScrollHandler);
-    window._xwebagentSomScrollHandler = null;
+  if (window._pageguideSomScrollHandler) {
+    window.removeEventListener('scroll', window._pageguideSomScrollHandler);
+    window._pageguideSomScrollHandler = null;
   }
 }
 

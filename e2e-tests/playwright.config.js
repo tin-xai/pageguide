@@ -3,7 +3,7 @@ const { defineConfig } = require('@playwright/test');
 const path = require('path');
 
 /**
- * Playwright configuration for XWebAgent extension testing
+ * Playwright configuration for PageGuide extension testing
  * Note: Tests use launchPersistentContext directly for extension support
  * @see https://playwright.dev/docs/test-configuration
  */

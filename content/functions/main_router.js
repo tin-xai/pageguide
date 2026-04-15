@@ -1,4 +1,4 @@
-// XWebAgent - API Router (Main Entry Point)
+// PageGuide - API Router (Main Entry Point)
 // Routes queries to appropriate handlers: ask, guide, hide
 /**
  * Safe wrapper for chrome.runtime.sendMessage

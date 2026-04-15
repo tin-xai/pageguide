@@ -1,20 +1,20 @@
-/* XWebAgent Content Script Styles */
+/* PageGuide Content Script Styles */
 
 /* Guide highlight effect */
-.xwebagent-guide-highlight {
+.pageguide-guide-highlight {
   outline: 3px solid #00ff88 !important;
   outline-offset: 3px !important;
   box-shadow: 0 0 20px rgba(0, 255, 136, 0.5) !important;
-  animation: xwebagent-pulse 1.5s ease-in-out infinite !important;
+  animation: pageguide-pulse 1.5s ease-in-out infinite !important;
 }
 
-@keyframes xwebagent-pulse {
+@keyframes pageguide-pulse {
   0%, 100% { box-shadow: 0 0 10px rgba(0, 255, 136, 0.5); }
   50% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.8); }
 }
 
 /* Tooltip */
-.xwebagent-tooltip {
+.pageguide-tooltip {
   position: fixed;
   background: #1a1a2e;
   color: #fff;
@@ -28,7 +28,7 @@
   border: 1px solid rgba(0, 217, 255, 0.3);
 }
 
-.xwebagent-tooltip::before {
+.pageguide-tooltip::before {
   content: '';
   position: absolute;
   top: -6px;
@@ -39,14 +39,14 @@
 }
 
 /* Arrow indicator */
-.xwebagent-arrow {
+.pageguide-arrow {
   position: fixed;
   pointer-events: none;
   z-index: 999998;
 }
 
 /* Warning overlay */
-.xwebagent-warning-overlay {
+.pageguide-warning-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -59,7 +59,7 @@
   justify-content: center;
 }
 
-.xwebagent-warning-box {
+.pageguide-warning-box {
   background: #1a1a2e;
   border: 2px solid #ff4444;
   border-radius: 12px;
@@ -70,12 +70,12 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
-.xwebagent-warning-box h2 {
+.pageguide-warning-box h2 {
   color: #ff4444;
   margin-bottom: 12px;
 }
 
-.xwebagent-warning-box button {
+.pageguide-warning-box button {
   margin: 8px;
   padding: 10px 20px;
   border-radius: 6px;
@@ -84,28 +84,28 @@
   font-weight: 600;
 }
 
-.xwebagent-warning-box .btn-danger {
+.pageguide-warning-box .btn-danger {
   background: #ff4444;
   color: white;
 }
 
-.xwebagent-warning-box .btn-safe {
+.pageguide-warning-box .btn-safe {
   background: #00ff88;
   color: #000;
 }
 
 /* Blurred explicit content */
-.xwebagent-blurred {
+.pageguide-blurred {
   filter: blur(20px) !important;
   transition: filter 0.3s;
 }
 
-.xwebagent-blurred:hover {
+.pageguide-blurred:hover {
   filter: blur(10px) !important;
 }
 
 /* Element index labels */
-.xwebagent-index-label {
+.pageguide-index-label {
   position: absolute;
   background: #00d9ff;
   color: #000;
@@ -119,7 +119,7 @@
 }
 
 /* ===== CHAT PANEL ===== */
-#xwebagent-chat-panel {
+#pageguide-chat-panel {
   position: fixed;
   top: 0;
   right: 0;
@@ -136,12 +136,12 @@
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-#xwebagent-chat-panel.open {
+#pageguide-chat-panel.open {
   transform: translateX(0);
 }
 
 /* Chat Header */
-.xwebagent-chat-header {
+.pageguide-chat-header {
   padding: 16px 20px;
   background: linear-gradient(135deg, rgba(0, 217, 255, 0.1) 0%, rgba(0, 255, 136, 0.05) 100%);
   border-bottom: 1px solid rgba(0, 217, 255, 0.2);
@@ -150,19 +150,19 @@
   justify-content: space-between;
 }
 
-.xwebagent-header-left {
+.pageguide-header-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.xwebagent-logo {
+.pageguide-logo {
   width: 40px;
   height: 40px;
   border-radius: 8px;
 }
 
-.xwebagent-header-text h2 {
+.pageguide-header-text h2 {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
@@ -172,20 +172,20 @@
   background-clip: text;
 }
 
-.xwebagent-header-text p {
+.pageguide-header-text p {
   margin: 2px 0 0 0;
   font-size: 10px;
   color: #888;
 }
 
-.xwebagent-header-right {
+.pageguide-header-right {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.xwebagent-settings-btn,
-.xwebagent-close-btn {
+.pageguide-settings-btn,
+.pageguide-close-btn {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   color: #888;
@@ -196,18 +196,18 @@
   transition: all 0.2s;
 }
 
-.xwebagent-settings-btn:hover {
+.pageguide-settings-btn:hover {
   background: rgba(0, 217, 255, 0.2);
   color: #00d9ff;
 }
 
-.xwebagent-close-btn:hover {
+.pageguide-close-btn:hover {
   background: rgba(255, 100, 100, 0.2);
   color: #ff6666;
 }
 
 /* Chat Messages Container */
-.xwebagent-chat-messages {
+.pageguide-chat-messages {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
@@ -216,30 +216,30 @@
   gap: 12px;
 }
 
-.xwebagent-chat-messages::-webkit-scrollbar {
+.pageguide-chat-messages::-webkit-scrollbar {
   width: 6px;
 }
 
-.xwebagent-chat-messages::-webkit-scrollbar-track {
+.pageguide-chat-messages::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.xwebagent-chat-messages::-webkit-scrollbar-thumb {
+.pageguide-chat-messages::-webkit-scrollbar-thumb {
   background: rgba(0, 217, 255, 0.3);
   border-radius: 3px;
 }
 
 /* Message Bubbles */
-.xwebagent-message {
+.pageguide-message {
   max-width: 85%;
   padding: 12px 16px;
   border-radius: 16px;
   font-size: 14px;
   line-height: 1.5;
-  animation: xwebagent-message-in 0.3s ease-out;
+  animation: pageguide-message-in 0.3s ease-out;
 }
 
-@keyframes xwebagent-message-in {
+@keyframes pageguide-message-in {
   from {
     opacity: 0;
     transform: translateY(10px);
@@ -250,14 +250,14 @@
   }
 }
 
-.xwebagent-message.user {
+.pageguide-message.user {
   align-self: flex-end;
   background: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%);
   color: #000;
   border-bottom-right-radius: 4px;
 }
 
-.xwebagent-message.assistant {
+.pageguide-message.assistant {
   align-self: flex-start;
   background: rgba(255, 255, 255, 0.08);
   color: #e0e0e0;
@@ -265,7 +265,7 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.xwebagent-message.system {
+.pageguide-message.system {
   align-self: center;
   background: rgba(0, 255, 136, 0.1);
   color: #00ff88;
@@ -275,7 +275,7 @@
   border: 1px solid rgba(0, 255, 136, 0.2);
 }
 
-.xwebagent-message.error {
+.pageguide-message.error {
   align-self: center;
   background: rgba(255, 100, 100, 0.1);
   color: #ff6666;
@@ -286,7 +286,7 @@
 }
 
 /* Action message - shows executed actions */
-.xwebagent-message.action {
+.pageguide-message.action {
   align-self: center;
   background: linear-gradient(135deg, rgba(255, 200, 0, 0.15), rgba(255, 150, 0, 0.15));
   color: #ffcc00;
@@ -298,7 +298,7 @@
 }
 
 /* Guide message - step-by-step instructions */
-.xwebagent-message.guide {
+.pageguide-message.guide {
   align-self: flex-start;
   background: linear-gradient(135deg, rgba(110, 72, 255, 0.15), rgba(59, 130, 246, 0.15));
   color: #e0e0e0;
@@ -308,13 +308,13 @@
   max-width: 90%;
 }
 
-.xwebagent-guide-step {
+.pageguide-guide-step {
   display: flex;
   align-items: flex-start;
   gap: 10px;
 }
 
-.xwebagent-step-badge {
+.pageguide-step-badge {
   background: linear-gradient(135deg, #6e48ff, #3b82f6);
   color: white;
   padding: 4px 10px;
@@ -324,12 +324,12 @@
   white-space: nowrap;
 }
 
-.xwebagent-step-text {
+.pageguide-step-text {
   flex: 1;
   line-height: 1.5;
 }
 
-.xwebagent-next-hint {
+.pageguide-next-hint {
   margin-top: 10px;
   padding: 8px 12px;
   background: rgba(255, 255, 255, 0.05);
@@ -338,34 +338,34 @@
   color: #a0a0a0;
 }
 
-.xwebagent-guide-waiting {
+.pageguide-guide-waiting {
   margin-top: 10px;
   font-size: 11px;
   color: #6bcfff;
-  animation: xwebagent-waiting-pulse 2s ease-in-out infinite;
+  animation: pageguide-waiting-pulse 2s ease-in-out infinite;
 }
 
-@keyframes xwebagent-waiting-pulse {
+@keyframes pageguide-waiting-pulse {
   0%, 100% { opacity: 0.7; }
   50% { opacity: 1; }
 }
 
 /* Clickable answer message - scroll to highlight */
-.xwebagent-message.xwebagent-clickable {
+.pageguide-message.pageguide-clickable {
   cursor: pointer;
   position: relative;
   transition: all 0.2s ease;
   border: 1px solid rgba(0, 217, 255, 0.3);
 }
 
-.xwebagent-message.xwebagent-clickable:hover {
+.pageguide-message.pageguide-clickable:hover {
   background: rgba(0, 217, 255, 0.15);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 217, 255, 0.2);
 }
 
 /* Typing Indicator */
-.xwebagent-typing {
+.pageguide-typing {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -376,23 +376,23 @@
   align-self: flex-start;
 }
 
-.xwebagent-typing span {
+.pageguide-typing span {
   width: 8px;
   height: 8px;
   background: #00d9ff;
   border-radius: 50%;
-  animation: xwebagent-typing-dot 1.4s infinite;
+  animation: pageguide-typing-dot 1.4s infinite;
 }
 
-.xwebagent-typing span:nth-child(2) {
+.pageguide-typing span:nth-child(2) {
   animation-delay: 0.2s;
 }
 
-.xwebagent-typing span:nth-child(3) {
+.pageguide-typing span:nth-child(3) {
   animation-delay: 0.4s;
 }
 
-@keyframes xwebagent-typing-dot {
+@keyframes pageguide-typing-dot {
   0%, 60%, 100% {
     opacity: 0.3;
     transform: scale(0.8);
@@ -404,20 +404,20 @@
 }
 
 /* Chat Input Area */
-.xwebagent-chat-input-area {
+.pageguide-chat-input-area {
   padding: 16px;
   background: rgba(0, 0, 0, 0.3);
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.xwebagent-quick-actions {
+.pageguide-quick-actions {
   display: flex;
   gap: 6px;
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
 
-.xwebagent-quick-btn {
+.pageguide-quick-btn {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: #aaa;
@@ -428,18 +428,18 @@
   transition: all 0.2s;
 }
 
-.xwebagent-quick-btn:hover {
+.pageguide-quick-btn:hover {
   background: rgba(0, 217, 255, 0.15);
   border-color: rgba(0, 217, 255, 0.3);
   color: #00d9ff;
 }
 
-.xwebagent-input-row {
+.pageguide-input-row {
   display: flex;
   gap: 8px;
 }
 
-.xwebagent-chat-input {
+.pageguide-chat-input {
   flex: 1;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -451,16 +451,16 @@
   transition: all 0.2s;
 }
 
-.xwebagent-chat-input::placeholder {
+.pageguide-chat-input::placeholder {
   color: #666;
 }
 
-.xwebagent-chat-input:focus {
+.pageguide-chat-input:focus {
   border-color: rgba(0, 217, 255, 0.5);
   box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
 }
 
-.xwebagent-send-btn {
+.pageguide-send-btn {
   background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
   border: none;
   border-radius: 50%;
@@ -474,12 +474,12 @@
   transition: all 0.2s;
 }
 
-.xwebagent-send-btn:hover {
+.pageguide-send-btn:hover {
   transform: scale(1.05);
   box-shadow: 0 0 20px rgba(0, 217, 255, 0.4);
 }
 
-.xwebagent-send-btn:disabled {
+.pageguide-send-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
@@ -490,52 +490,52 @@
 /* ===== HIGHLIGHT ANIMATIONS ===== */
 
 /* Pulse - Gentle pulsing glow */
-.xwebagent-highlight-pulse {
-  animation: xwebagent-pulse 2s ease-in-out infinite;
+.pageguide-highlight-pulse {
+  animation: pageguide-pulse 2s ease-in-out infinite;
 }
 
-@keyframes xwebagent-pulse {
+@keyframes pageguide-pulse {
   0%, 100% { 
-    box-shadow: 0 0 5px var(--xwebagent-color, #ffd93d);
+    box-shadow: 0 0 5px var(--pageguide-color, #ffd93d);
     opacity: 1;
   }
   50% { 
-    box-shadow: 0 0 25px var(--xwebagent-color, #ffd93d), 0 0 50px var(--xwebagent-color, #ffd93d);
+    box-shadow: 0 0 25px var(--pageguide-color, #ffd93d), 0 0 50px var(--pageguide-color, #ffd93d);
     opacity: 0.9;
   }
 }
 
 /* Spotlight - Bright spotlight effect */
-.xwebagent-highlight-spotlight {
-  animation: xwebagent-spotlight 1.5s ease-out forwards;
+.pageguide-highlight-spotlight {
+  animation: pageguide-spotlight 1.5s ease-out forwards;
   position: relative;
 }
 
-@keyframes xwebagent-spotlight {
+@keyframes pageguide-spotlight {
   0% {
-    box-shadow: 0 0 0 0 var(--xwebagent-color, #ffd93d);
+    box-shadow: 0 0 0 0 var(--pageguide-color, #ffd93d);
     background-color: transparent;
   }
   30% {
-    box-shadow: 0 0 60px 20px var(--xwebagent-color, #ffd93d);
+    box-shadow: 0 0 60px 20px var(--pageguide-color, #ffd93d);
   }
   100% {
-    box-shadow: 0 0 20px 5px var(--xwebagent-color, #ffd93d);
-    background-color: color-mix(in srgb, var(--xwebagent-color, #ffd93d) 25%, transparent);
+    box-shadow: 0 0 20px 5px var(--pageguide-color, #ffd93d);
+    background-color: color-mix(in srgb, var(--pageguide-color, #ffd93d) 25%, transparent);
   }
 }
 
 /* Shimmer - Moving highlight sweep */
-.xwebagent-highlight-shimmer {
+.pageguide-highlight-shimmer {
   position: relative;
   display: inline-block;
   overflow: hidden;
-  background-color: color-mix(in srgb, var(--xwebagent-color, #ffd93d) 20%, transparent);
+  background-color: color-mix(in srgb, var(--pageguide-color, #ffd93d) 20%, transparent);
   border-radius: 3px;
   padding: 0 2px;
 }
 
-.xwebagent-highlight-shimmer::after {
+.pageguide-highlight-shimmer::after {
   content: '';
   position: absolute;
   top: 0;
@@ -545,25 +545,25 @@
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in srgb, var(--xwebagent-color, #ffd93d) 60%, white),
+    color-mix(in srgb, var(--pageguide-color, #ffd93d) 60%, white),
     transparent
   );
-  animation: xwebagent-shimmer 1.5s ease-in-out infinite;
+  animation: pageguide-shimmer 1.5s ease-in-out infinite;
   pointer-events: none;
 }
 
-@keyframes xwebagent-shimmer {
+@keyframes pageguide-shimmer {
   0% { left: -50%; }
   100% { left: 100%; }
 }
 
 /* Shimmer for block elements */
-.xwebagent-highlight-shimmer-block {
+.pageguide-highlight-shimmer-block {
   position: relative;
   overflow: hidden;
 }
 
-.xwebagent-highlight-shimmer-block::before {
+.pageguide-highlight-shimmer-block::before {
   content: '';
   position: absolute;
   top: 0;
@@ -573,36 +573,36 @@
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in srgb, var(--xwebagent-color, #ffd93d) 40%, transparent),
+    color-mix(in srgb, var(--pageguide-color, #ffd93d) 40%, transparent),
     transparent
   );
-  animation: xwebagent-shimmer-move 2s linear infinite;
+  animation: pageguide-shimmer-move 2s linear infinite;
 }
 
-@keyframes xwebagent-shimmer-move {
+@keyframes pageguide-shimmer-move {
   0% { left: -100%; }
   100% { left: 100%; }
 }
 
 /* Bounce - Bouncing attention */
-.xwebagent-highlight-bounce {
-  animation: xwebagent-bounce 1s ease infinite;
+.pageguide-highlight-bounce {
+  animation: pageguide-bounce 1s ease infinite;
 }
 
-@keyframes xwebagent-bounce {
+@keyframes pageguide-bounce {
   0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
   40% { transform: translateY(-10px); }
   60% { transform: translateY(-5px); }
 }
 
 /* Rainbow - Color cycling border */
-.xwebagent-highlight-rainbow {
-  animation: xwebagent-rainbow 3s linear infinite;
+.pageguide-highlight-rainbow {
+  animation: pageguide-rainbow 3s linear infinite;
   border: 3px solid transparent;
   border-radius: 4px;
 }
 
-@keyframes xwebagent-rainbow {
+@keyframes pageguide-rainbow {
   0% { border-color: #ff6b6b; box-shadow: 0 0 15px #ff6b6b; }
   16% { border-color: #ffd93d; box-shadow: 0 0 15px #ffd93d; }
   33% { border-color: #6bcf63; box-shadow: 0 0 15px #6bcf63; }
@@ -613,77 +613,77 @@
 }
 
 /* Underline - Animated underline */
-.xwebagent-highlight-underline {
+.pageguide-highlight-underline {
   position: relative;
   text-decoration: none !important;
 }
 
-.xwebagent-highlight-underline::after {
+.pageguide-highlight-underline::after {
   content: '';
   position: absolute;
   bottom: -2px;
   left: 0;
   width: 100%;
   height: 3px;
-  background: var(--xwebagent-color, #ffd93d);
-  animation: xwebagent-underline 0.5s ease-out forwards, xwebagent-underline-pulse 2s ease-in-out 0.5s infinite;
+  background: var(--pageguide-color, #ffd93d);
+  animation: pageguide-underline 0.5s ease-out forwards, pageguide-underline-pulse 2s ease-in-out 0.5s infinite;
   transform-origin: left;
 }
 
-@keyframes xwebagent-underline {
+@keyframes pageguide-underline {
   0% { transform: scaleX(0); }
   100% { transform: scaleX(1); }
 }
 
-@keyframes xwebagent-underline-pulse {
+@keyframes pageguide-underline-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
 
 /* Glow - Steady glowing outline */
-.xwebagent-highlight-glow {
-  outline: 3px solid var(--xwebagent-color, #ffd93d);
+.pageguide-highlight-glow {
+  outline: 3px solid var(--pageguide-color, #ffd93d);
   outline-offset: 3px;
   box-shadow: 
-    0 0 10px var(--xwebagent-color, #ffd93d),
-    0 0 20px var(--xwebagent-color, #ffd93d),
-    inset 0 0 10px color-mix(in srgb, var(--xwebagent-color, #ffd93d) 20%, transparent);
-  animation: xwebagent-glow 2s ease-in-out infinite;
+    0 0 10px var(--pageguide-color, #ffd93d),
+    0 0 20px var(--pageguide-color, #ffd93d),
+    inset 0 0 10px color-mix(in srgb, var(--pageguide-color, #ffd93d) 20%, transparent);
+  animation: pageguide-glow 2s ease-in-out infinite;
 }
 
-@keyframes xwebagent-glow {
+@keyframes pageguide-glow {
   0%, 100% { 
     box-shadow: 
-      0 0 10px var(--xwebagent-color, #ffd93d),
-      0 0 20px var(--xwebagent-color, #ffd93d);
+      0 0 10px var(--pageguide-color, #ffd93d),
+      0 0 20px var(--pageguide-color, #ffd93d);
   }
   50% { 
     box-shadow: 
-      0 0 20px var(--xwebagent-color, #ffd93d),
-      0 0 40px var(--xwebagent-color, #ffd93d),
-      0 0 60px var(--xwebagent-color, #ffd93d);
+      0 0 20px var(--pageguide-color, #ffd93d),
+      0 0 40px var(--pageguide-color, #ffd93d),
+      0 0 60px var(--pageguide-color, #ffd93d);
   }
 }
 
 /* Focus Ring - Draws attention with expanding ring */
-.xwebagent-highlight-ring {
+.pageguide-highlight-ring {
   position: relative;
 }
 
-.xwebagent-highlight-ring::before {
+.pageguide-highlight-ring::before {
   content: '';
   position: absolute;
   top: 50%;
   left: 50%;
   width: 100%;
   height: 100%;
-  border: 2px solid var(--xwebagent-color, #ffd93d);
+  border: 2px solid var(--pageguide-color, #ffd93d);
   border-radius: 8px;
   transform: translate(-50%, -50%);
-  animation: xwebagent-ring 1.5s ease-out infinite;
+  animation: pageguide-ring 1.5s ease-out infinite;
 }
 
-@keyframes xwebagent-ring {
+@keyframes pageguide-ring {
   0% {
     width: 100%;
     height: 100%;
@@ -697,23 +697,23 @@
 }
 
 /* Arrow pointer - Points to element */
-.xwebagent-highlight-arrow::before {
+.pageguide-highlight-arrow::before {
   content: '👉';
   position: absolute;
   left: -30px;
   top: 50%;
   transform: translateY(-50%);
   font-size: 20px;
-  animation: xwebagent-arrow 1s ease-in-out infinite;
+  animation: pageguide-arrow 1s ease-in-out infinite;
 }
 
-@keyframes xwebagent-arrow {
+@keyframes pageguide-arrow {
   0%, 100% { transform: translateY(-50%) translateX(0); }
   50% { transform: translateY(-50%) translateX(5px); }
 }
 
 /* Base highlight style - always applied */
-.xwebagent-highlight {
+.pageguide-highlight {
   border-radius: 3px;
   padding: 1px 3px;
   margin: 0 1px;
@@ -722,7 +722,7 @@
 
 /* ===== PROTECTION / DARK PATTERN BADGES ===== */
 
-.xwebagent-dark-pattern-badge {
+.pageguide-dark-pattern-badge {
   position: absolute;
   top: -12px;
   right: -8px;
@@ -736,53 +736,53 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   white-space: nowrap;
   z-index: 10000;
-  animation: xwebagent-badge-pop 0.3s ease-out;
+  animation: pageguide-badge-pop 0.3s ease-out;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-@keyframes xwebagent-badge-pop {
+@keyframes pageguide-badge-pop {
   0% { transform: scale(0); opacity: 0; }
   50% { transform: scale(1.1); }
   100% { transform: scale(1); opacity: 1; }
 }
 
-.xwebagent-dark-pattern-badge[data-severity="danger"] {
+.pageguide-dark-pattern-badge[data-severity="danger"] {
   background: linear-gradient(135deg, #ff4757, #ff6b81);
   color: white;
 }
 
-.xwebagent-dark-pattern-badge[data-severity="warning"] {
+.pageguide-dark-pattern-badge[data-severity="warning"] {
   background: linear-gradient(135deg, #ffa502, #ff7f50);
   color: #000;
 }
 
-.xwebagent-dark-pattern-badge[data-severity="info"] {
+.pageguide-dark-pattern-badge[data-severity="info"] {
   background: linear-gradient(135deg, #1e90ff, #00d9ff);
   color: white;
 }
 
-.xwebagent-dp-icon {
+.pageguide-dp-icon {
   font-size: 14px;
 }
 
-.xwebagent-dp-label {
+.pageguide-dp-label {
   max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.xwebagent-dp-info {
+.pageguide-dp-info {
   cursor: help;
   opacity: 0.7;
   font-size: 12px;
 }
 
-.xwebagent-dp-info:hover {
+.pageguide-dp-info:hover {
   opacity: 1;
 }
 
 /* Protection scan animation */
-@keyframes xwebagent-scan {
+@keyframes pageguide-scan {
   0% { 
     box-shadow: 0 0 0 0 rgba(30, 144, 255, 0.4);
   }
@@ -794,13 +794,13 @@
   }
 }
 
-[data-xwebagent-marked] {
-  animation: xwebagent-scan 2s ease-out;
+[data-pageguide-marked] {
+  animation: pageguide-scan 2s ease-out;
 }
 
 /* Hidden/Blurred ads overlay */
-[data-xwebagent-hidden]::after {
-  content: '🛡️ Ad blocked by XWebAgent';
+[data-pageguide-hidden]::after {
+  content: '🛡️ Ad blocked by PageGuide';
   position: absolute;
   top: 50%;
   left: 50%;

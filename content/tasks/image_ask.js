@@ -1,4 +1,4 @@
-// XWebAgent - Image Ask Functionality
+// PageGuide - Image Ask Functionality
 // Allows users to upload an image and ask questions about finding similar content on the page
 // Uses vision-based scrolling to find and highlight matching elements
 
@@ -12,14 +12,14 @@ if (typeof IMAGE_ASK_CONFIG === 'undefined') {
 }
 
 // Store the uploaded image globally
-window._xwebagentUploadedImage = null;
+window._pageguideUploadedImage = null;
 
 /**
  * Set the uploaded image (called from panel)
  * @param {string} imageBase64 - Base64 encoded image data
  */
 function setUploadedImage(imageBase64) {
-  window._xwebagentUploadedImage = imageBase64;
+  window._pageguideUploadedImage = imageBase64;
   console.log('🖼️ Image uploaded and stored');
 }
 
@@ -27,7 +27,7 @@ function setUploadedImage(imageBase64) {
  * Clear the uploaded image
  */
 function clearUploadedImage() {
-  window._xwebagentUploadedImage = null;
+  window._pageguideUploadedImage = null;
   console.log('🖼️ Uploaded image cleared');
 }
 
@@ -36,7 +36,7 @@ function clearUploadedImage() {
  * @returns {string|null} Base64 image data or null
  */
 function getUploadedImage() {
-  return window._xwebagentUploadedImage;
+  return window._pageguideUploadedImage;
 }
 
 /**

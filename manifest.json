@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "XWebAgent",
+  "name": "PageGuide",
   "version": "1.0.0",
   "description": "AI Web Assistant - Makes browsing Safe, Fun, and Efficient",
   "permissions": [
@@ -24,7 +24,7 @@
       "48": "icons/icon128.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "Open XWebAgent Chat"
+    "default_title": "Open PageGuide Chat"
   },
   "background": {
     "service_worker": "background/service-worker.js"

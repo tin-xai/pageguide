@@ -3,84 +3,84 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>XWebAgent</title>
+  <title>PageGuide</title>
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <div class="xwebagent-panel">
+  <div class="pageguide-panel">
 
     <!-- History overlay (covers whole panel when visible) -->
-    <div class="xwebagent-history-overlay" id="xwebagent-history" style="display:none;">
-      <div class="xwebagent-history-hdr">
-        <button class="xwebagent-history-nav-btn" id="xwebagent-history-back" style="visibility:hidden;">← Back</button>
-        <span class="xwebagent-history-hdr-title" id="xwebagent-history-hdr-title">Chat History</span>
-        <button class="xwebagent-history-nav-btn" id="xwebagent-history-close">✕</button>
+    <div class="pageguide-history-overlay" id="pageguide-history" style="display:none;">
+      <div class="pageguide-history-hdr">
+        <button class="pageguide-history-nav-btn" id="pageguide-history-back" style="visibility:hidden;">← Back</button>
+        <span class="pageguide-history-hdr-title" id="pageguide-history-hdr-title">Chat History</span>
+        <button class="pageguide-history-nav-btn" id="pageguide-history-close">✕</button>
       </div>
-      <div class="xwebagent-history-body" id="xwebagent-history-body"></div>
+      <div class="pageguide-history-body" id="pageguide-history-body"></div>
     </div>
 
-    <div class="xwebagent-chat-header">
-      <div class="xwebagent-header-left">
-        <!-- <img src="../icons/icon128.png" alt="XWebAgent" class="xwebagent-logo"> -->
-        <div class="xwebagent-header-text">
-          <!-- <h2>XWebAgent</h2> -->
+    <div class="pageguide-chat-header">
+      <div class="pageguide-header-left">
+        <!-- <img src="../icons/icon128.png" alt="PageGuide" class="pageguide-logo"> -->
+        <div class="pageguide-header-text">
+          <!-- <h2>PageGuide</h2> -->
         </div>
       </div>
-      <div class="xwebagent-header-right">
-        <button class="xwebagent-theme-btn" id="xwebagent-theme-toggle" title="Toggle light/dark mode">🌙</button>
-        <button class="xwebagent-new-chat-btn" id="xwebagent-open-history" title="Chat History">🕐</button>
-        <button class="xwebagent-new-chat-btn" id="xwebagent-new-chat" title="New Chat">✏️</button>
-        <button class="xwebagent-settings-btn" id="xwebagent-settings" title="Settings">⚙️</button>
+      <div class="pageguide-header-right">
+        <button class="pageguide-theme-btn" id="pageguide-theme-toggle" title="Toggle light/dark mode">🌙</button>
+        <button class="pageguide-new-chat-btn" id="pageguide-open-history" title="Chat History">🕐</button>
+        <button class="pageguide-new-chat-btn" id="pageguide-new-chat" title="New Chat">✏️</button>
+        <button class="pageguide-settings-btn" id="pageguide-settings" title="Settings">⚙️</button>
       </div>
     </div>
     
-    <div class="xwebagent-chat-messages" id="xwebagent-messages">
+    <div class="pageguide-chat-messages" id="pageguide-messages">
     </div>
     
-    <div class="xwebagent-chat-input-area">
-      <div class="xwebagent-quick-actions">
-        <button class="xwebagent-quick-btn" data-action="reset" title="Clear chat and highlights">🧹 Clear</button>
-        <button class="xwebagent-quick-btn" id="xwebagent-save-chat" title="Save current chat to history">💾 Save</button>
-        <button class="xwebagent-quick-btn xwebagent-pdf-reader-btn" id="xwebagent-pdf-reader" title="Open PDF Reader with AI chat">📄 PDF</button>
-        <button class="xwebagent-quick-btn" id="xwebagent-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)">🌐 Page: On</button>
+    <div class="pageguide-chat-input-area">
+      <div class="pageguide-quick-actions">
+        <button class="pageguide-quick-btn" data-action="reset" title="Clear chat and highlights">🧹 Clear</button>
+        <button class="pageguide-quick-btn" id="pageguide-save-chat" title="Save current chat to history">💾 Save</button>
+        <button class="pageguide-quick-btn pageguide-pdf-reader-btn" id="pageguide-pdf-reader" title="Open PDF Reader with AI chat">📄 PDF</button>
+        <button class="pageguide-quick-btn" id="pageguide-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)">🌐 Page: On</button>
       </div>
       
       <!-- Image Preview Area (hidden by default) -->
-      <div class="xwebagent-image-preview" id="xwebagent-image-preview" style="display: none;">
-        <div class="xwebagent-image-wrapper" id="xwebagent-image-wrapper">
-          <img id="xwebagent-preview-img" src="" alt="Uploaded image">
+      <div class="pageguide-image-preview" id="pageguide-image-preview" style="display: none;">
+        <div class="pageguide-image-wrapper" id="pageguide-image-wrapper">
+          <img id="pageguide-preview-img" src="" alt="Uploaded image">
           <!-- clickable region overlays injected here by JS -->
         </div>
-        <div class="xwebagent-image-preview-footer">
-          <span class="xwebagent-image-label" id="xwebagent-image-label">📷 Image ready - ask about it!</span>
-          <button class="xwebagent-remove-image" id="xwebagent-remove-image" title="Remove image">✕</button>
+        <div class="pageguide-image-preview-footer">
+          <span class="pageguide-image-label" id="pageguide-image-label">📷 Image ready - ask about it!</span>
+          <button class="pageguide-remove-image" id="pageguide-remove-image" title="Remove image">✕</button>
         </div>
       </div>
       
       <!-- Slash command autocomplete dropdown -->
-      <div class="xwebagent-slash-menu" id="xwebagent-slash-menu" style="display:none;"></div>
+      <div class="pageguide-slash-menu" id="pageguide-slash-menu" style="display:none;"></div>
 
       <!-- File Preview Area (hidden by default) -->
-      <div class="xwebagent-file-preview" id="xwebagent-file-preview" style="display: none;">
-        <span class="xwebagent-file-label" id="xwebagent-file-label">📎 File attached</span>
-        <button class="xwebagent-remove-image" id="xwebagent-remove-file" title="Remove file">✕</button>
+      <div class="pageguide-file-preview" id="pageguide-file-preview" style="display: none;">
+        <span class="pageguide-file-label" id="pageguide-file-label">📎 File attached</span>
+        <button class="pageguide-remove-image" id="pageguide-remove-file" title="Remove file">✕</button>
       </div>
 
       <!-- Selected Text Preview Area (hidden by default) -->
-      <div class="xwebagent-selected-text-preview" id="xwebagent-selected-text-preview" style="display: none;">
-        <span class="xwebagent-selected-text-label" id="xwebagent-selected-text-label">📝 Text selected</span>
-        <button class="xwebagent-remove-image" id="xwebagent-remove-selected-text" title="Clear selection context">✕</button>
+      <div class="pageguide-selected-text-preview" id="pageguide-selected-text-preview" style="display: none;">
+        <span class="pageguide-selected-text-label" id="pageguide-selected-text-label">📝 Text selected</span>
+        <button class="pageguide-remove-image" id="pageguide-remove-selected-text" title="Clear selection context">✕</button>
       </div>
 
-      <div class="xwebagent-input-row">
-        <textarea class="xwebagent-chat-input" id="xwebagent-input" placeholder="Ask anything... (type / for commands)" rows="3"></textarea>
+      <div class="pageguide-input-row">
+        <textarea class="pageguide-chat-input" id="pageguide-input" placeholder="Ask anything... (type / for commands)" rows="3"></textarea>
       </div>
-      <div class="xwebagent-input-actions">
-        <label class="xwebagent-upload-btn" id="xwebagent-upload-label" title="Upload image or file (or Ctrl+V to paste image)">
-          <span id="xwebagent-upload-icon">📎</span>
-          <input type="file" id="xwebagent-image-upload" accept="image/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.html,.htm,.py,.js,.ts,.css,.log" hidden>
+      <div class="pageguide-input-actions">
+        <label class="pageguide-upload-btn" id="pageguide-upload-label" title="Upload image or file (or Ctrl+V to paste image)">
+          <span id="pageguide-upload-icon">📎</span>
+          <input type="file" id="pageguide-image-upload" accept="image/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.html,.htm,.py,.js,.ts,.css,.log" hidden>
         </label>
-        <button class="xwebagent-send-btn" id="xwebagent-send">➤</button>
+        <button class="pageguide-send-btn" id="pageguide-send">➤</button>
       </div>
     </div>
   </div>

@@ -1,4 +1,4 @@
-// XWebAgent - LLM Prompts
+// PageGuide - LLM Prompts
 // All prompts used for Gemini API calls
 
 // Guard against double-loading

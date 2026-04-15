@@ -1,4 +1,4 @@
-# Claude Code Instructions (XWebAgent)
+# Claude Code Instructions (PageGuide)
 
 ## Repo layout
 - Chrome extension source lives in repo root.

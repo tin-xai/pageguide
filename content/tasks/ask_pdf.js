@@ -1,4 +1,4 @@
-// XWebAgent - PDF Ask Functionality
+// PageGuide - PDF Ask Functionality
 // Handles questions about PDF documents with backend-powered text extraction and bbox highlighting
 
 // Configuration for PDF backend (guard against double-loading)
@@ -300,8 +300,8 @@ async function applyTextBasedPdfHighlights(citations) {
         
         // Create highlight at span position
         const highlight = document.createElement('div');
-        highlight.className = 'xwebagent-pdf-highlight';
-        highlight.setAttribute('data-xwebagent-styled', 'true');
+        highlight.className = 'pageguide-pdf-highlight';
+        highlight.setAttribute('data-pageguide-styled', 'true');
         highlight.setAttribute('data-pdf-page', citation.page);
         highlight.setAttribute('data-pdf-text', citation.quote);
         
@@ -316,14 +316,14 @@ async function applyTextBasedPdfHighlights(citations) {
           border-radius: 2px;
           pointer-events: none;
           z-index: 10;
-          animation: xwebagent-pdf-pulse 1.5s ease-in-out 3;
+          animation: pageguide-pdf-pulse 1.5s ease-in-out 3;
         `;
         
         pageEl.style.position = 'relative';
         pageEl.appendChild(highlight);
         
-        window._xwebagentPdfHighlights = window._xwebagentPdfHighlights || [];
-        window._xwebagentPdfHighlights.push(highlight);
+        window._pageguidePdfHighlights = window._pageguidePdfHighlights || [];
+        window._pageguidePdfHighlights.push(highlight);
         count++;
         break;  // One highlight per citation
       }
@@ -331,7 +331,7 @@ async function applyTextBasedPdfHighlights(citations) {
   }
   
   // Scroll to first highlight
-  const firstHighlight = window._xwebagentPdfHighlights?.[0];
+  const firstHighlight = window._pageguidePdfHighlights?.[0];
   if (firstHighlight) {
     firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }

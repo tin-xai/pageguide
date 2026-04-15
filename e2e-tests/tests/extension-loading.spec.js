@@ -89,12 +89,12 @@ test.describe('Extension Loading', () => {
     await page.goto(`chrome-extension://${extensionId}/sidepanel/panel.html`);
 
     // Check key UI elements exist
-    await expect(page.locator('#xwebagent-input')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('#xwebagent-send')).toBeVisible();
-    await expect(page.locator('#xwebagent-messages')).toBeVisible();
+    await expect(page.locator('#pageguide-input')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#pageguide-send')).toBeVisible();
+    await expect(page.locator('#pageguide-messages')).toBeVisible();
 
     // Check quick action buttons
-    await expect(page.locator('.xwebagent-quick-btn[data-action="reset"]')).toBeVisible();
+    await expect(page.locator('.pageguide-quick-btn[data-action="reset"]')).toBeVisible();
 
     await page.close();
   });
@@ -139,7 +139,7 @@ test.describe('Extension Loading', () => {
 
     // Check that the page loaded correctly
     const pageTitle = await page.title();
-    expect(pageTitle).toBe('Sample Article - XWebAgent Test');
+    expect(pageTitle).toBe('Sample Article - PageGuide Test');
 
     // Verify no console errors from extension
     /** @type {string[]} */
@@ -150,7 +150,7 @@ test.describe('Extension Loading', () => {
 
     // Filter out non-extension errors
     const extensionErrors = errors.filter(
-      (e) => e.includes('xwebagent') || e.includes('chrome-extension')
+      (e) => e.includes('pageguide') || e.includes('chrome-extension')
     );
 
     expect(extensionErrors).toHaveLength(0);

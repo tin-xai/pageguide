@@ -1,7 +1,7 @@
-// XWebAgent Background Service Worker
+// PageGuide Background Service Worker
 // Handles API calls to multiple LLM providers (Gemini, OpenRouter, OpenAI)
 
-console.log('🤖 XWebAgent Service Worker started');
+console.log('🤖 PageGuide Service Worker started');
 
 // ===== Keep-Alive Mechanism =====
 // Prevents service worker from going inactive during long LLM calls
@@ -107,7 +107,7 @@ chrome.action.onClicked.addListener(async (tab) => {
           // Check if content scripts are already loaded
           const [result] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            func: () => typeof window._xwebagentLoaded !== 'undefined'
+            func: () => typeof window._pageguideLoaded !== 'undefined'
           });
           
           // Only inject if not already loaded
@@ -669,7 +669,7 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
         'HTTP-Referer': chrome.runtime.getURL(''),
-        'X-Title': 'XWebAgent'
+        'X-Title': 'PageGuide'
       },
       body: JSON.stringify({
         model: model,
@@ -882,7 +882,7 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
         'HTTP-Referer': chrome.runtime.getURL(''),
-        'X-Title': 'XWebAgent'
+        'X-Title': 'PageGuide'
       },
       body: JSON.stringify({
         model: model,

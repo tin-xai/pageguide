@@ -1,4 +1,4 @@
-// XWebAgent - PDF Highlight Functions
+// PageGuide - PDF Highlight Functions
 // Handles PDF detection, text extraction, and highlighting on PDF.js viewers
 
 /**
@@ -23,12 +23,12 @@ if (typeof PDF_CONFIG === 'undefined') {
  */
 function showPdfSearchNotification(pageNumber, searchText) {
   // Remove existing notification
-  const existing = document.getElementById('xwebagent-pdf-notification');
+  const existing = document.getElementById('pageguide-pdf-notification');
   if (existing) existing.remove();
   
   // Create notification element
   const notification = document.createElement('div');
-  notification.id = 'xwebagent-pdf-notification';
+  notification.id = 'pageguide-pdf-notification';
   notification.innerHTML = `
     <div style="display: flex; align-items: center; gap: 10px;">
       <span style="font-size: 24px;">📄</span>
@@ -53,16 +53,16 @@ function showPdfSearchNotification(pageNumber, searchText) {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 14px;
     max-width: 350px;
-    animation: xwebagent-slide-in 0.3s ease-out;
+    animation: pageguide-slide-in 0.3s ease-out;
     border-left: 4px solid #FFC107;
   `;
   
   // Add animation keyframes
-  if (!document.getElementById('xwebagent-pdf-notification-styles')) {
+  if (!document.getElementById('pageguide-pdf-notification-styles')) {
     const style = document.createElement('style');
-    style.id = 'xwebagent-pdf-notification-styles';
+    style.id = 'pageguide-pdf-notification-styles';
     style.textContent = `
-      @keyframes xwebagent-slide-in {
+      @keyframes pageguide-slide-in {
         from {
           opacity: 0;
           transform: translateX(100px);
@@ -72,7 +72,7 @@ function showPdfSearchNotification(pageNumber, searchText) {
           transform: translateX(0);
         }
       }
-      @keyframes xwebagent-slide-out {
+      @keyframes pageguide-slide-out {
         from {
           opacity: 1;
           transform: translateX(0);
@@ -90,13 +90,13 @@ function showPdfSearchNotification(pageNumber, searchText) {
   
   // Auto-dismiss after 5 seconds
   setTimeout(() => {
-    notification.style.animation = 'xwebagent-slide-out 0.3s ease-out forwards';
+    notification.style.animation = 'pageguide-slide-out 0.3s ease-out forwards';
     setTimeout(() => notification.remove(), 300);
   }, 5000);
   
   // Click to dismiss
   notification.addEventListener('click', () => {
-    notification.style.animation = 'xwebagent-slide-out 0.3s ease-out forwards';
+    notification.style.animation = 'pageguide-slide-out 0.3s ease-out forwards';
     setTimeout(() => notification.remove(), 300);
   });
 }
@@ -477,8 +477,8 @@ function createPdfHighlight(pageNumber, bbox, text) {
   
   // Create highlight element
   const highlight = document.createElement('div');
-  highlight.className = 'xwebagent-pdf-highlight';
-  highlight.setAttribute('data-xwebagent-styled', 'true');
+  highlight.className = 'pageguide-pdf-highlight';
+  highlight.setAttribute('data-pageguide-styled', 'true');
   highlight.setAttribute('data-pdf-page', pageNumber);
   highlight.setAttribute('data-pdf-text', text);
   
@@ -493,7 +493,7 @@ function createPdfHighlight(pageNumber, bbox, text) {
     border-radius: 2px;
     pointer-events: none;
     z-index: 10;
-    animation: xwebagent-pdf-pulse 1.5s ease-in-out 3;
+    animation: pageguide-pdf-pulse 1.5s ease-in-out 3;
   `;
   
   // Ensure page container has relative positioning
@@ -505,8 +505,8 @@ function createPdfHighlight(pageNumber, bbox, text) {
   pageElement.appendChild(highlight);
   
   // Store reference for cleanup
-  window._xwebagentPdfHighlights = window._xwebagentPdfHighlights || [];
-  window._xwebagentPdfHighlights.push(highlight);
+  window._pageguidePdfHighlights = window._pageguidePdfHighlights || [];
+  window._pageguidePdfHighlights.push(highlight);
   
   console.log('📄 Created PDF highlight on page', pageNumber, 'at', bbox);
   
@@ -517,12 +517,12 @@ function createPdfHighlight(pageNumber, bbox, text) {
  * Add CSS animation for PDF highlights
  */
 function injectPdfHighlightStyles() {
-  if (document.getElementById('xwebagent-pdf-styles')) return;
+  if (document.getElementById('pageguide-pdf-styles')) return;
   
   const style = document.createElement('style');
-  style.id = 'xwebagent-pdf-styles';
+  style.id = 'pageguide-pdf-styles';
   style.textContent = `
-    @keyframes xwebagent-pdf-pulse {
+    @keyframes pageguide-pdf-pulse {
       0%, 100% {
         background-color: rgba(255, 235, 59, 0.4);
         box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
@@ -533,15 +533,15 @@ function injectPdfHighlightStyles() {
       }
     }
     
-    .xwebagent-pdf-highlight {
+    .pageguide-pdf-highlight {
       transition: opacity 0.3s ease;
     }
     
-    .xwebagent-pdf-highlight:hover {
+    .pageguide-pdf-highlight:hover {
       opacity: 0.8;
     }
     
-    .xwebagent-pdf-highlight-tooltip {
+    .pageguide-pdf-highlight-tooltip {
       position: absolute;
       background: #333;
       color: white;
@@ -562,7 +562,7 @@ function injectPdfHighlightStyles() {
  * Clear all PDF highlights
  */
 function clearPdfHighlights() {
-  const highlights = window._xwebagentPdfHighlights || [];
+  const highlights = window._pageguidePdfHighlights || [];
   
   highlights.forEach(el => {
     if (el && el.parentNode) {
@@ -570,10 +570,10 @@ function clearPdfHighlights() {
     }
   });
   
-  window._xwebagentPdfHighlights = [];
+  window._pageguidePdfHighlights = [];
   
   // Also remove any orphaned highlights
-  document.querySelectorAll('.xwebagent-pdf-highlight').forEach(el => {
+  document.querySelectorAll('.pageguide-pdf-highlight').forEach(el => {
     el.parentNode?.removeChild(el);
   });
   
@@ -616,7 +616,7 @@ async function applyPdfHighlights(highlights) {
   }
   
   // Scroll first highlight into view
-  const firstHighlight = window._xwebagentPdfHighlights?.[0];
+  const firstHighlight = window._pageguidePdfHighlights?.[0];
   if (firstHighlight) {
     firstHighlight.scrollIntoView({ 
       behavior: 'smooth', 

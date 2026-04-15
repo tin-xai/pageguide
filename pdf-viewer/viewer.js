@@ -1,5 +1,5 @@
 /**
- * XWebAgent PDF Viewer
+ * PageGuide PDF Viewer
  * Full-screen PDF viewer that works with the sidepanel chat
  */
 

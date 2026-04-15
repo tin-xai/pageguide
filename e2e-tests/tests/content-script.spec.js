@@ -181,7 +181,7 @@ test.describe('Content Scripts', () => {
     // Filter for extension-related errors only
     const extensionErrors = consoleErrors.filter(
       (e) =>
-        e.toLowerCase().includes('xwebagent') ||
+        e.toLowerCase().includes('pageguide') ||
         e.includes('content.js') ||
         (e.includes('chrome-extension') && !e.includes('net::ERR'))
     );
@@ -198,12 +198,12 @@ test.describe('Content Scripts', () => {
       if (paragraph) {
         paragraph.style.outline = '3px solid #ff6b6b';
         paragraph.style.outlineOffset = '2px';
-        paragraph.setAttribute('data-xwebagent-highlight', 'true');
+        paragraph.setAttribute('data-pageguide-highlight', 'true');
       }
     });
 
     // Check that the highlight was applied
-    const highlightedElement = page.locator('[data-xwebagent-highlight="true"]');
+    const highlightedElement = page.locator('[data-pageguide-highlight="true"]');
     await expect(highlightedElement).toBeVisible();
   });
 
@@ -214,18 +214,18 @@ test.describe('Content Scripts', () => {
     await page.evaluate(() => {
       const paragraph = document.querySelector('p');
       if (paragraph) {
-        paragraph.setAttribute('data-xwebagent-highlight', 'true');
+        paragraph.setAttribute('data-pageguide-highlight', 'true');
       }
     });
 
     // Verify it exists
-    const highlightLocator = page.locator('[data-xwebagent-highlight]');
+    const highlightLocator = page.locator('[data-pageguide-highlight]');
     await expect(highlightLocator).toHaveCount(1);
 
     // Clear highlights
     await page.evaluate(() => {
-      document.querySelectorAll('[data-xwebagent-highlight]').forEach((el) => {
-        el.removeAttribute('data-xwebagent-highlight');
+      document.querySelectorAll('[data-pageguide-highlight]').forEach((el) => {
+        el.removeAttribute('data-pageguide-highlight');
       });
     });
 

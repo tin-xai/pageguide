@@ -1,8 +1,8 @@
-// XWebAgent - Utility Functions
+// PageGuide - Utility Functions
 // Uses accessibility-inspired approach to find ALL interactive/content elements
 
 // Store element references globally
-window._xwebagentIndex = window._xwebagentIndex || {};
+window._pageguideIndex = window._pageguideIndex || {};
 
 /**
  * Return true if the element is effectively hidden and should be excluded from
@@ -174,13 +174,13 @@ function getAccessibleName(el) {
 }
 
 /**
- * Check if element is part of XWebAgent UI
+ * Check if element is part of PageGuide UI
  */
-function isXWebAgentElement(el) {
+function isPageGuideElement(el) {
   if (!el) return false;
-  return el.closest('[id^="xwebagent"]') || 
-         el.closest('[class*="xwebagent"]') ||
-         el.hasAttribute('data-xwebagent-styled');
+  return el.closest('[id^="pageguide"]') || 
+         el.closest('[class*="pageguide"]') ||
+         el.hasAttribute('data-pageguide-styled');
 }
 
 /**
@@ -213,7 +213,7 @@ function getVisibleText(maxLength = 20000) {
   let el;
   while ((el = walker.nextNode())) {
     // Skip our UI
-    if (isXWebAgentElement(el)) continue;
+    if (isPageGuideElement(el)) continue;
     
     // Skip hidden
     try {
@@ -326,7 +326,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
       {
         acceptNode: (node) => {
           // Skip our UI
-          if (isXWebAgentElement(node)) return NodeFilter.FILTER_REJECT;
+          if (isPageGuideElement(node)) return NodeFilter.FILTER_REJECT;
 
           // Skip hidden (opacity:0, display:none, visibility:hidden, el.hidden, zero-size, etc.)
           if (isHiddenElement(node)) return NodeFilter.FILTER_REJECT;
@@ -344,7 +344,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
   let el;
   while ((el = walker.nextNode()) && idx <= maxItems) {
     // Skip our UI
-    if (isXWebAgentElement(el)) continue;
+    if (isPageGuideElement(el)) continue;
     
     // Skip already seen
     if (seen.has(el)) continue;
@@ -417,7 +417,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
   
   const processElement = (el) => {
     if (idx > maxItems) return;
-    if (isXWebAgentElement(el)) return;
+    if (isPageGuideElement(el)) return;
     if (seen.has(el)) return;
     
     try {
@@ -475,7 +475,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
     try {
       document.querySelectorAll(selector).forEach(el => {
         if (idx > maxItems) return;
-        if (isXWebAgentElement(el)) return;
+        if (isPageGuideElement(el)) return;
         if (seen.has(el)) return;
 
         try {
@@ -521,7 +521,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
         document.querySelectorAll(selector).forEach(el => {
           if (idx > maxItems) return;
           if (seen.has(el)) return;
-          if (isXWebAgentElement(el)) return;
+          if (isPageGuideElement(el)) return;
           
           let name = el.textContent?.trim() || el.getAttribute('aria-label') || 
                      el.getAttribute('alt') || el.getAttribute('title') || '';
@@ -543,7 +543,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
   }
   
   // Store globally
-  window._xwebagentIndex = indexMap;
+  window._pageguideIndex = indexMap;
   
   console.log('🤖 Indexed', idx - 1, 'elements (including fallbacks)');
   console.log('🤖 Index keys stored:', Object.keys(indexMap).slice(0, 10), '...');
@@ -559,7 +559,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
  * Get element by index number
  */
 function getIndexedElement(idx) {
-  return window._xwebagentIndex[idx] || null;
+  return window._pageguideIndex[idx] || null;
 }
 
 /**
@@ -617,7 +617,7 @@ async function expandTruncatedContent() {
   let el;
   while ((el = walker.nextNode())) {
     // Skip extension-own elements
-    if (el.classList?.contains('xwebagent') || el.id?.startsWith('xwebagent')) continue;
+    if (el.classList?.contains('pageguide') || el.id?.startsWith('pageguide')) continue;
 
     const tag = el.tagName.toLowerCase();
     if (!candidateTags.has(tag)) continue;

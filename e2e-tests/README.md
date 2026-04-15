@@ -1,6 +1,6 @@
-# XWebAgent E2E Tests
+# PageGuide E2E Tests
 
-End-to-end tests for the XWebAgent browser extension using Playwright.
+End-to-end tests for the PageGuide browser extension using Playwright.
 
 ## Setup
 

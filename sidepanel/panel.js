@@ -1,4 +1,4 @@
-// XWebAgent Side Panel Script
+// PageGuide Side Panel Script
 // Handles chat UI and communicates with content scripts
 
 let chatMessages = [];
@@ -30,30 +30,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   currentTabId = tab?.id;
   
   // Attach event listeners
-  document.getElementById('xwebagent-settings')?.addEventListener('click', () => {
+  document.getElementById('pageguide-settings')?.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
   });
 
   // Theme toggle (light / dark mode)
-  const themeToggleBtn = document.getElementById('xwebagent-theme-toggle');
+  const themeToggleBtn = document.getElementById('pageguide-theme-toggle');
   const applyTheme = (isLight) => {
     document.body.classList.toggle('light-mode', isLight);
     if (themeToggleBtn) themeToggleBtn.textContent = isLight ? '☀️' : '🌙';
   };
-  const savedTheme = localStorage.getItem('xwebagent-theme');
+  const savedTheme = localStorage.getItem('pageguide-theme');
   applyTheme(savedTheme === 'light');
   themeToggleBtn?.addEventListener('click', () => {
     const isLight = !document.body.classList.contains('light-mode');
     applyTheme(isLight);
-    localStorage.setItem('xwebagent-theme', isLight ? 'light' : 'dark');
+    localStorage.setItem('pageguide-theme', isLight ? 'light' : 'dark');
   });
 
-  document.getElementById('xwebagent-new-chat')?.addEventListener('click', () => resetChat());
+  document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
   
-  document.getElementById('xwebagent-send').addEventListener('click', sendMessage);
-  document.getElementById('xwebagent-input').addEventListener('keydown', e => {
+  document.getElementById('pageguide-send').addEventListener('click', sendMessage);
+  document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      const menu = document.getElementById('xwebagent-slash-menu');
+      const menu = document.getElementById('pageguide-slash-menu');
       // If slash menu is open and an item is selected, let the keydown handler handle it
       if (menu && menu.style.display !== 'none' && _slashMenuIndex >= 0) return;
       e.preventDefault();
@@ -62,28 +62,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   
   // Quick action buttons
-  document.querySelectorAll('.xwebagent-quick-btn').forEach(btn => {
+  document.querySelectorAll('.pageguide-quick-btn').forEach(btn => {
     btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
   });
   
   // PDF Reader button
-  document.getElementById('xwebagent-pdf-reader')?.addEventListener('click', () => {
+  document.getElementById('pageguide-pdf-reader')?.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
   });
   
   // Chat history
-  document.getElementById('xwebagent-open-history')?.addEventListener('click', showHistoryPanel);
-  document.getElementById('xwebagent-history-close')?.addEventListener('click', hideHistoryPanel);
-  document.getElementById('xwebagent-history-back')?.addEventListener('click', () => renderHistoryList());
-  document.getElementById('xwebagent-save-chat')?.addEventListener('click', saveCurrentChat);
+  document.getElementById('pageguide-open-history')?.addEventListener('click', showHistoryPanel);
+  document.getElementById('pageguide-history-close')?.addEventListener('click', hideHistoryPanel);
+  document.getElementById('pageguide-history-back')?.addEventListener('click', () => renderHistoryList());
+  document.getElementById('pageguide-save-chat')?.addEventListener('click', saveCurrentChat);
 
   // No-page-context toggle
-  document.getElementById('xwebagent-no-page-ctx')?.addEventListener('click', () => {
+  document.getElementById('pageguide-no-page-ctx')?.addEventListener('click', () => {
     noPageContext = !noPageContext;
-    const btn = document.getElementById('xwebagent-no-page-ctx');
+    const btn = document.getElementById('pageguide-no-page-ctx');
     if (btn) {
       btn.textContent = noPageContext ? '💭 Page: Off' : '🌐 Page: On';
-      btn.classList.toggle('xwebagent-quick-btn--active', noPageContext);
+      btn.classList.toggle('pageguide-quick-btn--active', noPageContext);
       btn.title = noPageContext
         ? 'Page context OFF — answers from AI knowledge only. Click to re-enable.'
         : 'Toggle: answer from AI knowledge only (ignore current page)';
@@ -91,10 +91,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Combined upload handling (images + text files share one button)
-  const imageUpload = document.getElementById('xwebagent-image-upload');
-  const removeImageBtn = document.getElementById('xwebagent-remove-image');
-  const removeFileBtn = document.getElementById('xwebagent-remove-file');
-  const removeSelectedTextBtn = document.getElementById('xwebagent-remove-selected-text');
+  const imageUpload = document.getElementById('pageguide-image-upload');
+  const removeImageBtn = document.getElementById('pageguide-remove-image');
+  const removeFileBtn = document.getElementById('pageguide-remove-file');
+  const removeSelectedTextBtn = document.getElementById('pageguide-remove-selected-text');
 
   if (imageUpload) imageUpload.addEventListener('change', handleUpload);
   if (removeImageBtn) removeImageBtn.addEventListener('click', clearUploadedImage);
@@ -107,12 +107,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('paste', handlePasteImage);
   
   // Focus input
-  document.getElementById('xwebagent-input')?.focus();
+  document.getElementById('pageguide-input')?.focus();
 
   // Wire up delegated click handler for message container.
   // A single listener on the container survives innerHTML replacement during
   // session restore, keeping citations and highlights clickable after tab switches.
-  const messagesContainer = document.getElementById('xwebagent-messages');
+  const messagesContainer = document.getElementById('pageguide-messages');
   if (messagesContainer) _setupMessageContainerDelegate(messagesContainer);
 
   // Wire up slash command autocomplete
@@ -204,7 +204,7 @@ function parseCitations(text, isPdf = false) {
       // Store all ranges as JSON in data attribute
       const rangesJson = JSON.stringify(ranges);
       const tooltipText = ranges.map(r => r.start === r.end ? r.start : `${r.start}-${r.end}`).join(', ');
-      result += `<span class="xwebagent-pdf-citation" data-ranges='${rangesJson}' data-citation="${citationCount}" title="Elements: ${tooltipText}">[${citationCount}]</span>`;
+      result += `<span class="pageguide-pdf-citation" data-ranges='${rangesJson}' data-citation="${citationCount}" title="Elements: ${tooltipText}">[${citationCount}]</span>`;
       
       lastIndex = match.index + match[0].length;
     }
@@ -235,7 +235,7 @@ function parseCitations(text, isPdf = false) {
       // Add clickable PDF citation - show index only, store quote for highlighting
       // Truncate quote for tooltip (first 60 chars)
       const tooltipText = quoteText.length > 60 ? quoteText.slice(0, 60) + '...' : quoteText;
-      result += `<span class="xwebagent-pdf-citation" data-page="${pageNum}" data-text="${escapeHtml(quoteText)}" data-citation="${citationCount}" title="Page ${pageNum}: ${escapeHtml(tooltipText)}">[${citationCount}]</span>`;
+      result += `<span class="pageguide-pdf-citation" data-page="${pageNum}" data-text="${escapeHtml(quoteText)}" data-citation="${citationCount}" title="Page ${pageNum}: ${escapeHtml(tooltipText)}">[${citationCount}]</span>`;
       
       lastIndex = match.index + match[0].length;
     }
@@ -268,10 +268,10 @@ function parseCitations(text, isPdf = false) {
       webCitationCount++;
       if (explicitText) {
         // Has citation text - make it toggleable
-        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><span class="citation-text">${escapeHtml(explicitText)}</span><sup class="citation-index">[${webCitationCount}]</sup></span>`;
+        result += `<span class="pageguide-citation pageguide-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><span class="citation-text">${escapeHtml(explicitText)}</span><sup class="citation-index">[${webCitationCount}]</sup></span>`;
       } else {
         // No text - just show index
-        result += `<span class="xwebagent-citation xwebagent-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><sup class="citation-index">[${webCitationCount}]</sup></span>`;
+        result += `<span class="pageguide-citation pageguide-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><sup class="citation-index">[${webCitationCount}]</sup></span>`;
       }
     });
     
@@ -324,13 +324,13 @@ function parseMarkdown(text) {
   result = result.replace(/(?<!\*)\*([^*^\n]+)\*(?!\*)/g, '<em>$1</em>');
   
   // Links [text](url) - handle markdown links (with up to 1 level of nested parentheses in URL)
-  result = result.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="xwebagent-markdown-link">$1</a>');
+  result = result.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="pageguide-markdown-link">$1</a>');
   
   // Raw URLs (basic linkify for URLs not inside existing tags or markdown links)
   // Be careful not to replace URLs that are already part of an href attribute or markdown link.
   // Supports up to 1 level of nested parentheses in URL
   const rawUrlRegex = /(^|\s)(https?:\/\/(?:[^\s\(\)<>]+|\([^\s\(\)<>]+\))+)/g;
-  result = result.replace(rawUrlRegex, '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="xwebagent-markdown-link">$2</a>');
+  result = result.replace(rawUrlRegex, '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="pageguide-markdown-link">$2</a>');
   
   // Headers
   result = result.replace(/^### (.+)$/gm, '<h4>$1</h4>');
@@ -419,7 +419,7 @@ async function showModelStatus() {
 function _setupMessageContainerDelegate(container) {
   container.addEventListener('click', async (e) => {
     // 1. PDF citation → PDF navigation (with range cycling)
-    const pdfCit = e.target.closest('.xwebagent-pdf-citation');
+    const pdfCit = e.target.closest('.pageguide-pdf-citation');
     if (pdfCit) {
       e.stopPropagation();
 
@@ -467,7 +467,7 @@ function _setupMessageContainerDelegate(container) {
     }
 
     // 2. Web citation → scroll to index
-    const webCit = e.target.closest('.xwebagent-citation');
+    const webCit = e.target.closest('.pageguide-citation');
     if (webCit) {
       e.stopPropagation();
       const index = parseInt(webCit.dataset.index, 10);
@@ -476,7 +476,7 @@ function _setupMessageContainerDelegate(container) {
     }
 
     // 3. Clickable message (guide/ask-step → scrollToHighlight; assistant → toggle citations)
-    const msg = e.target.closest('.xwebagent-message.xwebagent-clickable');
+    const msg = e.target.closest('.pageguide-message.pageguide-clickable');
     if (!msg || e.target.closest('button')) return;
 
     if (msg.classList.contains('guide') || msg.classList.contains('ask-step')) {
@@ -491,13 +491,13 @@ function _setupMessageContainerDelegate(container) {
  * Add a message to the chat
  */
 function addMessage(content, type = 'assistant', clickable = false, context = null) {
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   if (!container) return;
   
   hideTyping();
   
   const msg = document.createElement('div');
-  msg.className = `xwebagent-message ${type}`;
+  msg.className = `pageguide-message ${type}`;
   
   let innerHTML = '';
 
@@ -507,32 +507,32 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
       const snippet = context.text.length > 80 ? context.text.substring(0, 80) + '...' : context.text;
       const wordCount = context.text.split(/\\s+/).filter(w => w.length > 0).length;
       innerHTML += `
-        <div class="xwebagent-msg-context-pill xwebagent-msg-context-selected">
-          <span class="xwebagent-msg-context-icon">📝</span>
-          <span class="xwebagent-msg-context-text" title="${escapeHtml(context.text)}">
+        <div class="pageguide-msg-context-pill pageguide-msg-context-selected">
+          <span class="pageguide-msg-context-icon">📝</span>
+          <span class="pageguide-msg-context-text" title="${escapeHtml(context.text)}">
             "${escapeHtml(snippet)}" (${wordCount} words)
           </span>
         </div>
       `;
     } else if (context.type === 'file') {
       innerHTML += `
-        <div class="xwebagent-msg-context-pill xwebagent-msg-context-file">
-          <span class="xwebagent-msg-context-icon">📎</span>
-          <span class="xwebagent-msg-context-text">${escapeHtml(context.name)}</span>
+        <div class="pageguide-msg-context-pill pageguide-msg-context-file">
+          <span class="pageguide-msg-context-icon">📎</span>
+          <span class="pageguide-msg-context-text">${escapeHtml(context.name)}</span>
         </div>
       `;
     } else if (context.type === 'image') {
       innerHTML += `
-        <div class="xwebagent-msg-context-pill xwebagent-msg-context-image">
-          <span class="xwebagent-msg-context-icon">📷</span>
-          <span class="xwebagent-msg-context-text">Attached Image</span>
+        <div class="pageguide-msg-context-pill pageguide-msg-context-image">
+          <span class="pageguide-msg-context-icon">📷</span>
+          <span class="pageguide-msg-context-text">Attached Image</span>
         </div>
       `;
     }
   }
 
   if (clickable) {
-    msg.classList.add('xwebagent-clickable');
+    msg.classList.add('pageguide-clickable');
     // Parse markdown first, then citations
     const markdownParsed = parseMarkdown(content);
     // Parse citations to make them clickable (handles both web and PDF citations)
@@ -558,23 +558,23 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
  * Collapsed by default, click to expand
  */
 function addCollapsibleDebug(lines) {
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   if (!container) return;
   
   const wrapper = document.createElement('div');
-  wrapper.className = 'xwebagent-debug-wrapper';
+  wrapper.className = 'pageguide-debug-wrapper';
   
   const toggle = document.createElement('div');
-  toggle.className = 'xwebagent-debug-toggle';
-  toggle.innerHTML = `<span class="xwebagent-debug-arrow">▶</span> <span class="xwebagent-debug-label">Details</span>`;
+  toggle.className = 'pageguide-debug-toggle';
+  toggle.innerHTML = `<span class="pageguide-debug-arrow">▶</span> <span class="pageguide-debug-label">Details</span>`;
   
   const content = document.createElement('div');
-  content.className = 'xwebagent-debug-content';
+  content.className = 'pageguide-debug-content';
   content.style.display = 'none';
   
   lines.forEach(line => {
     const lineEl = document.createElement('div');
-    lineEl.className = 'xwebagent-debug-line';
+    lineEl.className = 'pageguide-debug-line';
     lineEl.textContent = line;
     content.appendChild(lineEl);
   });
@@ -582,7 +582,7 @@ function addCollapsibleDebug(lines) {
   toggle.addEventListener('click', () => {
     const isOpen = content.style.display !== 'none';
     content.style.display = isOpen ? 'none' : 'block';
-    toggle.querySelector('.xwebagent-debug-arrow').textContent = isOpen ? '▶' : '▼';
+    toggle.querySelector('.pageguide-debug-arrow').textContent = isOpen ? '▶' : '▼';
   });
   
   wrapper.appendChild(toggle);
@@ -595,31 +595,31 @@ function addCollapsibleDebug(lines) {
  * Add a guide step message
  */
 function addGuideStep(result) {
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   if (!container) return;
 
   guideActive = !result.isLastStep;
   hideTyping();
   
   const msg = document.createElement('div');
-  msg.className = 'xwebagent-message guide';
+  msg.className = 'pageguide-message guide';
   
   const stepBadge = result.isLastStep ? '✅' : `Step ${result.step}`;
   
   msg.innerHTML = `
-    <div class="xwebagent-guide-step">
-      <span class="xwebagent-step-badge">${stepBadge}</span>
-      <span class="xwebagent-step-text">${result.answer}</span>
+    <div class="pageguide-guide-step">
+      <span class="pageguide-step-badge">${stepBadge}</span>
+      <span class="pageguide-step-text">${result.answer}</span>
     </div>
-    ${result.nextStepHint && !result.isLastStep ? `<div class="xwebagent-next-hint">💡 ${result.nextStepHint}</div>` : ''}
+    ${result.nextStepHint && !result.isLastStep ? `<div class="pageguide-next-hint">💡 ${result.nextStepHint}</div>` : ''}
   `;
 
   if (!result.isLastStep) {
     const btnRow = document.createElement('div');
-    btnRow.className = 'xwebagent-step-btn-row';
+    btnRow.className = 'pageguide-step-btn-row';
 
     const stopHereBtn = document.createElement('button');
-    stopHereBtn.className = 'xwebagent-step-stop-btn';
+    stopHereBtn.className = 'pageguide-step-stop-btn';
     stopHereBtn.textContent = '⏹ Stop here';
     stopHereBtn.title = 'Stop the guide at this step';
     stopHereBtn.addEventListener('click', (e) => {
@@ -629,7 +629,7 @@ function addGuideStep(result) {
 
     if (result.action === 'click') {
       const nextBtn = document.createElement('button');
-      nextBtn.className = 'xwebagent-step-next-btn';
+      nextBtn.className = 'pageguide-step-next-btn';
       nextBtn.textContent = 'Next →';
       nextBtn.title = 'Mark this step as done and get the next one';
       nextBtn.addEventListener('click', async (e) => {
@@ -649,7 +649,7 @@ function addGuideStep(result) {
   }
 
   if (result.hasHighlights) {
-    msg.classList.add('xwebagent-clickable');
+    msg.classList.add('pageguide-clickable');
     // Click handler handled by delegated listener (_setupMessageContainerDelegate).
   }
 
@@ -675,13 +675,13 @@ function addGuideStep(result) {
  * Add an ask step message (for scroll/expand actions)
  */
 function addAskStep(result) {
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   if (!container) return;
   
   hideTyping();
   
   const msg = document.createElement('div');
-  msg.className = 'xwebagent-message ask-step';
+  msg.className = 'pageguide-message ask-step';
   
   // Different icons for different action types
   const actionIcon = result.actionType === 'scroll' ? '📜' : '📦';
@@ -690,15 +690,15 @@ function addAskStep(result) {
     : '👆 Click the highlighted button';
   
   msg.innerHTML = `
-    <div class="xwebagent-ask-step">
-      <span class="xwebagent-action-icon">${actionIcon}</span>
-      <span class="xwebagent-step-text">${result.answer}</span>
+    <div class="pageguide-ask-step">
+      <span class="pageguide-action-icon">${actionIcon}</span>
+      <span class="pageguide-step-text">${result.answer}</span>
     </div>
-    <div class="xwebagent-action-hint">${actionHint}</div>
+    <div class="pageguide-action-hint">${actionHint}</div>
   `;
   
   if (result.hasHighlights) {
-    msg.classList.add('xwebagent-clickable');
+    msg.classList.add('pageguide-clickable');
     // Click handler handled by delegated listener (_setupMessageContainerDelegate).
   }
 
@@ -710,16 +710,16 @@ function addAskStep(result) {
  * Show typing indicator. In guide mode, appends a Stop button.
  */
 function showTyping() {
-  const container = document.getElementById('xwebagent-messages');
-  if (!container || container.querySelector('.xwebagent-typing')) return;
+  const container = document.getElementById('pageguide-messages');
+  if (!container || container.querySelector('.pageguide-typing')) return;
 
   const typing = document.createElement('div');
-  typing.className = 'xwebagent-typing';
+  typing.className = 'pageguide-typing';
   typing.innerHTML = '<span></span><span></span><span></span>';
 
   if (guideActive) {
     const stopBtn = document.createElement('button');
-    stopBtn.className = 'xwebagent-guide-stop-btn';
+    stopBtn.className = 'pageguide-guide-stop-btn';
     stopBtn.textContent = '⏹ Stop';
     stopBtn.addEventListener('click', (e) => { e.stopPropagation(); stopGuide(); });
     typing.appendChild(stopBtn);
@@ -748,7 +748,7 @@ async function stopGuide(message = '⏹ Guide stopped.') {
  * Hide typing indicator
  */
 function hideTyping() {
-  document.querySelector('.xwebagent-typing')?.remove();
+  document.querySelector('.pageguide-typing')?.remove();
 }
 
 /**
@@ -805,9 +805,9 @@ async function handlePasteImage(event) {
           uploadedImageBase64 = base64.split(',')[1];
           
           // Show preview
-          const preview = document.getElementById('xwebagent-image-preview');
-          const previewImg = document.getElementById('xwebagent-preview-img');
-          const uploadLabel = document.getElementById('xwebagent-upload-label');
+          const preview = document.getElementById('pageguide-image-preview');
+          const previewImg = document.getElementById('pageguide-preview-img');
+          const uploadLabel = document.getElementById('pageguide-upload-label');
           
           if (preview && previewImg) {
             previewImg.src = base64;
@@ -830,7 +830,7 @@ async function handlePasteImage(event) {
           }
 
           // Update placeholder to hint about asking
-          const input = document.getElementById('xwebagent-input');
+          const input = document.getElementById('pageguide-input');
           if (input) {
             input.placeholder = 'Ask about the pasted image...';
             input.focus();
@@ -863,7 +863,7 @@ async function handleUpload(event) {
 
 /** Update the combined upload button icon */
 function _setUploadIcon(emoji) {
-  const icon = document.getElementById('xwebagent-upload-icon');
+  const icon = document.getElementById('pageguide-upload-icon');
   if (icon) icon.textContent = emoji;
 }
 
@@ -895,9 +895,9 @@ async function handleImageUpload(event) {
       uploadedImageBase64 = base64.split(',')[1];
       
       // Show preview
-      const preview = document.getElementById('xwebagent-image-preview');
-      const previewImg = document.getElementById('xwebagent-preview-img');
-      const uploadLabel = document.getElementById('xwebagent-upload-label');
+      const preview = document.getElementById('pageguide-image-preview');
+      const previewImg = document.getElementById('pageguide-preview-img');
+      const uploadLabel = document.getElementById('pageguide-upload-label');
       
       if (preview && previewImg) {
         previewImg.src = base64;
@@ -920,7 +920,7 @@ async function handleImageUpload(event) {
       }
 
       // Update placeholder to hint about asking
-      const input = document.getElementById('xwebagent-input');
+      const input = document.getElementById('pageguide-input');
       if (input) {
         input.placeholder = 'Ask about the uploaded image...';
       }
@@ -941,17 +941,17 @@ async function clearUploadedImage() {
   uploadedImageBase64 = null;
 
   // Hide preview and clear region overlays
-  const preview = document.getElementById('xwebagent-image-preview');
-  const wrapper = document.getElementById('xwebagent-image-wrapper');
-  const uploadLabel = document.getElementById('xwebagent-upload-label');
-  const input = document.getElementById('xwebagent-input');
-  const fileInput = document.getElementById('xwebagent-image-upload');
-  const label = document.getElementById('xwebagent-image-label');
+  const preview = document.getElementById('pageguide-image-preview');
+  const wrapper = document.getElementById('pageguide-image-wrapper');
+  const uploadLabel = document.getElementById('pageguide-upload-label');
+  const input = document.getElementById('pageguide-input');
+  const fileInput = document.getElementById('pageguide-image-upload');
+  const label = document.getElementById('pageguide-image-label');
 
   if (preview) preview.style.display = 'none';
   if (wrapper) {
     wrapper.classList.remove('has-regions');
-    wrapper.querySelectorAll('.xwebagent-image-region').forEach(el => el.remove());
+    wrapper.querySelectorAll('.pageguide-image-region').forEach(el => el.remove());
   }
   if (label) label.textContent = '📷 Image ready — ask about it!';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
@@ -989,10 +989,10 @@ async function handleFileUpload(event) {
     uploadedFileName = file.name;
 
     // Show preview badge
-    const preview = document.getElementById('xwebagent-file-preview');
-    const label = document.getElementById('xwebagent-file-label');
-    const uploadLabel = document.getElementById('xwebagent-upload-label');
-    const input = document.getElementById('xwebagent-input');
+    const preview = document.getElementById('pageguide-file-preview');
+    const label = document.getElementById('pageguide-file-label');
+    const uploadLabel = document.getElementById('pageguide-upload-label');
+    const input = document.getElementById('pageguide-input');
 
     if (preview) preview.style.display = 'flex';
     if (label) label.textContent = `📎 ${file.name}`;
@@ -1013,11 +1013,11 @@ function clearUploadedFile() {
   uploadedFileContent = null;
   uploadedFileName = null;
 
-  const preview = document.getElementById('xwebagent-file-preview');
-  const label = document.getElementById('xwebagent-file-label');
-  const uploadLabel = document.getElementById('xwebagent-upload-label');
-  const input = document.getElementById('xwebagent-input');
-  const fileInput = document.getElementById('xwebagent-image-upload');
+  const preview = document.getElementById('pageguide-file-preview');
+  const label = document.getElementById('pageguide-file-label');
+  const uploadLabel = document.getElementById('pageguide-upload-label');
+  const input = document.getElementById('pageguide-input');
+  const fileInput = document.getElementById('pageguide-image-upload');
 
   if (preview) preview.style.display = 'none';
   if (label) label.textContent = '📎 File attached';
@@ -1034,9 +1034,9 @@ function clearUploadedFile() {
  */
 function clearSelectedText() {
   currentSelectedText = null;
-  const preview = document.getElementById('xwebagent-selected-text-preview');
+  const preview = document.getElementById('pageguide-selected-text-preview');
   if (preview) preview.style.display = 'none';
-  const input = document.getElementById('xwebagent-input');
+  const input = document.getElementById('pageguide-input');
   if (input) input.focus();
 }
 
@@ -1048,12 +1048,12 @@ function clearSelectedText() {
  * @param {Array} regions - [{label, citationIndex, bbox:{x,y,w,h}}]
  */
 function renderImageRegions(regions) {
-  const wrapper = document.getElementById('xwebagent-image-wrapper');
-  const label = document.getElementById('xwebagent-image-label');
+  const wrapper = document.getElementById('pageguide-image-wrapper');
+  const label = document.getElementById('pageguide-image-label');
   if (!wrapper) return;
 
   // Remove any existing regions
-  wrapper.querySelectorAll('.xwebagent-image-region').forEach(el => el.remove());
+  wrapper.querySelectorAll('.pageguide-image-region').forEach(el => el.remove());
   wrapper.classList.add('has-regions');
 
   regions.forEach(item => {
@@ -1061,14 +1061,14 @@ function renderImageRegions(regions) {
     if (!bbox) return;
 
     const region = document.createElement('div');
-    region.className = 'xwebagent-image-region';
+    region.className = 'pageguide-image-region';
     region.style.left   = `${bbox.x}%`;
     region.style.top    = `${bbox.y}%`;
     region.style.width  = `${bbox.w}%`;
     region.style.height = `${bbox.h}%`;
 
     const tooltip = document.createElement('span');
-    tooltip.className = 'xwebagent-region-label';
+    tooltip.className = 'pageguide-region-label';
     tooltip.textContent = itemLabel || '';
     region.appendChild(tooltip);
 
@@ -1192,14 +1192,14 @@ function _buildSlashMenuItems(inputVal) {
 }
 
 function _renderSlashMenu(items) {
-  const menu = document.getElementById('xwebagent-slash-menu');
+  const menu = document.getElementById('pageguide-slash-menu');
   if (!menu) return;
   menu.innerHTML = '';
   if (items.length === 0) { menu.style.display = 'none'; return; }
 
   items.forEach((item, idx) => {
     const row = document.createElement('div');
-    row.className = 'xwebagent-slash-item' + (idx === _slashMenuIndex ? ' active' : '');
+    row.className = 'pageguide-slash-item' + (idx === _slashMenuIndex ? ' active' : '');
     row.innerHTML =
       `<span class="slash-cmd">${item.command}${item.args ? ' <em>' + item.args + '</em>' : ''}</span>` +
       `<span class="slash-desc">${item.description}</span>`;
@@ -1213,7 +1213,7 @@ function _renderSlashMenu(items) {
 }
 
 function _applySlashItem(item) {
-  const input = document.getElementById('xwebagent-input');
+  const input = document.getElementById('pageguide-input');
   if (!input) return;
   // Commands that take args: insert command + space so user can type the arg
   if (item.args) {
@@ -1226,13 +1226,13 @@ function _applySlashItem(item) {
 }
 
 function _hideSlashMenu() {
-  const menu = document.getElementById('xwebagent-slash-menu');
+  const menu = document.getElementById('pageguide-slash-menu');
   if (menu) menu.style.display = 'none';
   _slashMenuIndex = -1;
 }
 
 function _initSlashAutocomplete() {
-  const input = document.getElementById('xwebagent-input');
+  const input = document.getElementById('pageguide-input');
   if (!input) return;
 
   input.addEventListener('input', () => {
@@ -1247,11 +1247,11 @@ function _initSlashAutocomplete() {
   });
 
   input.addEventListener('keydown', (e) => {
-    const menu = document.getElementById('xwebagent-slash-menu');
+    const menu = document.getElementById('pageguide-slash-menu');
     const visible = menu && menu.style.display !== 'none';
     if (!visible) return;
 
-    const items = menu.querySelectorAll('.xwebagent-slash-item');
+    const items = menu.querySelectorAll('.pageguide-slash-item');
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       _slashMenuIndex = Math.min(_slashMenuIndex + 1, items.length - 1);
@@ -1281,8 +1281,8 @@ function _initSlashAutocomplete() {
  * Send a chat message
  */
 async function sendMessage() {
-  const input = document.getElementById('xwebagent-input');
-  const btn = document.getElementById('xwebagent-send');
+  const input = document.getElementById('pageguide-input');
+  const btn = document.getElementById('pageguide-send');
   
   const query = input?.value.trim() || '';
   
@@ -1736,7 +1736,7 @@ window._shouldResetOnTabSwitch = _shouldResetOnTabSwitch;
  */
 function _saveTabSession(tabId) {
   if (!tabId) return;
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   _tabSessions.set(tabId, {
     chatMessages: [...chatMessages],
     conversationHistory: [...conversationHistory],
@@ -1754,7 +1754,7 @@ function _restoreTabSession(session) {
   conversationHistory = [...session.conversationHistory];
   hasImageInConversation = session.hasImageInConversation;
 
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   if (container) {
     container.innerHTML = session.html;
     container.scrollTop = container.scrollHeight;
@@ -1762,9 +1762,9 @@ function _restoreTabSession(session) {
 
   // Clear image upload UI (blobs aren't saved in the session)
   uploadedImageBase64 = null;
-  const preview = document.getElementById('xwebagent-image-preview');
-  const uploadLabel = document.getElementById('xwebagent-upload-label');
-  const fileInput = document.getElementById('xwebagent-image-upload');
+  const preview = document.getElementById('pageguide-image-preview');
+  const uploadLabel = document.getElementById('pageguide-upload-label');
+  const fileInput = document.getElementById('pageguide-image-upload');
   if (preview) preview.style.display = 'none';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   if (fileInput) fileInput.value = '';
@@ -1772,7 +1772,7 @@ function _restoreTabSession(session) {
   // Clear text-file upload UI
   uploadedFileContent = null;
   uploadedFileName = null;
-  const filePreview = document.getElementById('xwebagent-file-preview');
+  const filePreview = document.getElementById('pageguide-file-preview');
   if (filePreview) filePreview.style.display = 'none';
 }
 
@@ -1815,15 +1815,15 @@ async function resetChat(showMessage = true) {
   conversationHistory = [];
   chatMessages = [];
   hasImageInConversation = false;
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   if (container) container.innerHTML = '';
 
   // Clear uploaded image state
   uploadedImageBase64 = null;
-  const preview = document.getElementById('xwebagent-image-preview');
-  const uploadLabel = document.getElementById('xwebagent-upload-label');
-  const input = document.getElementById('xwebagent-input');
-  const fileInput = document.getElementById('xwebagent-image-upload');
+  const preview = document.getElementById('pageguide-image-preview');
+  const uploadLabel = document.getElementById('pageguide-upload-label');
+  const input = document.getElementById('pageguide-input');
+  const fileInput = document.getElementById('pageguide-image-upload');
 
   if (preview) preview.style.display = 'none';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
@@ -1833,12 +1833,12 @@ async function resetChat(showMessage = true) {
   // Clear text-file upload state
   uploadedFileContent = null;
   uploadedFileName = null;
-  const filePreview = document.getElementById('xwebagent-file-preview');
+  const filePreview = document.getElementById('pageguide-file-preview');
   if (filePreview) filePreview.style.display = 'none';
 
   // Clear selected text state
   currentSelectedText = null;
-  const selectedTextPreview = document.getElementById('xwebagent-selected-text-preview');
+  const selectedTextPreview = document.getElementById('pageguide-selected-text-preview');
   if (selectedTextPreview) selectedTextPreview.style.display = 'none';
 
   try {
@@ -1870,7 +1870,7 @@ async function handleQuickAction(action) {
 // Chat History
 // ---------------------------------------------------------------------------
 
-const HISTORY_STORAGE_KEY = 'xwebagent_history';
+const HISTORY_STORAGE_KEY = 'pageguide_history';
 const HISTORY_MAX_ITEMS = 50;
 
 /**
@@ -1912,7 +1912,7 @@ async function saveCurrentChat() {
  * Show the history overlay and render the list view.
  */
 function showHistoryPanel() {
-  const overlay = document.getElementById('xwebagent-history');
+  const overlay = document.getElementById('pageguide-history');
   if (overlay) overlay.style.display = 'flex';
   renderHistoryList();
 }
@@ -1921,7 +1921,7 @@ function showHistoryPanel() {
  * Hide the history overlay.
  */
 function hideHistoryPanel() {
-  const overlay = document.getElementById('xwebagent-history');
+  const overlay = document.getElementById('pageguide-history');
   if (overlay) overlay.style.display = 'none';
 }
 
@@ -1929,52 +1929,52 @@ function hideHistoryPanel() {
  * Render the list of saved chats in the history body.
  */
 async function renderHistoryList() {
-  const body = document.getElementById('xwebagent-history-body');
-  const backBtn = document.getElementById('xwebagent-history-back');
-  const titleEl = document.getElementById('xwebagent-history-hdr-title');
+  const body = document.getElementById('pageguide-history-body');
+  const backBtn = document.getElementById('pageguide-history-back');
+  const titleEl = document.getElementById('pageguide-history-hdr-title');
   if (!body) return;
 
   if (backBtn) backBtn.style.visibility = 'hidden';
   if (titleEl) titleEl.textContent = 'Chat History';
 
-  body.innerHTML = '<div class="xwebagent-history-empty">Loading…</div>';
+  body.innerHTML = '<div class="pageguide-history-empty">Loading…</div>';
 
   let history = [];
   try {
     const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
     history = Array.isArray(data[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
   } catch (err) {
-    body.innerHTML = `<div class="xwebagent-history-empty">❌ Could not load history: ${err.message}</div>`;
+    body.innerHTML = `<div class="pageguide-history-empty">❌ Could not load history: ${err.message}</div>`;
     return;
   }
 
   if (history.length === 0) {
-    body.innerHTML = '<div class="xwebagent-history-empty">No saved chats yet.<br>Use 💾 Save to save a chat.</div>';
+    body.innerHTML = '<div class="pageguide-history-empty">No saved chats yet.<br>Use 💾 Save to save a chat.</div>';
     return;
   }
 
   body.innerHTML = '';
   history.forEach(entry => {
     const item = document.createElement('div');
-    item.className = 'xwebagent-history-item';
+    item.className = 'pageguide-history-item';
 
     const main = document.createElement('div');
-    main.className = 'xwebagent-history-item-main';
+    main.className = 'pageguide-history-item-main';
     main.addEventListener('click', () => renderHistoryDetail(entry));
 
     const titleSpan = document.createElement('div');
-    titleSpan.className = 'xwebagent-history-item-title';
+    titleSpan.className = 'pageguide-history-item-title';
     titleSpan.textContent = entry.title;
 
     const meta = document.createElement('div');
-    meta.className = 'xwebagent-history-item-meta';
+    meta.className = 'pageguide-history-item-meta';
     meta.textContent = `${entry.savedAt} · ${entry.messages.length} messages`;
 
     main.appendChild(titleSpan);
     main.appendChild(meta);
 
     const delBtn = document.createElement('button');
-    delBtn.className = 'xwebagent-history-delete-btn';
+    delBtn.className = 'pageguide-history-delete-btn';
     delBtn.title = 'Delete this chat';
     delBtn.textContent = '🗑';
     delBtn.addEventListener('click', (e) => {
@@ -1993,9 +1993,9 @@ async function renderHistoryList() {
  * @param {Object} entry - { id, title, savedAt, messages }
  */
 function renderHistoryDetail(entry) {
-  const body = document.getElementById('xwebagent-history-body');
-  const backBtn = document.getElementById('xwebagent-history-back');
-  const titleEl = document.getElementById('xwebagent-history-hdr-title');
+  const body = document.getElementById('pageguide-history-body');
+  const backBtn = document.getElementById('pageguide-history-back');
+  const titleEl = document.getElementById('pageguide-history-hdr-title');
   if (!body) return;
 
   if (backBtn) backBtn.style.visibility = 'visible';
@@ -2005,9 +2005,9 @@ function renderHistoryDetail(entry) {
 
   // "Load Chat" button
   const loadBar = document.createElement('div');
-  loadBar.className = 'xwebagent-history-load-bar';
+  loadBar.className = 'pageguide-history-load-bar';
   const loadBtn = document.createElement('button');
-  loadBtn.className = 'xwebagent-history-load-btn';
+  loadBtn.className = 'pageguide-history-load-btn';
   loadBtn.textContent = '↩ Load this chat';
   loadBtn.addEventListener('click', () => {
     loadHistoryChat(entry);
@@ -2019,7 +2019,7 @@ function renderHistoryDetail(entry) {
   // Messages
   entry.messages.forEach(msg => {
     const bubble = document.createElement('div');
-    bubble.className = `xwebagent-history-msg xwebagent-history-msg--${msg.type || 'system'}`;
+    bubble.className = `pageguide-history-msg pageguide-history-msg--${msg.type || 'system'}`;
     bubble.textContent = msg.content;
     body.appendChild(bubble);
   });
@@ -2050,7 +2050,7 @@ function loadHistoryChat(entry) {
   conversationHistory = [];
   chatMessages = [];
   hasImageInConversation = false;
-  const container = document.getElementById('xwebagent-messages');
+  const container = document.getElementById('pageguide-messages');
   if (container) container.innerHTML = '';
 
   // Restore messages
@@ -2098,8 +2098,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     window.close();
   } else if (message.action === 'selectedText') {
     // Handle text selection passed from the content script
-    const preview = document.getElementById('xwebagent-selected-text-preview');
-    const label = document.getElementById('xwebagent-selected-text-label');
+    const preview = document.getElementById('pageguide-selected-text-preview');
+    const label = document.getElementById('pageguide-selected-text-label');
     
     if (message.text && message.text.length > 0) {
       currentSelectedText = message.text;

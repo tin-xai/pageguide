@@ -96,19 +96,19 @@ test.describe('Selected Slow Tests', () => {
     await activePage.goto(`chrome-extension://${extensionId}/sidepanel/panel.html`);
     await activePage.waitForLoadState('domcontentloaded');
 
-    const input = activePage.locator('#xwebagent-input');
-    const messagesContainer = activePage.locator('#xwebagent-messages');
+    const input = activePage.locator('#pageguide-input');
+    const messagesContainer = activePage.locator('#pageguide-messages');
 
     await input.fill('Hello! What is 2+2?');
     await input.press('Enter');
 
     // User message should appear
-    await expect(messagesContainer.locator('.xwebagent-message.user').first()).toBeVisible({
+    await expect(messagesContainer.locator('.pageguide-message.user').first()).toBeVisible({
       timeout: 10000,
     });
 
     // Wait for an assistant or system/error response back
-    await expect(messagesContainer.locator('.xwebagent-message:not(.user)').first()).toBeVisible({
+    await expect(messagesContainer.locator('.pageguide-message:not(.user)').first()).toBeVisible({
       timeout: 15000,
     });
 

@@ -8,7 +8,7 @@ const path = require('path');
 const EXTENSION_PATH = path.join(__dirname, '../../../');
 
 /**
- * Launch a browser with the XWebAgent extension loaded
+ * Launch a browser with the PageGuide extension loaded
  * @returns {Promise<{browser: Browser, context: BrowserContext, extensionId: string}>}
  */
 async function launchBrowserWithExtension() {
@@ -106,7 +106,7 @@ async function waitForContentScripts(page, timeout = 5000) {
   await page
     .waitForFunction(
       () =>
-        typeof window._xwebagentIndex !== 'undefined' || document.querySelector('[data-xwebagent]'),
+        typeof window._pageguideIndex !== 'undefined' || document.querySelector('[data-pageguide]'),
       { timeout }
     )
     .catch(() => {

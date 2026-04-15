@@ -1,4 +1,4 @@
-// XWebAgent - Ask Functionality
+// PageGuide - Ask Functionality
 // Single prompt approach: Answer with inline citations
 // Supports vision-based answering for visual questions
 
@@ -425,7 +425,7 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
 function applyHighlightsFromCitations(answer) {
   // Clear previous highlights
   clearHighlights();
-  window._xwebagentHighlights = [];
+  window._pageguideHighlights = [];
   
   // Normalize curly/smart quotes to straight quotes
   const normalizedAnswer = answer
@@ -456,7 +456,7 @@ function applyHighlightsFromCitations(answer) {
   }
   
   console.log('🤖 Found', matchesWithText.length, 'citations with text,', matchesSimple.length, 'simple citations');
-  console.log('🤖 Available indices in _xwebagentIndex:', Object.keys(window._xwebagentIndex || {}).length);
+  console.log('🤖 Available indices in _pageguideIndex:', Object.keys(window._pageguideIndex || {}).length);
   
   const pageBg = getPageBackground();
   // highlightedElements tracks WHOLE-element highlights (simple citations / Strategy-3
@@ -537,7 +537,7 @@ function applyHighlightsFromCitations(answer) {
     
     const element = getIndexedElement(index);
     if (!element) {
-      console.log('🤖 Index', index, 'not found in _xwebagentIndex');
+      console.log('🤖 Index', index, 'not found in _pageguideIndex');
       failedIndices.push(index);
       continue;
     }
@@ -559,7 +559,7 @@ function applyHighlightsFromCitations(answer) {
     element.style.outlineOffset = '2px';
     element.style.backgroundColor = `${style.color}22`;
     
-    window._xwebagentHighlights.push(element);
+    window._pageguideHighlights.push(element);
     highlightedElements.add(element);
     count++;
     
@@ -571,8 +571,8 @@ function applyHighlightsFromCitations(answer) {
   }
   
   // Scroll to first highlight
-  if (window._xwebagentHighlights.length > 0) {
-    window._xwebagentHighlights[0].scrollIntoView({ 
+  if (window._pageguideHighlights.length > 0) {
+    window._pageguideHighlights[0].scrollIntoView({ 
       behavior: 'smooth', 
       block: 'center' 
     });

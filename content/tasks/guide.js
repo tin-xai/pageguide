@@ -1,10 +1,10 @@
-// XWebAgent - Step-by-Step Guidance System
+// PageGuide - Step-by-Step Guidance System
 // Handles interactive step-by-step guidance with cross-page persistence
 
 // ===== GUIDANCE STATE =====
 
 // Store guidance session state (will be synced with storage)
-window._xwebagentGuidance = {
+window._pageguideGuidance = {
   active: false,
   question: '',
   currentStep: 0,
@@ -19,10 +19,10 @@ window._xwebagentGuidance = {
  * Save guidance state to chrome.storage.session for cross-page persistence
  */
 async function saveGuidanceState() {
-  const guidance = window._xwebagentGuidance;
+  const guidance = window._pageguideGuidance;
   try {
     await chrome.storage.session.set({
-      xwebagentGuidance: {
+      pageguideGuidance: {
         active: guidance.active,
         question: guidance.question,
         currentStep: guidance.currentStep,
@@ -44,13 +44,13 @@ async function saveGuidanceState() {
  */
 async function loadGuidanceState() {
   try {
-    const result = await chrome.storage.session.get('xwebagentGuidance');
-    if (result.xwebagentGuidance) {
-      const saved = result.xwebagentGuidance;
+    const result = await chrome.storage.session.get('pageguideGuidance');
+    if (result.pageguideGuidance) {
+      const saved = result.pageguideGuidance;
       // Only restore if session is less than 10 minutes old
       const age = Date.now() - (saved.timestamp || 0);
       if (age < 10 * 60 * 1000) {
-        window._xwebagentGuidance = {
+        window._pageguideGuidance = {
           active: saved.active,
           question: saved.question,
           currentStep: saved.currentStep,
@@ -76,7 +76,7 @@ async function loadGuidanceState() {
  */
 async function clearGuidanceState() {
   try {
-    await chrome.storage.session.remove('xwebagentGuidance');
+    await chrome.storage.session.remove('pageguideGuidance');
     console.log('🎯 Guidance state cleared');
   } catch (e) {
     console.warn('🎯 Failed to clear guidance state:', e);
@@ -160,7 +160,7 @@ async function checkAndResumeGuidance() {
         });
       } catch (e) {}
       // Clear state so we don't keep retrying
-      window._xwebagentGuidance.active = false;
+      window._pageguideGuidance.active = false;
       await clearGuidanceState();
     } else {
       // continueGuidance returned null (guidance became inactive mid-await)
@@ -225,7 +225,7 @@ window.addEventListener('popstate', _onSpaNavigation);
  * Start or continue step-by-step guidance
  */
 async function handleStepByStepGuide(question, continueFromStep = false) {
-  const guidance = window._xwebagentGuidance;
+  const guidance = window._pageguideGuidance;
   
   if (!continueFromStep) {
     // Start new guidance session
@@ -304,7 +304,7 @@ Provide the next step. Return JSON only.`
  * Process guidance response and apply highlighting
  */
 async function processGuideResponse(content) {
-  const guidance = window._xwebagentGuidance;
+  const guidance = window._pageguideGuidance;
   
   try {
     let jsonStr = content.trim()
@@ -320,7 +320,7 @@ async function processGuideResponse(content) {
     
     // Clear previous highlights
     clearHighlights();
-    window._xwebagentHighlights = [];
+    window._pageguideHighlights = [];
     
     // Apply highlight for this step with random style
     let highlightCount = 0;
@@ -334,7 +334,7 @@ async function processGuideResponse(content) {
       );
       
       // Scroll to highlighted element
-      if (window._xwebagentHighlights.length > 0) {
+      if (window._pageguideHighlights.length > 0) {
         setTimeout(() => scrollToHighlight(0), 300);
       }
     }
@@ -393,13 +393,13 @@ async function processGuideResponse(content) {
  * Supports: click, input, scroll
  */
 function setupActionListener(actionType) {
-  const guidance = window._xwebagentGuidance;
+  const guidance = window._pageguideGuidance;
   
   // Remove any existing listeners
   removeActionListener();
   
   // Store handlers so we can remove them later
-  window._xwebagentActionHandlers = [];
+  window._pageguideActionHandlers = [];
   
   const continueToNextStep = async (delay = 1200) => {
     console.log('🎯 User completed action, continuing to next step...');
@@ -418,7 +418,7 @@ function setupActionListener(actionType) {
     // happens, the new page's checkAndResumeGuidance() can detect it even if the
     // URL comparison fails (because this context may save lastUrl = new page URL).
     try {
-      window._xwebagentGuidance.pendingResume = true;
+      window._pageguideGuidance.pendingResume = true;
       await saveGuidanceState(); // Saves pendingResume:true, lastUrl:startUrl (old URL)
     } catch (e) {
       // Context might already be dying — ignore; URL comparison is the fallback
@@ -479,8 +479,8 @@ function setupActionListener(actionType) {
   if (actionType === 'click') {
     // Click handler - wait for click on highlighted element
     const clickHandler = async (e) => {
-      const isHighlighted = e.target.closest('[data-xwebagent-styled]') || 
-                            e.target.hasAttribute('data-xwebagent-styled');
+      const isHighlighted = e.target.closest('[data-pageguide-styled]') || 
+                            e.target.hasAttribute('data-pageguide-styled');
       if (!isHighlighted) return;
       
       console.log('🎯 User clicked highlighted element');
@@ -488,14 +488,14 @@ function setupActionListener(actionType) {
     };
     
     document.addEventListener('click', clickHandler, true);
-    window._xwebagentActionHandlers.push({ event: 'click', handler: clickHandler, capture: true });
+    window._pageguideActionHandlers.push({ event: 'click', handler: clickHandler, capture: true });
     console.log('🎯 Listening for click on highlighted element...');
     
   } else if (actionType === 'input') {
     // Input handler - wait for user to type and then blur/Enter
     const inputHandler = async (e) => {
-      const isHighlighted = e.target.closest('[data-xwebagent-styled]') || 
-                            e.target.hasAttribute('data-xwebagent-styled');
+      const isHighlighted = e.target.closest('[data-pageguide-styled]') || 
+                            e.target.hasAttribute('data-pageguide-styled');
       if (!isHighlighted) return;
       
       // For input fields, wait until user finishes (blur or Enter)
@@ -503,8 +503,8 @@ function setupActionListener(actionType) {
     };
     
     const blurHandler = async (e) => {
-      const isHighlighted = e.target.closest('[data-xwebagent-styled]') || 
-                            e.target.hasAttribute('data-xwebagent-styled');
+      const isHighlighted = e.target.closest('[data-pageguide-styled]') || 
+                            e.target.hasAttribute('data-pageguide-styled');
       if (!isHighlighted) return;
       
       // Only continue if field has value
@@ -517,8 +517,8 @@ function setupActionListener(actionType) {
     const keydownHandler = async (e) => {
       if (e.key !== 'Enter') return;
       
-      const isHighlighted = e.target.closest('[data-xwebagent-styled]') || 
-                            e.target.hasAttribute('data-xwebagent-styled');
+      const isHighlighted = e.target.closest('[data-pageguide-styled]') || 
+                            e.target.hasAttribute('data-pageguide-styled');
       if (!isHighlighted) return;
       
       console.log('🎯 User finished typing (Enter)');
@@ -529,9 +529,9 @@ function setupActionListener(actionType) {
     document.addEventListener('blur', blurHandler, true);
     document.addEventListener('keydown', keydownHandler, true);
     
-    window._xwebagentActionHandlers.push({ event: 'input', handler: inputHandler, capture: true });
-    window._xwebagentActionHandlers.push({ event: 'blur', handler: blurHandler, capture: true });
-    window._xwebagentActionHandlers.push({ event: 'keydown', handler: keydownHandler, capture: true });
+    window._pageguideActionHandlers.push({ event: 'input', handler: inputHandler, capture: true });
+    window._pageguideActionHandlers.push({ event: 'blur', handler: blurHandler, capture: true });
+    window._pageguideActionHandlers.push({ event: 'keydown', handler: keydownHandler, capture: true });
     console.log('🎯 Listening for input in highlighted field (blur or Enter to continue)...');
     
   } else if (actionType === 'scroll') {
@@ -548,14 +548,14 @@ function setupActionListener(actionType) {
     };
     
     window.addEventListener('scroll', scrollHandler, true);
-    window._xwebagentActionHandlers.push({ event: 'scroll', handler: scrollHandler, capture: true, target: window });
+    window._pageguideActionHandlers.push({ event: 'scroll', handler: scrollHandler, capture: true, target: window });
     console.log('🎯 Listening for scroll...');
     
   } else {
     // Default: just listen for any click on highlighted element
     const defaultHandler = async (e) => {
-      const isHighlighted = e.target.closest('[data-xwebagent-styled]') || 
-                            e.target.hasAttribute('data-xwebagent-styled');
+      const isHighlighted = e.target.closest('[data-pageguide-styled]') || 
+                            e.target.hasAttribute('data-pageguide-styled');
       if (!isHighlighted) return;
       
       console.log('🎯 User interacted with highlighted element');
@@ -563,7 +563,7 @@ function setupActionListener(actionType) {
     };
     
     document.addEventListener('click', defaultHandler, true);
-    window._xwebagentActionHandlers.push({ event: 'click', handler: defaultHandler, capture: true });
+    window._pageguideActionHandlers.push({ event: 'click', handler: defaultHandler, capture: true });
     console.log('🎯 Listening for interaction with highlighted element...');
   }
 }
@@ -572,18 +572,18 @@ function setupActionListener(actionType) {
  * Remove all action listeners
  */
 function removeActionListener() {
-  if (window._xwebagentActionHandlers) {
-    window._xwebagentActionHandlers.forEach(({ event, handler, capture, target }) => {
+  if (window._pageguideActionHandlers) {
+    window._pageguideActionHandlers.forEach(({ event, handler, capture, target }) => {
       const el = target || document;
       el.removeEventListener(event, handler, capture);
     });
-    window._xwebagentActionHandlers = [];
+    window._pageguideActionHandlers = [];
   }
   
   // Legacy cleanup
-  if (window._xwebagentActionHandler) {
-    document.removeEventListener('click', window._xwebagentActionHandler, true);
-    window._xwebagentActionHandler = null;
+  if (window._pageguideActionHandler) {
+    document.removeEventListener('click', window._pageguideActionHandler, true);
+    window._pageguideActionHandler = null;
   }
 }
 
@@ -592,7 +592,7 @@ function removeActionListener() {
  * Includes retry logic for slow-rendering menus
  */
 async function continueGuidance() {
-  const guidance = window._xwebagentGuidance;
+  const guidance = window._pageguideGuidance;
   
   if (!guidance.active) {
     console.log('🎯 No active guidance session');

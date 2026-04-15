@@ -1,10 +1,10 @@
-// XWebAgent Content Script - Main Entry Point
+// PageGuide Content Script - Main Entry Point
 // Initializes the extension and handles message routing
 
 // Prevent double-loading
-if (!window._xwebagentLoaded) {
-  window._xwebagentLoaded = true;
-  console.log('🤖 XWebAgent loaded');
+if (!window._pageguideLoaded) {
+  window._pageguideLoaded = true;
+  console.log('🤖 PageGuide loaded');
 
   // ===== Message Handler =====
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -39,12 +39,12 @@ async function handleMessage(request) {
       if (typeof clearPdfHighlights === 'function') clearPdfHighlights();
       if (typeof clearGuidanceState === 'function') clearGuidanceState();
       // Also reset in-memory guidance state
-      if (window._xwebagentGuidance) {
-        window._xwebagentGuidance.active = false;
-        window._xwebagentGuidance.question = '';
-        window._xwebagentGuidance.currentStep = 0;
-        window._xwebagentGuidance.previousSteps = [];
-        window._xwebagentGuidance.waitingForAction = null;
+      if (window._pageguideGuidance) {
+        window._pageguideGuidance.active = false;
+        window._pageguideGuidance.question = '';
+        window._pageguideGuidance.currentStep = 0;
+        window._pageguideGuidance.previousSteps = [];
+        window._pageguideGuidance.waitingForAction = null;
       }
       // Reset guidev2 state
       if (typeof gv2StopGuide === 'function') gv2StopGuide();

@@ -1,14 +1,14 @@
-// XWebAgent - Scroll Functions
+// PageGuide - Scroll Functions
 // Scroll utilities for navigation and highlighting
 
 // Store highlighted elements for scrolling (shared across modules)
-window._xwebagentHighlights = window._xwebagentHighlights || [];
+window._pageguideHighlights = window._pageguideHighlights || [];
 
 /**
  * Scroll to a highlighted element by index
  */
 function scrollToHighlight(index = 0) {
-  const highlights = window._xwebagentHighlights;
+  const highlights = window._pageguideHighlights;
   if (highlights.length === 0) {
     console.log('🤖 No highlights to scroll to');
     return;
@@ -37,7 +37,7 @@ function scrollToIndex(index) {
   const element = getIndexedElement(index);
   
   if (!element) {
-    console.log('🤖 Index', index, 'not found in _xwebagentIndex');
+    console.log('🤖 Index', index, 'not found in _pageguideIndex');
     return false;
   }
   

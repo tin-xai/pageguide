@@ -1,4 +1,4 @@
-/* XWebAgent Side Panel Styles */
+/* PageGuide Side Panel Styles */
 
 * {
   box-sizing: border-box;
@@ -14,7 +14,7 @@ body {
   min-height: 100vh;
 }
 
-.xwebagent-panel {
+.pageguide-panel {
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -23,7 +23,7 @@ body {
 }
 
 /* ---- Chat History Overlay ---- */
-.xwebagent-history-overlay {
+.pageguide-history-overlay {
   position: absolute;
   inset: 0;
   z-index: 50;
@@ -32,7 +32,7 @@ body {
   flex-direction: column;
 }
 
-.xwebagent-history-hdr {
+.pageguide-history-hdr {
   display: flex;
   align-items: center;
   padding: 14px 16px;
@@ -41,7 +41,7 @@ body {
   flex-shrink: 0;
 }
 
-.xwebagent-history-hdr-title {
+.pageguide-history-hdr-title {
   flex: 1;
   text-align: center;
   font-size: 14px;
@@ -49,7 +49,7 @@ body {
   color: #e0e0e0;
 }
 
-.xwebagent-history-nav-btn {
+.pageguide-history-nav-btn {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #aaa;
@@ -61,20 +61,20 @@ body {
   transition: all 0.2s;
 }
 
-.xwebagent-history-nav-btn:hover {
+.pageguide-history-nav-btn:hover {
   background: rgba(0, 217, 255, 0.15);
   border-color: rgba(0, 217, 255, 0.3);
   color: #00d9ff;
 }
 
-.xwebagent-history-body {
+.pageguide-history-body {
   flex: 1;
   overflow-y: auto;
   padding: 12px;
 }
 
 /* List view items */
-.xwebagent-history-item {
+.pageguide-history-item {
   display: flex;
   align-items: center;
   background: rgba(255, 255, 255, 0.05);
@@ -87,17 +87,17 @@ body {
   transition: all 0.15s;
 }
 
-.xwebagent-history-item:hover {
+.pageguide-history-item:hover {
   background: rgba(0, 217, 255, 0.08);
   border-color: rgba(0, 217, 255, 0.2);
 }
 
-.xwebagent-history-item-main {
+.pageguide-history-item-main {
   flex: 1;
   min-width: 0;
 }
 
-.xwebagent-history-item-title {
+.pageguide-history-item-title {
   font-size: 13px;
   color: #ddd;
   white-space: nowrap;
@@ -105,13 +105,13 @@ body {
   text-overflow: ellipsis;
 }
 
-.xwebagent-history-item-meta {
+.pageguide-history-item-meta {
   font-size: 11px;
   color: #777;
   margin-top: 3px;
 }
 
-.xwebagent-history-delete-btn {
+.pageguide-history-delete-btn {
   background: none;
   border: none;
   cursor: pointer;
@@ -122,11 +122,11 @@ body {
   flex-shrink: 0;
 }
 
-.xwebagent-history-delete-btn:hover {
+.pageguide-history-delete-btn:hover {
   opacity: 1;
 }
 
-.xwebagent-history-empty {
+.pageguide-history-empty {
   text-align: center;
   color: #666;
   font-size: 13px;
@@ -135,13 +135,13 @@ body {
 }
 
 /* Detail view — reuse existing message styles; add a load-chat button */
-.xwebagent-history-load-bar {
+.pageguide-history-load-bar {
   padding: 10px 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
 }
 
-.xwebagent-history-load-btn {
+.pageguide-history-load-btn {
   width: 100%;
   background: rgba(0, 217, 255, 0.15);
   border: 1px solid rgba(0, 217, 255, 0.35);
@@ -153,12 +153,12 @@ body {
   transition: all 0.2s;
 }
 
-.xwebagent-history-load-btn:hover {
+.pageguide-history-load-btn:hover {
   background: rgba(0, 217, 255, 0.25);
 }
 
 /* History detail message bubbles */
-.xwebagent-history-msg {
+.pageguide-history-msg {
   margin: 6px 12px;
   padding: 8px 12px;
   border-radius: 10px;
@@ -168,21 +168,21 @@ body {
   word-break: break-word;
 }
 
-.xwebagent-history-msg--user {
+.pageguide-history-msg--user {
   background: rgba(0, 217, 255, 0.12);
   border: 1px solid rgba(0, 217, 255, 0.2);
   color: #e0f7ff;
   align-self: flex-end;
 }
 
-.xwebagent-history-msg--assistant {
+.pageguide-history-msg--assistant {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: #d0d0d0;
 }
 
-.xwebagent-history-msg--system,
-.xwebagent-history-msg--error {
+.pageguide-history-msg--system,
+.pageguide-history-msg--error {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: #999;
@@ -190,78 +190,78 @@ body {
   font-size: 12px;
 }
 
-body.light-mode .xwebagent-history-msg--user {
+body.light-mode .pageguide-history-msg--user {
   background: rgba(0, 140, 200, 0.1);
   border-color: rgba(0, 140, 200, 0.25);
   color: #003c5a;
 }
 
-body.light-mode .xwebagent-history-msg--assistant {
+body.light-mode .pageguide-history-msg--assistant {
   background: rgba(0, 0, 0, 0.04);
   border-color: rgba(0, 0, 0, 0.08);
   color: #333;
 }
 
-body.light-mode .xwebagent-history-msg--system,
-body.light-mode .xwebagent-history-msg--error {
+body.light-mode .pageguide-history-msg--system,
+body.light-mode .pageguide-history-msg--error {
   color: #888;
 }
 
 /* Light-mode overrides */
-body.light-mode .xwebagent-history-overlay {
+body.light-mode .pageguide-history-overlay {
   background: linear-gradient(180deg, #f4f6fa 0%, #eef1f8 100%);
 }
 
-body.light-mode .xwebagent-history-hdr {
+body.light-mode .pageguide-history-hdr {
   border-bottom-color: rgba(0, 140, 200, 0.15);
 }
 
-body.light-mode .xwebagent-history-hdr-title {
+body.light-mode .pageguide-history-hdr-title {
   color: #222;
 }
 
-body.light-mode .xwebagent-history-nav-btn {
+body.light-mode .pageguide-history-nav-btn {
   background: rgba(0, 0, 0, 0.06);
   border-color: rgba(0, 0, 0, 0.1);
   color: #555;
 }
 
-body.light-mode .xwebagent-history-nav-btn:hover {
+body.light-mode .pageguide-history-nav-btn:hover {
   background: rgba(0, 140, 200, 0.1);
   border-color: rgba(0, 140, 200, 0.3);
   color: #0077aa;
 }
 
-body.light-mode .xwebagent-history-item {
+body.light-mode .pageguide-history-item {
   background: rgba(0, 0, 0, 0.04);
   border-color: rgba(0, 0, 0, 0.08);
 }
 
-body.light-mode .xwebagent-history-item:hover {
+body.light-mode .pageguide-history-item:hover {
   background: rgba(0, 140, 200, 0.07);
   border-color: rgba(0, 140, 200, 0.2);
 }
 
-body.light-mode .xwebagent-history-item-title {
+body.light-mode .pageguide-history-item-title {
   color: #222;
 }
 
-body.light-mode .xwebagent-history-item-meta {
+body.light-mode .pageguide-history-item-meta {
   color: #888;
 }
 
-body.light-mode .xwebagent-history-load-btn {
+body.light-mode .pageguide-history-load-btn {
   background: rgba(0, 140, 200, 0.1);
   border-color: rgba(0, 140, 200, 0.3);
   color: #0077aa;
 }
 
-body.light-mode .xwebagent-history-load-btn:hover {
+body.light-mode .pageguide-history-load-btn:hover {
   background: rgba(0, 140, 200, 0.2);
 }
 
 /* Chat Header */
-.xwebagent-chat-header {
+.pageguide-chat-header {
   padding: 16px 20px;
   background: linear-gradient(135deg, rgba(0, 217, 255, 0.1) 0%, rgba(0, 255, 136, 0.05) 100%);
   border-bottom: 1px solid rgba(0, 217, 255, 0.2);
@@ -271,19 +271,19 @@ body.light-mode .xwebagent-history-load-btn:hover {
   flex-shrink: 0;
 }
 
-.xwebagent-header-left {
+.pageguide-header-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.xwebagent-logo {
+.pageguide-logo {
   width: 40px;
   height: 40px;
   border-radius: 8px;
 }
 
-.xwebagent-header-text h2 {
+.pageguide-header-text h2 {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
@@ -293,21 +293,21 @@ body.light-mode .xwebagent-history-load-btn:hover {
   background-clip: text;
 }
 
-.xwebagent-header-text p {
+.pageguide-header-text p {
   margin: 2px 0 0 0;
   font-size: 10px;
   color: #888;
 }
 
-.xwebagent-header-right {
+.pageguide-header-right {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.xwebagent-new-chat-btn,
-.xwebagent-settings-btn,
-.xwebagent-close-btn {
+.pageguide-new-chat-btn,
+.pageguide-settings-btn,
+.pageguide-close-btn {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   color: #888;
@@ -318,23 +318,23 @@ body.light-mode .xwebagent-history-load-btn:hover {
   transition: all 0.2s;
 }
 
-.xwebagent-new-chat-btn:hover {
+.pageguide-new-chat-btn:hover {
   background: rgba(124, 92, 255, 0.2);
   color: #9d82ff;
 }
 
-.xwebagent-settings-btn:hover {
+.pageguide-settings-btn:hover {
   background: rgba(0, 217, 255, 0.2);
   color: #00d9ff;
 }
 
-.xwebagent-close-btn:hover {
+.pageguide-close-btn:hover {
   background: rgba(255, 100, 100, 0.2);
   color: #ff6666;
 }
 
 /* Chat Messages Container */
-.xwebagent-chat-messages {
+.pageguide-chat-messages {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
@@ -343,21 +343,21 @@ body.light-mode .xwebagent-history-load-btn:hover {
   gap: 12px;
 }
 
-.xwebagent-chat-messages::-webkit-scrollbar {
+.pageguide-chat-messages::-webkit-scrollbar {
   width: 6px;
 }
 
-.xwebagent-chat-messages::-webkit-scrollbar-track {
+.pageguide-chat-messages::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.xwebagent-chat-messages::-webkit-scrollbar-thumb {
+.pageguide-chat-messages::-webkit-scrollbar-thumb {
   background: rgba(0, 217, 255, 0.3);
   border-radius: 3px;
 }
 
 /* Message Bubbles */
-.xwebagent-message {
+.pageguide-message {
   max-width: 85%;
   padding: 12px 16px;
   border-radius: 16px;
@@ -377,7 +377,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   }
 }
 
-.xwebagent-message.user {
+.pageguide-message.user {
   align-self: flex-end;
   background: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%);
   color: #000;
@@ -385,7 +385,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Context pills inside messages */
-.xwebagent-msg-context-pill {
+.pageguide-msg-context-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -399,18 +399,18 @@ body.light-mode .xwebagent-history-load-btn:hover {
   max-width: 100%;
 }
 
-.xwebagent-msg-context-icon {
+.pageguide-msg-context-icon {
   flex-shrink: 0;
 }
 
-.xwebagent-msg-context-text {
+.pageguide-msg-context-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: 500;
 }
 
-.xwebagent-message.assistant {
+.pageguide-message.assistant {
   align-self: flex-start;
   background: rgba(255, 255, 255, 0.08);
   color: #e0e0e0;
@@ -419,17 +419,17 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Markdown formatting in messages */
-.xwebagent-message strong {
+.pageguide-message strong {
   color: #fff;
   font-weight: 700;
 }
 
-.xwebagent-message em {
+.pageguide-message em {
   font-style: italic;
   color: #b8d4e8;
 }
 
-.xwebagent-message code {
+.pageguide-message code {
   background: rgba(0, 217, 255, 0.15);
   color: #00d9ff;
   padding: 2px 6px;
@@ -438,7 +438,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   font-size: 0.9em;
 }
 
-.xwebagent-message pre {
+.pageguide-message pre {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
@@ -447,66 +447,66 @@ body.light-mode .xwebagent-history-load-btn:hover {
   margin: 8px 0;
 }
 
-.xwebagent-message pre code {
+.pageguide-message pre code {
   background: none;
   padding: 0;
   color: #e0e0e0;
 }
 
-.xwebagent-message h2,
-.xwebagent-message h3,
-.xwebagent-message h4 {
+.pageguide-message h2,
+.pageguide-message h3,
+.pageguide-message h4 {
   color: #fff;
   margin: 12px 0 8px 0;
   font-weight: 600;
 }
 
-.xwebagent-message h2 {
+.pageguide-message h2 {
   font-size: 1.3em;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   padding-bottom: 6px;
 }
 
-.xwebagent-message h3 {
+.pageguide-message h3 {
   font-size: 1.15em;
 }
 
-.xwebagent-message h4 {
+.pageguide-message h4 {
   font-size: 1.05em;
 }
 
-.xwebagent-message p {
+.pageguide-message p {
   margin: 8px 0;
 }
 
-.xwebagent-message p:first-child {
+.pageguide-message p:first-child {
   margin-top: 0;
 }
 
-.xwebagent-message p:last-child {
+.pageguide-message p:last-child {
   margin-bottom: 0;
 }
 
-.xwebagent-message ul,
-.xwebagent-message ol {
+.pageguide-message ul,
+.pageguide-message ol {
   margin: 8px 0;
   padding-left: 20px;
 }
 
-.xwebagent-message li {
+.pageguide-message li {
   margin: 4px 0;
   line-height: 1.5;
 }
 
-.xwebagent-message ul li {
+.pageguide-message ul li {
   list-style-type: disc;
 }
 
-.xwebagent-message ol li {
+.pageguide-message ol li {
   list-style-type: decimal;
 }
 
-.xwebagent-message.system {
+.pageguide-message.system {
   align-self: center;
   background: rgba(0, 255, 136, 0.1);
   color: #00ff88;
@@ -516,7 +516,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   border: 1px solid rgba(0, 255, 136, 0.2);
 }
 
-.xwebagent-message.error {
+.pageguide-message.error {
   align-self: center;
   background: rgba(255, 100, 100, 0.1);
   color: #ff6666;
@@ -526,7 +526,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   border: 1px solid rgba(255, 100, 100, 0.2);
 }
 
-.xwebagent-message.action {
+.pageguide-message.action {
   align-self: center;
   background: linear-gradient(135deg, rgba(255, 200, 0, 0.15), rgba(255, 150, 0, 0.15));
   color: #ffcc00;
@@ -538,7 +538,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Guide message */
-.xwebagent-message.guide {
+.pageguide-message.guide {
   align-self: flex-start;
   background: linear-gradient(135deg, rgba(110, 72, 255, 0.15), rgba(59, 130, 246, 0.15));
   color: #e0e0e0;
@@ -548,13 +548,13 @@ body.light-mode .xwebagent-history-load-btn:hover {
   max-width: 90%;
 }
 
-.xwebagent-guide-step {
+.pageguide-guide-step {
   display: flex;
   align-items: flex-start;
   gap: 10px;
 }
 
-.xwebagent-step-badge {
+.pageguide-step-badge {
   background: linear-gradient(135deg, #6e48ff, #3b82f6);
   color: white;
   padding: 4px 10px;
@@ -564,12 +564,12 @@ body.light-mode .xwebagent-history-load-btn:hover {
   white-space: nowrap;
 }
 
-.xwebagent-step-text {
+.pageguide-step-text {
   flex: 1;
   line-height: 1.5;
 }
 
-.xwebagent-next-hint {
+.pageguide-next-hint {
   margin-top: 10px;
   padding: 8px 12px;
   background: rgba(255, 255, 255, 0.05);
@@ -578,7 +578,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   color: #a0a0a0;
 }
 
-.xwebagent-guide-waiting {
+.pageguide-guide-waiting {
   margin-top: 10px;
   font-size: 11px;
   color: #6bcfff;
@@ -591,7 +591,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Ask step message (for scroll/expand actions) */
-.xwebagent-message.ask-step {
+.pageguide-message.ask-step {
   align-self: flex-start;
   background: linear-gradient(135deg, rgba(255, 170, 0, 0.15), rgba(255, 100, 50, 0.15));
   color: #e0e0e0;
@@ -601,18 +601,18 @@ body.light-mode .xwebagent-history-load-btn:hover {
   max-width: 90%;
 }
 
-.xwebagent-ask-step {
+.pageguide-ask-step {
   display: flex;
   align-items: flex-start;
   gap: 10px;
 }
 
-.xwebagent-action-icon {
+.pageguide-action-icon {
   font-size: 20px;
   line-height: 1;
 }
 
-.xwebagent-action-hint {
+.pageguide-action-hint {
   margin-top: 10px;
   font-size: 11px;
   color: #ffaa00;
@@ -620,21 +620,21 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Clickable message */
-.xwebagent-message.xwebagent-clickable {
+.pageguide-message.pageguide-clickable {
   cursor: pointer;
   position: relative;
   transition: all 0.2s ease;
   border: 1px solid rgba(0, 217, 255, 0.3);
 }
 
-.xwebagent-message.xwebagent-clickable:hover {
+.pageguide-message.pageguide-clickable:hover {
   background: rgba(0, 217, 255, 0.15);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 217, 255, 0.2);
 }
 
 /* Clickable citations in answers */
-.xwebagent-citation {
+.pageguide-citation {
   display: inline;
   background: linear-gradient(135deg, rgba(0, 217, 255, 0.15), rgba(0, 255, 136, 0.1));
   color: #00d9ff;
@@ -645,14 +645,14 @@ body.light-mode .xwebagent-history-load-btn:hover {
   border-bottom: 1px dashed rgba(0, 217, 255, 0.5);
 }
 
-.xwebagent-citation:hover {
+.pageguide-citation:hover {
   background: linear-gradient(135deg, rgba(0, 217, 255, 0.3), rgba(0, 255, 136, 0.2));
   color: #fff;
   border-bottom-color: #00d9ff;
 }
 
 /* Citation with toggleable text (web citations) */
-.xwebagent-citation-idx {
+.pageguide-citation-idx {
   display: inline;
   color: #00d9ff;
   cursor: pointer;
@@ -662,49 +662,49 @@ body.light-mode .xwebagent-history-load-btn:hover {
   transition: all 0.2s ease;
 }
 
-.xwebagent-citation-idx:hover {
+.pageguide-citation-idx:hover {
   background: rgba(0, 217, 255, 0.25);
   color: #fff;
 }
 
 /* Citation text - hidden by default */
-.xwebagent-citation-idx .citation-text {
+.pageguide-citation-idx .citation-text {
   display: none;
   font-size: inherit;
 }
 
 /* Citation index - always visible */
-.xwebagent-citation-idx .citation-index {
+.pageguide-citation-idx .citation-index {
   font-size: 10px;
   font-weight: 600;
 }
 
 /* When expanded, show citation text */
-.citations-expanded .xwebagent-citation-idx .citation-text {
+.citations-expanded .pageguide-citation-idx .citation-text {
   display: inline;
   margin-right: 1px;
 }
 
 /* Toggle hint on clickable messages */
-.xwebagent-clickable {
+.pageguide-clickable {
   cursor: pointer;
 }
 
-.xwebagent-clickable::after {
+.pageguide-clickable::after {
   content: '';
   display: none;
 }
 
-.xwebagent-clickable.citations-expanded::after {
+.pageguide-clickable.citations-expanded::after {
   content: '👆 Click to collapse citations';
 }
 
-.xwebagent-clickable:hover::after {
+.pageguide-clickable:hover::after {
   color: rgba(255, 255, 255, 0.6);
 }
 
 /* Superscript citation number (fallback when no phrase found) */
-.xwebagent-citation-sup {
+.pageguide-citation-sup {
   background: none;
   padding: 0;
   border: none;
@@ -714,13 +714,13 @@ body.light-mode .xwebagent-history-load-btn:hover {
   vertical-align: super;
 }
 
-.xwebagent-citation-sup:hover {
+.pageguide-citation-sup:hover {
   background: none;
   color: #00ff88;
 }
 
 /* PDF Page Citations - Index style [1], [2], [3] */
-.xwebagent-pdf-citation {
+.pageguide-pdf-citation {
   display: inline;
   background: rgba(255, 193, 7, 0.25);
   color: #FFD54F;
@@ -735,7 +735,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   text-decoration: none;
 }
 
-.xwebagent-pdf-citation:hover {
+.pageguide-pdf-citation:hover {
   background: rgba(255, 193, 7, 0.5);
   color: #fff;
   transform: scale(1.1);
@@ -749,7 +749,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Markdown Links and Raw URLs */
-.xwebagent-markdown-link {
+.pageguide-markdown-link {
   color: #00ff88;
   text-decoration: none;
   font-weight: 500;
@@ -758,14 +758,14 @@ body.light-mode .xwebagent-history-load-btn:hover {
   word-break: break-all;
 }
 
-.xwebagent-markdown-link:hover {
+.pageguide-markdown-link:hover {
   background: linear-gradient(135deg, rgba(0, 255, 136, 0.15), rgba(0, 217, 255, 0.1));
   color: #fff;
   border-bottom-color: #00ff88;
 }
 
 /* Typing Indicator */
-.xwebagent-typing {
+.pageguide-typing {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -776,7 +776,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   align-self: flex-start;
 }
 
-.xwebagent-typing span {
+.pageguide-typing span {
   width: 8px;
   height: 8px;
   background: #00d9ff;
@@ -784,11 +784,11 @@ body.light-mode .xwebagent-history-load-btn:hover {
   animation: typing-dot 1.4s infinite;
 }
 
-.xwebagent-typing span:nth-child(2) {
+.pageguide-typing span:nth-child(2) {
   animation-delay: 0.2s;
 }
 
-.xwebagent-typing span:nth-child(3) {
+.pageguide-typing span:nth-child(3) {
   animation-delay: 0.4s;
 }
 
@@ -804,7 +804,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Button row: holds Next + Stop Here side by side */
-.xwebagent-step-btn-row {
+.pageguide-step-btn-row {
   display: flex;
   gap: 6px;
   margin-top: 8px;
@@ -812,7 +812,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Next button on each guide step card */
-.xwebagent-step-next-btn {
+.pageguide-step-next-btn {
   background: rgba(46, 213, 115, 0.12);
   border: 1px solid rgba(46, 213, 115, 0.4);
   color: #2ed573;
@@ -823,18 +823,18 @@ body.light-mode .xwebagent-history-load-btn:hover {
   font-weight: 600;
 }
 
-.xwebagent-step-next-btn:hover {
+.pageguide-step-next-btn:hover {
   background: rgba(46, 213, 115, 0.22);
   border-color: rgba(46, 213, 115, 0.7);
 }
 
-.xwebagent-step-next-btn:disabled {
+.pageguide-step-next-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
 /* Stop-here button on each guide step card */
-.xwebagent-step-stop-btn {
+.pageguide-step-stop-btn {
   background: transparent;
   border: 1px solid rgba(255, 80, 80, 0.3);
   color: rgba(255, 107, 107, 0.7);
@@ -845,19 +845,19 @@ body.light-mode .xwebagent-history-load-btn:hover {
   text-align: left;
 }
 
-.xwebagent-step-stop-btn:hover {
+.pageguide-step-stop-btn:hover {
   background: rgba(255, 80, 80, 0.12);
   border-color: rgba(255, 80, 80, 0.55);
   color: #ff6b6b;
 }
 
-.xwebagent-step-stop-btn:disabled {
+.pageguide-step-stop-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
 /* Guide Stop Button (inside typing indicator) */
-.xwebagent-guide-stop-btn {
+.pageguide-guide-stop-btn {
   background: rgba(255, 80, 80, 0.15);
   border: 1px solid rgba(255, 80, 80, 0.45);
   color: #ff6b6b;
@@ -869,26 +869,26 @@ body.light-mode .xwebagent-history-load-btn:hover {
   white-space: nowrap;
 }
 
-.xwebagent-guide-stop-btn:hover {
+.pageguide-guide-stop-btn:hover {
   background: rgba(255, 80, 80, 0.3);
 }
 
 /* Chat Input Area */
-.xwebagent-chat-input-area {
+.pageguide-chat-input-area {
   padding: 16px;
   background: rgba(0, 0, 0, 0.3);
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
 }
 
-.xwebagent-quick-actions {
+.pageguide-quick-actions {
   display: flex;
   gap: 6px;
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
 
-.xwebagent-quick-btn {
+.pageguide-quick-btn {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: #aaa;
@@ -899,38 +899,38 @@ body.light-mode .xwebagent-history-load-btn:hover {
   transition: all 0.2s;
 }
 
-.xwebagent-quick-btn:hover {
+.pageguide-quick-btn:hover {
   background: rgba(0, 217, 255, 0.15);
   border-color: rgba(0, 217, 255, 0.3);
   color: #00d9ff;
 }
 
-.xwebagent-quick-btn--active {
+.pageguide-quick-btn--active {
   background: rgba(255, 180, 0, 0.15);
   border-color: rgba(255, 180, 0, 0.45);
   color: #ffb400;
 }
 
-.xwebagent-quick-btn--active:hover {
+.pageguide-quick-btn--active:hover {
   background: rgba(255, 180, 0, 0.25);
   border-color: rgba(255, 180, 0, 0.65);
   color: #ffc933;
 }
 
-.xwebagent-pdf-reader-btn {
+.pageguide-pdf-reader-btn {
   background: linear-gradient(135deg, rgba(124, 92, 255, 0.2), rgba(180, 100, 255, 0.2));
   border-color: rgba(124, 92, 255, 0.4);
   color: #b088ff;
 }
 
-.xwebagent-pdf-reader-btn:hover {
+.pageguide-pdf-reader-btn:hover {
   background: linear-gradient(135deg, rgba(124, 92, 255, 0.35), rgba(180, 100, 255, 0.35));
   border-color: rgba(124, 92, 255, 0.6);
   color: #d0b0ff;
 }
 
 /* Image Preview Area */
-.xwebagent-image-preview {
+.pageguide-image-preview {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -954,7 +954,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Footer row: label + remove button */
-.xwebagent-image-preview-footer {
+.pageguide-image-preview-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -962,14 +962,14 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Wrapper: position:relative is the anchor for region overlays */
-.xwebagent-image-wrapper {
+.pageguide-image-wrapper {
   position: relative;
   width: 100%;
   line-height: 0;
 }
 
 /* Default: compact thumbnail */
-.xwebagent-image-wrapper img {
+.pageguide-image-wrapper img {
   width: 64px;
   height: 64px;
   object-fit: cover;
@@ -982,7 +982,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 /* Expanded view when regions are detected.
    No object-fit so the image fills the element exactly —
    percentage-based region overlays align pixel-perfectly. */
-.xwebagent-image-wrapper.has-regions img {
+.pageguide-image-wrapper.has-regions img {
   width: 100%;
   height: auto;
   max-height: none;
@@ -991,7 +991,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Clickable region overlays */
-.xwebagent-image-region {
+.pageguide-image-region {
   position: absolute;
   cursor: pointer;
   border: 2px solid transparent;
@@ -1001,13 +1001,13 @@ body.light-mode .xwebagent-history-load-btn:hover {
   box-sizing: border-box;
 }
 
-.xwebagent-image-region:hover {
+.pageguide-image-region:hover {
   border-color: rgba(255, 220, 0, 0.9);
   background: rgba(255, 220, 0, 0.18);
 }
 
 /* Tooltip label shown on hover */
-.xwebagent-region-label {
+.pageguide-region-label {
   position: absolute;
   bottom: calc(100% + 4px);
   left: 50%;
@@ -1023,11 +1023,11 @@ body.light-mode .xwebagent-history-load-btn:hover {
   transition: opacity 0.15s;
 }
 
-.xwebagent-image-region:hover .xwebagent-region-label {
+.pageguide-image-region:hover .pageguide-region-label {
   opacity: 1;
 }
 
-.xwebagent-remove-image {
+.pageguide-remove-image {
   background: rgba(255, 100, 100, 0.2);
   border: 1px solid rgba(255, 100, 100, 0.4);
   color: #ff6666;
@@ -1043,12 +1043,12 @@ body.light-mode .xwebagent-history-load-btn:hover {
   flex-shrink: 0;
 }
 
-.xwebagent-remove-image:hover {
+.pageguide-remove-image:hover {
   background: rgba(255, 100, 100, 0.4);
   transform: scale(1.1);
 }
 
-.xwebagent-image-label {
+.pageguide-image-label {
   flex: 1;
   font-size: 12px;
   color: #b388ff;
@@ -1056,7 +1056,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* File attachment preview strip */
-.xwebagent-file-preview {
+.pageguide-file-preview {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1068,7 +1068,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   gap: 8px;
 }
 
-.xwebagent-file-label {
+.pageguide-file-label {
   flex: 1;
   font-size: 12px;
   color: #00e096;
@@ -1079,7 +1079,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Selected Text preview strip */
-.xwebagent-selected-text-preview {
+.pageguide-selected-text-preview {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1097,7 +1097,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.xwebagent-selected-text-label {
+.pageguide-selected-text-label {
   flex: 1;
   font-size: 12px;
   color: #ffcc00;
@@ -1107,15 +1107,15 @@ body.light-mode .xwebagent-history-load-btn:hover {
   text-overflow: ellipsis;
 }
 
-.xwebagent-input-row {
+.pageguide-input-row {
   display: flex;
 }
 
-.xwebagent-input-row .xwebagent-chat-input {
+.pageguide-input-row .pageguide-chat-input {
   width: 100%;
 }
 
-.xwebagent-input-actions {
+.pageguide-input-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1124,7 +1124,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* Image Upload Button */
-.xwebagent-upload-btn {
+.pageguide-upload-btn {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 50%;
@@ -1139,19 +1139,19 @@ body.light-mode .xwebagent-history-load-btn:hover {
   flex-shrink: 0;
 }
 
-.xwebagent-upload-btn:hover {
+.pageguide-upload-btn:hover {
   background: rgba(138, 43, 226, 0.2);
   border-color: rgba(138, 43, 226, 0.5);
   transform: scale(1.05);
 }
 
-.xwebagent-upload-btn.has-image {
+.pageguide-upload-btn.has-image {
   background: linear-gradient(135deg, rgba(138, 43, 226, 0.3), rgba(0, 217, 255, 0.2));
   border-color: rgba(138, 43, 226, 0.6);
   box-shadow: 0 0 12px rgba(138, 43, 226, 0.3);
 }
 
-.xwebagent-chat-input {
+.pageguide-chat-input {
   flex: 1;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -1168,16 +1168,16 @@ body.light-mode .xwebagent-history-load-btn:hover {
   line-height: 1.4;
 }
 
-.xwebagent-chat-input::placeholder {
+.pageguide-chat-input::placeholder {
   color: #666;
 }
 
-.xwebagent-chat-input:focus {
+.pageguide-chat-input:focus {
   border-color: rgba(0, 217, 255, 0.5);
   box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
 }
 
-.xwebagent-send-btn {
+.pageguide-send-btn {
   background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
   border: none;
   border-radius: 50%;
@@ -1192,25 +1192,25 @@ body.light-mode .xwebagent-history-load-btn:hover {
   flex-shrink: 0;
 }
 
-.xwebagent-send-btn:hover {
+.pageguide-send-btn:hover {
   transform: scale(1.05);
   box-shadow: 0 0 20px rgba(0, 217, 255, 0.4);
 }
 
-.xwebagent-send-btn:disabled {
+.pageguide-send-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
 }
 
 /* Collapsible Debug Section */
-.xwebagent-debug-wrapper {
+.pageguide-debug-wrapper {
   align-self: center;
   width: 100%;
   max-width: 95%;
 }
 
-.xwebagent-debug-toggle {
+.pageguide-debug-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1223,23 +1223,23 @@ body.light-mode .xwebagent-history-load-btn:hover {
   user-select: none;
 }
 
-.xwebagent-debug-toggle:hover {
+.pageguide-debug-toggle:hover {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(0, 217, 255, 0.2);
 }
 
-.xwebagent-debug-arrow {
+.pageguide-debug-arrow {
   color: #666;
   font-size: 10px;
   transition: transform 0.2s;
 }
 
-.xwebagent-debug-label {
+.pageguide-debug-label {
   color: #666;
   font-size: 11px;
 }
 
-.xwebagent-debug-content {
+.pageguide-debug-content {
   margin-top: 6px;
   padding: 10px 12px;
   background: rgba(0, 0, 0, 0.2);
@@ -1259,7 +1259,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   }
 }
 
-.xwebagent-debug-line {
+.pageguide-debug-line {
   font-size: 11px;
   color: #888;
   line-height: 1.6;
@@ -1268,12 +1268,12 @@ body.light-mode .xwebagent-history-load-btn:hover {
   word-break: break-word;
 }
 
-.xwebagent-debug-line:not(:last-child) {
+.pageguide-debug-line:not(:last-child) {
   margin-bottom: 2px;
 }
 
 /* ---- Slash command autocomplete menu ---- */
-.xwebagent-slash-menu {
+.pageguide-slash-menu {
   position: relative;
   background: #1a1a2e;
   border: 1px solid rgba(0, 217, 255, 0.3);
@@ -1283,7 +1283,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
 }
 
-.xwebagent-slash-item {
+.pageguide-slash-item {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -1293,16 +1293,16 @@ body.light-mode .xwebagent-history-load-btn:hover {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.xwebagent-slash-item:last-child {
+.pageguide-slash-item:last-child {
   border-bottom: none;
 }
 
-.xwebagent-slash-item:hover,
-.xwebagent-slash-item.active {
+.pageguide-slash-item:hover,
+.pageguide-slash-item.active {
   background: rgba(0, 217, 255, 0.12);
 }
 
-.xwebagent-slash-item .slash-cmd {
+.pageguide-slash-item .slash-cmd {
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
   font-size: 12px;
   color: #00d9ff;
@@ -1310,12 +1310,12 @@ body.light-mode .xwebagent-history-load-btn:hover {
   flex-shrink: 0;
 }
 
-.xwebagent-slash-item .slash-cmd em {
+.pageguide-slash-item .slash-cmd em {
   font-style: normal;
   color: rgba(0, 217, 255, 0.55);
 }
 
-.xwebagent-slash-item .slash-desc {
+.pageguide-slash-item .slash-desc {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.5);
   overflow: hidden;
@@ -1324,7 +1324,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
 }
 
 /* ---- Theme toggle button ---- */
-.xwebagent-theme-btn {
+.pageguide-theme-btn {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   color: #888;
@@ -1335,7 +1335,7 @@ body.light-mode .xwebagent-history-load-btn:hover {
   transition: all 0.2s;
 }
 
-.xwebagent-theme-btn:hover {
+.pageguide-theme-btn:hover {
   background: rgba(255, 220, 0, 0.2);
   color: #ffd700;
 }
@@ -1349,365 +1349,365 @@ body.light-mode {
   background: linear-gradient(180deg, #f0f4f8 0%, #e4eaf2 100%);
 }
 
-body.light-mode .xwebagent-panel {
+body.light-mode .pageguide-panel {
   color: #1a1a2e;
 }
 
-body.light-mode .xwebagent-chat-header {
+body.light-mode .pageguide-chat-header {
   background: linear-gradient(135deg, rgba(0, 140, 200, 0.08) 0%, rgba(0, 180, 100, 0.05) 100%);
   border-bottom: 1px solid rgba(0, 140, 200, 0.2);
 }
 
-body.light-mode .xwebagent-header-text p {
+body.light-mode .pageguide-header-text p {
   color: #666;
 }
 
-body.light-mode .xwebagent-new-chat-btn,
-body.light-mode .xwebagent-settings-btn,
-body.light-mode .xwebagent-close-btn,
-body.light-mode .xwebagent-theme-btn {
+body.light-mode .pageguide-new-chat-btn,
+body.light-mode .pageguide-settings-btn,
+body.light-mode .pageguide-close-btn,
+body.light-mode .pageguide-theme-btn {
   background: rgba(0, 0, 0, 0.06);
   color: #555;
 }
 
-body.light-mode .xwebagent-theme-btn:hover {
+body.light-mode .pageguide-theme-btn:hover {
   background: rgba(255, 180, 0, 0.15);
   color: #cc8800;
 }
 
-body.light-mode .xwebagent-chat-messages::-webkit-scrollbar-track {
+body.light-mode .pageguide-chat-messages::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.04);
 }
 
-body.light-mode .xwebagent-chat-messages::-webkit-scrollbar-thumb {
+body.light-mode .pageguide-chat-messages::-webkit-scrollbar-thumb {
   background: rgba(0, 140, 200, 0.3);
 }
 
-body.light-mode .xwebagent-message.assistant {
+body.light-mode .pageguide-message.assistant {
   background: rgba(0, 0, 0, 0.05);
   color: #2a2a40;
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
-body.light-mode .xwebagent-message strong {
+body.light-mode .pageguide-message strong {
   color: #1a1a2e;
 }
 
-body.light-mode .xwebagent-message em {
+body.light-mode .pageguide-message em {
   color: #3a5a7a;
 }
 
-body.light-mode .xwebagent-message code {
+body.light-mode .pageguide-message code {
   background: rgba(0, 140, 200, 0.1);
   color: #0077aa;
 }
 
-body.light-mode .xwebagent-message pre {
+body.light-mode .pageguide-message pre {
   background: rgba(0, 0, 0, 0.05);
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
-body.light-mode .xwebagent-message pre code {
+body.light-mode .pageguide-message pre code {
   color: #2a2a40;
 }
 
-body.light-mode .xwebagent-message h2,
-body.light-mode .xwebagent-message h3,
-body.light-mode .xwebagent-message h4 {
+body.light-mode .pageguide-message h2,
+body.light-mode .pageguide-message h3,
+body.light-mode .pageguide-message h4 {
   color: #1a1a2e;
 }
 
-body.light-mode .xwebagent-message h2 {
+body.light-mode .pageguide-message h2 {
   border-bottom: 1px solid rgba(0, 0, 0, 0.1);
 }
 
-body.light-mode .xwebagent-message.system {
+body.light-mode .pageguide-message.system {
   background: rgba(0, 180, 100, 0.08);
   color: #007a44;
   border: 1px solid rgba(0, 180, 100, 0.2);
 }
 
-body.light-mode .xwebagent-message.error {
+body.light-mode .pageguide-message.error {
   background: rgba(200, 50, 50, 0.08);
   color: #cc3333;
   border: 1px solid rgba(200, 50, 50, 0.2);
 }
 
-body.light-mode .xwebagent-message.action {
+body.light-mode .pageguide-message.action {
   background: linear-gradient(135deg, rgba(200, 150, 0, 0.1), rgba(200, 100, 0, 0.1));
   color: #a07000;
   border: 1px solid rgba(200, 150, 0, 0.25);
 }
 
-body.light-mode .xwebagent-message.guide {
+body.light-mode .pageguide-message.guide {
   background: linear-gradient(135deg, rgba(100, 60, 220, 0.08), rgba(50, 100, 220, 0.08));
   color: #2a2a40;
   border: 1px solid rgba(100, 60, 220, 0.2);
 }
 
-body.light-mode .xwebagent-guide-waiting {
+body.light-mode .pageguide-guide-waiting {
   color: #0088cc;
 }
 
-body.light-mode .xwebagent-message.ask-step {
+body.light-mode .pageguide-message.ask-step {
   background: linear-gradient(135deg, rgba(200, 130, 0, 0.08), rgba(200, 80, 30, 0.08));
   color: #2a2a40;
   border: 1px solid rgba(200, 130, 0, 0.2);
 }
 
-body.light-mode .xwebagent-action-hint {
+body.light-mode .pageguide-action-hint {
   color: #cc7700;
 }
 
-body.light-mode .xwebagent-next-hint {
+body.light-mode .pageguide-next-hint {
   background: rgba(0, 0, 0, 0.04);
   color: #777;
 }
 
-body.light-mode .xwebagent-message.xwebagent-clickable {
+body.light-mode .pageguide-message.pageguide-clickable {
   border: 1px solid rgba(0, 140, 200, 0.3);
 }
 
-body.light-mode .xwebagent-message.xwebagent-clickable:hover {
+body.light-mode .pageguide-message.pageguide-clickable:hover {
   background: rgba(0, 140, 200, 0.1);
   box-shadow: 0 4px 12px rgba(0, 140, 200, 0.15);
 }
 
-body.light-mode .xwebagent-clickable::after {
+body.light-mode .pageguide-clickable::after {
   color: rgba(0, 0, 0, 0.3);
 }
 
-body.light-mode .xwebagent-clickable:hover::after {
+body.light-mode .pageguide-clickable:hover::after {
   color: rgba(0, 0, 0, 0.5);
 }
 
-body.light-mode .xwebagent-citation {
+body.light-mode .pageguide-citation {
   background: linear-gradient(135deg, rgba(0, 140, 200, 0.12), rgba(0, 200, 100, 0.08));
   color: #0077aa;
   border-bottom: 1px dashed rgba(0, 140, 200, 0.5);
 }
 
-body.light-mode .xwebagent-citation:hover {
+body.light-mode .pageguide-citation:hover {
   background: linear-gradient(135deg, rgba(0, 140, 200, 0.25), rgba(0, 200, 100, 0.15));
   color: #1a1a2e;
 }
 
-body.light-mode .xwebagent-markdown-link {
+body.light-mode .pageguide-markdown-link {
   color: #3882D6;
   border-bottom-color: #2D6CB5,
 }
 
-body.light-mode .xwebagent-markdown-link:hover {
+body.light-mode .pageguide-markdown-link:hover {
   background: linear-gradient(135deg, rgba(11, 214, 70, 0.15), rgba(11, 214, 70, 0.1));
   color: #2D6CB5;
   border-bottom-color: #3882D6;
 }
 
-body.light-mode .xwebagent-citation-idx {
+body.light-mode .pageguide-citation-idx {
   color: #0077aa;
   background: rgba(0, 140, 200, 0.1);
 }
 
-body.light-mode .xwebagent-citation-idx:hover {
+body.light-mode .pageguide-citation-idx:hover {
   background: rgba(0, 140, 200, 0.2);
   color: #1a1a2e;
 }
 
-body.light-mode .xwebagent-citation-sup {
+body.light-mode .pageguide-citation-sup {
   color: #0077aa;
 }
 
-body.light-mode .xwebagent-pdf-citation {
+body.light-mode .pageguide-pdf-citation {
   background: rgba(180, 130, 0, 0.18);
   color: #a07000;
 }
 
-body.light-mode .xwebagent-pdf-citation:hover {
+body.light-mode .pageguide-pdf-citation:hover {
   background: rgba(180, 130, 0, 0.35);
   color: #1a1a2e;
 }
 
-body.light-mode .xwebagent-typing {
+body.light-mode .pageguide-typing {
   background: rgba(0, 0, 0, 0.06);
 }
 
-body.light-mode .xwebagent-typing span {
+body.light-mode .pageguide-typing span {
   background: #0099cc;
 }
 
-body.light-mode .xwebagent-step-next-btn {
+body.light-mode .pageguide-step-next-btn {
   background: rgba(30, 180, 80, 0.1);
   border: 1px solid rgba(30, 180, 80, 0.35);
   color: #1a9e4a;
 }
 
-body.light-mode .xwebagent-step-next-btn:hover {
+body.light-mode .pageguide-step-next-btn:hover {
   background: rgba(30, 180, 80, 0.18);
   border-color: rgba(30, 180, 80, 0.6);
 }
 
-body.light-mode .xwebagent-step-stop-btn {
+body.light-mode .pageguide-step-stop-btn {
   border: 1px solid rgba(200, 50, 50, 0.25);
   color: rgba(200, 80, 80, 0.7);
 }
 
-body.light-mode .xwebagent-step-stop-btn:hover {
+body.light-mode .pageguide-step-stop-btn:hover {
   background: rgba(200, 50, 50, 0.08);
   border-color: rgba(200, 50, 50, 0.45);
   color: #cc4444;
 }
 
-body.light-mode .xwebagent-guide-stop-btn {
+body.light-mode .pageguide-guide-stop-btn {
   background: rgba(200, 50, 50, 0.1);
   border: 1px solid rgba(200, 50, 50, 0.35);
   color: #cc4444;
 }
 
-body.light-mode .xwebagent-guide-stop-btn:hover {
+body.light-mode .pageguide-guide-stop-btn:hover {
   background: rgba(200, 50, 50, 0.2);
 }
 
-body.light-mode .xwebagent-chat-input-area {
+body.light-mode .pageguide-chat-input-area {
   background: rgba(255, 255, 255, 0.7);
   border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
-body.light-mode .xwebagent-quick-btn {
+body.light-mode .pageguide-quick-btn {
   background: rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.1);
   color: #555;
 }
 
-body.light-mode .xwebagent-quick-btn:hover {
+body.light-mode .pageguide-quick-btn:hover {
   background: rgba(0, 140, 200, 0.1);
   border-color: rgba(0, 140, 200, 0.3);
   color: #0077aa;
 }
 
-body.light-mode .xwebagent-quick-btn--active {
+body.light-mode .pageguide-quick-btn--active {
   background: rgba(200, 120, 0, 0.1);
   border-color: rgba(200, 120, 0, 0.4);
   color: #b87000;
 }
 
-body.light-mode .xwebagent-quick-btn--active:hover {
+body.light-mode .pageguide-quick-btn--active:hover {
   background: rgba(200, 120, 0, 0.18);
   border-color: rgba(200, 120, 0, 0.6);
   color: #9a5e00;
 }
 
-body.light-mode .xwebagent-pdf-reader-btn {
+body.light-mode .pageguide-pdf-reader-btn {
   background: linear-gradient(135deg, rgba(100, 60, 220, 0.1), rgba(150, 80, 220, 0.1));
   border-color: rgba(100, 60, 220, 0.3);
   color: #6040bb;
 }
 
-body.light-mode .xwebagent-pdf-reader-btn:hover {
+body.light-mode .pageguide-pdf-reader-btn:hover {
   background: linear-gradient(135deg, rgba(100, 60, 220, 0.18), rgba(150, 80, 220, 0.18));
   border-color: rgba(100, 60, 220, 0.5);
   color: #4d30aa;
 }
 
-body.light-mode .xwebagent-image-preview {
+body.light-mode .pageguide-image-preview {
   background: linear-gradient(135deg, rgba(100, 30, 200, 0.07), rgba(0, 140, 200, 0.05));
   border: 1px solid rgba(100, 30, 200, 0.18);
 }
 
-body.light-mode .xwebagent-image-label {
+body.light-mode .pageguide-image-label {
   color: #6040bb;
 }
 
-body.light-mode .xwebagent-file-preview {
+body.light-mode .pageguide-file-preview {
   background: rgba(0, 160, 90, 0.07);
   border-color: rgba(0, 160, 90, 0.25);
 }
 
-body.light-mode .xwebagent-file-label {
+body.light-mode .pageguide-file-label {
   color: #007a50;
 }
 
-body.light-mode .xwebagent-remove-image {
+body.light-mode .pageguide-remove-image {
   background: rgba(200, 50, 50, 0.12);
   border: 1px solid rgba(200, 50, 50, 0.3);
   color: #cc4444;
 }
 
-body.light-mode .xwebagent-remove-image:hover {
+body.light-mode .pageguide-remove-image:hover {
   background: rgba(200, 50, 50, 0.25);
 }
 
-body.light-mode .xwebagent-upload-btn {
+body.light-mode .pageguide-upload-btn {
   background: rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.12);
 }
 
-body.light-mode .xwebagent-upload-btn:hover {
+body.light-mode .pageguide-upload-btn:hover {
   background: rgba(100, 30, 200, 0.1);
   border-color: rgba(100, 30, 200, 0.4);
 }
 
-body.light-mode .xwebagent-chat-input {
+body.light-mode .pageguide-chat-input {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(0, 0, 0, 0.15);
   color: #1a1a2e;
 }
 
-body.light-mode .xwebagent-chat-input::placeholder {
+body.light-mode .pageguide-chat-input::placeholder {
   color: #999;
 }
 
-body.light-mode .xwebagent-chat-input:focus {
+body.light-mode .pageguide-chat-input:focus {
   border-color: rgba(0, 140, 200, 0.5);
   box-shadow: 0 0 20px rgba(0, 140, 200, 0.08);
 }
 
-body.light-mode .xwebagent-debug-toggle {
+body.light-mode .pageguide-debug-toggle {
   background: rgba(0, 0, 0, 0.02);
   border: 1px solid rgba(0, 0, 0, 0.07);
 }
 
-body.light-mode .xwebagent-debug-toggle:hover {
+body.light-mode .pageguide-debug-toggle:hover {
   background: rgba(0, 0, 0, 0.04);
   border-color: rgba(0, 140, 200, 0.2);
 }
 
-body.light-mode .xwebagent-debug-arrow,
-body.light-mode .xwebagent-debug-label {
+body.light-mode .pageguide-debug-arrow,
+body.light-mode .pageguide-debug-label {
   color: #999;
 }
 
-body.light-mode .xwebagent-debug-content {
+body.light-mode .pageguide-debug-content {
   background: rgba(0, 0, 0, 0.04);
   border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
-body.light-mode .xwebagent-debug-line {
+body.light-mode .pageguide-debug-line {
   color: #777;
 }
 
-body.light-mode .xwebagent-slash-menu {
+body.light-mode .pageguide-slash-menu {
   background: #fff;
   border: 1px solid rgba(0, 140, 200, 0.25);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.1);
 }
 
-body.light-mode .xwebagent-slash-item {
+body.light-mode .pageguide-slash-item {
   border-bottom: 1px solid rgba(0, 0, 0, 0.04);
 }
 
-body.light-mode .xwebagent-slash-item:hover,
-body.light-mode .xwebagent-slash-item.active {
+body.light-mode .pageguide-slash-item:hover,
+body.light-mode .pageguide-slash-item.active {
   background: rgba(0, 140, 200, 0.08);
 }
 
-body.light-mode .xwebagent-slash-item .slash-cmd {
+body.light-mode .pageguide-slash-item .slash-cmd {
   color: #0077aa;
 }
 
-body.light-mode .xwebagent-slash-item .slash-cmd em {
+body.light-mode .pageguide-slash-item .slash-cmd em {
   color: rgba(0, 120, 170, 0.55);
 }
 
-body.light-mode .xwebagent-slash-item .slash-desc {
+body.light-mode .pageguide-slash-item .slash-desc {
   color: rgba(0, 0, 0, 0.45);
 }
