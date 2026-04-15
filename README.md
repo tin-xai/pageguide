@@ -1,4 +1,4 @@
-<h1 align="center"><img src="icons/icon128.png" width="48" height="48" alt="" /> &nbsp;PageGuide</h1>
+<h1 align="center"> &nbsp;🍊 PageGuide</h1>
 <p align="center"><i>AI Web Assistant for Chrome & Edge</i></p>
 <p align="center">A Chrome extension that makes browsing <b>Safe</b> 🛡️, <b>Smart</b> 🧠, and <b>Efficient</b> 🚀</p>
 
