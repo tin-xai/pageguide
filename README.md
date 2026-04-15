@@ -67,7 +67,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <a id="demo-pdf"></a>
 ### 📄 PDF
 
-<img src="videos/pdf_asking.mp4" autoplay loop muted playsinline width="100%"></img>
+<img src="videos/pdf_asking.gif" autoplay loop muted playsinline width="100%"></img>
 
 > Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.
 
