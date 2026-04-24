@@ -145,7 +145,7 @@ Ask questions about PDFs directly in the browser.
 
 ---
 
-## ![alt text](assets/browser.png) Browser Support
+## 🌐 Browser Support
 
 - Chrome <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="20" alt="Chrome"> - Full support with all features
 - Edge <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="20" alt="Edge"> - Full support with all features
