@@ -121,15 +121,27 @@ Ask questions about PDFs directly in the browser.
 
 ---
 
-## Installation
+## Manual Installation
 
 ### Developer Mode (for testing)
 
-1. Open Chrome and go to `chrome://extensions/`
-2. Enable **Developer mode** (toggle in top right)
-3. Click **Load unpacked**
-4. Select the `PageGuide-Extension` folder
-5. The extension icon will appear in your toolbar
+1. Download
+
+- Download the latest zip file from the official Github release.
+
+2. Install
+
+- Open Chrome and go to `chrome://extensions/`
+- Enable **Developer mode** (toggle in top right)
+- Click **Load unpacked**
+- Select the `PageGuide-Extension` folder
+- The extension icon will appear in your toolbar
+
+3. Upgrading
+
+- Download the latest zip file from the official Github release.
+- Unzip and replace the existing PageGuide-Extension folder.
+- Reload the extension in `chrome://extensions/` by clicking the reload button on the extension card.
 
 ---
 
