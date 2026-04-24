@@ -46,7 +46,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 🎯 Guide
 
 <p align="center">
-  <img src="videos/guide.gif" alt="Guide demo" width="50%">
+  <img src="videos/guide.gif" alt="Guide demo" width="80%">
 </p>
 
 <p align="center"><em>Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.</em></p>
@@ -58,7 +58,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 🛡️ Hide
 
 <p align="center">
-  <img src="videos/hide.gif" alt="Hide demo" width="50%">
+  <img src="videos/hide.gif" alt="Hide demo" width="80%">
 </p>
 
 <p align="center"><em>Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.</em></p>
@@ -70,7 +70,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 🖼️ Image Asking
 
 <p align="center">
-  <img src="videos/vision_asking.gif" alt="Image demo" width="50%">
+  <img src="videos/vision_asking.gif" alt="Image demo" width="80%">
 </p>
 
 <p align="center"><em>Upload or paste an image — PageGuide visually searches the page and finds a match.</em></p>
@@ -82,7 +82,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 📄 PDF Asking
 
 <p align="center">
-<img src="videos/pdf_asking.gif" alt="PDF demo" width="50%">
+<img src="videos/pdf_asking.gif" alt="PDF demo" width="80%">
 </p>
 
 <p align="center"><em>Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.</em></p>
