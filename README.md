@@ -32,19 +32,24 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🔍 Find
 
-<img src="videos/find.gif" alt="Find demo" width="50%">
+<p align="center">
+  <img src="videos/find.gif" alt="Find demo" width="80%">
+</p>
 
-<p><em>Ask a question — PageGuide highlights the exact answer on the page.</em></p>
-
+<p align="center">
+  <em>Ask a question — PageGuide highlights the exact answer on the page.</em>
+</p>
 ---
 
 <a id="demo-guide"></a>
 
 ### 🎯 Guide
 
-<img src="videos/guide.gif" alt="Guide demo" width="50%">
+<p align="center">
+  <img src="videos/guide.gif" alt="Guide demo" width="50%">
+</p>
 
-<p><em>Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.</em></p>
+<p align="center"><em>Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.</em></p>
 
 ---
 
@@ -52,9 +57,11 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🛡️ Hide
 
-<img src="videos/hide.gif" alt="Hide demo" width="50%">
+<p align="center">
+  <img src="videos/hide.gif" alt="Hide demo" width="50%">
+</p>
 
-<p><em>Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.</em></p>
+<p align="center"><em>Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.</em></p>
 
 ---
 
@@ -62,9 +69,11 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🖼️ Image Asking
 
-<img src="videos/vision_asking.gif" alt="Image demo" width="50%">
+<p align="center">
+  <img src="videos/vision_asking.gif" alt="Image demo" width="50%">
+</p>
 
-<p><em>Upload or paste an image — PageGuide visually searches the page and finds a match.</em></p>
+<p align="center"><em>Upload or paste an image — PageGuide visually searches the page and finds a match.</em></p>
 
 ---
 
@@ -72,9 +81,11 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 📄 PDF Asking
 
+<p align="center">
 <img src="videos/pdf_asking.gif" alt="PDF demo" width="50%">
+</p>
 
-<p><em>Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.</em></p>
+<p align="center"><em>Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.</em></p>
 
 ---
 
