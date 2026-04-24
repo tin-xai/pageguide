@@ -125,11 +125,11 @@ Ask questions about PDFs directly in the browser.
 
 ### Developer Mode (for testing)
 
-1. Download
+1. **Download**
 
 - Download the latest zip file from the official Github release.
 
-2. Install
+2. **Install**
 
 - Open Chrome and go to `chrome://extensions/`
 - Enable **Developer mode** (toggle in top right)
@@ -137,7 +137,7 @@ Ask questions about PDFs directly in the browser.
 - Select the `PageGuide-Extension` folder
 - The extension icon will appear in your toolbar
 
-3. Upgrading
+3. **Upgrading**
 
 - Download the latest zip file from the official Github release.
 - Unzip and replace the existing PageGuide-Extension folder.
