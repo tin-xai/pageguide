@@ -3,8 +3,8 @@
 
 <div align="center">
 
-| 🔍 Find | 🎯 Guide | 🛡️ Hide | 💬 Answer | 🖼️ Image | 📄 PDF |
-|-|-|-|-|-|-|
+| 🔍 Find                   | 🎯 Guide                          | 🛡️ Hide                 | 💬 Answer             | 🖼️ Image                       | 📄 PDF                   |
+| ------------------------- | --------------------------------- | ----------------------- | --------------------- | ------------------------------ | ------------------------ |
 | Highlight content on page | Step-by-step interactive guidance | Hide ads & distractions | General knowledge Q&A | Visual search via image upload | Ask questions about PDFs |
 
 <br/>
@@ -29,6 +29,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <br/>
 
 <a id="demo-find"></a>
+
 ### 🔍 Find
 
 <img src="videos/find.gif" autoplay loop muted playsinline width="100%"></img>
@@ -38,6 +39,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ---
 
 <a id="demo-guide"></a>
+
 ### 🎯 Guide
 
 <img src="videos/guide.gif" autoplay loop muted playsinline width="100%"></img>
@@ -47,6 +49,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ---
 
 <a id="demo-hide"></a>
+
 ### 🛡️ Hide
 
 <img src="videos/hide.gif" autoplay loop muted playsinline width="100%"></img>
@@ -56,6 +59,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ---
 
 <a id="demo-image"></a>
+
 ### 🖼️ Image
 
 <img src="videos/visual_question_answering.gif" autoplay loop muted playsinline width="100%"></img>
@@ -65,6 +69,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ---
 
 <a id="demo-pdf"></a>
+
 ### 📄 PDF
 
 <img src="videos/pdf_asking.gif" autoplay loop muted playsinline width="100%"></img>
@@ -76,23 +81,30 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ## Features
 
 ### 💬 Ask & Find on Page
+
 Type any question and the agent finds the answer on the current page, automatically highlighting the relevant section(s).
 
 ### 🎯 Step-by-Step Interactive Guide
+
 Ask "how to" questions and get live, step-by-step guidance overlaid on the page:
+
 - Highlights the exact element to interact with at each step
 - Supports **click**, **type** (auto-fills text fields), and **navigate** actions
 
 ### 🛡️ Hide / Protection
+
 Detect and remove unwanted content from any page.
 
 ### 💡 General Knowledge Answer
+
 Toggle **Page: Off** to query the AI's knowledge base independent of the current page.
 
 ### 🖼️ Image Search
+
 Upload or paste (Ctrl/Cmd+V) an image to visually search the current page.
 
 ### 📄 PDF Q&A
+
 Ask questions about PDFs directly in the browser.
 
 ---
@@ -125,14 +137,14 @@ Ask questions about PDFs directly in the browser.
 
 ### Quick Reference
 
-| What you want | What to type |
-|---------------|--------------|
-| Find info on page | `What is the return policy?` |
-| Step-by-step task | `How do I change my password?` |
-| Hide distractions | `Hide all ads and sidebars` |
-| General knowledge | *(toggle Page: Off)* `What is the capital of France?` |
-| Search by image | *(upload image via 📎)* `Find this product on the page` |
-| Ask about a PDF | *(open PDF)* `Summarize section 3` |
+| What you want     | What to type                                            |
+| ----------------- | ------------------------------------------------------- |
+| Find info on page | `What is the return policy?`                            |
+| Step-by-step task | `How do I change my password?`                          |
+| Hide distractions | `Hide all ads and sidebars`                             |
+| General knowledge | _(toggle Page: Off)_ `What is the capital of France?`   |
+| Search by image   | _(upload image via 📎)_ `Find this product on the page` |
+| Ask about a PDF   | _(open PDF)_ `Summarize section 3`                      |
 
 ---
 
