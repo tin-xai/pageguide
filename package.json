@@ -16,6 +16,7 @@
     "e2e:manifest": "node e2e-tests/scripts/validate_manifest.js",
     "e2e:unit": "npx jest e2e-tests/unit/logic.test.js",
     "e2e:e2e": "npx playwright install --with-deps chromium && npx playwright test e2e-tests/tests",
+    "assets:gif": "bash scripts/convert_videos_to_gif.sh",
     "ci": "npm run e2e:manifest && npm run e2e:unit && npm run e2e:e2e"
   },
   "keywords": [],
