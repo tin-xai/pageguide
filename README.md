@@ -3,7 +3,7 @@
 
 <div align="center">
 
-| 🔍 Find                   | 🎯 Guide                          | 🛡️ Hide                 | 💬 Answer             | 🖼️ Image                       | 📄 PDF                   |
+| 🔍 Find                   | 🎯 Guide                          | 🛡️ Hide                 | 💬 Answer             | 🖼️ Image Asking                | 📄 PDF Asking            |
 | ------------------------- | --------------------------------- | ----------------------- | --------------------- | ------------------------------ | ------------------------ |
 | Highlight content on page | Step-by-step interactive guidance | Hide ads & distractions | General knowledge Q&A | Visual search via image upload | Ask questions about PDFs |
 
@@ -32,9 +32,9 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🔍 Find
 
-<img src="videos/find.gif" alt="Find demo" width="100%">
+<img src="videos/find.gif" alt="Find demo" width="50%">
 
-> Ask a question — PageGuide highlights the exact answer on the page.
+<p><em>Ask a question — PageGuide highlights the exact answer on the page.</em></p>
 
 ---
 
@@ -42,9 +42,9 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🎯 Guide
 
-<img src="videos/guide.gif" alt="Guide demo" width="100%">
+<img src="videos/guide.gif" alt="Guide demo" width="50%">
 
-> Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.
+<p><em>Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.</em></p>
 
 ---
 
@@ -52,33 +52,33 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🛡️ Hide
 
-<img src="videos/hide.gif" alt="Hide demo" width="100%">
+<img src="videos/hide.gif" alt="Hide demo" width="50%">
 
-> Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.
+<p><em>Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.</em></p>
 
 ---
 
 <a id="demo-image"></a>
 
-### 🖼️ Image
+### 🖼️ Image Asking
 
-<img src="videos/vision_asking.gif" alt="Image demo" width="100%">
+<img src="videos/vision_asking.gif" alt="Image demo" width="50%">
 
-> Upload or paste an image — PageGuide visually searches the page and finds a match.
+<p><em>Upload or paste an image — PageGuide visually searches the page and finds a match.</em></p>
 
 ---
 
 <a id="demo-pdf"></a>
 
-### 📄 PDF
+### 📄 PDF Asking
 
-<img src="videos/pdf_asking.gif" alt="PDF demo" width="100%">
+<img src="videos/pdf_asking.gif" alt="PDF demo" width="50%">
 
-> Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.
+<p><em>Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.</em></p>
 
 ---
 
-## Features
+## Core Features
 
 ### 💬 Ask & Find on Page
 
@@ -99,11 +99,11 @@ Detect and remove unwanted content from any page.
 
 Toggle **Page: Off** to query the AI's knowledge base independent of the current page.
 
-### 🖼️ Image Search
+### 🖼️ Image Asking
 
 Upload or paste (Ctrl/Cmd+V) an image to visually search the current page.
 
-### 📄 PDF Q&A
+### 📄 PDF Asking
 
 Ask questions about PDFs directly in the browser.
 
@@ -118,6 +118,19 @@ Ask questions about PDFs directly in the browser.
 3. Click **Load unpacked**
 4. Select the `PageGuide-Extension` folder
 5. The extension icon will appear in your toolbar
+
+---
+
+### Browser Support
+
+Officially Supported:
+
+- Chrome - Full support with all features
+- Edge - Full support with all features
+
+Not Supported:
+
+- Firefox, Safari.
 
 ---
 
@@ -158,6 +171,17 @@ Contributions are welcome! To get started:
 4. Submit a pull request with a clear description of what and why
 
 Please follow the rules in [CLAUDE.md](CLAUDE.md) and open an issue first for larger changes so we can align on the approach.
+
+### End-to-End Tests
+
+We use Playwright to run end-to-end tests. The e2e tests verify that the extension loads correctly, its UI pages render and respond to basic user actions,
+content scripts behave on real-like pages, and common edge cases don’t crash the app.
+
+To run the tests:
+
+```bash
+npm run ci
+```
 
 ---
 
