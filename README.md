@@ -15,7 +15,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ---
 
-## Demo
+## 🎬 Demo
 
 <p align="center">
   <a href="#demo-find"><kbd>🔍 Find</kbd></a> &nbsp;
@@ -33,7 +33,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 🔍 Find
 
 <p align="center">
-  <img src="videos/find.gif" alt="Find demo" width="80%">
+  <img src="assets/find.gif" alt="Find demo" width="80%">
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 🎯 Guide
 
 <p align="center">
-  <img src="videos/guide.gif" alt="Guide demo" width="80%">
+  <img src="assets/guide.gif" alt="Guide demo" width="80%">
 </p>
 
 <p align="center"><em>Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.</em></p>
@@ -59,7 +59,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 🛡️ Hide
 
 <p align="center">
-  <img src="videos/hide.gif" alt="Hide demo" width="80%">
+  <img src="assets/hide.gif" alt="Hide demo" width="80%">
 </p>
 
 <p align="center"><em>Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.</em></p>
@@ -71,7 +71,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 🖼️ Image Asking
 
 <p align="center">
-  <img src="videos/vision_asking.gif" alt="Image demo" width="80%">
+  <img src="assets/vision_asking.gif" alt="Image demo" width="80%">
 </p>
 
 <p align="center"><em>Upload or paste an image — PageGuide visually searches the page and finds a match.</em></p>
@@ -83,14 +83,14 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 ### 📄 PDF Asking
 
 <p align="center">
-<img src="videos/pdf_asking.gif" alt="PDF demo" width="80%">
+<img src="assets/pdf_asking.gif" alt="PDF demo" width="80%">
 </p>
 
 <p align="center"><em>Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.</em></p>
 
 ---
 
-## Core Features
+## ✨ Core Features
 
 ### 💬 Ask & Find on Page
 
@@ -121,7 +121,7 @@ Ask questions about PDFs directly in the browser.
 
 ---
 
-## Manual Installation
+## 🛠️ Manual Installation
 
 ### Developer Mode (for testing)
 
@@ -145,7 +145,7 @@ Ask questions about PDFs directly in the browser.
 
 ---
 
-## Browser Support
+## ![alt text](assets/browser.png) Browser Support
 
 - Chrome <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="20" alt="Chrome"> - Full support with all features
 - Edge <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="20" alt="Edge"> - Full support with all features
@@ -156,7 +156,7 @@ Not Supported:
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 1. Click the extension icon to open the side panel
 2. Click the **⚙️ Settings** (gear icon) at the bottom
@@ -168,7 +168,7 @@ Not Supported:
 
 ---
 
-## Use case
+## 💡 Use Case
 
 ### Quick Reference
 
@@ -183,7 +183,7 @@ Not Supported:
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
 Contributions are welcome! To get started:
 
@@ -194,7 +194,7 @@ Contributions are welcome! To get started:
 
 Please follow the rules in [CLAUDE.md](CLAUDE.md) and open an issue first for larger changes so we can align on the approach.
 
-### End-to-End Tests
+### 🧪 End-to-End Tests
 
 We use Playwright to run end-to-end tests. The e2e tests verify that the extension loads correctly, its UI pages render and respond to basic user actions,
 content scripts behave on real-like pages, and common edge cases don’t crash the app.
@@ -207,7 +207,7 @@ npm run ci
 
 ---
 
-## Acknowledgements
+## 🙏 Acknowledgements
 
 PageGuide is built on top of some great open-source tools and APIs:
 
