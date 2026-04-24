@@ -32,7 +32,10 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🔍 Find
 
-<img src="videos/find.gif" autoplay loop muted playsinline width="100%"></img>
+<video autoplay loop muted playsinline width="100%" preload="metadata">
+  <source src="videos/find.mp4" type="video/mp4">
+  <source src="videos/find.webm" type="video/webm">
+</video>
 
 > Ask a question — PageGuide highlights the exact answer on the page.
 
@@ -42,7 +45,10 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🎯 Guide
 
-<img src="videos/guide.gif" autoplay loop muted playsinline width="100%"></img>
+<video autoplay loop muted playsinline width="100%" preload="metadata">
+  <source src="videos/guide.mp4" type="video/mp4">
+  <source src="videos/guide.webm" type="video/webm">
+</video>
 
 > Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.
 
@@ -52,7 +58,10 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🛡️ Hide
 
-<img src="videos/hide.gif" autoplay loop muted playsinline width="100%"></img>
+<video autoplay loop muted playsinline width="100%" preload="metadata">
+  <source src="videos/hide.mp4" type="video/mp4">
+  <source src="videos/hide.webm" type="video/webm">
+</video>
 
 > Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.
 
@@ -62,7 +71,10 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 🖼️ Image
 
-<img src="videos/visual_question_answering.gif" autoplay loop muted playsinline width="100%"></img>
+<video autoplay loop muted playsinline width="100%" preload="metadata">
+  <source src="videos/vision_question_answering.mp4" type="video/mp4">
+  <source src="videos/vision_question_answering.webm" type="video/webm">
+</video>
 
 > Upload or paste an image — PageGuide visually searches the page and finds a match.
 
@@ -72,7 +84,10 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ### 📄 PDF
 
-<img src="videos/pdf_asking.gif" autoplay loop muted playsinline width="100%"></img>
+<video autoplay loop muted playsinline width="100%" preload="metadata">
+  <source src="videos/pdf_asking.mp4" type="video/mp4">
+  <source src="videos/pdf_asking.webm" type="video/webm">
+</video>
 
 > Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.
 
