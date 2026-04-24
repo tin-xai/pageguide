@@ -39,6 +39,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 <p align="center">
   <em>Ask a question — PageGuide highlights the exact answer on the page.</em>
 </p>
+
 ---
 
 <a id="demo-guide"></a>
@@ -134,10 +135,8 @@ Ask questions about PDFs directly in the browser.
 
 ### Browser Support
 
-Officially Supported:
-
-- Chrome - Full support with all features
-- Edge - Full support with all features
+- Chrome <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="20" alt="Chrome"> - Full support with all features
+- Edge <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="20" alt="Edge"> - Full support with all features
 
 Not Supported:
 
