@@ -134,13 +134,14 @@ Ask questions about PDFs directly in the browser.
 - Open Chrome and go to `chrome://extensions/`
 - Enable **Developer mode** (toggle in top right)
 - Click **Load unpacked**
-- Select the `PageGuide-Extension` folder
-- The extension icon will appear in your toolbar
+- Select the `pageguide` folder
+- Pin the extension icon to your toolbar
+- Use the extension by clicking the icon in the toolbar
 
 3. **Upgrading**
 
 - Download the latest zip file from the official Github release.
-- Unzip and replace the existing PageGuide-Extension folder.
+- Unzip and replace the existing `pageguide` folder.
 - Reload the extension in `chrome://extensions/` by clicking the reload button on the extension card.
 
 ---
