@@ -134,7 +134,7 @@ Ask questions about PDFs directly in the browser.
 - Open Chrome and go to `chrome://extensions/`
 - Enable **Developer mode** (toggle in top right)
 - Click **Load unpacked**
-- Select the `pageguide` folder
+- Select the `pageguide` folder from the downloaded and unpacked zip file
 - Pin the extension icon to your toolbar
 - Use the extension by clicking the icon in the toolbar
 
