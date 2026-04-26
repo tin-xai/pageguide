@@ -160,7 +160,7 @@ Not Supported:
 ## ⚙️ Configuration
 
 1. Click the extension icon to open the side panel
-2. Click the **⚙️ Settings** (gear icon) at the top
+2. Click the **⚙️ Settings** (gear icon) at the top right corner of the side panel
 3. Choose your LLM provider and enter your API key (support Gemini, OpenRouter, and OpenAI providers)
 4. Click **Test & Save Connection** to validate your key
 5. Optionally configure:
