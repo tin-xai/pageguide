@@ -196,10 +196,10 @@ Please follow the rules in [CLAUDE.md](CLAUDE.md) and open an issue first for la
 
 ### 🧪 End-to-End Tests
 
-We use Playwright to run end-to-end tests. The e2e tests verify that the extension loads correctly, its UI pages render and respond to basic user actions,
-content scripts behave on real-like pages, and common edge cases don’t crash the app.
+We use Playwright to run end-to-end (E2E) tests, integrated with automated continuous integration (CI) via GitHub Actions. The CI pipeline runs on each commit and pull request, invoking `npm run ci` to execute the full test suite.
+The E2E tests verify that the extension loads correctly, its UI pages render and respond to user actions, content scripts behave on real-world pages, and common edge cases do not cause failures.
 
-To run the tests:
+To run the tests locally:
 
 ```bash
 npm run ci
