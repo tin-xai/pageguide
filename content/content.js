@@ -105,6 +105,12 @@ async function handleMessage(request) {
       }
       return { success: true }; // Silently succeed even if function not loaded
 
+    case 'getPageHint':
+      if (typeof getVisibleText === 'function') {
+        return { success: true, text: getVisibleText(800) };
+      }
+      return { success: true, text: document.title || '' };
+
     default:
       return { error: 'Unknown action' };
   }

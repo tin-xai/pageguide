@@ -133,6 +133,23 @@ Answer: The movie Inception was directed by [Christopher Nolan](https://en.wikip
 
 Answer the user's question:`,
 
+  // Auto-recommend: generate suggested questions based on page content
+  AUTO_RECOMMEND: `You are a helpful web assistant. Given a snippet of webpage content, suggest 3 short questions a user might want to ask about this page.
+
+RULES:
+- Each question must be specific to the page content shown, not generic
+- Keep each question under 10 words
+- Cover different aspects: finding info, how-to, summarizing, or highlighting elements
+- Return ONLY a JSON array of strings, no other text
+
+EXAMPLE output:
+["What is the return policy?", "How do I create an account?", "Show me the pricing plans"]
+
+Page content:
+{pageContent}
+
+Return JSON array only:`,
+
 
   // Step-by-step guidance prompt for hidden elements / multi-step tasks
   STEP_BY_STEP_GUIDE: `You are a helpful guide assistant. Users ask "how to" questions and you provide step-by-step guidance.

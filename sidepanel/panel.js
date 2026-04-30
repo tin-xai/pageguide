@@ -120,6 +120,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Show current model status on open
   showModelStatus();
+  showAutoRecommendations();
 
   // Listen for tab changes.
   // Save the outgoing tab's session, then restore the incoming tab's session
@@ -1277,6 +1278,109 @@ function _initSlashAutocomplete() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Auto Recommendations
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch page content and ask the LLM to suggest 3 questions the user might ask.
+ * Renders clickable chips that disappear once the user sends their first message.
+ */
+async function showAutoRecommendations() {
+  // Don't show on restricted pages or PDF viewer
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.url) return;
+  if (
+    tab.url.startsWith('chrome://') ||
+    tab.url.startsWith('chrome-extension://') ||
+    tab.url.startsWith('edge://') ||
+    tab.url.includes('pdf-viewer/viewer.html')
+  ) return;
+
+  // Get page hint from content script
+  let pageText = '';
+  try {
+    const hint = await sendToContentScript({ action: 'getPageHint' });
+    pageText = hint?.text || '';
+  } catch (e) {
+    return; // Content script not injected yet; skip silently
+  }
+  if (!pageText.trim()) return;
+
+  // Check API key is configured
+  let settings = {};
+  try { settings = await chrome.storage.sync.get(['provider', 'geminiApiKey', 'openrouterApiKey', 'openaiApiKey']); } catch (e) {}
+  const provider = settings.provider || 'gemini';
+  const hasKey = (provider === 'gemini' && settings.geminiApiKey) ||
+                 (provider === 'openrouter' && settings.openrouterApiKey) ||
+                 (provider === 'openai' && settings.openaiApiKey);
+  if (!hasKey) return;
+
+  const systemPrompt = (typeof PROMPTS !== 'undefined' && PROMPTS.AUTO_RECOMMEND)
+    ? PROMPTS.AUTO_RECOMMEND.replace('{pageContent}', pageText.slice(0, 800))
+    : null;
+  if (!systemPrompt) return;
+
+  let questions = [];
+  try {
+    const response = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        action: 'callLLM',
+        systemPrompt,
+        messages: [{ role: 'user', content: 'Suggest questions.' }]
+      }, (res) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(res);
+      });
+    });
+
+    if (response?.content) {
+      const raw = response.content.trim().replace(/^```json\s*/i, '').replace(/```$/, '');
+      questions = JSON.parse(raw);
+      if (!Array.isArray(questions)) questions = [];
+    }
+  } catch (e) {
+    return; // Silently skip if LLM fails or returns bad JSON
+  }
+
+  if (questions.length === 0) return;
+  renderRecommendationChips(questions.slice(0, 4));
+}
+
+/**
+ * Render clickable question chips in the messages area.
+ * The chip container is removed the first time the user submits a message.
+ */
+function renderRecommendationChips(questions) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+
+  // Remove any existing chips
+  container.querySelector('.pageguide-recommend-chips')?.remove();
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'pageguide-recommend-chips';
+
+  questions.forEach(q => {
+    const chip = document.createElement('button');
+    chip.className = 'pageguide-recommend-chip';
+    chip.textContent = q;
+    chip.addEventListener('click', () => {
+      wrapper.remove();
+      const input = document.getElementById('pageguide-input');
+      if (input) {
+        input.value = q;
+        input.focus();
+      }
+      sendMessage();
+    });
+    wrapper.appendChild(chip);
+  });
+
+  container.appendChild(wrapper);
+  container.scrollTop = container.scrollHeight;
+}
+
 /**
  * Send a chat message
  */
@@ -1292,6 +1396,8 @@ async function sendMessage() {
   }
 
   _hideSlashMenu();
+  // Dismiss recommendation chips on first real user message
+  document.querySelector('.pageguide-recommend-chips')?.remove();
   if (input) input.value = '';
   if (btn) btn.disabled = true;
 
@@ -1853,6 +1959,7 @@ async function resetChat(showMessage = true) {
 
   // Always show the current model status after clearing
   showModelStatus();
+  showAutoRecommendations();
 
   _resettingChat = false;
 }
