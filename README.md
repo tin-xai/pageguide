@@ -184,6 +184,90 @@ Not Supported:
 
 ---
 
+## 📊 Research & Dataset
+
+PageGuide was evaluated in a controlled within-subjects user study. All data and task stimuli are publicly available on HuggingFace.
+
+### User Study
+
+| Property | Value |
+|---|---|
+| Design | Counterbalanced within-subjects |
+| Participants | ~47 |
+| Conditions | `extension` (PageGuide active) vs. `control` (no extension) |
+| Task types | `find` · `guide` · `hide` |
+| Metrics | Completion time, answer correctness, 7-point Likert survey |
+
+Each participant completed all three task types in both conditions. Condition order was counterbalanced to control for learning effects.
+
+**Results summary**
+
+| Task | n | Control (s) | Extension (s) | Δ (s) | p (Wilcoxon) |
+|---|---|---|---|---|---|
+| find  | 86 | 81.1 | 70.8 | −10.3 | 0.094 |
+| guide | 85 | 76.2 | 109.3 | +33.1 | < 0.001 ✱ |
+| hide  | 82 | 80.3 | 45.2  | −35.1 | < 0.001 ✱ |
+
+✱ Statistically significant at α = 0.05.
+
+**Post-study survey (7-point Likert, n ≈ 47)**
+
+| Task | Difficulty without PageGuide | Ease with PageGuide | Accuracy with PageGuide |
+|---|---|---|---|
+| Find  | 4.4 / 7 | 5.7 / 7 | 6.0 / 7 |
+| Guide | 4.8 / 7 | 5.6 / 7 | 5.5 / 7 |
+| Hide  | 5.5 / 7 | 5.9 / 7 | — |
+
+### Datasets
+
+---
+
+**`pageguide_userstudy`**
+- **Purpose:** Raw interaction logs from the user study — completion times, chat transcripts, correctness labels, paired statistical results, and post-study survey responses.
+- **Used in:** Section 5 (User Study / Evaluation)
+- **Download:** [🤗 ttn0011/pageguide_userstudy](https://huggingface.co/datasets/ttn0011/pageguide_userstudy)
+
+```python
+from datasets import load_dataset
+tasks  = load_dataset("ttn0011/pageguide_userstudy", data_files="tasks.csv", split="train").to_pandas()
+paired = load_dataset("ttn0011/pageguide_userstudy", data_files="paired_times.csv", split="train").to_pandas()
+```
+
+---
+
+**`pageguide_find_data`**
+- **Purpose:** Task stimuli for the **Find** condition — 10 real webpages (NASA, Wikipedia, Cleveland Clinic, WWF, Britannica, JMLR) each annotated with up to 2 factual questions, ground-truth answers, and supporting evidence spans.
+- **Used in:** Section 5.1 (Find Task Setup)
+- **Download:** [🤗 ttn0011/pageguide_find_data](https://huggingface.co/datasets/ttn0011/pageguide_find_data)
+
+```python
+find_tasks = load_dataset("ttn0011/pageguide_find_data", split="train").to_pandas()
+```
+
+---
+
+**`pageguide_guide_data`**
+- **Purpose:** Task stimuli for the **Guide** condition — 7 procedural tasks across 6 platforms (Google Sheets, Google Docs, Google Slides, Coda, TradingView, Scratch), labelled Easy or Medium difficulty.
+- **Used in:** Section 5.2 (Guide Task Setup)
+- **Download:** [🤗 ttn0011/pageguide_guide_data](https://huggingface.co/datasets/ttn0011/pageguide_guide_data)
+
+```python
+guide_tasks = load_dataset("ttn0011/pageguide_guide_data", split="train").to_pandas()
+```
+
+---
+
+**`pageguide_hide_data`**
+- **Purpose:** Task stimuli for the **Hide** condition — 37 annotated webpage snapshots (Amazon, Netflix, TechCrunch, Allrecipes, Spotify, Yelp, and more) with `(user_goal, hide_query, difficulty, hidden_elements)` annotations and ground-truth CSS selectors. HTML snapshots available on [Google Drive](https://drive.google.com/drive/folders/1tid8Hec_WIGGWdpZUVkE47qFH5flBC2z?usp=sharing).
+- **Used in:** Section 5.3 (Hide Task Setup)
+- **Download:** [🤗 ttn0011/pageguide_hide_data](https://huggingface.co/datasets/ttn0011/pageguide_hide_data)
+
+```python
+hide_tasks = load_dataset("ttn0011/pageguide_hide_data", split="train").to_pandas()
+```
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! To get started:
