@@ -1,7 +1,7 @@
 # 🍊 PageGuide: Browser Extension to Assist Users in Navigating a Webpage and Locating Information
 
 <p align="center">
-  by <a href="#">Tin Nguyen</a><sup>*†1</sup>, <a href="#">Thang T. Truong</a><sup>*1</sup>, <a href="#">Runtao Zhou</a><sup>*2</sup>, <a href="#">Trung Bui</a>, <a href="#">Chirag Agarwal</a><sup>2</sup>, <a href="#">Anh Totti Nguyen</a><sup>1</sup>
+  by <a href="https://tin-xai.github.io/">Tin Nguyen</a><sup>*†1</sup>, <a href="https://truongthoithang.com/">Thang T. Truong</a><sup>*1</sup>, <a href="https://datascience.virginia.edu/people/miles-zhou">Runtao Zhou</a><sup>*2</sup>, <a href="#">Trung Bui</a>, <a href="https://chirag-agarwall.github.io/">Chirag Agarwal</a><sup>2</sup>, <a href="https://anhnguyen.me/">Anh Totti Nguyen</a><sup>1</sup>
 </p>
 
 <p align="center">
