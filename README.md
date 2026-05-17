@@ -1,5 +1,22 @@
-<h1 align="center"> &nbsp;🍊 PageGuide</h1>
-<p align="center">Web Extension that makes browsing <b>Safe</b> 🛡️, <b>Smart</b> 🧠, and <b>Efficient</b> 🚀</p>
+# 🍊 PageGuide: Browser Extension to Assist Users in Navigating a Webpage and Locating Information
+
+<p align="center">
+  by <a href="#">Tin Nguyen</a><sup>*†1</sup>, <a href="#">Thang T. Truong</a><sup>*1</sup>, <a href="#">Runtao Zhou</a><sup>*2</sup>, <a href="#">Trung Bui</a>, <a href="#">Chirag Agarwal</a><sup>2</sup>, <a href="#">Anh Totti Nguyen</a><sup>1</sup>
+</p>
+
+<p align="center">
+  <sup>*</sup>Equal contribution &nbsp;&nbsp; <sup>†</sup>Project lead<br>
+  <sup>1</sup>Auburn University &nbsp;&nbsp; <sup>2</sup>University of Virginia
+</p>
+
+<p align="center">
+  <a href="https://pageguide.github.io/">Project Page</a> &nbsp;|&nbsp;
+  <a href="https://arxiv.org/abs/2604.23772">arXiv 2604.23772</a> &nbsp;|&nbsp;
+  <a href="https://huggingface.co/papers/2604.23772">🤗 Hugging Face Paper</a> &nbsp;|&nbsp;
+  Code License: MIT
+</p>
+
+---
 
 <div align="center">
 
@@ -15,109 +32,122 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 
 ---
 
-## 🎬 Demo
+## ✨ Features
 
 <p align="center">
-  <a href="#demo-find"><kbd>🔍 Find</kbd></a> &nbsp;
-  <a href="#demo-guide"><kbd>🎯 Guide</kbd></a> &nbsp;
-  <a href="#demo-hide"><kbd>🛡️ Hide</kbd></a> &nbsp;
-  <a href="#demo-answer"><kbd>💬 Answer</kbd></a> &nbsp;
-  <a href="#demo-image"><kbd>🖼️ Image</kbd></a> &nbsp;
-  <a href="#demo-pdf"><kbd>📄 PDF</kbd></a>
+  <a href="#feat-find"><kbd>🔍 Find</kbd></a> &nbsp;
+  <a href="#feat-guide"><kbd>🎯 Guide</kbd></a> &nbsp;
+  <a href="#feat-hide"><kbd>🛡️ Hide</kbd></a> &nbsp;
+  <a href="#feat-answer"><kbd>💬 Answer</kbd></a> &nbsp;
+  <a href="#feat-image"><kbd>🖼️ Image</kbd></a> &nbsp;
+  <a href="#feat-pdf"><kbd>📄 PDF</kbd></a>
 </p>
 
 <br/>
 
-<a id="demo-find"></a>
+<a id="feat-find"></a>
 
-### 🔍 Find
+### 🔍 Find — Highlight the answer on the page
+
+Have a question about something buried on a long page? PageGuide reads the page and highlights the exact text that answers your question — no manual scrolling needed.
+
+**How to use:**
+1. Open any webpage and click the PageGuide icon in your toolbar to open the side panel.
+2. Make sure the **Page** toggle is **On** (the default).
+3. Type your question in plain English, e.g. _"What is the return policy?"_ or _"Where is the contact email?"_
+4. PageGuide highlights the relevant section on the page and shows you the answer in the panel.
 
 <p align="center">
   <img src="assets/find.gif" alt="Find demo" width="80%">
 </p>
 
-<p align="center">
-  <em>Ask a question — PageGuide highlights the exact answer on the page.</em>
-</p>
-
 ---
 
-<a id="demo-guide"></a>
+<a id="feat-guide"></a>
 
-### 🎯 Guide
+### 🎯 Guide — Walk through any task step by step
+
+Not sure how to complete a task on an unfamiliar site? PageGuide overlays live instructions directly on the page, highlighting the exact button or field to interact with at each step.
+
+**How to use:**
+1. Navigate to the site where you want to complete a task.
+2. Open PageGuide from the toolbar.
+3. Ask a "how to" question, e.g. _"How do I change my password?"_ or _"How do I export this spreadsheet as a PDF?"_
+4. PageGuide displays step-by-step instructions on the page. Each step highlights the exact element — click it, or let PageGuide auto-fill text fields and navigate for you.
+5. Confirm each step at your own pace; PageGuide waits for you and resumes on the next page if navigation is needed.
 
 <p align="center">
   <img src="assets/guide.gif" alt="Guide demo" width="80%">
 </p>
 
-<p align="center"><em>Ask "how to" — PageGuide walks you through each step interactively, highlighting the exact element at every stage.</em></p>
-
 ---
 
-<a id="demo-hide"></a>
+<a id="feat-hide"></a>
 
-### 🛡️ Hide
+### 🛡️ Hide — Remove distracting content instantly
+
+Cluttered with ads, cookie banners, or sidebars? Describe what you want gone and PageGuide removes it without refreshing the page.
+
+**How to use:**
+1. Open any webpage with unwanted content.
+2. Open PageGuide from the toolbar.
+3. Type what you want to remove, e.g. _"Hide all ads and the sidebar"_ or _"Remove the cookie banner."_
+4. PageGuide detects the matching elements and makes them disappear instantly.
 
 <p align="center">
   <img src="assets/hide.gif" alt="Hide demo" width="80%">
 </p>
 
-<p align="center"><em>Tell PageGuide what to remove — ads, banners, sidebars — and they disappear instantly.</em></p>
+---
+
+<a id="feat-answer"></a>
+
+### 💬 Answer — Ask general knowledge questions
+
+Need a quick fact that has nothing to do with the current page? Switch PageGuide into general-knowledge mode and ask anything.
+
+**How to use:**
+1. Open PageGuide from the toolbar.
+2. Toggle **Page** to **Off** in the side panel (this tells PageGuide to ignore the current page).
+3. Type any question, e.g. _"What is the capital of France?"_ or _"Explain what a p-value means."_
+4. PageGuide answers from its AI knowledge base directly in the panel.
 
 ---
 
-<a id="demo-image"></a>
+<a id="feat-image"></a>
 
-### 🖼️ Image Asking
+### 🖼️ Image Asking — Search the page with a picture
+
+Have a screenshot or product image and want to find the matching item on the current page? Upload it and ask.
+
+**How to use:**
+1. Navigate to the page you want to search visually.
+2. Open PageGuide from the toolbar.
+3. Click the **📎** attachment icon in the chat bar, or paste an image directly with **Ctrl/Cmd+V**.
+4. Type your question alongside the image, e.g. _"Find this product on the page"_ or _"Where is this button?"_
+5. PageGuide compares your image against the page and highlights the matching element.
 
 <p align="center">
   <img src="assets/vision_asking.gif" alt="Image demo" width="80%">
 </p>
 
-<p align="center"><em>Upload or paste an image — PageGuide visually searches the page and finds a match.</em></p>
-
 ---
 
-<a id="demo-pdf"></a>
+<a id="feat-pdf"></a>
 
-### 📄 PDF Asking
+### 📄 PDF Asking — Ask questions about any PDF
+
+Reading a long PDF in the browser? Ask questions and PageGuide finds the relevant passage without you having to read the whole document.
+
+**How to use:**
+1. Open a PDF in your browser (e.g. navigate to any `.pdf` URL or open a local PDF file in Chrome).
+2. Open PageGuide from the toolbar — it detects the PDF automatically.
+3. Ask a question about the document, e.g. _"What is the main finding?"_ or _"Summarize section 3."_
+4. PageGuide reads the document and highlights the cited passage directly in the PDF viewer.
 
 <p align="center">
-<img src="assets/pdf_asking.gif" alt="PDF demo" width="80%">
+  <img src="assets/pdf_asking.gif" alt="PDF demo" width="80%">
 </p>
-
-<p align="center"><em>Open any PDF and ask questions — PageGuide reads the document and cites the exact passage.</em></p>
-
----
-
-## ✨ Core Features
-
-### 💬 Ask & Find on Page
-
-Type any question and the agent finds the answer on the current page, automatically highlighting the relevant section(s).
-
-### 🎯 Step-by-Step Interactive Guide
-
-Ask "how to" questions and get live, step-by-step guidance overlaid on the page:
-
-- Highlights the exact element to interact with at each step
-- Supports **click**, **type** (auto-fills text fields), and **navigate** actions
-
-### 🛡️ Hide / Protection
-
-Detect and remove unwanted content from any page.
-
-### 💡 General Knowledge Answer
-
-Toggle **Page: Off** to query the AI's knowledge base independent of the current page.
-
-### 🖼️ Image Asking
-
-Upload or paste (Ctrl/Cmd+V) an image to visually search the current page.
-
-### 📄 PDF Asking
-
-Ask questions about PDFs directly in the browser.
 
 ---
 
@@ -127,7 +157,7 @@ Ask questions about PDFs directly in the browser.
 
 1. **Download**
 
-- Download the latest zip file from the official Github release.
+- Download the latest zip file from the official Github release (`master` branch: https://github.com/tin-xai/pageguide).
 
 2. **Install**
 
