@@ -10,10 +10,13 @@
 </p>
 
 <p align="center">
-  <a href="https://pageguide.github.io/">Project Page</a> &nbsp;|&nbsp;
-  <a href="https://arxiv.org/abs/2604.23772">arXiv 2604.23772</a> &nbsp;|&nbsp;
-  <a href="https://huggingface.co/papers/2604.23772">🤗 Hugging Face Paper</a> &nbsp;|&nbsp;
-  Code License: MIT
+  <a href="https://pageguide.github.io/"><img alt="Project Page" src="https://img.shields.io/badge/Project_Page-pageguide.github.io-4285F4?style=flat-square&logoColor=white"></a>
+  &nbsp;
+  <a href="https://arxiv.org/abs/2604.23772"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2604.23772-B31B1B?style=flat-square"></a>
+  &nbsp;
+  <a href="https://huggingface.co/papers/2604.23772"><img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging_Face-Paper-FFD21E?style=flat-square"></a>
+  &nbsp;
+  <img alt="License" src="https://img.shields.io/badge/Code_License-MIT-4CAF50?style=flat-square">
 </p>
 
 ---
