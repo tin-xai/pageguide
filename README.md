@@ -23,10 +23,6 @@
 
 <div align="center">
 
-| 🔍 Find                   | 🎯 Guide                          | 🛡️ Hide                 | 💬 Answer             | 🖼️ Image Asking                | 📄 PDF Asking            |
-| ------------------------- | --------------------------------- | ----------------------- | --------------------- | ------------------------------ | ------------------------ |
-| Highlight content on page | Step-by-step interactive guidance | Hide ads & distractions | General knowledge Q&A | Visual search via image upload | Ask questions about PDFs |
-
 <br/>
 
 Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="20" alt="Chrome"> Chrome &nbsp;&nbsp; <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/edge/edge_48x48.png" width="20" alt="Edge"> Edge
