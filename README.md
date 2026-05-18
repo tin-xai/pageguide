@@ -156,7 +156,7 @@ Reading a long PDF in the browser? Ask questions and PageGuide finds the relevan
 
 1. **Download**
 
-- Download the [latest zip](https://github.com/tin-xai/pageguide/archive/refs/heads/master.zip) file this repo (`master` branch: https://github.com/tin-xai/pageguide).
+- Download the [latest zip](https://github.com/tin-xai/pageguide/releases/download/pageguide/pageguide-master.zip) file this repo (`master` branch: https://github.com/tin-xai/pageguide).
 
 2. **Install**
 
