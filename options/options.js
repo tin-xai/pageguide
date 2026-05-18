@@ -7,7 +7,8 @@ let currentProvider = 'gemini';
 const PROVIDER_NAMES = {
   gemini: 'Google Gemini',
   openrouter: 'OpenRouter',
-  openai: 'OpenAI'
+  openai: 'OpenAI',
+  togetherai: 'Together AI'
 };
 
 // Load saved settings
@@ -17,6 +18,7 @@ async function loadSettings() {
     'geminiApiKey', 'geminiModel',
     'openrouterApiKey', 'openrouterModel',
     'openaiApiKey', 'openaiModel',
+    'togetheraiApiKey', 'togetheraiModel',
     'visionEnabled',
     'somEnabled'
   ]);
@@ -36,7 +38,11 @@ async function loadSettings() {
   // Load OpenAI settings
   document.getElementById('openaiApiKey').value = settings.openaiApiKey || '';
   if (settings.openaiModel) document.getElementById('openaiModel').value = settings.openaiModel;
-  
+
+  // Load TogetherAI settings
+  document.getElementById('togetheraiApiKey').value = settings.togetheraiApiKey || '';
+  if (settings.togetheraiModel) document.getElementById('togetheraiModel').value = settings.togetheraiModel;
+
   // Load Vision setting (default: enabled)
   document.getElementById('visionEnabled').checked = settings.visionEnabled !== false;
   
@@ -77,6 +83,8 @@ async function saveSettings() {
     openrouterModel: document.getElementById('openrouterModel').value,
     openaiApiKey: document.getElementById('openaiApiKey').value.trim(),
     openaiModel: document.getElementById('openaiModel').value,
+    togetheraiApiKey: document.getElementById('togetheraiApiKey').value.trim(),
+    togetheraiModel: document.getElementById('togetheraiModel').value,
     visionEnabled: document.getElementById('visionEnabled').checked,
     somEnabled: document.getElementById('somEnabled').checked
   };
@@ -104,6 +112,9 @@ async function testApi() {
         break;
       case 'openai':
         await testOpenAI(resultDiv);
+        break;
+      case 'togetherai':
+        await testTogetherAI(resultDiv);
         break;
     }
   } catch (error) {
@@ -213,6 +224,42 @@ async function testOpenAI(resultDiv) {
   if (response.ok && data.choices?.[0]?.message?.content) {
     await saveSettings(); // Only persist on success
     resultDiv.textContent = `✅ OpenAI connected! (${model})`;
+    resultDiv.className = 'status success';
+  } else {
+    resultDiv.textContent = `❌ ${data.error?.message || 'Unknown error'}`;
+    resultDiv.className = 'status error';
+  }
+}
+
+// Test Together AI API
+async function testTogetherAI(resultDiv) {
+  const apiKey = document.getElementById('togetheraiApiKey').value.trim();
+  const model = document.getElementById('togetheraiModel').value;
+
+  if (!apiKey) {
+    resultDiv.textContent = '❌ Please enter a Together AI API key';
+    resultDiv.className = 'status error';
+    return;
+  }
+
+  const response = await fetch('https://api.together.xyz/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [{ role: 'user', content: 'Say "OK" only.' }],
+      max_tokens: 100
+    })
+  });
+
+  const data = await response.json();
+
+  if (response.ok && data.choices?.[0]?.message?.content) {
+    await saveSettings(); // Only persist on success
+    resultDiv.textContent = `✅ Together AI connected! (${model.split('/').pop()})`;
     resultDiv.className = 'status success';
   } else {
     resultDiv.textContent = `❌ ${data.error?.message || 'Unknown error'}`;
