@@ -364,8 +364,7 @@ async function showModelStatus() {
   const PROVIDER_LABELS = {
     gemini: 'Gemini',
     openrouter: 'OpenRouter',
-    openai: 'OpenAI',
-    togetherai: 'Together AI'
+    openai: 'OpenAI'
   };
 
   let settings = {};
@@ -374,8 +373,7 @@ async function showModelStatus() {
       'provider',
       'geminiApiKey', 'geminiModel',
       'openrouterApiKey', 'openrouterModel',
-      'openaiApiKey', 'openaiModel',
-      'togetheraiApiKey', 'togetheraiModel'
+      'openaiApiKey', 'openaiModel'
     ]);
   } catch (e) { /* storage unavailable */ }
 
@@ -394,9 +392,6 @@ async function showModelStatus() {
   } else if (provider === 'openai') {
     apiKey = settings.openaiApiKey || '';
     modelRaw = settings.openaiModel || '';
-  } else if (provider === 'togetherai') {
-    apiKey = settings.togetheraiApiKey || '';
-    modelRaw = settings.togetheraiModel || '';
   }
 
   // Shorten "org/model-name" → "model-name" for display

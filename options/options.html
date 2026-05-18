@@ -366,10 +366,7 @@
           <img src="https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg" alt="OpenAI">
           OpenAI
         </div>
-        <div class="provider-tab" data-provider="togetherai">
-          <span class="icon">🤝</span>
-          Together
-        </div>
+
       </div>
       
       <!-- Gemini Config -->
@@ -431,32 +428,12 @@
             <option value="gpt-4o-2024-11-20">GPT-4o</option>
             <option value="gpt-4o-mini-2024-07-18">GPT-4o Mini</option>
             <option value="gpt-5.2-2025-12-11">GPT-5.2-2025-12-11</option>
-            <option value="gpt-5.2-pro-2025-12-11">GPT-5.2-Pro-2025-12-11</option>
+            <!-- <option value="gpt-5.2-pro-2025-12-11">GPT-5.2-Pro-2025-12-11</option> -->
           </select>
         </div>
       </div>
       
-      <!-- TogetherAI Config -->
-      <div class="provider-config" id="config-togetherai">
-        <div class="form-group">
-          <label for="togetheraiApiKey">Together AI API Key</label>
-          <input type="password" id="togetheraiApiKey" placeholder="Enter your Together AI API key...">
-          <small>Get a key at <a href="https://api.together.xyz/settings/api-keys" target="_blank">api.together.xyz</a></small>
-        </div>
-        <div class="form-group">
-          <label for="togetheraiModel">Model</label>
-          <select id="togetheraiModel">
-            <option value="meta-llama/Llama-3.3-70B-Instruct-Turbo">Llama 3.3 70B Turbo</option>
-            <option value="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo">Llama 3.1 8B Turbo</option>
-            <option value="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo">Llama 3.1 405B Turbo</option>
-            <option value="Qwen/Qwen2.5-72B-Instruct-Turbo">Qwen 2.5 72B Turbo</option>
-            <option value="mistralai/Mixtral-8x7B-Instruct-v0.1">Mixtral 8x7B</option>
-            <option value="deepseek-ai/DeepSeek-R1">DeepSeek R1</option>
-            <option value="meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo">Llama 3.2 11B Vision</option>
-            <option value="meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo">Llama 3.2 90B Vision</option>
-          </select>
-        </div>
-      </div>
+
 
       <button type="button" id="testApiBtn" class="primary" style="width: 100%;">🧪 Test & Save Connection</button>
       <small style="display:block; color:#555; margin-top:8px; font-size:12px; text-align:center;">API key is saved automatically on successful test</small>

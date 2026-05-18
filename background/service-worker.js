@@ -49,11 +49,6 @@ const CONFIG = {
       endpoint: 'https://api.openai.com/v1/chat/completions',
       defaultModel: 'gpt-4o',
       defaultApiKey: (typeof CONFIG_KEYS !== 'undefined' && CONFIG_KEYS.OPENAI_KEY) || ''
-    },
-    togetherai: {
-      endpoint: 'https://api.together.xyz/v1/chat/completions',
-      defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-      defaultApiKey: (typeof CONFIG_KEYS !== 'undefined' && CONFIG_KEYS.TOGETHERAI_KEY) || ''
     }
   },
   defaultProvider: 'gemini'
@@ -407,8 +402,7 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
       'provider',
       'geminiApiKey', 'geminiModel',
       'openrouterApiKey', 'openrouterModel',
-      'openaiApiKey', 'openaiModel',
-      'togetheraiApiKey', 'togetheraiModel'
+      'openaiApiKey', 'openaiModel'
     ]);
   } catch (e) {
     stopKeepAlive();
@@ -429,9 +423,7 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
       case 'openai':
         result = await callOpenAIMultiImage(messages, systemPrompt, settings, images);
         break;
-      case 'togetherai':
-        result = await callTogetherAIMultiImage(messages, systemPrompt, settings, images);
-        break;
+
       default:
         result = { error: `Unknown provider: ${provider}` };
     }
@@ -520,8 +512,7 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
       'provider',
       'geminiApiKey', 'geminiModel',
       'openrouterApiKey', 'openrouterModel',
-      'openaiApiKey', 'openaiModel',
-      'togetheraiApiKey', 'togetheraiModel'
+      'openaiApiKey', 'openaiModel'
     ]);
   } catch (e) {
     stopKeepAlive();
@@ -542,9 +533,7 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
       case 'openai':
         result = await callOpenAI(messages, systemPrompt, settings, imageBase64);
         break;
-      case 'togetherai':
-        result = await callTogetherAI(messages, systemPrompt, settings, imageBase64);
-        break;
+
       default:
         result = { error: `Unknown provider: ${provider}` };
     }
@@ -987,132 +976,5 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
     return { content: text };
   } catch (error) {
     return { error: `OpenAI network error: ${error.message}` };
-  }
-}
-
-// ===== Together AI API Call =====
-async function callTogetherAI(messages, systemPrompt, settings, imageBase64 = null) {
-  const config = CONFIG.providers.togetherai;
-  const apiKey = (settings.togetheraiApiKey || config.defaultApiKey).trim();
-
-  if (!apiKey) {
-    return { error: 'Together AI API key not configured. Click ⚙️ Settings.' };
-  }
-
-  const model = settings.togetheraiModel || config.defaultModel;
-
-  try {
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-
-    // Vision models on Together AI support the image_url format
-    let content;
-    if (imageBase64) {
-      console.log('🖼️ Adding image to Together AI request');
-      content = [
-        { type: 'text', text: userContent },
-        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
-      ];
-    } else {
-      content = userContent;
-    }
-
-    const chatMessages = [{ role: 'user', content: content }];
-
-    const response = await fetch(config.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: chatMessages,
-        temperature: 0.1,
-        max_tokens: 1024
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return { error: `Together AI API error: ${data.error?.message || response.status}` };
-    }
-
-    const text = data.choices?.[0]?.message?.content;
-    if (!text) {
-      return { error: 'Empty response from Together AI' };
-    }
-
-    return { content: text };
-  } catch (error) {
-    return { error: `Together AI network error: ${error.message}` };
-  }
-}
-
-// ===== Multi-Image Together AI API Call =====
-async function callTogetherAIMultiImage(messages, systemPrompt, settings, images = []) {
-  const config = CONFIG.providers.togetherai;
-  const apiKey = (settings.togetheraiApiKey || config.defaultApiKey).trim();
-
-  if (!apiKey) {
-    return { error: 'Together AI API key not configured. Click ⚙️ Settings.' };
-  }
-
-  const model = settings.togetheraiModel || config.defaultModel;
-
-  try {
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-
-    const content = [{ type: 'text', text: userContent }];
-
-    if (images && images.length > 0) {
-      console.log(`🖼️ Adding ${images.length} images to Together AI request`);
-      for (const img of images) {
-        if (img.label) {
-          content.push({ type: 'text', text: `[${img.label}]:` });
-        }
-        content.push({
-          type: 'image_url',
-          image_url: { url: `data:image/jpeg;base64,${img.base64}` }
-        });
-      }
-    }
-
-    const chatMessages = [{ role: 'user', content: content }];
-
-    const response = await fetch(config.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: chatMessages,
-        temperature: 0.1,
-        max_tokens: 1024
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return { error: `Together AI API error: ${data.error?.message || response.status}` };
-    }
-
-    const text = data.choices?.[0]?.message?.content;
-    if (!text) {
-      return { error: 'Empty response from Together AI' };
-    }
-
-    return { content: text };
-  } catch (error) {
-    return { error: `Together AI network error: ${error.message}` };
   }
 }
