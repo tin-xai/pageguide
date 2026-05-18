@@ -737,17 +737,18 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        temperature: 0.1,
-        max_tokens: 1024
+        max_completion_tokens: 1024,
+        // o-series models (o1, o3, o4-mini, …) don't support temperature
+        ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
       })
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       return { error: `OpenAI API error: ${data.error?.message || response.status}` };
     }
-    
+
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenAI' };
@@ -953,17 +954,18 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        temperature: 0.1,
-        max_tokens: 1024
+        max_completion_tokens: 1024,
+        // o-series models (o1, o3, o4-mini, …) don't support temperature
+        ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
       })
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       return { error: `OpenAI API error: ${data.error?.message || response.status}` };
     }
-    
+
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenAI' };
