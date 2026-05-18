@@ -51,6 +51,7 @@ Support <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src
 Have a question about something buried on a long page? PageGuide reads the page and highlights the exact text that answers your question — no manual scrolling needed.
 
 **How to use:**
+
 1. Open any webpage and click the PageGuide icon in your toolbar to open the side panel.
 2. Make sure the **Page** toggle is **On** (the default).
 3. Type your question in plain English, e.g. _"What is the return policy?"_ or _"Where is the contact email?"_
@@ -69,6 +70,7 @@ Have a question about something buried on a long page? PageGuide reads the page 
 Not sure how to complete a task on an unfamiliar site? PageGuide overlays live instructions directly on the page, highlighting the exact button or field to interact with at each step.
 
 **How to use:**
+
 1. Navigate to the site where you want to complete a task.
 2. Open PageGuide from the toolbar.
 3. Ask a "how to" question, e.g. _"How do I change my password?"_ or _"How do I export this spreadsheet as a PDF?"_
@@ -88,6 +90,7 @@ Not sure how to complete a task on an unfamiliar site? PageGuide overlays live i
 Cluttered with ads, cookie banners, or sidebars? Describe what you want gone and PageGuide removes it without refreshing the page.
 
 **How to use:**
+
 1. Open any webpage with unwanted content.
 2. Open PageGuide from the toolbar.
 3. Type what you want to remove, e.g. _"Hide all ads and the sidebar"_ or _"Remove the cookie banner."_
@@ -106,6 +109,7 @@ Cluttered with ads, cookie banners, or sidebars? Describe what you want gone and
 Need a quick fact that has nothing to do with the current page? Switch PageGuide into general-knowledge mode and ask anything.
 
 **How to use:**
+
 1. Open PageGuide from the toolbar.
 2. Toggle **Page** to **Off** in the side panel (this tells PageGuide to ignore the current page).
 3. Type any question, e.g. _"What is the capital of France?"_ or _"Explain what a p-value means."_
@@ -120,6 +124,7 @@ Need a quick fact that has nothing to do with the current page? Switch PageGuide
 Have a screenshot or product image and want to find the matching item on the current page? Upload it and ask.
 
 **How to use:**
+
 1. Navigate to the page you want to search visually.
 2. Open PageGuide from the toolbar.
 3. Click the **📎** attachment icon in the chat bar, or paste an image directly with **Ctrl/Cmd+V**.
@@ -139,10 +144,21 @@ Have a screenshot or product image and want to find the matching item on the cur
 Reading a long PDF in the browser? Ask questions and PageGuide finds the relevant passage without you having to read the whole document.
 
 **How to use:**
-1. Open a PDF in your browser (e.g. navigate to any `.pdf` URL or open a local PDF file in Chrome).
-2. Open PageGuide from the toolbar — it detects the PDF automatically.
-3. Ask a question about the document, e.g. _"What is the main finding?"_ or _"Summarize section 3."_
-4. PageGuide reads the document and highlights the cited passage directly in the PDF viewer.
+
+1. Click the **📄 PDF** button in the toolbar.
+
+2. Add your PDF in one of three ways:
+   - Drag and drop the PDF file.
+   - Click the upload button and select a file.
+   - Paste a PDF URL into the input field.
+
+3. Ask a question about the document, such as:
+   - _“What is the main finding?”_
+   - _“Summarize Section 3.”_
+
+4. PageGuide reads the PDF and answers your question with cited evidence.
+
+5. Click the citation to jump to the highlighted passage directly in the PDF viewer.
 
 <p align="center">
   <img src="assets/pdf_asking.gif" alt="PDF demo" width="80%">
@@ -219,39 +235,40 @@ PageGuide was evaluated in a controlled within-subjects user study. All data and
 
 ### User Study
 
-| Property | Value |
-|---|---|
-| Design | Counterbalanced within-subjects |
-| Participants | ~47 |
-| Conditions | `extension` (PageGuide active) vs. `control` (no extension) |
-| Task types | `find` · `guide` · `hide` |
-| Metrics | Completion time, answer correctness, 7-point Likert survey |
+| Property     | Value                                                       |
+| ------------ | ----------------------------------------------------------- |
+| Design       | Counterbalanced within-subjects                             |
+| Participants | ~47                                                         |
+| Conditions   | `extension` (PageGuide active) vs. `control` (no extension) |
+| Task types   | `find` · `guide` · `hide`                                   |
+| Metrics      | Completion time, answer correctness, 7-point Likert survey  |
 
 Each participant completed all three task types in both conditions. Condition order was counterbalanced to control for learning effects.
 
 **Results summary**
 
-| Task | n | Control (s) | Extension (s) | Δ (s) | p (Wilcoxon) |
-|---|---|---|---|---|---|
-| find  | 86 | 81.1 | 70.8 | −10.3 | 0.094 |
-| guide | 85 | 76.2 | 109.3 | +33.1 | < 0.001 ✱ |
-| hide  | 82 | 80.3 | 45.2  | −35.1 | < 0.001 ✱ |
+| Task  | n   | Control (s) | Extension (s) | Δ (s) | p (Wilcoxon) |
+| ----- | --- | ----------- | ------------- | ----- | ------------ |
+| find  | 86  | 81.1        | 70.8          | −10.3 | 0.094        |
+| guide | 85  | 76.2        | 109.3         | +33.1 | < 0.001 ✱    |
+| hide  | 82  | 80.3        | 45.2          | −35.1 | < 0.001 ✱    |
 
 ✱ Statistically significant at α = 0.05.
 
 **Post-study survey (7-point Likert, n ≈ 47)**
 
-| Task | Difficulty without PageGuide | Ease with PageGuide | Accuracy with PageGuide |
-|---|---|---|---|
-| Find  | 4.4 / 7 | 5.7 / 7 | 6.0 / 7 |
-| Guide | 4.8 / 7 | 5.6 / 7 | 5.5 / 7 |
-| Hide  | 5.5 / 7 | 5.9 / 7 | — |
+| Task  | Difficulty without PageGuide | Ease with PageGuide | Accuracy with PageGuide |
+| ----- | ---------------------------- | ------------------- | ----------------------- |
+| Find  | 4.4 / 7                      | 5.7 / 7             | 6.0 / 7                 |
+| Guide | 4.8 / 7                      | 5.6 / 7             | 5.5 / 7                 |
+| Hide  | 5.5 / 7                      | 5.9 / 7             | —                       |
 
 ### Datasets
 
 ---
 
 **`pageguide_userstudy`**
+
 - **Purpose:** Raw interaction logs from the user study — completion times, chat transcripts, correctness labels, paired statistical results, and post-study survey responses.
 - **Used in:** Section 5 (User Study / Evaluation)
 - **Download:** [🤗 ttn0011/pageguide_userstudy](https://huggingface.co/datasets/ttn0011/pageguide_userstudy)
@@ -265,6 +282,7 @@ paired = load_dataset("ttn0011/pageguide_userstudy", data_files="paired_times.cs
 ---
 
 **`pageguide_find_data`**
+
 - **Purpose:** Task stimuli for the **Find** condition — 10 real webpages (NASA, Wikipedia, Cleveland Clinic, WWF, Britannica, JMLR) each annotated with up to 2 factual questions, ground-truth answers, and supporting evidence spans.
 - **Used in:** Section 5.1 (Find Task Setup)
 - **Download:** [🤗 ttn0011/pageguide_find_data](https://huggingface.co/datasets/ttn0011/pageguide_find_data)
@@ -276,6 +294,7 @@ find_tasks = load_dataset("ttn0011/pageguide_find_data", split="train").to_panda
 ---
 
 **`pageguide_guide_data`**
+
 - **Purpose:** Task stimuli for the **Guide** condition — 7 procedural tasks across 6 platforms (Google Sheets, Google Docs, Google Slides, Coda, TradingView, Scratch), labelled Easy or Medium difficulty.
 - **Used in:** Section 5.2 (Guide Task Setup)
 - **Download:** [🤗 ttn0011/pageguide_guide_data](https://huggingface.co/datasets/ttn0011/pageguide_guide_data)
@@ -287,6 +306,7 @@ guide_tasks = load_dataset("ttn0011/pageguide_guide_data", split="train").to_pan
 ---
 
 **`pageguide_hide_data`**
+
 - **Purpose:** Task stimuli for the **Hide** condition — 37 annotated webpage snapshots (Amazon, Netflix, TechCrunch, Allrecipes, Spotify, Yelp, and more) with `(user_goal, hide_query, difficulty, hidden_elements)` annotations and ground-truth CSS selectors. HTML snapshots available on [Google Drive](https://drive.google.com/drive/folders/1tid8Hec_WIGGWdpZUVkE47qFH5flBC2z?usp=sharing).
 - **Used in:** Section 5.3 (Hide Task Setup)
 - **Download:** [🤗 ttn0011/pageguide_hide_data](https://huggingface.co/datasets/ttn0011/pageguide_hide_data)
