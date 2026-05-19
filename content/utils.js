@@ -572,9 +572,13 @@ async function expandTruncatedContent() {
   // (via history.pushState / React Router), NOT an inline expand. It is rendered as a
   // <span role="button"> with no href, so the anchor-href check below can't catch it.
   // Clicking it during an LLM call kills the message channel → error. Skip entirely.
+  //
+  // Google Search: AI Overview "Show more" / "See more" buttons are also JS-driven and
+  // can navigate the tab to a different page or expand in a way that triggers navigation.
   const _h = window.location.hostname;
   if (_h === 'x.com' || _h === 'twitter.com' ||
-      _h.endsWith('.x.com') || _h.endsWith('.twitter.com')) {
+      _h.endsWith('.x.com') || _h.endsWith('.twitter.com') ||
+      _h === 'google.com' || _h.endsWith('.google.com')) {
     return;
   }
 

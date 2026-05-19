@@ -110,6 +110,15 @@ async function handleMessage(request) {
   }
 }
 
+// When Chrome restores this page from bfcache, clean up any stale guide state
+// (the guide has already moved to the new page; this page is just returning from bfcache)
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) {
+    if (typeof gv2StopGuide === 'function') gv2StopGuide();
+    else if (window._guidev2) window._guidev2.active = false;
+  }
+});
+
 // Track selection changes to send context to sidepanel
 let selectionTimeout = null;
 document.addEventListener('selectionchange', () => {

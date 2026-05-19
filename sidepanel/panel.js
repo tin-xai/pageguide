@@ -1610,6 +1610,12 @@ async function sendMessage() {
   } catch (e) {
     hideTyping();
     const msg = e.message || '';
+    if (msg.includes('back/forward cache') || msg.includes('bfcache')) {
+      // Guide navigated the tab to a new page; Chrome bfcached the old page and
+      // closed its extension port. The new page's content script sends guide
+      // results via chrome.runtime.onMessage — nothing to show here.
+      return;
+    }
     if (msg.includes('Could not establish connection') ||
         msg.includes('Receiving end does not exist') ||
         msg.includes('Cannot access') ||
