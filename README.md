@@ -185,7 +185,7 @@ Reading a long PDF in the browser? Ask questions and PageGuide finds the relevan
 
 3. **Upgrading**
 
-- Download the [latest zip](https://github.com/tin-xai/pageguide/archive/refs/heads/master.zip) file
+- Download the [latest zip](https://github.com/tin-xai/pageguide/releases/download/pageguide/pageguide-master.zip) file
 - Unzip and replace the existing `pageguide` folder.
 - Reload the extension in `chrome://extensions/` by clicking the reload button on the extension card.
 
