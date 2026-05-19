@@ -22,14 +22,6 @@ function stopKeepAlive() {
   }
 }
 
-// Load API keys from config.js
-try {
-  importScripts('../config.js');
-  console.log('🤖 Loaded config.js');
-} catch (e) {
-  console.warn('🤖 config.js not found');
-}
-
 // PDF extraction is handled via offscreen document (PDF.js needs DOM)
 
 // ===== Configuration =====
