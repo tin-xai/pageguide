@@ -555,39 +555,32 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
 
 /**
  * Add a collapsible debug/info section
- * Collapsed by default, click to expand
+ * Uses native <details>/<summary> so the toggle is always reliably clickable.
  */
 function addCollapsibleDebug(lines) {
   const container = document.getElementById('pageguide-messages');
   if (!container) return;
-  
-  const wrapper = document.createElement('div');
-  wrapper.className = 'pageguide-debug-wrapper';
-  
-  const toggle = document.createElement('div');
-  toggle.className = 'pageguide-debug-toggle';
-  toggle.innerHTML = `<span class="pageguide-debug-arrow">▶</span> <span class="pageguide-debug-label">Details</span>`;
-  
+
+  const details = document.createElement('details');
+  details.className = 'pageguide-debug-wrapper';
+
+  const summary = document.createElement('summary');
+  summary.className = 'pageguide-debug-toggle';
+  summary.innerHTML = `<span class="pageguide-debug-label">Details</span>`;
+
   const content = document.createElement('div');
   content.className = 'pageguide-debug-content';
-  content.style.display = 'none';
-  
+
   lines.forEach(line => {
     const lineEl = document.createElement('div');
     lineEl.className = 'pageguide-debug-line';
     lineEl.textContent = line;
     content.appendChild(lineEl);
   });
-  
-  toggle.addEventListener('click', () => {
-    const isOpen = content.style.display !== 'none';
-    content.style.display = isOpen ? 'none' : 'block';
-    toggle.querySelector('.pageguide-debug-arrow').textContent = isOpen ? '▶' : '▼';
-  });
-  
-  wrapper.appendChild(toggle);
-  wrapper.appendChild(content);
-  container.appendChild(wrapper);
+
+  details.appendChild(summary);
+  details.appendChild(content);
+  container.appendChild(details);
   container.scrollTop = container.scrollHeight;
 }
 

@@ -1211,6 +1211,7 @@ body.light-mode .pageguide-history-load-btn:hover {
   max-width: 95%;
 }
 
+/* summary resets */
 .pageguide-debug-toggle {
   display: flex;
   align-items: center;
@@ -1222,17 +1223,25 @@ body.light-mode .pageguide-history-load-btn:hover {
   cursor: pointer;
   transition: all 0.2s;
   user-select: none;
+  list-style: none;
+}
+
+.pageguide-debug-toggle::-webkit-details-marker { display: none; }
+
+.pageguide-debug-toggle::before {
+  content: '▶';
+  color: #666;
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.pageguide-debug-wrapper[open] .pageguide-debug-toggle::before {
+  content: '▼';
 }
 
 .pageguide-debug-toggle:hover {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(0, 217, 255, 0.2);
-}
-
-.pageguide-debug-arrow {
-  color: #666;
-  font-size: 10px;
-  transition: transform 0.2s;
 }
 
 .pageguide-debug-label {
@@ -1672,7 +1681,7 @@ body.light-mode .pageguide-debug-toggle:hover {
   border-color: rgba(0, 140, 200, 0.2);
 }
 
-body.light-mode .pageguide-debug-arrow,
+body.light-mode .pageguide-debug-toggle::before,
 body.light-mode .pageguide-debug-label {
   color: #999;
 }
