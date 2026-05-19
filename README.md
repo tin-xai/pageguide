@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icons/icon128.png" alt="PageGuide" width="80">
+</p>
+
 # 🍊 PageGuide: Browser Extension to Assist Users in Navigating a Webpage and Locating Information
 
 <p align="center">

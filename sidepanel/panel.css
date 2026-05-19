@@ -278,9 +278,10 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-logo {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 0;
+  background: transparent;
 }
 
 .pageguide-header-text h2 {
