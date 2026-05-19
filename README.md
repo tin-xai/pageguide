@@ -183,9 +183,25 @@ Reading a long PDF in the browser? Ask questions and PageGuide finds the relevan
 - Open Chrome and go to `chrome://extensions/`
 - Enable **Developer mode** (toggle in top right)
 - Click **Load unpacked**
+  <p align="center">
+    <img src="assets/load_extension/load_extension.png" alt="Load unpacked" width="600">
+  </p>
 - Select the `pageguide` folder from the downloaded and unpacked zip file
+  <p align="center">
+    <img src="assets/load_extension/unzip_folder.png" alt="Select the pageguide folder" width="500">
+  </p>
+- Click Extension icon
+  <p align="center">
+    <img src="assets/load_extension/open_extension_icon.png" alt="Click Extension icon" width="350">
+  </p>
 - Pin the extension icon to your toolbar
+  <p align="center">
+    <img src="assets/load_extension/pin_icon.png" alt="Pin the extension icon" width="350">
+  </p>
 - Use the extension by clicking the icon in the toolbar
+  <p align="center">
+    <img src="assets/load_extension/click_icon_to_use.png" alt="Use the extension" width="350">
+  </p>
 
 3. **Upgrading**
 
