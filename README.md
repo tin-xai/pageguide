@@ -170,6 +170,78 @@ Reading a long PDF in the browser? Ask questions and PageGuide finds the relevan
 
 ---
 
+## 🚀 Quick Start — One Click Installation 
+
+Get PageGuide up and running in seconds. No configuration needed to start exploring!
+
+### Step 1: Install from Chrome Web Store
+
+Click the button below to install PageGuide directly to your browser:
+
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/pageguide/jjamnggpgpgfjehkcmabopcjkichjgip?authuser=0&hl=en" style="display: inline-block; padding: 12px 24px; background-color: #4285F4; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">📥 Add to Chrome</a>
+</p>
+
+The extension will automatically download and install. You'll see a confirmation notification in your browser.
+
+---
+
+### Step 2: Pin the Icon to Your Toolbar
+
+Once installed, pin PageGuide to your toolbar for quick access:
+
+<p align="center">
+  <img src="assets/load_extension/pin_icon_without_numbers.png" alt="Pin the PageGuide icon to your toolbar" width="600">
+</p>
+
+**How to pin:**
+- Look for the puzzle piece icon <img src="https://raw.githubusercontent.com/alrra/browser-logos/main/src/chrome/chrome_48x48.png" width="16" alt="Chrome"> in your browser's top-right corner
+- Click it to reveal all installed extensions
+- Find PageGuide and click the pin icon next to it
+- The PageGuide icon will now appear in your main toolbar for easy access
+
+---
+
+### Step 3: Start Using PageGuide
+
+Click the PageGuide icon in your toolbar to open the side panel and begin:
+
+<p align="center">
+  <img src="assets/load_extension/click_icon_without_numbers.png" alt="Click the PageGuide icon to start using the extension" width="600">
+</p>
+
+**You're ready to go!** Try one of these:
+- 🔍 Ask a question about the current page, e.g., _"What is the return policy?"_
+- 🎯 Get step-by-step instructions, e.g., _"How do I export this as a PDF?"_
+- 🛡️ Hide unwanted content, e.g., _"Remove all ads and popups"_
+- 🖼️ Upload an image to search visually
+- 💬 Toggle **Page: Off** to ask general knowledge questions
+
+---
+
+### ⚙️ First-Time Setup
+
+Before you can start using PageGuide, configure your LLM provider:
+
+1. **Open Settings:** Click the ⚙️ gear icon in the top-right corner of the side panel
+2. **Choose a Provider:** Select from:
+   - **Google Gemini** (free tier available)
+   - **OpenAI** (requires API key)
+   - **OpenRouter** (aggregates multiple models)
+3. **Enter Your API Key:** Paste your API key into the field
+4. **Test Connection:** Click **Test & Save Connection** to verify your setup
+5. **Done!** Your configuration is saved and ready to use
+
+👉 **Need an API key?** Check the provider's website for setup instructions.
+
+---
+
+### 💡 Pro Tips
+
+- **Pin to quick access:** Keep the extension icon pinned in your toolbar (see Step 2)
+- **Keyboard shortcut:** You can set a custom keyboard shortcut in `chrome://extensions/shortcuts`
+- **Privacy:** Your API key is stored only in your browser and never shared with us
+
 ## 🛠️ Manual Installation
 
 ### Developer Mode (for testing)
