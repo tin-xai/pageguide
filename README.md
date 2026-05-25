@@ -184,7 +184,6 @@ Click the button below to install PageGuide directly to your browser:
 
 The extension will automatically download and install. You'll see a confirmation notification in your browser.
 
----
 
 ### Step 2: Pin the Icon to Your Toolbar
 
@@ -200,7 +199,6 @@ Once installed, pin PageGuide to your toolbar for quick access:
 - Find PageGuide and click the pin icon next to it
 - The PageGuide icon will now appear in your main toolbar for easy access
 
----
 
 ### Step 3: Start Using PageGuide
 
