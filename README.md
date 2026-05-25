@@ -191,7 +191,7 @@ The extension will automatically download and install. You'll see a confirmation
 Once installed, pin PageGuide to your toolbar for quick access:
 
 <p align="center">
-  <img src="assets/load_extension/pin_icon_without_numbers.png" alt="Pin the PageGuide icon to your toolbar" width="600">
+  <img src="assets/load_extension/pin_icon_without_numbers.png" alt="Pin the PageGuide icon to your toolbar" width="400">
 </p>
 
 **How to pin:**
@@ -207,7 +207,7 @@ Once installed, pin PageGuide to your toolbar for quick access:
 Click the PageGuide icon in your toolbar to open the side panel and begin:
 
 <p align="center">
-  <img src="assets/load_extension/click_icon_without_numbers.png" alt="Click the PageGuide icon to start using the extension" width="600">
+  <img src="assets/load_extension/click_icon_without_numbers.png" alt="Click the PageGuide icon to start using the extension" width="400">
 </p>
 
 **You're ready to go!** Try one of these:
@@ -234,13 +234,14 @@ Before you can start using PageGuide, configure your LLM provider:
 
 👉 **Need an API key?** Check the provider's website for setup instructions.
 
----
 
 ### 💡 Pro Tips
 
 - **Pin to quick access:** Keep the extension icon pinned in your toolbar (see Step 2)
 - **Keyboard shortcut:** You can set a custom keyboard shortcut in `chrome://extensions/shortcuts`
 - **Privacy:** Your API key is stored only in your browser and never shared with us
+
+---
 
 ## 🛠️ Manual Installation
 
