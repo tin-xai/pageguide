@@ -678,3 +678,168 @@ async function expandTruncatedContent() {
   // Final settle delay so expanded content is in the DOM before indexing
   await new Promise(r => setTimeout(r, 300));
 }
+
+/**
+ * Serialize the current page into a static, self-contained HTML string for the
+ * Rewind inspector (Slice 1).
+ *
+ * outerHTML alone is NOT enough: live form values (what the user/agent typed),
+ * checkbox/radio/select state, and contenteditable content are runtime properties
+ * that do not appear in serialized markup. We clone the tree and copy those values
+ * onto the clone so the snapshot shows the page exactly as it looked after the step.
+ *
+ * The result is rendered READ-ONLY in a sandboxed <iframe> with no script execution,
+ * so we strip <script> tags here as defense-in-depth.
+ *
+ * Known fidelity gaps (documented intentionally): cross-origin stylesheets/images may
+ * not load under the iframe sandbox/CSP; shadow DOM and <canvas> pixels are not
+ * captured; lazy/virtualized content reflects only what was mounted at capture time.
+ *
+ * @param {Element} [rootEl] - root to serialize (default <html>); injectable for tests
+ * @param {string}  [baseHref] - base URL for resolving relative asset URLs
+ * @returns {string} a full HTML document string
+ */
+function gv2SerializeDom(rootEl, baseHref) {
+  rootEl = rootEl || (typeof document !== 'undefined' ? document.documentElement : null);
+  if (!rootEl) return '';
+  if (!baseHref) {
+    if (typeof document !== 'undefined' && document.baseURI) baseHref = document.baseURI;
+    else if (typeof location !== 'undefined' && location.href) baseHref = location.href;
+    else baseHref = '';
+  }
+
+  const ownerDoc = rootEl.ownerDocument || (typeof document !== 'undefined' ? document : null);
+  const clone = rootEl.cloneNode(true);
+
+  // Copy runtime values outerHTML omits. cloneNode preserves order, so we can zip the
+  // live controls with their clones by index using the same selector on both trees.
+  const SEL = 'input, textarea, select, [contenteditable]';
+  const live = rootEl.querySelectorAll(SEL);
+  const copy = clone.querySelectorAll(SEL);
+  for (let i = 0; i < live.length; i++) {
+    const l = live[i];
+    const c = copy[i];
+    if (!c) continue;
+    const tag = l.tagName;
+    if (tag === 'INPUT') {
+      const type = (l.getAttribute('type') || 'text').toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        if (l.checked) c.setAttribute('checked', ''); else c.removeAttribute('checked');
+      } else if (type === 'password') {
+        // Privacy: never serialize password values into a stored snapshot.
+        c.setAttribute('value', '');
+      } else {
+        c.setAttribute('value', l.value != null ? l.value : '');
+      }
+    } else if (tag === 'TEXTAREA') {
+      c.textContent = l.value != null ? l.value : '';
+    } else if (tag === 'SELECT') {
+      const lOpts = l.querySelectorAll('option');
+      const cOpts = c.querySelectorAll('option');
+      for (let j = 0; j < cOpts.length; j++) {
+        if (lOpts[j] && lOpts[j].selected) cOpts[j].setAttribute('selected', '');
+        else cOpts[j].removeAttribute('selected');
+      }
+    } else {
+      // contenteditable (true / "")
+      const ce = l.getAttribute('contenteditable');
+      const editable = (typeof l.isContentEditable === 'boolean' && l.isContentEditable) || ce === '' || ce === 'true';
+      if (editable) c.innerHTML = l.innerHTML;
+    }
+  }
+
+  // Strip scripts — the inspector iframe runs without allow-scripts, but remove anyway.
+  clone.querySelectorAll('script').forEach(s => s.remove());
+
+  // Inject a single <base> so relative CSS/image URLs resolve against the original page.
+  if (ownerDoc) {
+    const head = clone.querySelector('head');
+    if (head) {
+      head.querySelectorAll('base').forEach(b => b.remove());
+      const base = ownerDoc.createElement('base');
+      base.setAttribute('href', baseHref);
+      head.insertBefore(base, head.firstChild);
+    }
+  }
+
+  return '<!DOCTYPE html>\n' + clone.outerHTML;
+}
+
+if (typeof window !== 'undefined') window.gv2SerializeDom = gv2SerializeDom;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2SerializeDom = gv2SerializeDom;
+
+/**
+ * Tolerant JSON-object extractor for LLM responses (shared by guidev2 plan,
+ * confidence, and verification parsing). Handles ```json fences, leading/trailing
+ * prose, and returns null on malformed input instead of throwing.
+ *
+ * @param {string} content - raw LLM text
+ * @returns {object|null} parsed object, or null if none could be parsed
+ */
+function gv2ExtractJsonObject(content) {
+  if (content == null) return null;
+  let json = String(content).trim()
+    .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+  const m = json.match(/\{[\s\S]*\}/);
+  if (m) json = m[0];
+  try { return JSON.parse(json); } catch (e) { return null; }
+}
+
+if (typeof window !== 'undefined') window.gv2ExtractJsonObject = gv2ExtractJsonObject;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2ExtractJsonObject = gv2ExtractJsonObject;
+
+// Patterns for actions that are sensitive or hard to undo. Used to ESCALATE a step's
+// risk so the agent never auto-performs these in autonomous mode, even if the model
+// reported "low". Defense-in-depth: we trust the model to flag risk, but never rely on
+// it alone for safety.
+const _GV2_RISKY_PATTERN = /\b(delete|remove|permanently|pay|buy|purchase|checkout|place\s+order|order\s+now|transfer|withdraw|deposit|password|log\s?out|sign\s?out|deactivate|unsubscribe|close\s+account|cancel\s+subscription|send|post|publish|submit\s+payment)\b/i;
+
+/**
+ * Decide whether a guide step is safe to auto-perform in autonomous mode.
+ * Returns 'low' (reversible/routine — agent may auto-do) or 'high' (hand to user).
+ *
+ * Effective risk = max(model self-assessment, deterministic heuristic). The heuristic
+ * can only escalate to 'high', never downgrade.
+ *
+ * @param {object} step - parsed step (may include risk, instruction, typeText, element)
+ * @returns {'low'|'high'}
+ */
+function gv2AssessRisk(step) {
+  if (!step) return 'low';
+  if (step.risk === 'high') return 'high';
+  const text = [
+    step.instruction,
+    step.typeText,
+    step.element && step.element.text,
+    step.riskReason
+  ].filter(Boolean).join(' ');
+  if (_GV2_RISKY_PATTERN.test(text)) return 'high';
+  return 'low';
+}
+
+if (typeof window !== 'undefined') window.gv2AssessRisk = gv2AssessRisk;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2AssessRisk = gv2AssessRisk;
+
+/**
+ * Decide what to do after verifying a step (Slice 3 — self-verification).
+ *
+ * @param {'success'|'failed'|'blocked'} status - verification verdict
+ * @param {number} retryCount - how many times this plan step has already been auto-retried
+ * @param {boolean} highRisk - whether the step was high-risk (never auto-retry those)
+ * @returns {'proceed'|'retry'|'pause'}
+ *   proceed: step worked → generate the next step
+ *   retry:   auto-retry the step once (a recoverable failure)
+ *   pause:   stop and ask the user [Retry] [Continue] [Stop]
+ */
+function gv2RetryDecision(status, retryCount, highRisk) {
+  if (status === 'success') return 'proceed';
+  // 'blocked' means a wall the agent can't pass on its own (login, captcha, error) —
+  // retrying won't help, so hand to the user immediately.
+  if (status === 'blocked') return 'pause';
+  // 'failed': auto-retry once, unless the step was high-risk or we already retried.
+  if (highRisk) return 'pause';
+  return (retryCount || 0) < 1 ? 'retry' : 'pause';
+}
+
+if (typeof window !== 'undefined') window.gv2RetryDecision = gv2RetryDecision;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2RetryDecision = gv2RetryDecision;

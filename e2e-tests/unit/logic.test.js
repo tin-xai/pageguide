@@ -282,16 +282,202 @@ describe('Routing Logic (content/functions/main_router.js)', () => {
   // Verify the LLM routing logic parses JSON correctly
   test('routeQuery handles valid JSON response', async () => {
     // Mock LLM response structure for a guidance query
-    const mockResponse = { 
-        content: '```json\n{"handler": "guide", "confidence": 0.9}\n```' 
+    const mockResponse = {
+        content: '```json\n{"handler": "guide", "confidence": 0.9}\n```'
     };
     chrome.runtime.sendMessage.mockResolvedValue(mockResponse);
-    
+
     // Test routing decision for "how to do x"
     const result = await window.routeQuery('how to do x');
-    
+
     // Verify it chose the correct handler ('guide') with high confidence
     expect(result.handler).toBe('guide');
     expect(result.confidence).toBe(0.9);
+  });
+});
+
+// Rewind feature (Slice 1): static DOM snapshot serializer.
+// Verifies that runtime form state (which outerHTML omits) is captured into the
+// snapshot, that scripts are stripped, and that a <base> is injected.
+describe('gv2SerializeDom (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  test('captures runtime values, selected option, contenteditable, strips scripts, injects base', () => {
+    const doc = document.implementation.createHTMLDocument('t');
+    doc.body.innerHTML = [
+      '<input id="t" type="text">',
+      '<input id="c" type="checkbox">',
+      '<textarea id="ta"></textarea>',
+      '<select id="s"><option value="a">A</option><option value="b">B</option></select>',
+      '<div id="ce" contenteditable="true"></div>',
+      '<scr' + 'ipt>alert(1)</scr' + 'ipt>'
+    ].join('');
+    doc.getElementById('t').value = 'hello world';
+    doc.getElementById('c').checked = true;
+    doc.getElementById('ta').value = 'multi line text';
+    doc.getElementById('s').value = 'b';
+    doc.getElementById('ce').innerHTML = '<b>rich content</b>';
+
+    const html = window.gv2SerializeDom(doc.documentElement, 'https://example.com/');
+
+    expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
+    expect(html).toContain('value="hello world"');   // text input value reflected
+    expect(html).toContain('checked');               // checkbox state reflected
+    expect(html).toContain('multi line text');        // textarea content reflected
+    expect(html).toMatch(/<option value="b"[^>]*selected/); // selected option reflected
+    expect(html).toContain('<b>rich content</b>');    // contenteditable content reflected
+    expect(html).not.toContain('alert(1)');           // scripts stripped
+    expect(html).toContain('<base href="https://example.com/"'); // base injected
+  });
+
+  test('never serializes password field values', () => {
+    const doc = document.implementation.createHTMLDocument('t');
+    doc.body.innerHTML = '<input id="p" type="password">';
+    doc.getElementById('p').value = 'secret-password-123';
+    const html = window.gv2SerializeDom(doc.documentElement, 'https://example.com/');
+    expect(html).not.toContain('secret-password-123');
+  });
+});
+
+// Plan/confidence (Slice 2): tolerant JSON-object extractor used for plan,
+// confidence, and verification parsing.
+describe('gv2ExtractJsonObject (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  test('parses a ```json fenced object', () => {
+    const out = window.gv2ExtractJsonObject('```json\n{"plan":["a","b","c"]}\n```');
+    expect(out).toEqual({ plan: ['a', 'b', 'c'] });
+  });
+
+  test('extracts an object embedded in surrounding prose', () => {
+    const out = window.gv2ExtractJsonObject('Sure! Here is the step:\n{"step":2,"confidence":0.8,"planStep":1}\nHope that helps.');
+    expect(out.step).toBe(2);
+    expect(out.confidence).toBe(0.8);
+    expect(out.planStep).toBe(1);
+  });
+
+  test('returns null for malformed JSON', () => {
+    expect(window.gv2ExtractJsonObject('not json at all')).toBeNull();
+    expect(window.gv2ExtractJsonObject('{ broken: ')).toBeNull();
+    expect(window.gv2ExtractJsonObject(null)).toBeNull();
+  });
+});
+
+// Autonomous mode (mode toggle): risk assessment that gates auto-execution.
+describe('gv2AssessRisk (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  test('honors model high-risk self-assessment', () => {
+    expect(window.gv2AssessRisk({ risk: 'high', instruction: 'Open the menu' })).toBe('high');
+  });
+
+  test('escalates obviously destructive/sensitive actions even if model says low', () => {
+    expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Delete your account' })).toBe('high');
+    expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Click Pay now' })).toBe('high');
+    expect(window.gv2AssessRisk({ risk: 'low', action: 'type', typeText: 'hunter2', element: { text: 'Password' } })).toBe('high');
+    expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Send the message' })).toBe('high');
+  });
+
+  test('treats reversible/routine actions as low risk', () => {
+    expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Open the Settings menu' })).toBe('low');
+    expect(window.gv2AssessRisk({ instruction: 'Toggle dark mode on' })).toBe('low');
+    expect(window.gv2AssessRisk(null)).toBe('low');
+  });
+});
+
+// Self-verification (Slice 3): the retry/pause decision state machine.
+describe('gv2RetryDecision (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  test('success proceeds', () => {
+    expect(window.gv2RetryDecision('success', 0, false)).toBe('proceed');
+    expect(window.gv2RetryDecision('success', 3, true)).toBe('proceed');
+  });
+
+  test('first failure auto-retries, second pauses', () => {
+    expect(window.gv2RetryDecision('failed', 0, false)).toBe('retry');
+    expect(window.gv2RetryDecision('failed', 1, false)).toBe('pause');
+  });
+
+  test('high-risk failures never auto-retry', () => {
+    expect(window.gv2RetryDecision('failed', 0, true)).toBe('pause');
+  });
+
+  test('blocked always pauses (needs the user)', () => {
+    expect(window.gv2RetryDecision('blocked', 0, false)).toBe('pause');
+  });
+});
+
+// Rewind feature (Slice 1): chrome.storage.local-backed record store.
+describe('RewindStore (rewind/rewind_store.js)', () => {
+  let mem;
+  beforeEach(() => {
+    mem = {};
+    window.chrome = {
+      storage: {
+        local: {
+          get: (keys, cb) => {
+            let res = {};
+            if (keys == null) res = { ...mem };
+            else if (typeof keys === 'string') { if (keys in mem) res[keys] = mem[keys]; }
+            else if (Array.isArray(keys)) keys.forEach(k => { if (k in mem) res[k] = mem[k]; });
+            cb(res);
+          },
+          set: (obj, cb) => { Object.assign(mem, obj); cb && cb(); },
+          remove: (keys, cb) => { (Array.isArray(keys) ? keys : [keys]).forEach(k => delete mem[k]); cb && cb(); }
+        }
+      }
+    };
+    loadScript('rewind/rewind_store.js');
+  });
+
+  test('stores records and builds a step index', async () => {
+    await window.rewindStartSession('s1', 'my goal');
+    await window.rewindPutRecord({ sessionId: 's1', step: 1, instruction: 'first', screenshot: 'IMG', domSnapshot: '<html></html>' });
+    await window.rewindPutRecord({ sessionId: 's1', step: 2, instruction: 'second' });
+
+    const idx = await window.rewindGetIndex();
+    expect(idx.sessionId).toBe('s1');
+    expect(idx.goal).toBe('my goal');
+    expect(idx.steps.map(s => s.step)).toEqual([1, 2]);
+
+    const rec = await window.rewindGetRecord('s1', 1);
+    expect(rec.instruction).toBe('first');
+    expect(rec.screenshot).toBe('IMG');
+  });
+
+  test('overwriting a step updates its meta without duplicating', async () => {
+    await window.rewindStartSession('s1', 'g');
+    await window.rewindPutRecord({ sessionId: 's1', step: 1, instruction: 'before' });
+    await window.rewindPutRecord({ sessionId: 's1', step: 1, instruction: 'after' });
+    const idx = await window.rewindGetIndex();
+    expect(idx.steps.length).toBe(1);
+    expect(idx.steps[0].instruction).toBe('after');
+  });
+
+  test('clear removes index and all records', async () => {
+    await window.rewindStartSession('s1', 'g');
+    await window.rewindPutRecord({ sessionId: 's1', step: 1, instruction: 'a' });
+    await window.rewindClear();
+    expect(await window.rewindGetIndex()).toBeNull();
+    expect(await window.rewindGetRecord('s1', 1)).toBeNull();
+  });
+
+  test('truncateAfter drops later steps from records and index', async () => {
+    await window.rewindStartSession('s1', 'g');
+    for (let i = 1; i <= 4; i++) await window.rewindPutRecord({ sessionId: 's1', step: i, instruction: 's' + i });
+    await window.rewindTruncateAfter('s1', 2);
+    const idx = await window.rewindGetIndex();
+    expect(idx.steps.map(s => s.step)).toEqual([1, 2]);
+    expect(await window.rewindGetRecord('s1', 2)).not.toBeNull();
+    expect(await window.rewindGetRecord('s1', 3)).toBeNull();
   });
 });

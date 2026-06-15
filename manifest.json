@@ -6,6 +6,7 @@
   "permissions": [
     "activeTab",
     "storage",
+    "unlimitedStorage",
     "scripting",
     "tabs",
     "sidePanel",
@@ -35,6 +36,7 @@
       "js": [
         "content/prompts.js",
         "content/utils.js",
+        "rewind/rewind_store.js",
         "content/functions/scroll.js",
         "content/functions/capture_screenshot.js",
         "content/functions/highlight.js",
@@ -60,7 +62,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json"],
+      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json", "rewind/*"],
       "matches": ["<all_urls>"]
     }
   ]

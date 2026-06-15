@@ -50,6 +50,7 @@ const CONFIG = {
 const CONTENT_SCRIPTS = [
   'content/prompts.js',
   'content/utils.js',
+  'rewind/rewind_store.js',
   'content/functions/capture_screenshot.js',
   'content/functions/highlight.js',
   'content/functions/highlight_pdf.js',

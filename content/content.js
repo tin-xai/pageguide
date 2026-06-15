@@ -49,6 +49,8 @@ async function handleMessage(request) {
       // Reset guidev2 state
       if (typeof gv2StopGuide === 'function') gv2StopGuide();
       else if (window._guidev2) window._guidev2.active = false;
+      // Clear rewind capture records (🧹 Clear / New Chat ends the session)
+      if (typeof rewindClear === 'function') { try { rewindClear(); } catch (e) {} }
       // Stop auto-hide session
       if (typeof stopAutoHide === 'function') stopAutoHide();
       // Clear uploaded image
@@ -83,6 +85,14 @@ async function handleMessage(request) {
         gv2NextStep();
         return { success: true };
       }
+      return { success: false, error: 'Guide not active' };
+
+    case 'guideVerifyRetry':
+      if (typeof gv2VerifyRetry === 'function') { gv2VerifyRetry(); return { success: true }; }
+      return { success: false, error: 'Guide not active' };
+
+    case 'guideVerifyContinue':
+      if (typeof gv2VerifyContinue === 'function') { gv2VerifyContinue(); return { success: true }; }
       return { success: false, error: 'Guide not active' };
 
     case 'continueGuidance':

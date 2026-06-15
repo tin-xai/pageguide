@@ -30,8 +30,23 @@ Return JSON only:
   "action": "click" | "type" | "done",
   "typeText": "text to type (only when action=type)",
   "isLastStep": false,
-  "nextStepHint": "What will happen after this step"
+  "nextStepHint": "What will happen after this step",
+  "confidence": 0.0,
+  "planStep": N,
+  "risk": "low" | "high",
+  "riskReason": "short reason for the risk level"
 }
+
+confidence: 0.0–1.0 — how sure you are that THIS step and the chosen element are correct
+  for the user's goal on the current page. Be honest: use a low value (< 0.5) when the
+  target is ambiguous, not clearly visible, or you are guessing.
+planStep: the number of the PLAN item (from the === PLAN === section, if provided) that
+  this action works toward. Omit or repeat the same number across multiple concrete steps.
+risk: "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling
+  a setting that can be undone, navigating) — safe for the agent to perform automatically.
+  "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or
+  removing data, sending/posting/publishing, or anything entering a password. High-risk
+  steps should be left for the user to perform.
 
 RULES:
 1. ONE step at a time — never list multiple things to do
@@ -91,6 +106,52 @@ function _gv2ShowIndicator(text = 'Agent thinking…') {
 function _gv2HideIndicator() {
   const el = document.getElementById(_GV2_INDICATOR_ID);
   if (el) el.classList.remove('gv2-visible');
+}
+
+// ===== AUTO-MODE OVERLAY + TAKE-CONTROL BUTTON (Slice 4) =====
+// A light-yellow, click-through tint over the page signals that the agent is acting
+// autonomously. A floating "Take control" button (which IS clickable) lets the user
+// reclaim control at any moment.
+
+const _GV2_AUTO_OVERLAY_ID = 'pageguide-gv2-auto';
+let _gv2AutoOverlayCss = false;
+
+function gv2ShowAutoOverlay() {
+  if (!_gv2AutoOverlayCss) {
+    _gv2AutoOverlayCss = true;
+    const style = document.createElement('style');
+    style.id = 'pageguide-gv2-auto-css';
+    style.textContent = `
+#${_GV2_AUTO_OVERLAY_ID}{position:fixed;inset:0;z-index:2147483646;pointer-events:none;background:rgba(255,221,87,.10);box-shadow:inset 0 0 0 3px rgba(255,200,0,.45);opacity:0;transition:opacity .2s ease}
+#${_GV2_AUTO_OVERLAY_ID}.on{opacity:1}
+#${_GV2_AUTO_OVERLAY_ID} .gv2-take{position:absolute;top:16px;left:50%;transform:translateX(-50%);pointer-events:auto;display:flex;align-items:center;gap:8px;background:rgba(20,20,30,.92);color:#ffd166;border:1px solid rgba(255,209,102,.5);border-radius:999px;padding:9px 16px;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;box-shadow:0 4px 22px rgba(0,0,0,.45)}
+#${_GV2_AUTO_OVERLAY_ID} .gv2-take:hover{background:rgba(44,44,60,.96);border-color:rgba(255,209,102,.8)}
+#${_GV2_AUTO_OVERLAY_ID} .gv2-take .gv2-dot{width:8px;height:8px;border-radius:50%;background:#ffd166;animation:gv2autopulse 1.2s ease-in-out infinite;flex-shrink:0}
+@keyframes gv2autopulse{0%,100%{opacity:1}50%{opacity:.25}}`;
+    document.head.appendChild(style);
+  }
+  let el = document.getElementById(_GV2_AUTO_OVERLAY_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = _GV2_AUTO_OVERLAY_ID;
+    const btn = document.createElement('button');
+    btn.className = 'gv2-take';
+    btn.innerHTML = '<span class="gv2-dot"></span><span>🤖 Agent is working — ✋ Take control</span>';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof gv2TakeControl === 'function') gv2TakeControl();
+    });
+    el.appendChild(btn);
+    document.body.appendChild(el);
+  }
+  el.getBoundingClientRect(); // force reflow so the fade plays
+  el.classList.add('on');
+}
+
+function gv2HideAutoOverlay() {
+  const el = document.getElementById(_GV2_AUTO_OVERLAY_ID);
+  if (el) el.classList.remove('on');
 }
 
 // ===== TUTORIAL REFERENCE LOOKUP =====
@@ -192,9 +253,143 @@ async function _gv2FindTutorial(query, pageUrl) {
   return _gv2LlmPickTutorial(query, candidates);
 }
 
+// ===== PLAN GENERATION (Slice 2) =====
+
+/**
+ * Generate a short high-level plan (3–6 steps) and title for the user's goal.
+ * Best-effort: returns { title, plan } and never blocks guidance.
+ */
+async function gv2GeneratePlan(goal, tutorialRef) {
+  try {
+    let seed = '';
+    if (tutorialRef && tutorialRef.content && Array.isArray(tutorialRef.content.steps)) {
+      seed = `\n\nA verified reference flow exists for a similar task on ${tutorialRef.website}:\n`
+        + tutorialRef.content.steps.join('\n')
+        + `\nUse it to inform the plan, adapting to the user's actual goal.`;
+    }
+    const response = await safeSendMessage({
+      action: 'callRouterLLM',
+      systemPrompt: `You are a planning assistant for an interactive web guide. Given the user's goal, produce a short title and a SHORT high-level plan of 3 to 6 steps describing the sequence of actions to accomplish it on a website. The title should be 3 to 6 words. Each step is a brief imperative phrase (e.g. "Open the Settings menu", "Turn off the toggle"). Do not include signing in unless clearly required. Return JSON only: {"title":"short title","plan":["step 1","step 2",...]}`,
+      messages: [{ role: 'user', content: `USER GOAL: "${goal}"${seed}` }]
+    });
+
+    if (!response || !response.content) return { title: '', plan: [] };
+    const parsed = (typeof gv2ExtractJsonObject === 'function')
+      ? gv2ExtractJsonObject(response.content)
+      : null;
+    const arr = parsed && Array.isArray(parsed.plan) ? parsed.plan : [];
+    const plan = arr
+      .filter(s => s != null && String(s).trim())
+      .slice(0, 8)
+      .map((g, i) => ({ n: i + 1, goal: String(g).trim() }));
+    return {
+      title: parsed?.title ? String(parsed.title).trim().slice(0, 80) : '',
+      plan
+    };
+  } catch (e) {
+    console.warn('[guidev2] plan generation failed:', e.message);
+    return { title: '', plan: [] };
+  }
+}
+
+// ===== STEP VERIFICATION (Slice 3) =====
+
+/**
+ * Check whether the previously-performed step achieved its intended outcome, using the
+ * current page state. Uses the cheap router LLM. Fails OPEN — any error returns
+ * 'success' so verification never blocks guidance.
+ *
+ * @param {object} prev - { instruction, nextStepHint } of the step just performed
+ * @param {object} pageIndex - fresh index of the resulting page (after-state)
+ * @returns {Promise<{status:'success'|'failed'|'blocked', reason:string}>}
+ */
+async function gv2VerifyStep(prev, pageIndex) {
+  try {
+    const response = await safeSendMessage({
+      action: 'callRouterLLM',
+      systemPrompt: `You verify whether a step in an interactive web guide succeeded, given the step performed and the resulting page. Return JSON only: {"status":"success"|"failed"|"blocked","reason":"brief reason"}.
+- "success": the page now reflects the step's intended outcome (or plausibly progressed toward it).
+- "failed": the page did not change as expected (e.g. the menu didn't open, nothing happened).
+- "blocked": further progress needs the user (a login wall, captcha, permission prompt, or an error message is shown).
+Be lenient — if the outcome was plausibly achieved, answer success.`,
+      messages: [{
+        role: 'user',
+        content: `STEP PERFORMED: ${prev.instruction}
+EXPECTED RESULT: ${prev.nextStepHint || '(progress toward the goal)'}
+USER GOAL: ${window._guidev2 ? window._guidev2.question : ''}
+
+CURRENT URL: ${window.location.href}
+
+=== PAGE NOW (interactive elements) ===
+${pageIndex && pageIndex.indexText ? pageIndex.indexText : '(none)'}`
+      }]
+    });
+
+    const parsed = (typeof gv2ExtractJsonObject === 'function')
+      ? gv2ExtractJsonObject(response && response.content) : null;
+    if (!parsed || !parsed.status) return { status: 'success', reason: '' };
+    const status = ['success', 'failed', 'blocked'].includes(parsed.status) ? parsed.status : 'success';
+    return { status, reason: parsed.reason || '' };
+  } catch (e) {
+    console.warn('[guidev2] verify failed (failing open):', e.message);
+    return { status: 'success', reason: '' };
+  }
+}
+
+/**
+ * Verify the pending (just-performed) step and decide what to do next:
+ * returns 'proceed' | 'retry' | 'pause'. Records the verdict, updates the timeline,
+ * and (on pause) notifies the panel to show [Retry] [Continue] [Stop].
+ */
+async function _gv2VerifyPending(pageIndex) {
+  const g = window._guidev2;
+  const pv = g._pendingVerify;
+  g._pendingVerify = null;
+  if (!pv) return 'proceed';
+
+  _gv2ShowIndicator('Checking the last step…');
+  const verdict = await gv2VerifyStep(pv, pageIndex);
+
+  // Persist verdict onto the step's rewind record and update its timeline dot.
+  if (g.captureEnabled && typeof rewindPatchRecord === 'function') {
+    try { rewindPatchRecord(g.sessionId, pv.step, { verification: verdict }); } catch (e) {}
+  }
+  try {
+    chrome.runtime.sendMessage({
+      action: 'guideStepVerify', sessionId: g.sessionId, step: pv.step,
+      status: verdict.status, reason: verdict.reason
+    });
+  } catch (e) {}
+
+  g.retryCounts = g.retryCounts || {};
+  const key = pv.planStep || pv.step;
+  const count = g.retryCounts[key] || 0;
+  const decision = (typeof gv2RetryDecision === 'function')
+    ? gv2RetryDecision(verdict.status, count, pv.highRisk) : 'proceed';
+
+  if (decision === 'retry') {
+    g.retryCounts[key] = count + 1;
+    g._retryNote = `The previous step ("${pv.instruction}") did not appear to work: ${verdict.reason || 'no visible change'}. Try a DIFFERENT way to achieve the same result.`;
+    console.log('[guidev2] Verification failed — auto-retrying step', pv.step);
+    return 'retry';
+  }
+  if (decision === 'pause') {
+    g._lastFailReason = verdict.reason || '';
+    gv2HideAutoOverlay(); // handing control to the user
+    try {
+      chrome.runtime.sendMessage({
+        action: 'guideVerifyFail', step: pv.step, status: verdict.status, reason: verdict.reason || ''
+      });
+    } catch (e) {}
+    console.log('[guidev2] Verification', verdict.status, '— pausing for user on step', pv.step);
+    return 'pause';
+  }
+  return 'proceed';
+}
+
 // ===== IN-PAGE STATE =====
 
-window._guidev2 = { active: false, question: '', previousSteps: [] };
+window._guidev2 = { active: false, question: '', previousSteps: [], plan: [], planTitle: '', currentPlanStep: 1 };
 
 // Prevent concurrent resume/generate calls
 let _guidev2Resuming = false;
@@ -215,6 +410,14 @@ async function gv2SaveFallback(extra = {}) {
         active: s.active,
         question: s.question,
         previousSteps: s.previousSteps,
+        sessionId: s.sessionId,
+        captureEnabled: s.captureEnabled,
+        tutorialRef: s.tutorialRef,
+        tutorialReason: s.tutorialReason,
+        plan: s.plan,
+        planTitle: s.planTitle,
+        currentPlanStep: s.currentPlanStep,
+        autoMode: s.autoMode,
         lastUrl: window.location.href,
         timestamp: Date.now(),
         ...extra
@@ -334,7 +537,15 @@ async function _gv2ResumeFromState(state) {
   window._guidev2 = {
     active: true,
     question: state.question,
-    previousSteps: state.previousSteps || []
+    previousSteps: state.previousSteps || [],
+    sessionId: state.sessionId,
+    captureEnabled: state.captureEnabled,
+    tutorialRef: state.tutorialRef || null,
+    tutorialReason: state.tutorialReason || null,
+    plan: state.plan || [],
+    planTitle: state.planTitle || '',
+    currentPlanStep: state.currentPlanStep || 1,
+    autoMode: state.autoMode === true
   };
 
   console.log('[guidev2] Resuming on new page — next step will be',
@@ -389,7 +600,18 @@ async function _gv2SetState(pendingResume) {
     previousSteps: s.previousSteps,
     lastUrl: window.location.href,
     timestamp: Date.now(),
-    pendingResume
+    pendingResume,
+    // Rewind (Slice 1): carry capture session across navigations.
+    sessionId: s.sessionId,
+    captureEnabled: s.captureEnabled,
+    tutorialRef: s.tutorialRef,
+    tutorialReason: s.tutorialReason,
+    // Plan (Slice 2): carry the plan + progress pointer across navigations.
+    plan: s.plan,
+    planTitle: s.planTitle,
+    currentPlanStep: s.currentPlanStep,
+    // Mode: carry Manual/Auto across navigations.
+    autoMode: s.autoMode
   };
 
   // Primary: tell service worker (survives page navigation if SW stays alive)
@@ -406,12 +628,145 @@ async function _gv2SetState(pendingResume) {
 function _gv2ClearState() {
   window._guidev2.active = false;
   _gv2HideIndicator();
+  gv2HideAutoOverlay();
 
   // Clear from SW
   try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
 
   // Clear session storage
   gv2ClearFallback();
+}
+
+// ===== REWIND CAPTURE (Slice 1) =====
+
+const _GV2_CAPTURE_PREF_KEY = 'rewindCaptureEnabled';
+
+/**
+ * Read the user's "capture steps for rewind" preference (default ON).
+ */
+async function _gv2IsCaptureEnabled() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_CAPTURE_PREF_KEY);
+    // Default to enabled unless explicitly turned off.
+    return r[_GV2_CAPTURE_PREF_KEY] !== false;
+  } catch (e) {
+    return true;
+  }
+}
+
+// ===== AUTONOMOUS MODE (Manual vs Auto) =====
+// Manual (default): the user clicks each highlighted step themselves.
+// Auto: the agent performs reversible/low-risk steps automatically and hands control
+//       back to the user for sensitive/high-risk ones.
+
+const _GV2_AUTOMODE_PREF_KEY = 'guideAutoMode';
+
+async function _gv2IsAutoMode() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_AUTOMODE_PREF_KEY);
+    return r[_GV2_AUTOMODE_PREF_KEY] === true; // default false (manual)
+  } catch (e) {
+    return false;
+  }
+}
+
+// Keep the live session's mode in sync when the user toggles it mid-session.
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[_GV2_AUTOMODE_PREF_KEY] && window._guidev2) {
+      const on = changes[_GV2_AUTOMODE_PREF_KEY].newValue === true;
+      window._guidev2.autoMode = on;
+      // Turning Auto off mid-session: drop the overlay and any pending auto-click.
+      if (!on) {
+        if (window._guidev2._autoClickTimer) {
+          clearTimeout(window._guidev2._autoClickTimer);
+          window._guidev2._autoClickTimer = null;
+        }
+        if (typeof gv2HideAutoOverlay === 'function') gv2HideAutoOverlay();
+      }
+    }
+  });
+} catch (e) { /* storage events unavailable */ }
+
+/**
+ * Whether the agent should auto-perform this step (Auto mode + low effective risk).
+ */
+function _gv2ShouldAutoExecute(step) {
+  const g = window._guidev2;
+  if (!g || !g.autoMode) return false;
+  const risk = (typeof gv2AssessRisk === 'function') ? gv2AssessRisk(step) : 'low';
+  return risk === 'low';
+}
+
+/**
+ * Capture a rewind record for the current step: viewport screenshot + static DOM
+ * snapshot + the agent's reasoning. Persisted to the rewind store and announced to
+ * the side panel (lightweight meta only — the heavy payload is loaded lazily on
+ * inspect). Fire-and-forget: never blocks or breaks the guidance flow.
+ *
+ * @param {object} data - reasoning fields for the step (see record shape in plan)
+ */
+async function gv2CaptureStepRecord(data) {
+  const g = window._guidev2;
+  if (!g || !g.active || !g.captureEnabled || !g.sessionId) return;
+  if (typeof rewindPutRecord !== 'function') return;
+
+  // Stash so a later re-capture (e.g. after auto-type fills a field) can reuse the
+  // same reasoning fields and only refresh the screenshot/DOM snapshot.
+  g._lastCaptureData = data;
+
+  try {
+    const startedAt = g._stepStartedAt || Date.now();
+    let screenshot = null;
+    try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
+    catch (e) { /* screenshot is best-effort */ }
+
+    let domSnapshot = '';
+    try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
+    catch (e) { console.warn('[guidev2] DOM snapshot failed:', e); }
+
+    const record = {
+      sessionId: g.sessionId,
+      step: data.step,
+      planStep: data.planStep != null ? data.planStep : data.step,
+      timestamp: Date.now(),
+      url: window.location.href,
+      instruction: data.instruction || '',
+      action: data.action || null,
+      isLastStep: !!data.isLastStep,
+      nextStepHint: data.nextStepHint || '',
+      target: data.target || null,
+      confidence: data.confidence != null ? data.confidence : null,
+      durationMs: Date.now() - startedAt,
+      screenshot: screenshot || null,
+      domSnapshot,
+      tutorialMatch: data.tutorialMatch || null,
+      rawLlmJson: data.rawLlmJson || ''
+    };
+
+    await rewindPutRecord(record);
+
+    // Tell the panel a step record is ready (lightweight — no screenshot/DOM payload).
+    try {
+      chrome.runtime.sendMessage({
+        action: 'guideStepRecord',
+        meta: {
+          sessionId: record.sessionId,
+          step: record.step,
+          planStep: record.planStep,
+          instruction: record.instruction,
+          action: record.action,
+          isLastStep: record.isLastStep,
+          url: record.url,
+          timestamp: record.timestamp,
+          durationMs: record.durationMs,
+          confidence: record.confidence
+        }
+      });
+    } catch (e) { /* panel may be closed */ }
+  } catch (e) {
+    console.warn('[guidev2] gv2CaptureStepRecord failed:', e);
+  }
 }
 
 // ===== CORE GUIDANCE =====
@@ -424,13 +779,43 @@ async function _handleStepByStepGuideV2(question) {
   // Look up a pre-verified tutorial ONCE at the start. Result is cached in
   // window._guidev2.tutorialRef so intermediate steps reuse it for free.
   const match = await _gv2FindTutorial(question, window.location.href);
+
+  // Rewind (Slice 1): start a fresh capture session. sessionId rides along in the
+  // persisted state so the resumed page on the next navigation keeps writing to it.
+  const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  const captureEnabled = await _gv2IsCaptureEnabled();
+  const autoMode = await _gv2IsAutoMode();
+
   window._guidev2 = {
     active: true,
     question,
     previousSteps: [],
     tutorialRef: match?.tutorial || null,
-    tutorialReason: match?.reason || null
+    tutorialReason: match?.reason || null,
+    sessionId,
+    captureEnabled,
+    autoMode,
+    plan: [],
+    planTitle: '',
+    currentPlanStep: 1
   };
+
+  if (captureEnabled && typeof rewindStartSession === 'function') {
+    try { await rewindStartSession(sessionId, question); } catch (e) { /* non-fatal */ }
+  }
+
+  // Plan (Slice 2): draft a short high-level outline before the first step so the
+  // user sees structure and the step LLM can locate itself. Best-effort.
+  try {
+    const generated = await gv2GeneratePlan(question, match?.tutorial || null);
+    const plan = Array.isArray(generated) ? generated : (generated?.plan || []);
+    const title = Array.isArray(generated) ? '' : (generated?.title || '');
+    window._guidev2.plan = plan;
+    window._guidev2.planTitle = title;
+    if (plan.length) {
+      try { chrome.runtime.sendMessage({ action: 'guidePlan', title, plan, total: plan.length }); } catch (e) {}
+    }
+  } catch (e) { /* non-fatal */ }
 
   // Not pending resume on first step — we're already on the right page
   await _gv2SetState(false);
@@ -446,7 +831,12 @@ async function gv2GenerateNextStep() {
   const g = window._guidev2;
   if (!g.active || _guidev2Stopped) return null;
 
+  // Rewind: mark when work on this step began (used for durationMs in the record).
+  g._stepStartedAt = Date.now();
+
   _gv2ShowIndicator('Agent thinking…');
+  // Auto mode: show the "agent is driving" overlay + Take-control button while working.
+  if (g.autoMode) gv2ShowAutoOverlay();
 
   // Retry loop in case DOM is sparse (page still rendering)
   // interactiveOnly=true: guide only needs clickable/typeable elements, not headings,
@@ -459,6 +849,15 @@ async function gv2GenerateNextStep() {
     console.log('[guidev2] Sparse DOM (', pageIndex.count, 'el), retrying...');
     await new Promise(r => setTimeout(r, 700));
   }
+
+  // Verification (Slice 3): before generating the next step, check whether the previous
+  // step actually worked. May auto-retry once or pause to ask the user.
+  if (g._pendingVerify) {
+    const outcome = await _gv2VerifyPending(pageIndex);
+    if (outcome === 'pause') { _gv2HideIndicator(); return null; }
+    // 'retry' falls through to generation with g._retryNote set; 'proceed' is normal.
+  }
+  if (!g.active || _guidev2Stopped) return null;
 
   const pageBg = getPageBackground();
   if (typeof showSomIfEnabled === 'function') await showSomIfEnabled(pageIndex);
@@ -476,6 +875,24 @@ Use these as a reference guide but map each step to the actual elements visible 
 `;
   }
 
+  // Plan (Slice 2): give the LLM the high-level outline + where it currently is so it
+  // can self-locate and report the planStep each concrete action works toward.
+  let planSection = '';
+  if (g.plan && g.plan.length) {
+    planSection = `\n=== PLAN ===
+${g.plan.map(p => `${p.n}. ${p.goal}`).join('\n')}
+Current plan step: ${g.currentPlanStep || 1}
+`;
+  }
+
+  // Verification retry (Slice 3): tell the LLM the previous attempt failed so it tries
+  // a different approach. Consumed once.
+  let retrySection = '';
+  if (g._retryNote) {
+    retrySection = `\n=== RETRY NOTICE ===\n${g._retryNote}\n`;
+    g._retryNote = null;
+  }
+
   try {
     const response = await safeSendMessage({
       action: 'callLLM',
@@ -490,7 +907,7 @@ ${pageIndex.indexText}
 
 === USER GOAL ===
 ${g.question}
-${tutorialSection}
+${tutorialSection}${planSection}${retrySection}
 === CURRENT STEP ===
 Step ${stepNumber}
 
@@ -599,12 +1016,18 @@ function gv2FindElementByText(searchText) {
 async function gv2ProcessResponse(content) {
   const g = window._guidev2;
   try {
-    let json = content.trim()
-      .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
-    const m = json.match(/\{[\s\S]*\}/);
-    if (m) json = m[0];
-    const step = JSON.parse(json);
+    const step = (typeof gv2ExtractJsonObject === 'function')
+      ? gv2ExtractJsonObject(content)
+      : JSON.parse(content);
+    if (!step) throw new Error('Could not parse step JSON');
     console.log('[guidev2] Parsed step:', step);
+
+    // Plan (Slice 2): normalize confidence to 0..1 and advance the plan pointer.
+    const confidence = (typeof step.confidence === 'number' && isFinite(step.confidence))
+      ? Math.max(0, Math.min(1, step.confidence)) : null;
+    if (typeof step.planStep === 'number' && step.planStep >= 1) {
+      g.currentPlanStep = step.planStep;
+    }
 
     // Clear previous highlights
     if (typeof clearHighlights === 'function') clearHighlights();
@@ -649,6 +1072,20 @@ async function gv2ProcessResponse(content) {
     const isLast = !!step.isLastStep;
     g.previousSteps.push(`Step ${step.step}: ${step.instruction}${isLast ? ' ✓' : ''}`);
 
+    // Verification (Slice 3): mark this step to be verified at the start of the next
+    // cycle (skip the final step — there is nothing after it to check).
+    if (!isLast) {
+      g._pendingVerify = {
+        step: step.step,
+        planStep: g.currentPlanStep,
+        instruction: step.instruction,
+        nextStepHint: step.nextStepHint || '',
+        highRisk: (typeof gv2AssessRisk === 'function') ? gv2AssessRisk(step) === 'high' : false
+      };
+    } else {
+      g._pendingVerify = null;
+    }
+
     if (isLast) {
       _gv2ClearState();
     } else if (step.action === 'click') {
@@ -657,6 +1094,29 @@ async function gv2ProcessResponse(content) {
       // can possibly click — no race condition with fast navigation.
       await _gv2SetState(true);
       _gv2SetupClickListener();
+
+      // Autonomous mode: if this step is reversible/low-risk, perform the click for
+      // the user (reusing the same path as the "Next →" button). Otherwise leave the
+      // manual click listener in place and tell the user we handed control back.
+      if (_gv2ShouldAutoExecute(step)) {
+        console.log('[guidev2] Auto mode: auto-performing low-risk click step', step.step);
+        // Store the timer so Take-control can cancel it before it fires.
+        g._autoClickTimer = setTimeout(() => {
+          g._autoClickTimer = null;
+          if (typeof gv2NextStep === 'function') gv2NextStep();
+        }, 900);
+      } else if (g.autoMode) {
+        // High-risk step in auto mode → hand control back to the user for this one.
+        gv2HideAutoOverlay();
+        const reason = step.riskReason ? ` (${step.riskReason})` : '';
+        try {
+          chrome.runtime.sendMessage({
+            action: 'addMessage',
+            content: `🖐 This step looks sensitive${reason} — I'll let you do this one. Click the highlighted element when ready.`,
+            type: 'info'
+          });
+        } catch (e) {}
+      }
     } else if (step.action === 'type') {
       await _gv2SetState(false);
       setTimeout(() => _gv2AutoType(step), 200);
@@ -666,13 +1126,38 @@ async function gv2ProcessResponse(content) {
     }
 
     _gv2HideIndicator();
+
+    // Rewind (Slice 1): capture this step (screenshot + DOM snapshot + reasoning).
+    // Fire-and-forget so it never delays showing the step to the user.
+    gv2CaptureStepRecord({
+      step: step.step,
+      planStep: (typeof step.planStep === 'number' && step.planStep >= 1) ? step.planStep : (g.currentPlanStep || step.step),
+      confidence,
+      instruction: step.instruction,
+      action: step.action,
+      isLastStep: isLast,
+      nextStepHint: step.nextStepHint,
+      target: { text: step.element?.text || null, llmIndex: step.element?.index ?? null },
+      rawLlmJson: content,
+      tutorialMatch: (step.step === 1 && g.tutorialRef) ? {
+        task: g.tutorialRef.task,
+        website: g.tutorialRef.website,
+        steps: g.tutorialRef.content.steps,
+        reason: g.tutorialReason
+      } : null
+    });
+
     return {
       success: true,
       answer: step.instruction,
       step: step.step,
       isLastStep: isLast,
       nextStepHint: step.nextStepHint,
+      targetText: step.element?.text || null,
       action: step.action,
+      confidence,
+      planStep: g.currentPlanStep,
+      totalSteps: Array.isArray(g.plan) ? g.plan.length : 0,
       highlightCount,
       hasHighlights: highlightCount > 0,
       isGuide: true
@@ -876,6 +1361,21 @@ async function _gv2AutoType(step) {
     }
   }
 
+  // Rewind: re-capture this step now that the field is filled, overwriting the
+  // pre-fill snapshot so the inspector shows the typed value. Reuse the stashed
+  // reasoning fields so rawLlmJson/tutorialMatch are preserved.
+  try {
+    const reuse = (window._guidev2 && window._guidev2._lastCaptureData) || {
+      step: step.step,
+      instruction: step.instruction,
+      action: step.action,
+      isLastStep: !!step.isLastStep,
+      nextStepHint: step.nextStepHint,
+      target: { text: step.element?.text || null, llmIndex: step.element?.index ?? null }
+    };
+    await gv2CaptureStepRecord(reuse);
+  } catch (e) { /* non-fatal */ }
+
   console.log('[guidev2] Auto-type done, generating next step...');
   if (_guidev2Resuming) return;
   _guidev2Resuming = true;
@@ -1015,9 +1515,78 @@ window.gv2StopGuide = function () {
   _guidev2Stopped = true;
   _guidev2Resuming = false;
   _guidev2WaitingForClick = false;
+  if (window._guidev2 && window._guidev2._autoClickTimer) {
+    clearTimeout(window._guidev2._autoClickTimer);
+    window._guidev2._autoClickTimer = null;
+  }
   _gv2RemoveClickListeners();
   _gv2HideIndicator();
+  gv2HideAutoOverlay();
   _gv2ClearState();
+};
+
+// ===== VERIFICATION USER CHOICES (Slice 3) =====
+// Called from the panel's [Retry] / [Continue] buttons after a verification pause.
+
+async function _gv2GenerateAndDispatch() {
+  if (_guidev2Resuming) return;
+  _guidev2Resuming = true;
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+  try {
+    const result = await gv2GenerateNextStep();
+    if (result && result.success !== false) {
+      try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+    } else {
+      try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+    }
+  } finally {
+    _guidev2Resuming = false;
+  }
+}
+
+// Retry: re-attempt the same goal, telling the LLM the prior attempt failed.
+window.gv2VerifyRetry = function () {
+  const g = window._guidev2;
+  if (!g || !g.active) return;
+  g._pendingVerify = null; // already consumed at pause time
+  g._retryNote = g._lastFailReason
+    ? `The previous attempt failed: ${g._lastFailReason}. Try a DIFFERENT approach to achieve the same result.`
+    : 'The previous attempt may not have worked. Try a different approach.';
+  return _gv2GenerateAndDispatch();
+};
+
+// Continue: accept the result and move on to the next step.
+window.gv2VerifyContinue = function () {
+  const g = window._guidev2;
+  if (!g || !g.active) return;
+  g._pendingVerify = null;
+  g._retryNote = null;
+  return _gv2GenerateAndDispatch();
+};
+
+// ===== TAKE CONTROL (Slice 4) =====
+// User reclaims control from autonomous mode without ending the guide. Cancels any
+// pending auto-action, switches the session to Manual, and leaves the current
+// highlighted step for the user to click themselves.
+window.gv2TakeControl = async function () {
+  const g = window._guidev2;
+  gv2HideAutoOverlay();
+  if (!g || !g.active) return;
+
+  // Cancel a scheduled auto-click (the 900 ms window before it fires).
+  if (g._autoClickTimer) { clearTimeout(g._autoClickTimer); g._autoClickTimer = null; }
+
+  // Switch this session to Manual and persist so the panel toggle reflects it.
+  g.autoMode = false;
+  try { await chrome.storage.local.set({ [_GV2_AUTOMODE_PREF_KEY]: false }); } catch (e) {}
+
+  try {
+    chrome.runtime.sendMessage({
+      action: 'addMessage',
+      content: '🖐 You have control. Click the highlighted step yourself; I\'ll continue guiding.',
+      type: 'info'
+    });
+  } catch (e) {}
 };
 
 // ===== ROUTER INTEGRATION =====

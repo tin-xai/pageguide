@@ -11,6 +11,15 @@ let uploadedFileName = null;    // Display name of the attached file
 let currentSelectedText = null; // Stores text selected on the webpage
 let guideActive = false; // True while guide is generating steps (shows stop button)
 let noPageContext = false; // When true, skip page scraping and answer from AI knowledge only
+let panelForcedMode = null; // Sticky route chosen by Find / Guide / Hide tabs; null = Auto
+let panelLastRoute = null;  // Last route returned by the router, used only for tab highlight
+let currentGoal = null;
+let currentGuidePlan = [];
+let currentGuideTitle = '';
+let currentGuideStep = 0;
+let currentGuideRecords = [];
+let currentGuideVerifications = {};
+let currentGuideWarnings = {};
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -23,6 +32,216 @@ const _tabSessions = new Map();
 // clearing the page highlights. This is more reliable than beforeunload + sendMessage.
 chrome.runtime.connect({ name: 'sidepanel' });
 
+const ROUTE_ICONS = { ask: '🔍', guide: '🔒', hide: '🙈', image_ask: '🖼️', pdf_ask: '📄', pdf_viewer: '📄' };
+const UI_ICONS = {
+  attach: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.4 11.6-8.8 8.8a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></span>',
+  image: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-5-5L5 19"/></svg></span>',
+  file: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>',
+  globe: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/></svg></span>',
+  pageOff: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 2.2A10 10 0 0 1 21.8 13.4"/><path d="M13.4 21.8A10 10 0 0 1 2.2 10.6"/><path d="M2 12h10"/><path d="M12 2a15 15 0 0 1 2.3 9.8"/></svg></span>',
+  bolt: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7Z"/></svg></span>',
+  hand: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V7a2 2 0 0 0-4 0v4"/><path d="M14 10V5a2 2 0 0 0-4 0v7"/><path d="M10 11V6a2 2 0 0 0-4 0v8"/><path d="M6 14v-2a2 2 0 0 0-4 0v3a7 7 0 0 0 7 7h4a7 7 0 0 0 7-7v-4a2 2 0 0 0-2-2Z"/></svg></span>'
+};
+
+function _truncateText(text, max = 72) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+function _normalizeRouteForTab(route) {
+  if (route === 'image_ask' || route === 'pdf_ask' || route === 'pdf_viewer') return 'ask';
+  if (route === 'protection') return 'hide';
+  return route;
+}
+
+function updateRouteTabs() {
+  // Route tabs were removed from the visible UI; routing stays automatic, with
+  // slash commands still able to force a route for one message.
+}
+
+function getGuideStepMeta(step) {
+  return currentGuideRecords.find(r => Number(r.step) === Number(step) || Number(r.planStep) === Number(step)) || null;
+}
+
+function getGuideStepLabel(step) {
+  const meta = getGuideStepMeta(step);
+  const plan = currentGuidePlan.find(p => Number(p.n) === Number(step));
+  return meta?.instruction || plan?.goal || `Step ${step}`;
+}
+
+function hideGoalStepPreview() {
+  document.getElementById('pageguide-goal-step-preview')?.remove();
+}
+
+async function showGoalStepPreview(step, anchor) {
+  hideGoalStepPreview();
+  const meta = getGuideStepMeta(step);
+  const label = getGuideStepLabel(step);
+  let rec = null;
+  try {
+    if (meta && typeof rewindGetRecord === 'function') {
+      rec = await rewindGetRecord(meta.sessionId, meta.step);
+    }
+  } catch (e) {}
+
+  const preview = document.createElement('div');
+  preview.id = 'pageguide-goal-step-preview';
+  preview.className = 'pageguide-goal-step-preview';
+  preview.innerHTML = `
+    ${rec?.screenshot ? `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="">` : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>'}
+    <div class="pageguide-goal-step-preview-title">Step ${step}</div>
+    <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
+    ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
+    ${meta ? '<button type="button">Inspect more</button>' : ''}
+  `;
+
+  preview.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (meta && typeof RewindTimeline !== 'undefined') {
+      hideGoalStepPreview();
+      if (typeof RewindTimeline.openFullPageStep === 'function') RewindTimeline.openFullPageStep(meta);
+      else if (typeof RewindTimeline.openStep === 'function') RewindTimeline.openStep(meta);
+    }
+  });
+
+  document.body.appendChild(preview);
+  const r = anchor.getBoundingClientRect();
+  const top = Math.min(window.innerHeight - preview.offsetHeight - 8, r.bottom + 10);
+  preview.style.top = Math.max(8, top) + 'px';
+  preview.style.left = Math.max(8, Math.min(r.left - 98, window.innerWidth - preview.offsetWidth - 8)) + 'px';
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest?.('#pageguide-goal-step-preview, .pageguide-goal-dot')) {
+    hideGoalStepPreview();
+  }
+});
+
+function renderGoalDots(current, total) {
+  const dots = document.getElementById('pageguide-goal-dots');
+  if (!dots) return;
+  dots.innerHTML = '';
+  for (let i = 1; i <= total; i++) {
+    const dot = document.createElement('button');
+    dot.type = 'button';
+    dot.className = 'pageguide-goal-dot';
+    dot.dataset.step = String(i);
+    dot.title = getGuideStepLabel(i);
+    const meta = getGuideStepMeta(i);
+    const verify = currentGuideVerifications[meta?.step] || currentGuideVerifications[i];
+    if (i < current) dot.classList.add('done');
+    else if (i === current) dot.classList.add('current');
+    if (meta?.confidence != null && meta.confidence < 0.5) dot.classList.add('review');
+    if (verify?.status) dot.classList.add(`verify-${verify.status}`);
+    dot.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showGoalStepPreview(i, dot);
+    });
+    dots.appendChild(dot);
+  }
+}
+
+function renderGoalCard({ prompt, route, title, step, total } = {}) {
+  const card = document.getElementById('pageguide-goal');
+  if (!card) return;
+
+  if (prompt != null || route != null) {
+    currentGoal = {
+      prompt: prompt != null ? prompt : currentGoal?.prompt || '',
+      route: route || currentGoal?.route || null
+    };
+  }
+  if (title != null) currentGuideTitle = title || '';
+  if (typeof step === 'number') currentGuideStep = step;
+  if (typeof total === 'number') {
+    currentGuidePlan = Array.from({ length: total }, (_, i) => currentGuidePlan[i] || { n: i + 1, goal: '' });
+  }
+
+  const activeRoute = currentGoal?.route || panelLastRoute || panelForcedMode;
+  const normalized = _normalizeRouteForTab(activeRoute);
+  const isGuide = normalized === 'guide' || currentGuidePlan.length > 0 || currentGuideStep > 0;
+  document.body.classList.toggle('pageguide-guide-mode', !!isGuide);
+  const promptText = currentGoal?.prompt || '';
+  const titleText = isGuide ? (currentGuideTitle || _truncateText(promptText)) : _truncateText(promptText);
+  if (!titleText) {
+    card.style.display = 'none';
+    return;
+  }
+
+  const icon = document.getElementById('pageguide-goal-icon');
+  const titleEl = document.getElementById('pageguide-goal-title');
+  const progress = document.getElementById('pageguide-goal-progress');
+  const stepText = document.getElementById('pageguide-goal-steptext');
+  const fill = document.getElementById('pageguide-goal-bar-fill');
+
+  if (icon) icon.textContent = ROUTE_ICONS[activeRoute] || ROUTE_ICONS[normalized] || '🎯';
+  if (titleEl) titleEl.textContent = titleText;
+
+  const totalSteps = Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0);
+  if (isGuide && totalSteps > 0 && currentGuideStep > 0) {
+    const safeStep = Math.max(1, Math.min(currentGuideStep, totalSteps));
+    if (progress) progress.style.display = 'flex';
+    if (stepText) stepText.textContent = `Step ${safeStep} of ${totalSteps}`;
+    if (fill) fill.style.width = `${Math.round((safeStep / totalSteps) * 100)}%`;
+    renderGoalDots(safeStep, totalSteps);
+  } else if (progress) {
+    progress.style.display = 'none';
+  }
+
+  card.style.display = '';
+  refreshGuideOnlyActions();
+}
+
+function clearGoalAndStepPanel() {
+  currentGoal = null;
+  currentGuidePlan = [];
+  currentGuideTitle = '';
+  currentGuideStep = 0;
+  currentGuideRecords = [];
+  currentGuideVerifications = {};
+  currentGuideWarnings = {};
+  hideGoalStepPreview();
+  const goal = document.getElementById('pageguide-goal');
+  const stepPanel = document.getElementById('pageguide-step-panel');
+  const exportBtn = document.getElementById('pageguide-export-pdf');
+  if (goal) goal.style.display = 'none';
+  if (stepPanel) {
+    stepPanel.style.display = 'none';
+    stepPanel.innerHTML = '';
+  }
+  if (exportBtn) exportBtn.disabled = true;
+  refreshGuideOnlyActions();
+}
+
+function setExportEnabled(on) {
+  const btn = document.getElementById('pageguide-export-pdf');
+  if (btn) btn.disabled = !on;
+  refreshGuideOnlyActions();
+}
+
+function moveMoreMenuForGuideMode(hasGuide) {
+  const wrap = document.getElementById('pageguide-more-wrap');
+  if (!wrap) return;
+  const guideActions = document.getElementById('pageguide-guide-card-actions');
+  const inputActions = document.querySelector('.pageguide-input-actions');
+  const sendBtn = document.getElementById('pageguide-send');
+  if (hasGuide && guideActions && wrap.parentElement !== guideActions) {
+    guideActions.appendChild(wrap);
+  } else if (!hasGuide && inputActions && wrap.parentElement !== inputActions) {
+    inputActions.insertBefore(wrap, sendBtn || null);
+  }
+}
+
+function refreshGuideOnlyActions() {
+  const hasGuide = !!(currentGuidePlan.length || currentGuideRecords.length || currentGuideStep);
+  document.body.classList.toggle('pageguide-guide-mode', hasGuide);
+  moveMoreMenuForGuideMode(hasGuide);
+  hideMoreMenu();
+  document.querySelectorAll('.pageguide-guide-only-action').forEach(el => {
+    el.style.display = hasGuide ? '' : 'none';
+  });
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   // Get current tab
@@ -33,15 +252,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-settings')?.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
   });
+  document.getElementById('pageguide-close')?.addEventListener('click', () => window.close());
 
   // Theme toggle (light / dark mode)
   const themeToggleBtn = document.getElementById('pageguide-theme-toggle');
+  const themeIcon = (isLight) => isLight
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8 8 0 1 1 9.5 3.5 6.5 6.5 0 0 0 20.5 14.5Z"/></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.9 19.1 1.4-1.4"/><path d="m17.7 6.3 1.4-1.4"/></svg>';
   const applyTheme = (isLight) => {
     document.body.classList.toggle('light-mode', isLight);
-    if (themeToggleBtn) themeToggleBtn.textContent = isLight ? '☀️' : '🌙';
+    if (themeToggleBtn) themeToggleBtn.innerHTML = themeIcon(isLight);
   };
   const savedTheme = localStorage.getItem('pageguide-theme');
-  applyTheme(savedTheme === 'light');
+  applyTheme(savedTheme ? savedTheme === 'light' : true);
   themeToggleBtn?.addEventListener('click', () => {
     const isLight = !document.body.classList.contains('light-mode');
     applyTheme(isLight);
@@ -51,6 +274,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
   
   document.getElementById('pageguide-send').addEventListener('click', sendMessage);
+  initGuideModeToggle();
+  initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
       const menu = document.getElementById('pageguide-slash-menu');
@@ -62,20 +287,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   
   // Quick action buttons
-  document.querySelectorAll('.pageguide-quick-btn').forEach(btn => {
+  document.querySelectorAll('[data-action]').forEach(btn => {
     btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
   });
   
   // PDF Reader button
   document.getElementById('pageguide-pdf-reader')?.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
+    hideMoreMenu();
   });
   
   // Chat history
   document.getElementById('pageguide-open-history')?.addEventListener('click', showHistoryPanel);
   document.getElementById('pageguide-history-close')?.addEventListener('click', hideHistoryPanel);
   document.getElementById('pageguide-history-back')?.addEventListener('click', () => renderHistoryList());
-  document.getElementById('pageguide-save-chat')?.addEventListener('click', saveCurrentChat);
+  document.getElementById('pageguide-save-chat')?.addEventListener('click', async () => {
+    hideMoreMenu();
+    await saveCurrentChat();
+  });
+  document.getElementById('pageguide-export-pdf')?.addEventListener('click', () => {
+    hideMoreMenu();
+    exportJourneyPdf();
+  });
+  setExportEnabled(false);
+  try {
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex();
+      setExportEnabled(!!idx?.steps?.length);
+    }
+  } catch (e) {}
 
   // No-page-context toggle
   document.getElementById('pageguide-no-page-ctx')?.addEventListener('click', () => {
@@ -83,11 +323,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btn = document.getElementById('pageguide-no-page-ctx');
     if (btn) {
       btn.textContent = noPageContext ? '💭 Page: Off' : '🌐 Page: On';
+      btn.innerHTML = noPageContext ? `${UI_ICONS.pageOff}Page: Off` : `${UI_ICONS.globe}Page: On`;
       btn.classList.toggle('pageguide-quick-btn--active', noPageContext);
       btn.title = noPageContext
         ? 'Page context OFF — answers from AI knowledge only. Click to re-enable.'
         : 'Toggle: answer from AI knowledge only (ignore current page)';
     }
+    hideMoreMenu();
   });
 
   // Combined upload handling (images + text files share one button)
@@ -584,32 +826,211 @@ function addCollapsibleDebug(lines) {
   container.scrollTop = container.scrollHeight;
 }
 
+// ===== Guide Mode Toggle (Manual vs Auto) =====
+// Manual: the user clicks each highlighted step. Auto: the agent performs reversible,
+// low-risk steps itself and hands control back for sensitive ones. The flag lives in
+// chrome.storage.local so the content script (guidev2.js) reads the same value.
+const GUIDE_AUTO_MODE_KEY = 'guideAutoMode';
+
+function _renderGuideMode(btn, auto) {
+  btn.innerHTML = auto ? `${UI_ICONS.bolt}Auto ▾` : `${UI_ICONS.hand}Manual ▾`;
+  btn.classList.toggle('pageguide-mode-auto', !!auto);
+  btn.title = auto
+    ? 'Autonomous mode: the agent completes low-risk steps and pauses for sensitive ones.'
+    : 'Manual mode: you do each step yourself.';
+  document.querySelectorAll('.pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === (auto ? 'auto' : 'manual'));
+  });
+}
+
+function initGuideModeToggle() {
+  const btn = document.getElementById('pageguide-mode-toggle');
+  const menu = document.getElementById('pageguide-mode-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_AUTO_MODE_KEY)
+    .then(r => _renderGuideMode(btn, r[GUIDE_AUTO_MODE_KEY] === true))
+    .catch(() => _renderGuideMode(btn, false));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const auto = option.dataset.mode === 'auto';
+    try { await chrome.storage.local.set({ [GUIDE_AUTO_MODE_KEY]: auto }); } catch (e) {}
+    _renderGuideMode(btn, auto);
+    menu.style.display = 'none';
+  });
+}
+
+function hideMoreMenu() {
+  const menu = document.getElementById('pageguide-more-menu');
+  if (menu) menu.style.display = 'none';
+}
+
+function initPanelMenus() {
+  const moreBtn = document.getElementById('pageguide-more-btn');
+  const moreMenu = document.getElementById('pageguide-more-menu');
+  const infoBtn = document.getElementById('pageguide-info');
+  const infoPop = document.getElementById('pageguide-info-pop');
+
+  moreBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (moreMenu) moreMenu.style.display = moreMenu.style.display === 'none' ? 'block' : 'none';
+    if (infoPop) infoPop.style.display = 'none';
+  });
+
+  infoBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (infoPop) infoPop.style.display = infoPop.style.display === 'none' ? 'block' : 'none';
+    hideMoreMenu();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.pageguide-menu-wrap')) hideMoreMenu();
+    if (!e.target.closest('.pageguide-footer')) {
+      const pop = document.getElementById('pageguide-info-pop');
+      if (pop) pop.style.display = 'none';
+    }
+    if (!e.target.closest('.pageguide-mode-wrap')) {
+      const menu = document.getElementById('pageguide-mode-menu');
+      if (menu) menu.style.display = 'none';
+    }
+  });
+}
+
+function renderStepWarning(step) {
+  const warning = currentGuideWarnings[step] || currentGuideWarnings[currentGuideStep];
+  if (!warning) return '';
+  const label = warning.status === 'blocked' ? 'Needs your attention' : 'Verification warning';
+  return `
+    <div class="pageguide-step-warning">
+      <div class="pageguide-step-warning-title">⚠️ ${escapeHtml(label)}</div>
+      ${warning.reason ? `<div class="pageguide-step-warning-reason">${escapeHtml(warning.reason)}</div>` : ''}
+    </div>`;
+}
+
+function clearGuideWarning(step) {
+  if (step == null) {
+    currentGuideWarnings = {};
+  } else {
+    delete currentGuideWarnings[step];
+    const meta = getGuideStepMeta(step);
+    if (meta?.planStep != null) delete currentGuideWarnings[meta.planStep];
+  }
+  const card = document.querySelector('#pageguide-step-panel .pageguide-step-card');
+  card?.querySelector('.pageguide-step-warning')?.remove();
+  card?.querySelector('.pageguide-step-verify-actions')?.remove();
+}
+
+/**
+ * Verification pause prompt (Slice 3): the agent couldn't confirm the last step worked.
+ * Offers Retry (try a different approach), Continue (proceed anyway), or Stop.
+ */
+function addVerifyPrompt(step, status, reason) {
+  hideTyping();
+  currentGuideWarnings[step] = { status, reason };
+  renderGoalCard({ route: 'guide', step: currentGuideStep || step });
+
+  const card = document.querySelector('#pageguide-step-panel .pageguide-step-card');
+  const panel = document.getElementById('pageguide-step-panel');
+  if (!card || !panel) {
+    addMessage(`⚠️ ${reason || 'The last guide step needs review.'}`, 'error');
+    return;
+  }
+
+  card.querySelector('.pageguide-step-warning')?.remove();
+  card.querySelector('.pageguide-step-verify-actions')?.remove();
+  const actionsRow = card.querySelector('.pageguide-step-btn-row');
+  if (actionsRow) actionsRow.remove();
+  const warningWrap = document.createElement('div');
+  warningWrap.innerHTML = renderStepWarning(step);
+  card.appendChild(warningWrap.firstElementChild);
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'pageguide-step-btn-row pageguide-step-verify-actions';
+
+  const retryBtn = document.createElement('button');
+  retryBtn.className = 'pageguide-step-next-btn';
+  retryBtn.textContent = '↻ Retry';
+  retryBtn.title = 'Let the agent try a different approach';
+
+  const continueBtn = document.createElement('button');
+  continueBtn.className = 'pageguide-step-next-btn';
+  continueBtn.textContent = 'Continue →';
+  continueBtn.title = 'It actually worked — keep going';
+
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'pageguide-step-stop-btn';
+  stopBtn.textContent = '⏹ Stop';
+
+  function disableAll() { [retryBtn, continueBtn, stopBtn].forEach(b => b.disabled = true); }
+
+  retryBtn.addEventListener('click', async () => { disableAll(); showTyping(); try { await sendToContentScript({ action: 'guideVerifyRetry' }); } catch (e) {} });
+  continueBtn.addEventListener('click', async () => { disableAll(); showTyping(); try { await sendToContentScript({ action: 'guideVerifyContinue' }); } catch (e) {} });
+  stopBtn.addEventListener('click', () => { disableAll(); stopGuide(`⏹ Stopped at step ${step}.`); });
+
+  btnRow.appendChild(retryBtn);
+  btnRow.appendChild(continueBtn);
+  btnRow.appendChild(stopBtn);
+  card.appendChild(btnRow);
+  panel.style.display = '';
+}
+
 /**
  * Add a guide step message
  */
 function addGuideStep(result) {
-  const container = document.getElementById('pageguide-messages');
-  if (!container) return;
+  const panel = document.getElementById('pageguide-step-panel');
+  if (!panel) return;
 
   guideActive = !result.isLastStep;
   hideTyping();
-  
-  const msg = document.createElement('div');
-  msg.className = 'pageguide-message guide';
-  
+
+  currentGuideStep = result.planStep || result.step || currentGuideStep;
+  if (result.step != null) delete currentGuideWarnings[result.step];
+  if (result.isLastStep) clearGuideWarning();
+  renderGoalCard({
+    route: 'guide',
+    step: currentGuideStep,
+    total: currentGuidePlan.length || result.totalSteps || undefined
+  });
+
   const stepBadge = result.isLastStep ? '✅' : `Step ${result.step}`;
-  
-  msg.innerHTML = `
-    <div class="pageguide-guide-step">
-      <span class="pageguide-step-badge">${stepBadge}</span>
-      <span class="pageguide-step-text">${result.answer}</span>
+  const targetRow = result.targetText
+    ? `<div class="pageguide-step-meta-row"><span>Target</span><b>${escapeHtml(result.targetText)}</b></div>`
+    : '';
+  const nextRow = result.nextStepHint && !result.isLastStep
+    ? `<div class="pageguide-step-meta-row"><span>Next</span><b>${escapeHtml(result.nextStepHint)}</b></div>`
+    : '';
+  const warning = renderStepWarning(result.step);
+
+  panel.innerHTML = `
+    <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
+      <div class="pageguide-guide-step">
+        <span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>
+        <span class="pageguide-step-text">${escapeHtml(result.answer || '')}</span>
+      </div>
+      <div class="pageguide-step-meta">
+        ${targetRow}
+        ${nextRow}
+      </div>
+      ${warning}
+      <div class="pageguide-step-btn-row"></div>
     </div>
-    ${result.nextStepHint && !result.isLastStep ? `<div class="pageguide-next-hint">💡 ${result.nextStepHint}</div>` : ''}
   `;
+  panel.style.display = '';
+  panel.onclick = (e) => {
+    if (e.target.closest('button')) return;
+    if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
+  };
 
   if (!result.isLastStep) {
-    const btnRow = document.createElement('div');
-    btnRow.className = 'pageguide-step-btn-row';
+    const btnRow = panel.querySelector('.pageguide-step-btn-row');
 
     const stopHereBtn = document.createElement('button');
     stopHereBtn.className = 'pageguide-step-stop-btn';
@@ -637,17 +1058,11 @@ function addGuideStep(result) {
       btnRow.appendChild(nextBtn);
     }
 
-    btnRow.appendChild(stopHereBtn);
-    msg.appendChild(btnRow);
+    if (btnRow) btnRow.appendChild(stopHereBtn);
+  } else {
+    const row = panel.querySelector('.pageguide-step-btn-row');
+    if (row) row.remove();
   }
-
-  if (result.hasHighlights) {
-    msg.classList.add('pageguide-clickable');
-    // Click handler handled by delegated listener (_setupMessageContainerDelegate).
-  }
-
-  container.appendChild(msg);
-  container.scrollTop = container.scrollHeight;
 
   // On step 1, show the matched tutorial reference in a collapsible Details section
   if (result.tutorialMatch) {
@@ -855,9 +1270,11 @@ async function handleUpload(event) {
 }
 
 /** Update the combined upload button icon */
-function _setUploadIcon(emoji) {
+function _setUploadIcon(kind) {
   const icon = document.getElementById('pageguide-upload-icon');
-  if (icon) icon.textContent = emoji;
+  if (!icon) return;
+  const key = kind === '📷' || kind === 'image' ? 'image' : (kind === 'file' ? 'file' : 'attach');
+  icon.innerHTML = UI_ICONS[key].replace(/^<span class="pageguide-inline-icon">|<\/span>$/g, '');
 }
 
 /**
@@ -1289,7 +1706,10 @@ async function sendMessage() {
   if (btn) btn.disabled = true;
 
   // Track if a specific routing is forced by the user
-  let forcedRoute = null;
+  // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
+  // A slash command in this message overrides it below.
+  let forcedRoute = panelForcedMode;
+  let activeQuery = query;
 
   // Handle slash commands before routing to agent
   if (query.startsWith('/')) {
@@ -1297,38 +1717,28 @@ async function sendMessage() {
     const lowerQuery = query.toLowerCase();
     if (lowerQuery.startsWith('/find ') || lowerQuery === '/find') {
       forcedRoute = 'ask';
-      // Strip the command from the query the LLM sees
-      // We do not return early here so it proceeds matching routing
-      input.value = query.substring(5).trim();
-      // Re-read query
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      activeQuery = query.substring(5).trim();
+      if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /find', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      // Reassign for downstream processing
-      input.value = '';
     } else if (lowerQuery.startsWith('/guide ') || lowerQuery === '/guide') {
       forcedRoute = 'guide';
-      input.value = query.substring(6).trim();
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      activeQuery = query.substring(6).trim();
+      if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /guide', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      input.value = '';
     } else if (lowerQuery.startsWith('/hide ') || lowerQuery === '/hide') {
       forcedRoute = 'hide';
-      input.value = query.substring(5).trim();
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      activeQuery = query.substring(5).trim();
+      if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /hide', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      input.value = '';
     } else {
       // Handle normal system slash commands that bypass LLM entirely
       if (btn) btn.disabled = false;
@@ -1338,9 +1748,6 @@ async function sendMessage() {
     }
   }
   
-  // Re-evaluate query after potentially stripping forced route command
-  const activeQuery = forcedRoute ? (query.split(/\\s+/).slice(1).join(' ') || '') : query;
-  
   // Check if current message has an image attached
   const currentMessageHasImage = !!uploadedImageBase64;
   if (currentMessageHasImage) {
@@ -1349,7 +1756,7 @@ async function sendMessage() {
 
   // If a text file is attached or text is selected, build an augmented query
   // The original user-visible message stays clean; the enriched version goes to the LLM.
-  let effectiveQuery = query;
+  let effectiveQuery = activeQuery;
   
   if (uploadedFileContent || currentSelectedText) {
     const parts = [];
@@ -1399,7 +1806,11 @@ async function sendMessage() {
     msgContext = { type: 'image' };
   }
 
-  addMessage(query, 'user', false, msgContext);
+  addMessage(activeQuery || query, 'user', false, msgContext);
+  renderGoalCard({
+    prompt: activeQuery || query,
+    route: forcedRoute || 'ask'
+  });
   showTyping();
   
   try {
@@ -1513,6 +1924,16 @@ async function sendMessage() {
     hideTyping();
     
     if (result && result.success) {
+      const routedTo = result.routedTo || forcedRoute || (noPageContext ? 'ask' : null);
+      if (routedTo) {
+        panelLastRoute = routedTo;
+        updateRouteTabs(routedTo);
+        renderGoalCard({
+          prompt: activeQuery || query,
+          route: routedTo
+        });
+      }
+
       // Build debug info for collapsible section
       const debugLines = [];
       
@@ -1786,6 +2207,10 @@ async function resetChat(showMessage = true) {
   _resettingChat = true;
   guideActive = false;
 
+  // Rewind (Slice 1): clear the step timeline (content 'reset' clears the store).
+  if (typeof RewindTimeline !== 'undefined') RewindTimeline.clear();
+  clearGoalAndStepPanel();
+
   // Discard any saved session for this tab so switching away+back starts fresh
   _tabSessions.delete(currentTabId);
 
@@ -1861,8 +2286,87 @@ async function resetChat(showMessage = true) {
  */
 async function handleQuickAction(action) {
   if (action === 'reset') {
+    hideMoreMenu();
     await resetChat(true);
   }
+}
+
+function _formatDuration(ms) {
+  if (ms == null) return '';
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+async function exportJourneyPdf() {
+  let index = null;
+  try {
+    if (typeof rewindGetIndex === 'function') index = await rewindGetIndex();
+  } catch (e) {}
+
+  if (!index?.steps?.length) {
+    addMessage('ℹ️ No guide journey to export yet.', 'system');
+    setExportEnabled(false);
+    return;
+  }
+
+  const records = [];
+  for (const meta of index.steps) {
+    let rec = null;
+    try {
+      if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(index.sessionId, meta.step);
+    } catch (e) {}
+    records.push(rec || meta);
+  }
+
+  const title = currentGuideTitle || index.title || _truncateText(index.goal || 'PageGuide Journey', 90);
+  const goal = index.goal || currentGoal?.prompt || '';
+  const stepHtml = records.map(rec => {
+    const bits = [];
+    if (rec.durationMs != null) bits.push(`Duration: ${_formatDuration(rec.durationMs)}`);
+    if (rec.verification?.status) bits.push(`Verification: ${rec.verification.status}`);
+    if (rec.url) bits.push(`URL: ${escapeHtml(rec.url)}`);
+    return `
+      <section class="step">
+        <h2>Step ${escapeHtml(rec.step)}</h2>
+        <p class="instruction">${escapeHtml(rec.instruction || '')}</p>
+        ${rec.target?.text ? `<p><strong>Target:</strong> ${escapeHtml(rec.target.text)}</p>` : ''}
+        ${rec.nextStepHint ? `<p><strong>Next:</strong> ${escapeHtml(rec.nextStepHint)}</p>` : ''}
+        ${bits.length ? `<p class="meta">${bits.join(' · ')}</p>` : ''}
+        ${rec.screenshot ? `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="Step ${escapeHtml(rec.step)} screenshot">` : ''}
+      </section>`;
+  }).join('');
+
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:32px;color:#1f2430}
+    h1{font-size:24px;margin:0 0 6px}
+    .goal{color:#5f6778;margin:0 0 24px}
+    .step{break-inside:avoid;border-top:1px solid #d9dde7;padding:18px 0}
+    h2{font-size:16px;margin:0 0 8px}
+    .instruction{font-size:15px;font-weight:600;margin:0 0 8px}
+    .meta{color:#697386;font-size:12px}
+    img{max-width:100%;border:1px solid #d9dde7;border-radius:8px;margin-top:10px}
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+  ${goal ? `<p class="goal">${escapeHtml(goal)}</p>` : ''}
+  ${stepHtml}
+  <script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250));<\/script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) {
+    addMessage('❌ Could not open print window. Allow popups for PageGuide and try again.', 'error');
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
 }
 
 // ---------------------------------------------------------------------------
@@ -2070,6 +2574,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'guideStep') {
     hideTyping();
     addGuideStep(message.result);
+  } else if (message.action === 'guideStepRecord') {
+    if (message.meta) {
+      const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
+      if (existing >= 0) currentGuideRecords[existing] = message.meta;
+      else currentGuideRecords.push(message.meta);
+      currentGuideRecords.sort((a, b) => Number(a.step) - Number(b.step));
+      currentGuideStep = message.meta.planStep || message.meta.step || currentGuideStep;
+      renderGoalCard({ route: 'guide', step: currentGuideStep });
+      setExportEnabled(true);
+    }
+  } else if (message.action === 'guidePlan') {
+    // Plan (Slice 2): the agent drafted a high-level plan — render the plan strip.
+    currentGuidePlan = Array.isArray(message.plan) ? message.plan : [];
+    currentGuideTitle = message.title || currentGuideTitle || '';
+    if (typeof RewindTimeline !== 'undefined') RewindTimeline.clear();
+    renderGoalCard({
+      route: 'guide',
+      title: currentGuideTitle,
+      step: currentGuideStep || 1,
+      total: message.total || currentGuidePlan.length
+    });
+  } else if (message.action === 'guideStepVerify') {
+    currentGuideVerifications[message.step] = { status: message.status, reason: message.reason };
+    if (message.status === 'success') clearGuideWarning(message.step);
+    renderGoalCard({ route: 'guide', step: currentGuideStep });
+  } else if (message.action === 'guideVerifyFail') {
+    // Verification (Slice 3): the agent couldn't confirm the step worked — ask the user.
+    hideTyping();
+    addVerifyPrompt(message.step, message.status, message.reason);
   } else if (message.action === 'askStep') {
     // Ask mode step (scroll/expand)
     hideTyping();

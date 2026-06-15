@@ -42,6 +42,14 @@ async function loadSettings() {
 
   // Load SoM setting (default: disabled)
   document.getElementById('somEnabled').checked = settings.somEnabled === true;
+
+  // Load Rewind capture setting from local storage (default: enabled).
+  // Kept in chrome.storage.local (not sync) because the capture writes large
+  // snapshots locally and the content script reads the flag from local too.
+  try {
+    const local = await chrome.storage.local.get('rewindCaptureEnabled');
+    document.getElementById('rewindCaptureEnabled').checked = local.rewindCaptureEnabled !== false;
+  } catch (e) {}
 }
 
 // Update UI to show selected provider
@@ -246,4 +254,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Save and test buttons
   document.getElementById('saveBtn').addEventListener('click', saveSettings);
   document.getElementById('testApiBtn').addEventListener('click', testApi);
+
+  // Rewind capture toggle persists immediately to local storage on change.
+  const rewindToggle = document.getElementById('rewindCaptureEnabled');
+  if (rewindToggle) {
+    rewindToggle.addEventListener('change', async () => {
+      try {
+        await chrome.storage.local.set({ rewindCaptureEnabled: rewindToggle.checked });
+        showStatus(rewindToggle.checked ? 'Rewind capture enabled' : 'Rewind capture disabled', 'success');
+      } catch (e) {}
+    });
+  }
 });
