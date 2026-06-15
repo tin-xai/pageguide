@@ -8,6 +8,11 @@
   let step = parseInt(params.get('step'), 10);
 
   const $ = id => document.getElementById(id);
+  try {
+    const savedTheme = localStorage.getItem('pageguide-theme');
+    if (savedTheme === 'light') document.body.classList.add('light-mode');
+    else if (savedTheme === 'dark') document.body.classList.add('dark-mode');
+  } catch (e) {}
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

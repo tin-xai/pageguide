@@ -82,7 +82,7 @@
 
       <!-- Selected Text Preview Area (hidden by default) -->
       <div class="pageguide-selected-text-preview" id="pageguide-selected-text-preview" style="display: none;">
-        <span class="pageguide-selected-text-label" id="pageguide-selected-text-label">📝 Text selected</span>
+        <span class="pageguide-selected-text-label" id="pageguide-selected-text-label"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10"/><path d="M7 12h7"/><path d="M5 20h14"/><path d="M4 4h16v12H4z"/></svg></span>Text selected</span>
         <button class="pageguide-remove-image" id="pageguide-remove-selected-text" title="Clear selection context">✕</button>
       </div>
 
@@ -134,7 +134,9 @@
       <!-- Footer disclaimer -->
       <div class="pageguide-footer">
         <span class="pageguide-footer-text">PageGuide can make mistakes</span>
-        <button class="pageguide-info-btn" id="pageguide-info" title="About PageGuide">ℹ️</button>
+        <button class="pageguide-info-btn" id="pageguide-info" title="About PageGuide" aria-label="About PageGuide">
+          <span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span>
+        </button>
         <div class="pageguide-info-pop" id="pageguide-info-pop" style="display:none;">
           PageGuide uses AI and can be wrong — review its steps, and double-check anything sensitive or irreversible before acting.
         </div>

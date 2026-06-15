@@ -1084,8 +1084,8 @@ body.light-mode .pageguide-history-load-btn:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 180, 0, 0.08);
-  border: 1px solid rgba(255, 180, 0, 0.25);
+  background: rgba(120, 87, 255, 0.08);
+  border: 1px solid rgba(120, 87, 255, 0.22);
   border-radius: 8px;
   padding: 6px 10px;
   margin-bottom: 8px;
@@ -1099,10 +1099,17 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-selected-text-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex: 1;
   font-size: 12px;
-  color: #ffcc00;
+  color: #7857ff;
   font-weight: 500;
+  min-width: 0;
+}
+
+.pageguide-selected-text-label span:last-child {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2480,6 +2487,28 @@ body {
   color: #4d566c;
 }
 
+.pageguide-goal-step-preview-reason {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: #f7f3ff;
+  color: #5d4b9b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pageguide-goal-step-preview-reason.is-warning {
+  background: #fff3f3;
+  color: #a13f52;
+}
+
+.pageguide-goal-step-preview-reason b {
+  font-size: 11px;
+  color: inherit;
+}
+
 .pageguide-goal-step-preview-meta {
   margin-top: 4px;
   font-size: 11px;
@@ -3329,6 +3358,28 @@ body:not(.light-mode) .pageguide-icon-btn,
   height: 18px;
 }
 
+.pageguide-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pg-muted);
+}
+
+.pageguide-info-btn:hover {
+  color: var(--pg-accent);
+}
+
+.pageguide-info-btn .pageguide-inline-icon,
+.pageguide-info-btn .pageguide-inline-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* ---- Composer border and restored more menu ---- */
 body.light-mode .pageguide-input-shell {
   border: 1px solid rgba(120, 87, 255, 0.14) !important;
@@ -3342,4 +3393,41 @@ body.light-mode .pageguide-chat-input:focus {
 
 body:not(.pageguide-guide-mode) .pageguide-input-actions > #pageguide-more-wrap {
   display: inline-flex;
+}
+
+/* ---- Composer alignment fixes ---- */
+.pageguide-input-actions {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 34px auto auto 30px minmax(0, 1fr) 36px;
+  gap: 5px;
+}
+
+.pageguide-more-btn,
+body.light-mode .pageguide-more-btn,
+body:not(.light-mode) .pageguide-more-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 15px;
+  text-align: center;
+}
+
+.pageguide-send-btn,
+body.light-mode .pageguide-send-btn,
+body:not(.light-mode) .pageguide-send-btn {
+  width: 34px;
+  height: 34px;
+  justify-self: center;
+  align-self: center;
+  transform: none;
+}
+
+.pageguide-send-btn:hover {
+  transform: none;
 }

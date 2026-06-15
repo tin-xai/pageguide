@@ -810,6 +810,7 @@ function gv2AssessRisk(step) {
   const text = [
     step.instruction,
     step.typeText,
+    step.value,              // canonical ACT value (Slice 5) — carries typed/selected text
     step.element && step.element.text,
     step.riskReason
   ].filter(Boolean).join(' ');

@@ -2,30 +2,30 @@
 
 /* Guide highlight effect */
 .pageguide-guide-highlight {
-  outline: 3px solid #00ff88 !important;
+  outline: 3px solid #7857ff !important;
   outline-offset: 3px !important;
-  box-shadow: 0 0 20px rgba(0, 255, 136, 0.5) !important;
+  box-shadow: 0 0 20px rgba(120, 87, 255, 0.42) !important;
   animation: pageguide-pulse 1.5s ease-in-out infinite !important;
 }
 
 @keyframes pageguide-pulse {
-  0%, 100% { box-shadow: 0 0 10px rgba(0, 255, 136, 0.5); }
-  50% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.8); }
+  0%, 100% { box-shadow: 0 0 10px rgba(120, 87, 255, 0.42); }
+  50% { box-shadow: 0 0 25px rgba(120, 87, 255, 0.68); }
 }
 
 /* Tooltip */
 .pageguide-tooltip {
   position: fixed;
-  background: #1a1a2e;
+  background: rgba(32, 26, 55, 0.96);
   color: #fff;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: 10px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 12px;
   z-index: 999999;
   max-width: 250px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(0, 217, 255, 0.3);
+  box-shadow: 0 14px 34px rgba(50, 35, 100, 0.25);
+  border: 1px solid rgba(155, 132, 255, 0.34);
 }
 
 .pageguide-tooltip::before {
@@ -35,7 +35,7 @@
   left: 20px;
   border-width: 0 6px 6px 6px;
   border-style: solid;
-  border-color: transparent transparent #1a1a2e transparent;
+  border-color: transparent transparent rgba(32, 26, 55, 0.96) transparent;
 }
 
 /* Arrow indicator */
@@ -698,18 +698,22 @@
 
 /* Arrow pointer - Points to element */
 .pageguide-highlight-arrow::before {
-  content: '👉';
+  content: '';
   position: absolute;
-  left: -30px;
+  left: -22px;
   top: 50%;
-  transform: translateY(-50%);
-  font-size: 20px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--pageguide-color, #7857ff);
+  border-left: 0;
+  border-bottom: 0;
+  transform: translateY(-50%) rotate(45deg);
   animation: pageguide-arrow 1s ease-in-out infinite;
 }
 
 @keyframes pageguide-arrow {
-  0%, 100% { transform: translateY(-50%) translateX(0); }
-  50% { transform: translateY(-50%) translateX(5px); }
+  0%, 100% { transform: translateY(-50%) translateX(0) rotate(45deg); }
+  50% { transform: translateY(-50%) translateX(5px) rotate(45deg); }
 }
 
 /* Base highlight style - always applied */
@@ -718,6 +722,34 @@
   padding: 1px 3px;
   margin: 0 1px;
   transition: all 0.3s ease;
+}
+
+[data-pageguide-styled] {
+  position: relative;
+}
+
+[data-pageguide-styled]:hover {
+  outline-color: #7857ff !important;
+  box-shadow: 0 0 0 4px rgba(120, 87, 255, 0.14), 0 12px 32px rgba(120, 87, 255, 0.22) !important;
+}
+
+[data-pageguide-styled]:hover::after {
+  content: 'PageGuide highlight';
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 2147483647;
+  padding: 6px 9px 6px 24px;
+  border: 1px solid rgba(155, 132, 255, 0.36);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 12px 50%, transparent 0 3px, #b89cff 3px 5px, transparent 5px),
+    rgba(32, 26, 55, 0.96);
+  color: #fff;
+  box-shadow: 0 14px 34px rgba(50, 35, 100, 0.25);
+  font: 700 11px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* ===== PROTECTION / DARK PATTERN BADGES ===== */
@@ -814,4 +846,3 @@
   pointer-events: none;
   z-index: 10001;
 }
-

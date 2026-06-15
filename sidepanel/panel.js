@@ -40,7 +40,8 @@ const UI_ICONS = {
   globe: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/></svg></span>',
   pageOff: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 2.2A10 10 0 0 1 21.8 13.4"/><path d="M13.4 21.8A10 10 0 0 1 2.2 10.6"/><path d="M2 12h10"/><path d="M12 2a15 15 0 0 1 2.3 9.8"/></svg></span>',
   bolt: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7Z"/></svg></span>',
-  hand: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V7a2 2 0 0 0-4 0v4"/><path d="M14 10V5a2 2 0 0 0-4 0v7"/><path d="M10 11V6a2 2 0 0 0-4 0v8"/><path d="M6 14v-2a2 2 0 0 0-4 0v3a7 7 0 0 0 7 7h4a7 7 0 0 0 7-7v-4a2 2 0 0 0-2-2Z"/></svg></span>'
+  hand: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V7a2 2 0 0 0-4 0v4"/><path d="M14 10V5a2 2 0 0 0-4 0v7"/><path d="M10 11V6a2 2 0 0 0-4 0v8"/><path d="M6 14v-2a2 2 0 0 0-4 0v3a7 7 0 0 0 7 7h4a7 7 0 0 0 7-7v-4a2 2 0 0 0-2-2Z"/></svg></span>',
+  quote: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10"/><path d="M7 12h7"/><path d="M5 20h14"/><path d="M4 4h16v12H4z"/></svg></span>'
 };
 
 function _truncateText(text, max = 72) {
@@ -77,12 +78,20 @@ async function showGoalStepPreview(step, anchor) {
   hideGoalStepPreview();
   const meta = getGuideStepMeta(step);
   const label = getGuideStepLabel(step);
+  const verify = currentGuideVerifications[meta?.step] || currentGuideVerifications[step];
   let rec = null;
   try {
     if (meta && typeof rewindGetRecord === 'function') {
       rec = await rewindGetRecord(meta.sessionId, meta.step);
     }
   } catch (e) {}
+  const recVerify = rec?.verification;
+  const verdict = recVerify || verify;
+  const hasIssue = verdict?.status && verdict.status !== 'success';
+  const isReview = meta?.confidence != null && meta.confidence < 0.5;
+  const reason = verdict?.reason || (hasIssue
+    ? 'PageGuide could not verify that this step worked.'
+    : (isReview ? 'PageGuide is less confident about this step, so it is marked for review.' : ''));
 
   const preview = document.createElement('div');
   preview.id = 'pageguide-goal-step-preview';
@@ -91,6 +100,10 @@ async function showGoalStepPreview(step, anchor) {
     ${rec?.screenshot ? `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="">` : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>'}
     <div class="pageguide-goal-step-preview-title">Step ${step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
+    ${reason ? `<div class="pageguide-goal-step-preview-reason ${hasIssue ? 'is-warning' : ''}">
+      <b>${hasIssue ? 'Why red?' : 'Review note'}</b>
+      <span>${escapeHtml(reason)}</span>
+    </div>` : ''}
     ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
     ${meta ? '<button type="button">Inspect more</button>' : ''}
   `;
@@ -2644,7 +2657,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Count words for better context hint
         const wordCount = message.text.split(/\s+/).filter(w => w.length > 0).length;
         
-        label.textContent = `📝 "${snippet}" (${wordCount} words)`;
+        label.innerHTML = `${UI_ICONS.quote}<span>"${escapeHtml(snippet)}" (${wordCount} words)</span>`;
         label.title = message.text; // Full text on hover
         preview.style.display = 'flex';
       }

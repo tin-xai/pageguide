@@ -43,13 +43,11 @@ function getPageBackground() {
  * Automatically picks contrasting colors based on page background
  */
 function getRandomHighlightStyle(isDarkPage = false) {
-  // Colors that contrast with dark backgrounds
-  const darkPageColors = ['#00ff88', '#ff6b6b', '#ffd93d', '#6bcfff', '#ff85c0', '#a29bfe'];
-  // Colors that contrast with light backgrounds  
-  const lightPageColors = ['#ff4757', '#2ed573', '#1e90ff', '#9b59b6', '#e84393', '#00b894'];
-  
-  // Animation options (removed underline)
-  const animations = ['pulse', 'spotlight', 'shimmer', 'bounce', 'glow'];
+  // Keep PageGuide highlights in the same purple family as the side panel.
+  const darkPageColors = ['#b89cff', '#9b84ff', '#c4b5fd'];
+  const lightPageColors = ['#7857ff', '#8b5cf6', '#6d5dfc'];
+
+  const animations = ['pulse', 'spotlight', 'shimmer', 'glow'];
   
   const colors = isDarkPage ? darkPageColors : lightPageColors;
   const color = colors[Math.floor(Math.random() * colors.length)];
