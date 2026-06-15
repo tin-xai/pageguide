@@ -384,6 +384,14 @@ describe('gv2AssessRisk (content/utils.js)', () => {
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Send the message' })).toBe('high');
   });
 
+  test('escalates on the canonical ACT value field (Slice 5)', () => {
+    // A canonical ACT/type step carries the sensitive text in `value`, not `typeText`.
+    expect(window.gv2AssessRisk({ risk: 'low', verb: 'ACT', operation: 'click', element: { text: 'Delete account' } })).toBe('high');
+    expect(window.gv2AssessRisk({ risk: 'low', verb: 'ACT', operation: 'type', value: 'unsubscribe', element: { text: 'Confirm' } })).toBe('high');
+    // A benign ACT/select stays low.
+    expect(window.gv2AssessRisk({ risk: 'low', verb: 'ACT', operation: 'select', value: 'United States', element: { text: 'Country' } })).toBe('low');
+  });
+
   test('treats reversible/routine actions as low risk', () => {
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Open the Settings menu' })).toBe('low');
     expect(window.gv2AssessRisk({ instruction: 'Toggle dark mode on' })).toBe('low');
@@ -413,6 +421,178 @@ describe('gv2RetryDecision (content/utils.js)', () => {
 
   test('blocked always pauses (needs the user)', () => {
     expect(window.gv2RetryDecision('blocked', 0, false)).toBe('pause');
+  });
+});
+
+// Robust action vocabulary (Slice 5): normalize legacy + new verbs into one shape.
+describe('gv2NormalizeAction (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  test('maps legacy click/type/done onto canonical verbs', () => {
+    const click = window.gv2NormalizeAction({ action: 'click', element: { index: 3, text: 'OK' } });
+    expect(click.verb).toBe('ACT');
+    expect(click.operation).toBe('click');
+
+    const type = window.gv2NormalizeAction({ action: 'type', typeText: 'hello' });
+    expect(type.verb).toBe('ACT');
+    expect(type.operation).toBe('type');
+    expect(type.value).toBe('hello'); // legacy typeText mirrored into value
+
+    expect(window.gv2NormalizeAction({ action: 'done' }).verb).toBe('DONE');
+  });
+
+  test('accepts new verbs case-insensitively and preserves their args', () => {
+    expect(window.gv2NormalizeAction({ action: 'OBSERVE', goal: 'look at cart' }).verb).toBe('OBSERVE');
+    expect(window.gv2NormalizeAction({ action: 'extract', schema: { total: 'order total' } }).verb).toBe('EXTRACT');
+    expect(window.gv2NormalizeAction({ action: 'wait_until', condition: 'spinner gone' }).verb).toBe('WAIT_UNTIL');
+    expect(window.gv2NormalizeAction({ action: 'scroll_to_find', target: 'Checkout' }).verb).toBe('SCROLL_TO_FIND');
+    expect(window.gv2NormalizeAction({ action: 'ask_human', reason: 'which size?', choices: ['S', 'M'] }).verb).toBe('ASK_HUMAN');
+  });
+
+  test('normalizes ACT operation: invalid → click, valid preserved', () => {
+    expect(window.gv2NormalizeAction({ action: 'ACT', operation: 'frobnicate' }).operation).toBe('click');
+    expect(window.gv2NormalizeAction({ action: 'ACT', operation: 'SELECT', value: 'X' }).operation).toBe('select');
+    expect(window.gv2NormalizeAction({ action: 'ACT' }).operation).toBe('click'); // default
+  });
+
+  test('unknown/missing verb falls back safely', () => {
+    // Non-terminal unknown → no-op OBSERVE (never mutates the page).
+    expect(window.gv2NormalizeAction({ action: 'launch_rocket' }).verb).toBe('OBSERVE');
+    expect(window.gv2NormalizeAction({}).verb).toBe('OBSERVE');
+    // Terminal step with no/garbage action → DONE.
+    expect(window.gv2NormalizeAction({ isLastStep: true }).verb).toBe('DONE');
+    // Defensive: non-objects.
+    expect(window.gv2NormalizeAction(null).verb).toBe('OBSERVE');
+  });
+});
+
+// Stuck/loop detection (Slice 5): hand control to the user when going in circles.
+describe('gv2DetectLoop (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  const sig = (verb, elementText, url, verifyStatus) => ({ verb, elementText, url, verifyStatus });
+
+  test('not stuck with too few or healthily progressing steps', () => {
+    expect(window.gv2DetectLoop({ stepSignatures: [] })).toBe(false);
+    expect(window.gv2DetectLoop({ stepSignatures: [sig('ACT', 'A', 'u1', 'success')] })).toBe(false);
+    expect(window.gv2DetectLoop({ stepSignatures: [
+      sig('ACT', 'Menu', 'u1', 'success'),
+      sig('ACT', 'Settings', 'u2', 'success'),
+      sig('ACT', 'History', 'u3', 'success'),
+      sig('SCROLL_TO_FIND', 'Clear', 'u3', 'success')
+    ] })).toBe(false);
+  });
+
+  test('oscillation — same {verb, elementText} repeated reaches threshold', () => {
+    expect(window.gv2DetectLoop({ stepSignatures: [
+      sig('ACT', 'Next', 'u1', 'failed'),
+      sig('ACT', 'Back', 'u2', 'success'),
+      sig('ACT', 'Next', 'u1', 'failed'),
+      sig('ACT', 'Next', 'u1', 'failed')
+    ] })).toBe(true);
+  });
+
+  test('no progress — same url and target across the recent window', () => {
+    expect(window.gv2DetectLoop({ stepSignatures: [
+      sig('ACT', 'Submit', 'u1', 'failed'),
+      sig('ACT', 'Submit', 'u1', 'failed'),
+      sig('ACT', 'Submit', 'u1', 'failed')
+    ] })).toBe(true);
+  });
+
+  test('repeated verification failures even on distinct actions', () => {
+    expect(window.gv2DetectLoop({ stepSignatures: [
+      sig('ACT', 'A', 'u1', 'failed'),
+      sig('ACT', 'B', 'u2', 'blocked'),
+      sig('ACT', 'C', 'u3', 'failed')
+    ] })).toBe(true);
+  });
+
+  test('ignores empty signatures so blanks do not falsely trip oscillation', () => {
+    expect(window.gv2DetectLoop({ stepSignatures: [
+      sig('', '', 'u1', 'success'),
+      sig('', '', 'u2', 'success'),
+      sig('', '', 'u3', 'success')
+    ] })).toBe(false);
+  });
+});
+
+// Follow-up: constraint normalizer.
+describe('gv2NormalizeConstraints (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('extracts goal + trimmed non-empty constraints', () => {
+    const out = window.gv2NormalizeConstraints({ goal: '  Book a flight  ', constraints: ['under $500', '', '  nonstop  ', null] });
+    expect(out.goal).toBe('Book a flight');
+    expect(out.constraints).toEqual(['under $500', 'nonstop']);
+  });
+
+  test('defends against missing/garbage input', () => {
+    expect(window.gv2NormalizeConstraints(null)).toEqual({ goal: '', constraints: [] });
+    expect(window.gv2NormalizeConstraints({ constraints: 'not-an-array' })).toEqual({ goal: '', constraints: [] });
+  });
+});
+
+// Follow-up: timeline dot-state aggregation (plan-step indexed).
+describe('gv2DotState (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('renders one dot per concrete step — never fewer than the step count', () => {
+    // Plan estimated 4 steps, but the agent has taken 10 concrete steps.
+    const plan = Array.from({ length: 4 }, (_, i) => ({ n: i + 1, goal: 'g' + (i + 1) }));
+    const records = Array.from({ length: 10 }, (_, i) => ({ step: i + 1, planStep: Math.min(i + 1, 4), confidence: 0.9 }));
+    const dots = window.gv2DotState({ plan, records, verifications: {}, current: 6, guideActive: true });
+    expect(dots).toHaveLength(10);            // all 10 steps shown, not capped to the plan
+    expect(dots[4].status).toBe('done');      // step 5 < current(6) → done
+    expect(dots[5].status).toBe('current');   // step 6 in progress
+    expect(dots[6].status).toBe('pending');   // step 7 not started
+  });
+
+  test('marks low-confidence and low-grounding steps for review', () => {
+    const records = [
+      { step: 1, confidence: 0.3 },              // low self-confidence
+      { step: 2, confidence: 0.9, grounding: 0.2 } // low grounding
+    ];
+    const dots = window.gv2DotState({ plan: [], records, verifications: {}, current: 2, guideActive: true });
+    expect(dots[0].review).toBe(true);
+    expect(dots[1].review).toBe(true);
+  });
+
+  test('surfaces verification status per concrete step (success + error)', () => {
+    const records = [{ step: 1 }, { step: 2 }];
+    const verifications = { 1: { status: 'success' }, 2: { status: 'failed' } };
+    const dots = window.gv2DotState({ plan: [], records, verifications, current: 2, guideActive: true });
+    expect(dots[0].verify).toBe('success');
+    expect(dots[1].verify).toBe('failed');
+  });
+
+  test('finished guide marks every step done (not stuck current)', () => {
+    const records = [{ step: 1 }, { step: 2 }];
+    const dots = window.gv2DotState({ plan: [], records, verifications: {}, current: 2, guideActive: false });
+    expect(dots.map(d => d.status)).toEqual(['done', 'done']);
+  });
+});
+
+// Follow-up: on-demand grounding trigger + auto-step budget.
+describe('gv2ShouldAutoGround + gv2BudgetExceeded (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('auto-grounds only uncertain, not-yet-grounded steps', () => {
+    expect(window.gv2ShouldAutoGround({ confidence: 0.3 })).toBe(true);
+    expect(window.gv2ShouldAutoGround({ confidence: 0.9 })).toBe(false);          // confident
+    expect(window.gv2ShouldAutoGround({ confidence: 0.3, grounding: 0.4 })).toBe(false); // already scored
+    expect(window.gv2ShouldAutoGround({})).toBe(false);                            // no self-confidence
+  });
+
+  test('auto budget trips at the cap only in auto mode', () => {
+    expect(window.gv2BudgetExceeded({ autoMode: true, autoStepCount: 15 })).toBe(true);
+    expect(window.gv2BudgetExceeded({ autoMode: true, autoStepCount: 14 })).toBe(false);
+    expect(window.gv2BudgetExceeded({ autoMode: false, autoStepCount: 99 })).toBe(false); // manual unaffected
+    expect(window.gv2BudgetExceeded({ autoMode: true, autoStepCount: 3 }, 3)).toBe(true); // custom cap
   });
 });
 

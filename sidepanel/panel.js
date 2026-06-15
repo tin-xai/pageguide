@@ -88,7 +88,15 @@ async function showGoalStepPreview(step, anchor) {
   const recVerify = rec?.verification;
   const verdict = recVerify || verify;
   const hasIssue = verdict?.status && verdict.status !== 'success';
-  const isReview = meta?.confidence != null && meta.confidence < 0.5;
+  const grounding = (rec && typeof rec.grounding === 'number') ? rec.grounding
+    : (meta && typeof meta.grounding === 'number' ? meta.grounding : null);
+  const isReview = (meta?.confidence != null && meta.confidence < 0.5) || (grounding != null && grounding < 0.5);
+
+  // On-demand: if this step has a screenshot but no grounding score yet, ask the content
+  // script to score how well the screenshot supports the step.
+  if (rec && rec.screenshot && rec.grounding == null && meta?.sessionId) {
+    try { sendToContentScript({ action: 'guideScoreGrounding', sessionId: meta.sessionId, step: meta.step }); } catch (e) {}
+  }
   const reason = verdict?.reason || (hasIssue
     ? 'PageGuide could not verify that this step worked.'
     : (isReview ? 'PageGuide is less confident about this step, so it is marked for review.' : ''));
@@ -104,12 +112,22 @@ async function showGoalStepPreview(step, anchor) {
       <b>${hasIssue ? 'Why red?' : 'Review note'}</b>
       <span>${escapeHtml(reason)}</span>
     </div>` : ''}
+    ${grounding != null ? `<div class="pageguide-goal-step-preview-meta">Screenshot match: ${Math.round(grounding * 100)}%${rec?.groundingReason ? ' — ' + escapeHtml(rec.groundingReason) : ''}</div>` : ''}
     ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
-    ${meta ? '<button type="button">Inspect more</button>' : ''}
+    ${meta ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
+    ${guideActive ? `<button type="button" class="pageguide-goal-step-steer${(hasIssue || isReview) ? ' is-flagged' : ''}">↗ Steer this step</button>` : ''}
   `;
 
   preview.addEventListener('click', (e) => {
     e.stopPropagation();
+    // Slice 6: "Steer this step" redirects the agent instead of opening the inspector.
+    if (e.target.closest('.pageguide-goal-step-steer')) {
+      hideGoalStepPreview();
+      // Pass the CONCRETE step + its URL (from the rewind record) so steer reloads the
+      // right page, not the plan-step index.
+      addSteerPrompt(meta ? meta.step : step, meta ? meta.url : null);
+      return;
+    }
     if (meta && typeof RewindTimeline !== 'undefined') {
       hideGoalStepPreview();
       if (typeof RewindTimeline.openFullPageStep === 'function') RewindTimeline.openFullPageStep(meta);
@@ -134,18 +152,33 @@ function renderGoalDots(current, total) {
   const dots = document.getElementById('pageguide-goal-dots');
   if (!dots) return;
   dots.innerHTML = '';
-  for (let i = 1; i <= total; i++) {
+
+  // Derive each dot's state by PLAN step, aggregating the concrete step records that
+  // belong to it (fixes the plan-vs-concrete-step conflation that left dots perma-gray).
+  // gv2DotState is the unit-tested pure helper shared from content/utils.js.
+  const states = (typeof gv2DotState === 'function')
+    ? gv2DotState({
+        plan: currentGuidePlan,
+        records: currentGuideRecords,
+        verifications: currentGuideVerifications,
+        current,
+        guideActive
+      })
+    : [];
+
+  // Always render at least `total` dots so the count matches the "Step X of N" text.
+  const count = Math.max(total || 0, states.length);
+  for (let i = 1; i <= count; i++) {
+    const st = states[i - 1] || { status: i < current ? 'done' : (i === current ? 'current' : 'pending'), review: false, verify: null };
     const dot = document.createElement('button');
     dot.type = 'button';
     dot.className = 'pageguide-goal-dot';
     dot.dataset.step = String(i);
     dot.title = getGuideStepLabel(i);
-    const meta = getGuideStepMeta(i);
-    const verify = currentGuideVerifications[meta?.step] || currentGuideVerifications[i];
-    if (i < current) dot.classList.add('done');
-    else if (i === current) dot.classList.add('current');
-    if (meta?.confidence != null && meta.confidence < 0.5) dot.classList.add('review');
-    if (verify?.status) dot.classList.add(`verify-${verify.status}`);
+    if (st.status === 'done') dot.classList.add('done');
+    else if (st.status === 'current') dot.classList.add('current');
+    if (st.review) dot.classList.add('review');
+    if (st.verify) dot.classList.add(`verify-${st.verify}`);
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
       showGoalStepPreview(i, dot);
@@ -962,15 +995,25 @@ function addVerifyPrompt(step, status, reason) {
   if (actionsRow) actionsRow.remove();
   const warningWrap = document.createElement('div');
   warningWrap.innerHTML = renderStepWarning(step);
-  card.appendChild(warningWrap.firstElementChild);
+  const warningEl = warningWrap.firstElementChild;
+  card.appendChild(warningEl);
 
   const btnRow = document.createElement('div');
   btnRow.className = 'pageguide-step-btn-row pageguide-step-verify-actions';
+  // ✕ to dismiss the verify prompt (UI-only — Stop/timeline remain available).
+  if (warningEl) _pgAddDismiss(warningEl, () => btnRow.remove());
 
   const retryBtn = document.createElement('button');
   retryBtn.className = 'pageguide-step-next-btn';
   retryBtn.textContent = '↻ Retry';
   retryBtn.title = 'Let the agent try a different approach';
+
+  // Slice 6: let the user redirect the agent right where the error surfaced, instead of
+  // only auto-retrying. Opens the free-text steer box.
+  const steerBtn = document.createElement('button');
+  steerBtn.className = 'pageguide-step-next-btn';
+  steerBtn.textContent = '↗ Steer';
+  steerBtn.title = 'Tell the agent what to do instead';
 
   const continueBtn = document.createElement('button');
   continueBtn.className = 'pageguide-step-next-btn';
@@ -981,17 +1024,182 @@ function addVerifyPrompt(step, status, reason) {
   stopBtn.className = 'pageguide-step-stop-btn';
   stopBtn.textContent = '⏹ Stop';
 
-  function disableAll() { [retryBtn, continueBtn, stopBtn].forEach(b => b.disabled = true); }
+  function disableAll() { [retryBtn, steerBtn, continueBtn, stopBtn].forEach(b => b.disabled = true); }
 
   retryBtn.addEventListener('click', async () => { disableAll(); showTyping(); try { await sendToContentScript({ action: 'guideVerifyRetry' }); } catch (e) {} });
+  steerBtn.addEventListener('click', () => { disableAll(); addSteerPrompt(); });
   continueBtn.addEventListener('click', async () => { disableAll(); showTyping(); try { await sendToContentScript({ action: 'guideVerifyContinue' }); } catch (e) {} });
   stopBtn.addEventListener('click', () => { disableAll(); stopGuide(`⏹ Stopped at step ${step}.`); });
 
   btnRow.appendChild(retryBtn);
+  btnRow.appendChild(steerBtn);
   btnRow.appendChild(continueBtn);
   btnRow.appendChild(stopBtn);
   card.appendChild(btnRow);
   panel.style.display = '';
+}
+
+/**
+ * Append a small ✕ dismiss button to a transient chat panel so the user can remove it
+ * when it's no longer needed. Dismissal is UI-only — it does not answer/resolve the
+ * underlying guide state. Optional onClose runs after removal.
+ */
+function _pgAddDismiss(wrapEl, onClose) {
+  if (!wrapEl) return;
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'pageguide-panel-dismiss';
+  x.setAttribute('aria-label', 'Dismiss');
+  x.title = 'Dismiss';
+  x.textContent = '✕';
+  x.addEventListener('click', (e) => {
+    e.stopPropagation();
+    wrapEl.remove();
+    if (typeof onClose === 'function') { try { onClose(); } catch (e2) {} }
+  });
+  wrapEl.appendChild(x);
+}
+
+/**
+ * ASK_HUMAN prompt (Slice 5): the agent needs a human decision (or the loop detector
+ * found it stuck). Renders the question with one button per choice. The chosen value is
+ * sent back to the content script, which resumes guidance.
+ */
+function addAskHumanPrompt(reason, choices, context) {
+  hideTyping();
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'pageguide-ask-human';
+  _pgAddDismiss(wrap);
+
+  const q = document.createElement('div');
+  q.className = 'pageguide-ask-human-q';
+  q.textContent = (context === 'stuck' ? '🤔 ' : '🙋 ') + (reason || 'I need your input to continue.');
+  wrap.appendChild(q);
+
+  const row = document.createElement('div');
+  row.className = 'pageguide-step-btn-row';
+  const opts = (Array.isArray(choices) && choices.length) ? choices : ['Continue'];
+  opts.forEach(choice => {
+    const btn = document.createElement('button');
+    btn.className = 'pageguide-step-next-btn';
+    btn.textContent = choice;
+    btn.addEventListener('click', async () => {
+      row.querySelectorAll('button').forEach(b => b.disabled = true);
+      showTyping();
+      try { await sendToContentScript({ action: 'guideAskHumanAnswer', choice }); } catch (e) {}
+    });
+    row.appendChild(btn);
+  });
+  wrap.appendChild(row);
+
+  container.appendChild(wrap);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * Steer prompt (Slice 6): reveal a free-text box so the user can redirect the agent on a
+ * low-confidence / errored / stuck step. The note is sent to the content script, which
+ * re-prompts the agent via the retry-note channel.
+ */
+function addSteerPrompt(step, url) {
+  hideTyping();
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+
+  const stepNum = Number(step) || null;
+  const stepUrl = url || null;
+  const wrap = document.createElement('div');
+  wrap.className = 'pageguide-steer';
+  const label = stepNum
+    ? `Steer step ${stepNum} — I'll reload that step and redo it your way:`
+    : 'Steer this step — tell the agent what to do instead:';
+  wrap.innerHTML = `<div class="pageguide-steer-label">${escapeHtml(label)}</div>`;
+  _pgAddDismiss(wrap);
+
+  const input = document.createElement('textarea');
+  input.className = 'pageguide-steer-input';
+  input.rows = 2;
+  input.placeholder = 'e.g. "Use the search box at the top instead"';
+  wrap.appendChild(input);
+
+  const row = document.createElement('div');
+  row.className = 'pageguide-step-btn-row';
+  const send = document.createElement('button');
+  send.className = 'pageguide-step-next-btn';
+  send.textContent = 'Steer →';
+  const submit = async () => {
+    const note = input.value.trim();
+    if (!note) return;
+    send.disabled = true; input.disabled = true;
+    showTyping();
+    // When steering a specific timeline step, prune the now-stale forward records so the
+    // timeline reflects the rewind immediately.
+    if (stepNum) {
+      currentGuideRecords = currentGuideRecords.filter(r => Number(r.step) <= stepNum);
+      Object.keys(currentGuideVerifications).forEach(k => { if (Number(k) > stepNum) delete currentGuideVerifications[k]; });
+    }
+    try { await sendToContentScript({ action: 'guideSteer', note, step: stepNum || undefined, url: stepUrl || undefined }); } catch (e) {}
+  };
+  send.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); });
+  row.appendChild(send);
+  wrap.appendChild(row);
+
+  container.appendChild(wrap);
+  container.scrollTop = container.scrollHeight;
+  input.focus();
+}
+
+/**
+ * Constraints panel (constraint-aware loop): list the limits/preferences the agent will keep
+ * satisfied throughout the task. Dismissible.
+ */
+function addConstraintsPanel(constraints) {
+  if (!Array.isArray(constraints) || !constraints.length) return;
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'pageguide-extract'; // reuse the panel styling
+  _pgAddDismiss(wrap);
+  const title = document.createElement('div');
+  title.className = 'pageguide-extract-title';
+  title.textContent = '📌 Keeping these in mind';
+  wrap.appendChild(title);
+  constraints.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'pageguide-extract-row';
+    row.textContent = `• ${c}`;
+    wrap.appendChild(row);
+  });
+  container.appendChild(wrap);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * EXTRACT result (Slice 5): show the structured data the agent read from the page.
+ */
+function addExtractResult(data) {
+  if (!data || typeof data !== 'object') return;
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'pageguide-extract';
+  _pgAddDismiss(wrap);
+  const title = document.createElement('div');
+  title.className = 'pageguide-extract-title';
+  title.textContent = '📋 Extracted';
+  wrap.appendChild(title);
+  Object.entries(data).forEach(([k, v]) => {
+    const row = document.createElement('div');
+    row.className = 'pageguide-extract-row';
+    row.textContent = `• ${k}: ${v == null ? '—' : v}`;
+    wrap.appendChild(row);
+  });
+  container.appendChild(wrap);
+  container.scrollTop = container.scrollHeight;
 }
 
 /**
@@ -1004,7 +1212,8 @@ function addGuideStep(result) {
   guideActive = !result.isLastStep;
   hideTyping();
 
-  currentGuideStep = result.planStep || result.step || currentGuideStep;
+  // Timeline is concrete-step indexed (one dot per step taken), so track the concrete step.
+  currentGuideStep = result.step || result.planStep || currentGuideStep;
   if (result.step != null) delete currentGuideWarnings[result.step];
   if (result.isLastStep) clearGuideWarning();
   renderGoalCard({
@@ -2608,6 +2817,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       step: currentGuideStep || 1,
       total: message.total || currentGuidePlan.length
     });
+  } else if (message.action === 'guideConstraints') {
+    // Constraint-aware loop: show the constraints the agent will keep satisfied.
+    addConstraintsPanel(message.constraints);
+  } else if (message.action === 'guideStepGrounding') {
+    // On-demand grounding: store the screenshot-match score and re-render the dot (red if low).
+    const rec = currentGuideRecords.find(r => Number(r.step) === Number(message.step));
+    if (rec) rec.grounding = message.grounding;
+    if (rec) rec.groundingReason = message.reason || '';
+    renderGoalCard({ route: 'guide', step: currentGuideStep });
   } else if (message.action === 'guideStepVerify') {
     currentGuideVerifications[message.step] = { status: message.status, reason: message.reason };
     if (message.status === 'success') clearGuideWarning(message.step);
@@ -2616,6 +2834,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Verification (Slice 3): the agent couldn't confirm the step worked — ask the user.
     hideTyping();
     addVerifyPrompt(message.step, message.status, message.reason);
+  } else if (message.action === 'guideAskHuman') {
+    // ASK_HUMAN (Slice 5): the agent needs a human decision, or is stuck in a loop.
+    hideTyping();
+    addAskHumanPrompt(message.reason, message.choices, message.context);
+  } else if (message.action === 'guidePromptSteer') {
+    // Slice 6: user chose "Let me steer" from a stuck prompt — show the steer box.
+    hideTyping();
+    addSteerPrompt();
+  } else if (message.action === 'guideExtract') {
+    // EXTRACT (Slice 5): show the structured data the agent read from the page.
+    addExtractResult(message.data);
   } else if (message.action === 'askStep') {
     // Ask mode step (scroll/expand)
     hideTyping();

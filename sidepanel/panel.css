@@ -1179,6 +1179,90 @@ body.light-mode .pageguide-history-load-btn:hover {
   margin-bottom: 8px;
 }
 
+/* ASK_HUMAN prompt (Slice 5) + Steer box (Slice 6) */
+.pageguide-ask-human,
+.pageguide-steer,
+.pageguide-extract {
+  position: relative;
+  background: rgba(108, 92, 231, 0.12);
+  border: 1px solid rgba(108, 92, 231, 0.35);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 8px 0;
+}
+
+.pageguide-ask-human-q,
+.pageguide-steer-label,
+.pageguide-extract-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.pageguide-extract-row {
+  font-size: 12px;
+  opacity: 0.92;
+  line-height: 1.5;
+}
+
+/* ✕ dismiss button on transient chat panels. */
+.pageguide-panel-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.5;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pageguide-panel-dismiss:hover {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.18);
+}
+
+/* The verify prompt's warning lives in the step card — anchor its ✕ too. */
+.pageguide-step-warning {
+  position: relative;
+}
+
+.pageguide-steer-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.18);
+  color: inherit;
+  font: inherit;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.pageguide-goal-step-steer {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* Steer button inside the timeline step preview — distinct from "Inspect more". */
+.pageguide-goal-step-preview button.pageguide-goal-step-steer {
+  background: var(--pg-accent, #7857ff);
+  color: #fff;
+}
+.pageguide-goal-step-preview button.pageguide-goal-step-steer.is-flagged {
+  background: var(--pg-danger, #ff526a);
+}
+
 /* Guide Mode Toggle (Manual vs Auto) */
 .pageguide-mode-btn {
   background: rgba(255, 255, 255, 0.08);
@@ -2338,12 +2422,29 @@ body {
 }
 
 .pageguide-goal-dot.review {
-  box-shadow: 0 0 0 3px rgba(255, 82, 106, 0.16);
+  background: var(--pg-danger);
+  box-shadow: 0 0 0 3px rgba(255, 82, 106, 0.28);
 }
 
 .pageguide-goal-dot.verify-failed,
 .pageguide-goal-dot.verify-blocked {
   background: var(--pg-danger);
+}
+
+/* Verified-correct step: solid green with a check, so success reads at a glance. */
+.pageguide-goal-dot.verify-success {
+  width: 12px;
+  height: 12px;
+  background: var(--pg-success);
+}
+
+.pageguide-goal-dot.verify-success::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  color: #fff;
+  font: 800 8px/12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
 }
 
 .pageguide-step-panel {
@@ -3274,6 +3375,15 @@ body.pageguide-guide-mode .pageguide-guide-card-actions .pageguide-menu-wrap {
   display: inline-flex;
 }
 
+/* In guide mode the "⋯ More" menu lives at the TOP of the task panel, so opening it
+   upward pushes it off-screen. Flip it to open downward, anchored to the right edge. */
+body.pageguide-guide-mode .pageguide-guide-card-actions .pageguide-menu {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+}
+
 body.light-mode .pageguide-input-shell,
 body.light-mode .pageguide-chat-input,
 body.light-mode .pageguide-input-row .pageguide-chat-input,
@@ -3430,4 +3540,48 @@ body:not(.light-mode) .pageguide-send-btn {
 
 .pageguide-send-btn:hover {
   transform: none;
+}
+
+/* ===== Robust action vocabulary (Slice 5) + Steer (Slice 6) ===== */
+.pageguide-ask-human,
+.pageguide-steer {
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid var(--pageguide-border, rgba(127, 127, 127, 0.25));
+  border-radius: 12px;
+  background: var(--pageguide-surface, rgba(127, 127, 127, 0.06));
+}
+
+.pageguide-ask-human-q,
+.pageguide-steer-label {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+}
+
+.pageguide-ask-human .pageguide-step-btn-row,
+.pageguide-steer .pageguide-step-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pageguide-steer-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--pageguide-border, rgba(127, 127, 127, 0.3));
+  background: var(--pageguide-bg, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+.pageguide-goal-step-steer {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
 }

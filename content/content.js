@@ -95,6 +95,26 @@ async function handleMessage(request) {
       if (typeof gv2VerifyContinue === 'function') { gv2VerifyContinue(); return { success: true }; }
       return { success: false, error: 'Guide not active' };
 
+    case 'guideAskHumanAnswer': // Slice 5: user answered an ASK_HUMAN / stuck prompt
+      if (typeof gv2AskHumanAnswer === 'function') { gv2AskHumanAnswer(request.choice); return { success: true }; }
+      return { success: false, error: 'Guide not active' };
+
+    case 'guideSteer': // Slice 6: user redirected a low-confidence/errored step
+      if (typeof gv2Steer === 'function') { gv2Steer(request.note, request.step, request.url); return { success: true }; }
+      return { success: false, error: 'Guide not active' };
+
+    case 'guideScoreGrounding': // on-demand: score a step's screenshot grounding
+      if (typeof gv2ScoreStepGrounding === 'function' && typeof rewindGetRecord === 'function') {
+        (async () => {
+          try {
+            const rec = await rewindGetRecord(request.sessionId, request.step);
+            if (rec) gv2ScoreStepGrounding(rec);
+          } catch (e) {}
+        })();
+        return { success: true };
+      }
+      return { success: false, error: 'Grounding unavailable' };
+
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {
         return await continueGuidance();

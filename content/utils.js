@@ -844,3 +844,217 @@ function gv2RetryDecision(status, retryCount, highRisk) {
 
 if (typeof window !== 'undefined') window.gv2RetryDecision = gv2RetryDecision;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2RetryDecision = gv2RetryDecision;
+
+// ===== ROBUST ACTION VOCABULARY (Slice 5) =====
+
+// Canonical verbs the guidance engine knows how to dispatch. Anything else the model
+// emits is treated as a safe, no-op OBSERVE (or DONE on the final step).
+const _GV2_VERBS = ['OBSERVE', 'ACT', 'EXTRACT', 'WAIT_UNTIL', 'SCROLL_TO_FIND', 'ASK_HUMAN', 'DONE'];
+// Operations the ACT verb supports. Unknown operations fall back to 'click'.
+const _GV2_ACT_OPS = ['click', 'type', 'select', 'check', 'hover', 'clear'];
+// Legacy actions (pre-Slice-5) mapped onto the canonical verb set.
+const _GV2_LEGACY_ACTION = { click: 'ACT', type: 'ACT', done: 'DONE' };
+
+/**
+ * Normalize a parsed step's action into the canonical Slice 5 shape so the dispatcher
+ * has a single contract regardless of whether the model emitted a legacy action
+ * (click/type/done) or a new verb (OBSERVE/ACT/EXTRACT/…). Pure & DOM-free.
+ *
+ * The returned object is a shallow copy of `step` with two guarantees:
+ *   - `verb`      — always one of _GV2_VERBS.
+ *   - `operation` — set to a valid _GV2_ACT_OPS value when verb === 'ACT'.
+ * Legacy `typeText` is mirrored into `value` for ACT/type so handlers read one field.
+ *
+ * @param {object} step - parsed LLM step
+ * @returns {object} canonical step ({verb, operation?, value?, ...originalFields})
+ */
+function gv2NormalizeAction(step) {
+  if (!step || typeof step !== 'object') return { verb: 'OBSERVE' };
+  const out = Object.assign({}, step);
+  const raw = String(step.action == null ? '' : step.action).trim().toLowerCase();
+
+  let verb;
+  if (Object.prototype.hasOwnProperty.call(_GV2_LEGACY_ACTION, raw)) {
+    verb = _GV2_LEGACY_ACTION[raw];
+    if (raw === 'click') out.operation = 'click';
+    else if (raw === 'type') out.operation = 'type';
+  } else if (_GV2_VERBS.includes(raw.toUpperCase())) {
+    verb = raw.toUpperCase();
+  } else {
+    // Unknown or missing verb → safest fallback: a no-op OBSERVE, unless this is
+    // clearly the terminal step, in which case finish.
+    verb = step.isLastStep ? 'DONE' : 'OBSERVE';
+  }
+  out.verb = verb;
+
+  if (verb === 'ACT') {
+    let op = String(out.operation || 'click').trim().toLowerCase();
+    if (!_GV2_ACT_OPS.includes(op)) op = 'click';
+    out.operation = op;
+    // Back-compat: legacy steps carried typed text in `typeText`.
+    if (out.value == null && step.typeText != null) out.value = step.typeText;
+  }
+
+  return out;
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeAction = gv2NormalizeAction;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeAction = gv2NormalizeAction;
+
+/**
+ * Detect whether the agent is stuck in a loop and should hand control to the user
+ * (via a synthesized ASK_HUMAN step). Runs after verification, before the next step.
+ * Pure & DOM-free — operates only on the session's recent step signatures.
+ *
+ * A signature is `{ verb, elementText, url, verifyStatus }`. Stuck when ANY holds:
+ *   1. Oscillation   — the same {verb, elementText} occurs >= repeatThreshold times.
+ *   2. No progress   — the last `noProgressWindow` steps share url AND target (nothing
+ *                      on the page advanced).
+ *   3. Repeated fail — the last `noProgressWindow` steps all verified failed/blocked.
+ *
+ * @param {object} g - session state (expects g.stepSignatures: array, oldest→newest)
+ * @param {object} [opts] - { repeatThreshold=3, noProgressWindow=3 }
+ * @returns {boolean} true if the agent appears stuck
+ */
+function gv2DetectLoop(g, opts) {
+  const o = opts || {};
+  const repeatThreshold = o.repeatThreshold || 3;
+  const noProgressWindow = o.noProgressWindow || 3;
+  const sigs = (g && Array.isArray(g.stepSignatures)) ? g.stepSignatures : [];
+  if (sigs.length < repeatThreshold) return false;
+
+  const keyOf = (s) => `${(s && s.verb) || ''}|${(s && s.elementText) || ''}`;
+  const isReal = (k) => k.replace('|', '').trim().length > 0;
+
+  // Rule 1: oscillation — same {verb, elementText} repeated across the whole history.
+  const counts = {};
+  for (const s of sigs) {
+    const k = keyOf(s);
+    if (!isReal(k)) continue;
+    counts[k] = (counts[k] || 0) + 1;
+    if (counts[k] >= repeatThreshold) return true;
+  }
+
+  if (sigs.length >= noProgressWindow) {
+    const recent = sigs.slice(-noProgressWindow);
+
+    // Rule 2: no progress — same url AND same target across the recent window.
+    const first = recent[0];
+    const stalled = recent.every(s =>
+      (s && s.url) === (first && first.url) && keyOf(s) === keyOf(first));
+    if (stalled && isReal(keyOf(first))) return true;
+
+    // Rule 3: repeated verification failures in the recent window.
+    const allBad = recent.every(s => s && (s.verifyStatus === 'failed' || s.verifyStatus === 'blocked'));
+    if (allBad) return true;
+  }
+
+  return false;
+}
+
+if (typeof window !== 'undefined') window.gv2DetectLoop = gv2DetectLoop;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2DetectLoop = gv2DetectLoop;
+
+// ===== CONSTRAINT-AWARE LOOP / TIMELINE / BUDGET (follow-up phase) =====
+
+/**
+ * Normalize the LLM's goal+constraint extraction into a stable shape. Pure & DOM-free.
+ * @param {object} parsed - parsed JSON ({ goal?, constraints? })
+ * @returns {{goal:string, constraints:string[]}}
+ */
+function gv2NormalizeConstraints(parsed) {
+  const out = { goal: '', constraints: [] };
+  if (!parsed || typeof parsed !== 'object') return out;
+  if (typeof parsed.goal === 'string') out.goal = parsed.goal.trim();
+  if (Array.isArray(parsed.constraints)) {
+    out.constraints = parsed.constraints
+      .map(x => String(x == null ? '' : x).trim())
+      .filter(Boolean);
+  }
+  return out;
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeConstraints = gv2NormalizeConstraints;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeConstraints = gv2NormalizeConstraints;
+
+/**
+ * Compute the visual state of each timeline dot, indexed by PLAN step, aggregating the
+ * concrete step records that belong to each plan step. Pure & DOM-free so it is unit-
+ * testable and fixes the plan-vs-concrete-step conflation that left dots stuck gray.
+ *
+ * @param {object} args
+ * @param {Array}  args.plan          - [{n, goal}] high-level plan (may be empty)
+ * @param {Array}  args.records       - [{step, planStep, confidence, grounding, verification}]
+ * @param {object} args.verifications - map: concrete-step|plan-step -> {status}
+ * @param {number} args.current       - current plan step (1-based)
+ * @param {boolean} args.guideActive  - false once the guide has finished
+ * @returns {Array<{step:number, status:'done'|'current'|'pending', review:boolean, verify:('success'|'failed'|'blocked'|null)}>}
+ */
+function gv2DotState(args) {
+  const a = args || {};
+  const plan = Array.isArray(a.plan) ? a.plan : [];
+  const records = Array.isArray(a.records) ? a.records : [];
+  const verifications = a.verifications || {};
+  const current = Number(a.current) || 0;
+  const active = a.guideActive !== false; // default active unless explicitly false
+
+  // Timeline is indexed by CONCRETE step (one dot per step the agent takes), so the dot
+  // count always matches the "Step X of N" text. The plan length is only a lower bound (an
+  // estimate of how many steps the task needs before any have run).
+  let maxStep = 0;
+  for (const r of records) {
+    const n = Number(r.step) || 0;
+    if (n > maxStep) maxStep = n;
+  }
+  const total = Math.max(plan.length, maxStep, current, records.length);
+
+  const recOf = (i) => records.find(r => Number(r.step) === i) || null;
+  const isLow = (x) => x != null && x < 0.5;
+
+  const out = [];
+  for (let i = 1; i <= total; i++) {
+    const r = recOf(i);
+    let status;
+    if (i < current) status = 'done';
+    else if (i === current) status = active ? 'current' : 'done';
+    else status = 'pending';
+    if (!active && i <= current) status = 'done'; // finished guide: everything up to current done
+
+    const review = !!(r && (isLow(r.confidence) || isLow(r.grounding)));
+    const verify = (verifications[i] && verifications[i].status) ||
+                   (r && r.verification && r.verification.status) || null;
+    out.push({ step: i, status, review, verify });
+  }
+  return out;
+}
+
+if (typeof window !== 'undefined') window.gv2DotState = gv2DotState;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2DotState = gv2DotState;
+
+/**
+ * Whether a step should get an automatic on-demand screenshot-grounding score: it has no
+ * grounding yet and the model self-rated it uncertain (< 0.5). Pure & DOM-free.
+ */
+function gv2ShouldAutoGround(record, threshold) {
+  const t = (typeof threshold === 'number') ? threshold : 0.5;
+  return !!(record && record.grounding == null &&
+            record.confidence != null && record.confidence < t);
+}
+
+if (typeof window !== 'undefined') window.gv2ShouldAutoGround = gv2ShouldAutoGround;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2ShouldAutoGround = gv2ShouldAutoGround;
+
+// Default cap on autonomous steps before the agent hands control back to the user.
+const _GV2_AUTO_STEP_BUDGET = 15;
+
+/**
+ * Whether autonomous execution has hit the step budget and should hand control back.
+ * Only applies in auto mode. Pure-ish (reads session counters). Unit-testable.
+ */
+function gv2BudgetExceeded(g, budget) {
+  const cap = (typeof budget === 'number') ? budget : _GV2_AUTO_STEP_BUDGET;
+  return !!(g && g.autoMode && (Number(g.autoStepCount) || 0) >= cap);
+}
+
+if (typeof window !== 'undefined') window.gv2BudgetExceeded = gv2BudgetExceeded;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2BudgetExceeded = gv2BudgetExceeded;
