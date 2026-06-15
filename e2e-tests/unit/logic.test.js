@@ -399,145 +399,32 @@ describe('gv2AssessRisk (content/utils.js)', () => {
   });
 });
 
-// Self-verification (Slice 3): the retry/pause decision state machine.
-describe('gv2RetryDecision (content/utils.js)', () => {
-  beforeAll(() => {
-    loadScript('content/utils.js');
-  });
-
-  test('success proceeds', () => {
-    expect(window.gv2RetryDecision('success', 0, false)).toBe('proceed');
-    expect(window.gv2RetryDecision('success', 3, true)).toBe('proceed');
-  });
-
-  test('first failure auto-retries, second pauses', () => {
-    expect(window.gv2RetryDecision('failed', 0, false)).toBe('retry');
-    expect(window.gv2RetryDecision('failed', 1, false)).toBe('pause');
-  });
-
-  test('high-risk failures never auto-retry', () => {
-    expect(window.gv2RetryDecision('failed', 0, true)).toBe('pause');
-  });
-
-  test('blocked always pauses (needs the user)', () => {
-    expect(window.gv2RetryDecision('blocked', 0, false)).toBe('pause');
-  });
-});
-
-// Robust action vocabulary (Slice 5): normalize legacy + new verbs into one shape.
-describe('gv2NormalizeAction (content/utils.js)', () => {
-  beforeAll(() => {
-    loadScript('content/utils.js');
-  });
-
-  test('maps legacy click/type/done onto canonical verbs', () => {
-    const click = window.gv2NormalizeAction({ action: 'click', element: { index: 3, text: 'OK' } });
-    expect(click.verb).toBe('ACT');
-    expect(click.operation).toBe('click');
-
-    const type = window.gv2NormalizeAction({ action: 'type', typeText: 'hello' });
-    expect(type.verb).toBe('ACT');
-    expect(type.operation).toBe('type');
-    expect(type.value).toBe('hello'); // legacy typeText mirrored into value
-
-    expect(window.gv2NormalizeAction({ action: 'done' }).verb).toBe('DONE');
-  });
-
-  test('accepts new verbs case-insensitively and preserves their args', () => {
-    expect(window.gv2NormalizeAction({ action: 'OBSERVE', goal: 'look at cart' }).verb).toBe('OBSERVE');
-    expect(window.gv2NormalizeAction({ action: 'extract', schema: { total: 'order total' } }).verb).toBe('EXTRACT');
-    expect(window.gv2NormalizeAction({ action: 'wait_until', condition: 'spinner gone' }).verb).toBe('WAIT_UNTIL');
-    expect(window.gv2NormalizeAction({ action: 'scroll_to_find', target: 'Checkout' }).verb).toBe('SCROLL_TO_FIND');
-    expect(window.gv2NormalizeAction({ action: 'ask_human', reason: 'which size?', choices: ['S', 'M'] }).verb).toBe('ASK_HUMAN');
-  });
-
-  test('normalizes ACT operation: invalid → click, valid preserved', () => {
-    expect(window.gv2NormalizeAction({ action: 'ACT', operation: 'frobnicate' }).operation).toBe('click');
-    expect(window.gv2NormalizeAction({ action: 'ACT', operation: 'SELECT', value: 'X' }).operation).toBe('select');
-    expect(window.gv2NormalizeAction({ action: 'ACT' }).operation).toBe('click'); // default
-  });
-
-  test('unknown/missing verb falls back safely', () => {
-    // Non-terminal unknown → no-op OBSERVE (never mutates the page).
-    expect(window.gv2NormalizeAction({ action: 'launch_rocket' }).verb).toBe('OBSERVE');
-    expect(window.gv2NormalizeAction({}).verb).toBe('OBSERVE');
-    // Terminal step with no/garbage action → DONE.
-    expect(window.gv2NormalizeAction({ isLastStep: true }).verb).toBe('DONE');
-    // Defensive: non-objects.
-    expect(window.gv2NormalizeAction(null).verb).toBe('OBSERVE');
-  });
-});
-
-// Stuck/loop detection (Slice 5): hand control to the user when going in circles.
-describe('gv2DetectLoop (content/utils.js)', () => {
-  beforeAll(() => {
-    loadScript('content/utils.js');
-  });
-
-  const sig = (verb, elementText, url, verifyStatus) => ({ verb, elementText, url, verifyStatus });
-
-  test('not stuck with too few or healthily progressing steps', () => {
-    expect(window.gv2DetectLoop({ stepSignatures: [] })).toBe(false);
-    expect(window.gv2DetectLoop({ stepSignatures: [sig('ACT', 'A', 'u1', 'success')] })).toBe(false);
-    expect(window.gv2DetectLoop({ stepSignatures: [
-      sig('ACT', 'Menu', 'u1', 'success'),
-      sig('ACT', 'Settings', 'u2', 'success'),
-      sig('ACT', 'History', 'u3', 'success'),
-      sig('SCROLL_TO_FIND', 'Clear', 'u3', 'success')
-    ] })).toBe(false);
-  });
-
-  test('oscillation — same {verb, elementText} repeated reaches threshold', () => {
-    expect(window.gv2DetectLoop({ stepSignatures: [
-      sig('ACT', 'Next', 'u1', 'failed'),
-      sig('ACT', 'Back', 'u2', 'success'),
-      sig('ACT', 'Next', 'u1', 'failed'),
-      sig('ACT', 'Next', 'u1', 'failed')
-    ] })).toBe(true);
-  });
-
-  test('no progress — same url and target across the recent window', () => {
-    expect(window.gv2DetectLoop({ stepSignatures: [
-      sig('ACT', 'Submit', 'u1', 'failed'),
-      sig('ACT', 'Submit', 'u1', 'failed'),
-      sig('ACT', 'Submit', 'u1', 'failed')
-    ] })).toBe(true);
-  });
-
-  test('repeated verification failures even on distinct actions', () => {
-    expect(window.gv2DetectLoop({ stepSignatures: [
-      sig('ACT', 'A', 'u1', 'failed'),
-      sig('ACT', 'B', 'u2', 'blocked'),
-      sig('ACT', 'C', 'u3', 'failed')
-    ] })).toBe(true);
-  });
-
-  test('ignores empty signatures so blanks do not falsely trip oscillation', () => {
-    expect(window.gv2DetectLoop({ stepSignatures: [
-      sig('', '', 'u1', 'success'),
-      sig('', '', 'u2', 'success'),
-      sig('', '', 'u3', 'success')
-    ] })).toBe(false);
-  });
-});
-
-// Follow-up: constraint normalizer.
-describe('gv2NormalizeConstraints (content/utils.js)', () => {
+// Auto-mode Gate 2: page-change detection.
+describe('gv2PageSignature + gv2StateChanged (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
 
-  test('extracts goal + trimmed non-empty constraints', () => {
-    const out = window.gv2NormalizeConstraints({ goal: '  Book a flight  ', constraints: ['under $500', '', '  nonstop  ', null] });
-    expect(out.goal).toBe('Book a flight');
-    expect(out.constraints).toEqual(['under $500', 'nonstop']);
+  test('identical page → identical signature → no change', () => {
+    const idx = { count: 12, indexText: 'A\nB\nC' };
+    const a = window.gv2PageSignature(idx, 'https://x.com/p');
+    const b = window.gv2PageSignature({ count: 12, indexText: 'A\nB\nC' }, 'https://x.com/p');
+    expect(a).toBe(b);
+    expect(window.gv2StateChanged(a, b)).toBe(false);
   });
 
-  test('defends against missing/garbage input', () => {
-    expect(window.gv2NormalizeConstraints(null)).toEqual({ goal: '', constraints: [] });
-    expect(window.gv2NormalizeConstraints({ constraints: 'not-an-array' })).toEqual({ goal: '', constraints: [] });
+  test('URL change, element-count change, or content change → different signature', () => {
+    const base = window.gv2PageSignature({ count: 12, indexText: 'A\nB' }, 'https://x.com/p');
+    expect(window.gv2PageSignature({ count: 12, indexText: 'A\nB' }, 'https://x.com/q')).not.toBe(base); // url
+    expect(window.gv2PageSignature({ count: 13, indexText: 'A\nB' }, 'https://x.com/p')).not.toBe(base); // count
+    expect(window.gv2PageSignature({ count: 12, indexText: 'A\nC' }, 'https://x.com/p')).not.toBe(base); // content
+    expect(window.gv2StateChanged(base, window.gv2PageSignature({ count: 99, indexText: 'Z' }, 'https://x.com/p'))).toBe(true);
+  });
+
+  test('missing signatures fail open (treated as changed)', () => {
+    expect(window.gv2StateChanged(null, 'sig')).toBe(true);
+    expect(window.gv2StateChanged('sig', undefined)).toBe(true);
   });
 });
 
-// Follow-up: timeline dot-state aggregation (plan-step indexed).
 describe('gv2DotState (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
 
@@ -577,26 +464,62 @@ describe('gv2DotState (content/utils.js)', () => {
   });
 });
 
-// Follow-up: on-demand grounding trigger + auto-step budget.
-describe('gv2ShouldAutoGround + gv2BudgetExceeded (content/utils.js)', () => {
-  beforeAll(() => { loadScript('content/utils.js'); });
-
-  test('auto-grounds only uncertain, not-yet-grounded steps', () => {
-    expect(window.gv2ShouldAutoGround({ confidence: 0.3 })).toBe(true);
-    expect(window.gv2ShouldAutoGround({ confidence: 0.9 })).toBe(false);          // confident
-    expect(window.gv2ShouldAutoGround({ confidence: 0.3, grounding: 0.4 })).toBe(false); // already scored
-    expect(window.gv2ShouldAutoGround({})).toBe(false);                            // no self-confidence
+describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({
+          onMessage: { addListener: jest.fn() },
+          onDisconnect: { addListener: jest.fn() }
+        })),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        session: {
+          get: jest.fn(async () => ({})),
+          set: jest.fn(async () => {}),
+          remove: jest.fn(async () => {})
+        },
+        local: {
+          get: jest.fn(async () => ({})),
+          set: jest.fn(async () => {})
+        }
+      }
+    };
+    loadScript('content/tasks/guidev2.js');
   });
 
-  test('auto budget trips at the cap only in auto mode', () => {
-    expect(window.gv2BudgetExceeded({ autoMode: true, autoStepCount: 15 })).toBe(true);
-    expect(window.gv2BudgetExceeded({ autoMode: true, autoStepCount: 14 })).toBe(false);
-    expect(window.gv2BudgetExceeded({ autoMode: false, autoStepCount: 99 })).toBe(false); // manual unaffected
-    expect(window.gv2BudgetExceeded({ autoMode: true, autoStepCount: 3 }, 3)).toBe(true); // custom cap
+  beforeEach(() => {
+    window._guidev2 = {
+      active: true,
+      question: 'answer a form question',
+      previousSteps: ['Step 1: Choose Yes'],
+      currentPlanStep: 1,
+      autoMode: false,
+      _currentStep: { action: 'click', instruction: 'Choose Yes' }
+    };
+  });
+
+  test('active manual guide continues even when no click-wait flag is set', async () => {
+    const continueGuide = jest.fn(async () => ({ success: true, progressed: true }));
+
+    const result = await window.gv2NextStep({ source: 'panel', generateAndDispatch: continueGuide });
+
+    expect(continueGuide).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ success: true, progressed: true });
+  });
+
+  test('returns a recoverable no-progress response when there is no active step', async () => {
+    window._guidev2._currentStep = null;
+
+    const result = await window.gv2NextStep({ source: 'panel' });
+
+    expect(result.success).toBe(false);
+    expect(result.progressed).toBe(false);
   });
 });
 
-// Rewind feature (Slice 1): chrome.storage.local-backed record store.
+// Follow-up: on-demand grounding trigger + auto-step budget.
 describe('RewindStore (rewind/rewind_store.js)', () => {
   let mem;
   beforeEach(() => {

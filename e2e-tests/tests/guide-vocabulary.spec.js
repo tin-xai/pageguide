@@ -6,12 +6,11 @@ const EXTENSION_PATH = path.join(__dirname, '../../');
 const HEADLESS = process.env.HEADFUL !== '1';
 
 /**
- * Slice 5/6: verify the side panel renders the new robust-action UI surfaces
- * (ASK_HUMAN choices, EXTRACT results, and the Steer box) when the content script
- * sends the corresponding messages. These are driven directly via the panel's global
- * render functions so the suite stays CI-safe (no LLM calls).
+ * Simple-agent branch: the guide timeline renders one dot per concrete step, and the
+ * "More" menu opens downward in guide mode. Driven via the panel's global render functions
+ * so the suite stays CI-safe (no LLM calls).
  */
-test.describe('Guide Action Vocabulary UI (Slice 5/6)', () => {
+test.describe('Guide timeline + menu (simple agent)', () => {
   /** @type {import('@playwright/test').BrowserContext} */
   let context;
   /** @type {string} */
@@ -66,129 +65,96 @@ test.describe('Guide Action Vocabulary UI (Slice 5/6)', () => {
     await context?.close();
   });
 
-  test('ASK_HUMAN renders the question and one button per choice', async () => {
+  test('manual mode shows Next + Stop on a TYPE step and Next advances', async () => {
+    // Capture the message the panel would send to the content script.
     await panelPage.evaluate(() => {
-      // @ts-ignore - global panel function
-      addAskHumanPrompt('Which shipping speed do you want?', ['Standard', 'Express'], 'verb');
+      // @ts-ignore - record sendToContentScript calls
+      window.__sent = [];
+      // @ts-ignore
+      sendToContentScript = (msg) => { window.__sent.push(msg); return Promise.resolve({}); };
+      // @ts-ignore - render a manual TYPE step (the old-framework regression case)
+      addGuideStep({
+        success: true, isGuide: true, isLastStep: false,
+        step: 1, action: 'type', answer: 'Type your search term', targetText: 'Search box'
+      });
     });
-    const ask = panelPage.locator('.pageguide-ask-human');
-    await expect(ask).toBeVisible();
-    await expect(ask.locator('.pageguide-ask-human-q')).toContainText('Which shipping speed');
-    await expect(ask.locator('.pageguide-step-btn-row button')).toHaveCount(2);
-    await expect(ask.locator('button', { hasText: 'Express' })).toBeVisible();
-    // The panel carries a ✕ dismiss control.
-    await expect(ask.locator('.pageguide-panel-dismiss')).toBeVisible();
+    const panel = panelPage.locator('#pageguide-step-panel');
+    await expect(panel.locator('.pageguide-step-next-btn')).toBeVisible(); // bug fix: Next on type
+    await expect(panel.locator('.pageguide-step-stop-btn')).toBeVisible();
+
+    await panel.locator('.pageguide-step-next-btn').click();
+    const sent = await panelPage.evaluate(() => window.__sent);
+    expect(sent.some((m) => m.action === 'nextGuideStep')).toBe(true);
   });
 
-  test('stuck ASK_HUMAN offers Stop / steer / keep-trying choices', async () => {
+  test('manual Next recovers controls when the content script reports no progress', async () => {
     await panelPage.evaluate(() => {
-      // @ts-ignore - global panel function
-      addAskHumanPrompt('I seem to be stuck.', ['Stop', 'Let me steer', 'Keep trying'], 'stuck');
+      // @ts-ignore - force a content-script no-op response
+      sendToContentScript = () => Promise.resolve({ success: true, progressed: false });
+      // @ts-ignore
+      addGuideStep({
+        success: true, isGuide: true, isLastStep: false,
+        step: 1, action: 'click', answer: 'Select Yes', targetText: 'Yes'
+      });
     });
-    const ask = panelPage.locator('.pageguide-ask-human');
-    await expect(ask.locator('.pageguide-step-btn-row button')).toHaveCount(3);
-    await expect(ask.locator('button', { hasText: 'Stop' })).toBeVisible();
-    await expect(ask.locator('button', { hasText: 'Let me steer' })).toBeVisible();
+
+    const panel = panelPage.locator('#pageguide-step-panel');
+    const next = panel.locator('.pageguide-step-next-btn');
+    const stop = panel.locator('.pageguide-step-stop-btn');
+
+    await next.click();
+    await expect(panelPage.locator('.pageguide-typing')).toHaveCount(0);
+    await expect(next).toBeEnabled();
+    await expect(stop).toBeEnabled();
+    await expect(panelPage.locator('#pageguide-messages')).toContainText('Could not continue the guide');
   });
 
-  test('EXTRACT renders the structured data the agent read', async () => {
+  test('timeline renders one dot per concrete step', async () => {
     await panelPage.evaluate(() => {
-      // @ts-ignore - global panel function
-      addExtractResult({ price: '$19.99', eta: 'June 20' });
-    });
-    const messages = panelPage.locator('#pageguide-messages');
-    await expect(messages).toContainText('Extracted');
-    await expect(messages).toContainText('price');
-    await expect(messages).toContainText('$19.99');
-  });
-
-  test('Steer box renders a text input and a Steer button', async () => {
-    await panelPage.evaluate(() => {
-      // @ts-ignore - global panel function
-      addSteerPrompt();
-    });
-    const steer = panelPage.locator('.pageguide-steer');
-    await expect(steer).toBeVisible();
-    await expect(steer.locator('textarea.pageguide-steer-input')).toBeVisible();
-    await expect(steer.locator('button', { hasText: 'Steer' })).toBeVisible();
-  });
-
-  test('timeline step preview shows Steer under Inspect more during an active guide', async () => {
-    await panelPage.evaluate(async () => {
-      // Globals declared in panel.js (classic script — reachable by bare name).
+      // No upfront plan in the simple version — the timeline is driven by concrete records.
       // @ts-ignore
-      guideActive = true;
+      currentGuidePlan = [];
       // @ts-ignore
-      currentGuidePlan = [{ n: 1, goal: 'first' }, { n: 2, goal: 'second' }];
-      // @ts-ignore — a normal (high-confidence) step: Steer must still appear.
-      currentGuideRecords = [{ step: 1, planStep: 1, instruction: 'Click X', confidence: 0.9 }];
-      const anchor = document.createElement('div');
-      document.body.appendChild(anchor);
-      // @ts-ignore - global panel function
-      await showGoalStepPreview(1, anchor);
-    });
-    const preview = panelPage.locator('#pageguide-goal-step-preview');
-    await expect(preview).toBeVisible();
-    await expect(preview.locator('button.pageguide-goal-step-inspect')).toBeVisible();
-    const steerBtn = preview.locator('button.pageguide-goal-step-steer');
-    await expect(steerBtn).toBeVisible();
-
-    // Clicking it opens the free-text steer box.
-    await steerBtn.click();
-    await expect(panelPage.locator('.pageguide-steer textarea.pageguide-steer-input')).toBeVisible();
-  });
-
-  test('each transient chat panel has a ✕ that removes it', async () => {
-    // Steer box
-    await panelPage.evaluate(() => { /* @ts-ignore */ addSteerPrompt(); });
-    let steer = panelPage.locator('.pageguide-steer');
-    await expect(steer).toBeVisible();
-    await steer.locator('.pageguide-panel-dismiss').click();
-    await expect(panelPage.locator('.pageguide-steer')).toHaveCount(0);
-
-    // Extract result
-    await panelPage.evaluate(() => { /* @ts-ignore */ addExtractResult({ price: '$5' }); });
-    const extract = panelPage.locator('.pageguide-extract');
-    await expect(extract).toBeVisible();
-    await expect(extract).toContainText('$5');
-    await extract.locator('.pageguide-panel-dismiss').click();
-    await expect(panelPage.locator('.pageguide-extract')).toHaveCount(0);
-  });
-
-  test('timeline renders one dot per concrete step with success/error status', async () => {
-    await panelPage.evaluate(() => {
-      // Plan estimated only 3 steps, but 10 concrete steps have run.
-      // @ts-ignore
-      currentGuidePlan = [{ n: 1, goal: 'a' }, { n: 2, goal: 'b' }, { n: 3, goal: 'c' }];
-      // @ts-ignore
-      currentGuideRecords = Array.from({ length: 10 }, (_, i) => ({ step: i + 1, planStep: Math.min(i + 1, 3), confidence: 0.9 }));
-      // @ts-ignore
-      currentGuideVerifications = { 1: { status: 'success' }, 2: { status: 'failed' } };
+      currentGuideRecords = Array.from({ length: 10 }, (_, i) => ({ step: i + 1, planStep: i + 1, confidence: 0.9 }));
       // @ts-ignore
       currentGuideStep = 4;
       // @ts-ignore
       guideActive = true;
       // @ts-ignore
-      renderGoalCard({ route: 'guide', title: 'T', step: 4, total: 3 });
+      renderGoalCard({ route: 'guide', title: 'T', step: 4 });
     });
     const dots = panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot');
-    await expect(dots).toHaveCount(10);                       // all 10 steps shown, not capped to plan
-    await expect(dots.nth(0)).toHaveClass(/verify-success/);  // step 1 correct
-    await expect(dots.nth(1)).toHaveClass(/verify-failed/);   // step 2 errored
-    await expect(dots.nth(0)).toHaveClass(/done/);            // step 1 < current → done
-    await expect(dots.nth(3)).toHaveClass(/current/);         // step 4 in progress
+    await expect(dots).toHaveCount(10);            // all 10 steps shown
+    await expect(dots.nth(0)).toHaveClass(/done/); // step 1 < current → done
+    await expect(dots.nth(3)).toHaveClass(/current/); // step 4 in progress
+  });
+
+  test('low-confidence step is flagged for review (red)', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      currentGuidePlan = [];
+      // @ts-ignore
+      currentGuideRecords = [{ step: 1, planStep: 1, confidence: 0.3 }];
+      // @ts-ignore
+      currentGuideStep = 2;
+      // @ts-ignore
+      guideActive = true;
+      // @ts-ignore
+      renderGoalCard({ route: 'guide', title: 'T', step: 2 });
+    });
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot').nth(0)).toHaveClass(/review/);
   });
 
   test('"More" menu opens downward (not off-screen) in guide mode', async () => {
-    // Render a guide goal card — this enters guide mode and relocates the "⋯ More" menu
-    // into the task panel header (top of the panel).
     await panelPage.evaluate(() => {
       // @ts-ignore
-      currentGuidePlan = [{ n: 1, goal: 'a' }, { n: 2, goal: 'b' }];
+      currentGuidePlan = [];
+      // @ts-ignore
+      currentGuideRecords = [{ step: 1, planStep: 1, confidence: 0.9 }];
       // @ts-ignore
       currentGuideStep = 1;
-      // @ts-ignore - global panel function
-      renderGoalCard({ route: 'guide', title: 'Test guide', step: 1, total: 2 });
+      // @ts-ignore
+      renderGoalCard({ route: 'guide', title: 'Test guide', step: 1 });
       const menu = document.getElementById('pageguide-more-menu');
       if (menu) menu.style.display = 'block';
     });
@@ -199,7 +165,6 @@ test.describe('Guide Action Vocabulary UI (Slice 5/6)', () => {
 
     const btnBox = await btn.boundingBox();
     const menuBox = await menu.boundingBox();
-    // The menu's top edge should sit at/below the button's bottom edge (opens downward).
     expect(menuBox.y).toBeGreaterThanOrEqual(btnBox.y + btnBox.height - 1);
   });
 });
