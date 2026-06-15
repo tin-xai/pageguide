@@ -32,7 +32,7 @@ const _tabSessions = new Map();
 // clearing the page highlights. This is more reliable than beforeunload + sendMessage.
 chrome.runtime.connect({ name: 'sidepanel' });
 
-const ROUTE_ICONS = { ask: '🔍', guide: '🔒', hide: '🙈', image_ask: '🖼️', pdf_ask: '📄', pdf_viewer: '📄' };
+const ROUTE_ICONS = { ask: '🔍', find: '🔍', guide: '🔒', hide: '🙈', image_ask: '🖼️', pdf_ask: '📄', pdf_viewer: '📄' };
 const UI_ICONS = {
   attach: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.4 11.6-8.8 8.8a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></span>',
   image: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-5-5L5 19"/></svg></span>',
@@ -207,6 +207,11 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   const normalized = _normalizeRouteForTab(activeRoute);
   const isGuide = normalized === 'guide' || currentGuidePlan.length > 0 || currentGuideStep > 0;
   document.body.classList.toggle('pageguide-guide-mode', !!isGuide);
+  if (normalized === 'find' || normalized === 'hide') {
+    card.style.display = 'none';
+    refreshGuideOnlyActions();
+    return;
+  }
   const promptText = currentGoal?.prompt || '';
   const titleText = isGuide ? (currentGuideTitle || _truncateText(promptText)) : _truncateText(promptText);
   if (!titleText) {
@@ -1931,6 +1936,7 @@ async function sendMessage() {
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
   // A slash command in this message overrides it below.
   let forcedRoute = panelForcedMode;
+  let displayRoute = forcedRoute;
   let activeQuery = query;
 
   // Handle slash commands before routing to agent
@@ -1939,6 +1945,7 @@ async function sendMessage() {
     const lowerQuery = query.toLowerCase();
     if (lowerQuery.startsWith('/find ') || lowerQuery === '/find') {
       forcedRoute = 'ask';
+      displayRoute = 'find';
       activeQuery = query.substring(5).trim();
       if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /find', 'system');
@@ -1947,6 +1954,7 @@ async function sendMessage() {
       }
     } else if (lowerQuery.startsWith('/guide ') || lowerQuery === '/guide') {
       forcedRoute = 'guide';
+      displayRoute = 'guide';
       activeQuery = query.substring(6).trim();
       if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /guide', 'system');
@@ -1955,6 +1963,7 @@ async function sendMessage() {
       }
     } else if (lowerQuery.startsWith('/hide ') || lowerQuery === '/hide') {
       forcedRoute = 'hide';
+      displayRoute = 'hide';
       activeQuery = query.substring(5).trim();
       if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /hide', 'system');
@@ -2031,7 +2040,7 @@ async function sendMessage() {
   addMessage(activeQuery || query, 'user', false, msgContext);
   renderGoalCard({
     prompt: activeQuery || query,
-    route: forcedRoute || 'ask'
+    route: displayRoute || 'ask'
   });
   showTyping();
   
@@ -2152,7 +2161,7 @@ async function sendMessage() {
         updateRouteTabs(routedTo);
         renderGoalCard({
           prompt: activeQuery || query,
-          route: routedTo
+          route: displayRoute || routedTo
         });
       }
 

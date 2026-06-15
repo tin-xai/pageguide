@@ -181,6 +181,26 @@ test.describe('Side Panel UI', () => {
     expect(pageExists).toBe(1);
   });
 
+  test('goal card is hidden for Find and Hide modes', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      renderGoalCard({ prompt: 'what is the cast of the movie?', route: 'find' });
+    });
+    await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
+
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      renderGoalCard({ prompt: 'hide this section', route: 'hide' });
+    });
+    await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
+
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      renderGoalCard({ prompt: 'walk me through this', route: 'guide', step: 1, total: 2 });
+    });
+    await expect(panelPage.locator('#pageguide-goal')).toBeVisible();
+  });
+
   test('placeholder text is present', async () => {
     const input = panelPage.locator('#pageguide-input');
 
