@@ -540,7 +540,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     let goal = '';
     try {
       if (typeof rewindGetIndex === 'function') {
-        const idx = await rewindGetIndex();
+        const idx = await rewindGetIndex(payload.sessionId);
         if (idx && idx.goal) goal = idx.goal;
       }
     } catch (e) {}

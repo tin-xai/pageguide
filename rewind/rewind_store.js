@@ -11,16 +11,22 @@
 //   plain-function module works in every context. `unlimitedStorage` (manifest) lifts the
 //   10 MB cap so MB-sized DOM snapshots fit.
 //
-// Layout:
-//   RW_INDEX                     -> { sessionId, goal, startedAt, steps:[lightweight meta] }
+// Layout (multi-session — each guide prompt keeps its own journey, so an earlier guide's
+// journey can be recalled later):
+//   RW_SESSIONS                  -> [{ sessionId, goal, startedAt }] oldest→newest (capped)
+//   RW_CURRENT                   -> sessionId of the active/most-recent session
+//   RW_IDX::<sessionId>          -> { sessionId, goal, startedAt, steps:[lightweight meta] }
 //   RW_REC::<sessionId>::<step>  -> full record (incl. screenshot + domSnapshot)
 //
 // The lightweight index keeps the timeline fast to render; full records (with the heavy
 // screenshot/DOM payload) are loaded lazily only when a step is hovered or inspected.
 
 (function (global) {
-  const RW_INDEX_KEY = 'RW_INDEX';
+  const RW_INDEX_PREFIX = 'RW_IDX::';
   const RW_REC_PREFIX = 'RW_REC::';
+  const RW_SESSIONS_KEY = 'RW_SESSIONS';
+  const RW_CURRENT_KEY = 'RW_CURRENT';
+  const RW_SESSION_CAP = 8; // keep the most recent N guide journeys
   // One-shot handoff for the "Steer from here" branch: written by the side panel, consumed
   // by the content script after it navigates back to the step's URL. See guidev2 steer pickup.
   const RW_STEER_PENDING_KEY = 'RW_STEER_PENDING';
@@ -61,10 +67,14 @@
   function _recKey(sessionId, step) {
     return RW_REC_PREFIX + sessionId + '::' + step;
   }
+  function _idxKey(sessionId) {
+    return RW_INDEX_PREFIX + sessionId;
+  }
 
   // Lightweight meta projected from a full record for the timeline index.
   function _toMeta(record) {
     return {
+      sessionId: record.sessionId,
       step: record.step,
       planStep: record.planStep,
       instruction: record.instruction,
@@ -81,35 +91,77 @@
     };
   }
 
-  // Begin a fresh session: wipe any prior session's records and start a new index.
-  async function rewindStartSession(sessionId, goal) {
-    await rewindClear();
-    await _set({ [RW_INDEX_KEY]: { sessionId, goal: goal || '', startedAt: Date.now(), steps: [] } });
+  async function _getSessions() {
+    const res = await _get(RW_SESSIONS_KEY);
+    return Array.isArray(res[RW_SESSIONS_KEY]) ? res[RW_SESSIONS_KEY] : [];
   }
 
-  // Store (or overwrite) the full record for a step and update the index meta.
+  // Remove a session's index + all of its step records.
+  async function _removeSession(sessionId) {
+    const all = await _get(null);
+    const recPrefix = RW_REC_PREFIX + sessionId + '::';
+    const toRemove = Object.keys(all).filter(k => k === _idxKey(sessionId) || k.indexOf(recPrefix) === 0);
+    if (toRemove.length) await _remove(toRemove);
+  }
+
+  // Begin a fresh session WITHOUT wiping prior ones (so earlier journeys can be recalled).
+  // Registers the session, marks it current, and prunes the oldest beyond the cap.
+  async function rewindStartSession(sessionId, goal) {
+    let sessions = await _getSessions();
+    sessions = sessions.filter(s => s.sessionId !== sessionId);
+    sessions.push({ sessionId, goal: goal || '', startedAt: Date.now() });
+    // Prune oldest beyond the cap.
+    while (sessions.length > RW_SESSION_CAP) {
+      const dropped = sessions.shift();
+      if (dropped) await _removeSession(dropped.sessionId);
+    }
+    await _set({
+      [RW_SESSIONS_KEY]: sessions,
+      [RW_CURRENT_KEY]: sessionId,
+      [_idxKey(sessionId)]: { sessionId, goal: goal || '', startedAt: Date.now(), steps: [] }
+    });
+  }
+
+  // Store (or overwrite) the full record for a step and update the session's index meta.
   async function rewindPutRecord(record) {
     if (!record || record.sessionId == null || record.step == null) return;
-    await _set({ [_recKey(record.sessionId, record.step)]: record });
+    const sid = record.sessionId;
+    await _set({ [_recKey(sid, record.step)]: record });
 
-    const res = await _get(RW_INDEX_KEY);
-    const index = res[RW_INDEX_KEY] || { sessionId: record.sessionId, goal: '', startedAt: Date.now(), steps: [] };
-    // If this record belongs to a different session than the index, reset the index.
-    if (index.sessionId !== record.sessionId) {
-      index.sessionId = record.sessionId;
-      index.steps = [];
-    }
+    const res = await _get(_idxKey(sid));
+    const index = res[_idxKey(sid)] || { sessionId: sid, goal: '', startedAt: Date.now(), steps: [] };
     const meta = _toMeta(record);
     const existing = index.steps.findIndex(s => s.step === record.step);
     if (existing >= 0) index.steps[existing] = meta;
     else index.steps.push(meta);
     index.steps.sort((a, b) => a.step - b.step);
-    await _set({ [RW_INDEX_KEY]: index });
+    await _set({ [_idxKey(sid)]: index });
+
+    // Ensure the session is registered (in case a record arrives without startSession).
+    const sessions = await _getSessions();
+    if (!sessions.some(s => s.sessionId === sid)) {
+      sessions.push({ sessionId: sid, goal: index.goal || '', startedAt: index.startedAt || Date.now() });
+      const patch = { [RW_SESSIONS_KEY]: sessions };
+      const cur = await _get(RW_CURRENT_KEY);
+      if (!cur[RW_CURRENT_KEY]) patch[RW_CURRENT_KEY] = sid;
+      await _set(patch);
+    }
   }
 
-  async function rewindGetIndex() {
-    const res = await _get(RW_INDEX_KEY);
-    return res[RW_INDEX_KEY] || null;
+  // Index for a specific session, or — with no arg — the current/most-recent session.
+  async function rewindGetIndex(sessionId) {
+    if (sessionId == null) {
+      const cur = await _get(RW_CURRENT_KEY);
+      sessionId = cur[RW_CURRENT_KEY];
+      if (sessionId == null) return null;
+    }
+    const res = await _get(_idxKey(sessionId));
+    return res[_idxKey(sessionId)] || null;
+  }
+
+  // Ordered list of retained sessions (oldest→newest).
+  async function rewindGetSessions() {
+    return _getSessions();
   }
 
   async function rewindGetRecord(sessionId, step) {
@@ -127,27 +179,32 @@
     await rewindPutRecord(rec);
   }
 
-  // Remove the index and every RW_REC:: record (across any session).
+  // Remove all sessions, indexes and records (🧹 New Chat / reset). Leaves the one-shot steer
+  // handoff untouched (it's cleared separately by its consumer).
   async function rewindClear() {
     const all = await _get(null);
-    const toRemove = Object.keys(all).filter(k => k === RW_INDEX_KEY || k.indexOf(RW_REC_PREFIX) === 0);
+    const toRemove = Object.keys(all).filter(k =>
+      k === RW_SESSIONS_KEY || k === RW_CURRENT_KEY ||
+      k.indexOf(RW_INDEX_PREFIX) === 0 || k.indexOf(RW_REC_PREFIX) === 0
+    );
     if (toRemove.length) await _remove(toRemove);
   }
 
-  // Drop records after `step` (used by the redirect/fork feature in a later slice).
+  // Drop records after `step` within a session (used by the steer/rebranch fork).
   async function rewindTruncateAfter(sessionId, step) {
     const all = await _get(null);
+    const recPrefix = RW_REC_PREFIX + sessionId + '::';
     const toRemove = Object.keys(all).filter(k => {
-      if (k.indexOf(RW_REC_PREFIX + sessionId + '::') !== 0) return false;
-      const n = parseInt(k.slice((RW_REC_PREFIX + sessionId + '::').length), 10);
+      if (k.indexOf(recPrefix) !== 0) return false;
+      const n = parseInt(k.slice(recPrefix.length), 10);
       return Number.isFinite(n) && n > step;
     });
     if (toRemove.length) await _remove(toRemove);
-    const res = await _get(RW_INDEX_KEY);
-    const index = res[RW_INDEX_KEY];
-    if (index && index.sessionId === sessionId) {
+    const res = await _get(_idxKey(sessionId));
+    const index = res[_idxKey(sessionId)];
+    if (index) {
       index.steps = index.steps.filter(s => s.step <= step);
-      await _set({ [RW_INDEX_KEY]: index });
+      await _set({ [_idxKey(sessionId)]: index });
     }
   }
 
@@ -173,6 +230,7 @@
     rewindStartSession,
     rewindPutRecord,
     rewindGetIndex,
+    rewindGetSessions,
     rewindGetRecord,
     rewindPatchRecord,
     rewindClear,

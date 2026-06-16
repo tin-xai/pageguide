@@ -28,7 +28,8 @@
 
   async function populateStepSelect() {
     let index = null;
-    try { index = await rewindGetIndex(); } catch (e) {}
+    // Prefer the session from the URL (?session=); fall back to the current session.
+    try { index = await rewindGetIndex(sessionId || undefined); } catch (e) {}
     const sel = $('step-select');
     sel.innerHTML = '';
     const steps = (index && index.steps) ? index.steps : [];

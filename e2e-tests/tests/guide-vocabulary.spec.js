@@ -291,6 +291,52 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     expect(res.inplace.payload.fromStep).toBe(2);
   });
 
+  test('send button morphs into a square Stop while running and reverts', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore - capture stop messages to the content script
+      window.__sent = [];
+      // @ts-ignore
+      sendToContentScript = (m) => { window.__sent.push(m); return Promise.resolve({}); };
+      // @ts-ignore
+      guideActive = true;
+      // @ts-ignore
+      showTyping();
+    });
+    const send = panelPage.locator('#pageguide-send');
+    await expect(send).toHaveClass(/pageguide-send-btn--stop/);
+    await expect(send).toHaveText('■');
+
+    await send.click();
+    const sent = await panelPage.evaluate(() => window.__sent);
+    expect(sent.some(m => m && m.action === 'stopGuide')).toBe(true);
+
+    // Reverts to the send shape once stopped.
+    await expect(send).not.toHaveClass(/pageguide-send-btn--stop/);
+    await expect(send).toHaveText('➤');
+  });
+
+  test('a guide journey can be recalled from its "View journey" button', async () => {
+    await panelPage.evaluate(async () => {
+      // @ts-ignore - seed a stored guide session with 3 steps
+      await rewindStartSession('jrn', 'my journey goal');
+      for (let i = 1; i <= 3; i++) {
+        // @ts-ignore
+        await rewindPutRecord({ sessionId: 'jrn', step: i, planStep: i, instruction: 'step ' + i, url: 'https://x/' + i });
+      }
+      // @ts-ignore - reset live state so the recall is what populates the dots
+      currentGuideRecords = []; currentGuidePlan = []; currentGuideStep = 0; guideActive = false;
+      // @ts-ignore
+      addJourneyRecallMessage('jrn', 'my journey goal');
+    });
+
+    const btn = panelPage.locator('.pageguide-journey-recall-btn');
+    await expect(btn).toBeVisible();
+    await btn.click();
+
+    // The task-panel journey re-populates with that session's steps.
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(3);
+  });
+
   test('timeline renders one dot per concrete step', async () => {
     await panelPage.evaluate(() => {
       // No upfront plan in the simple version — the timeline is driven by concrete records.

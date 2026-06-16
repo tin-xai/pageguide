@@ -592,6 +592,52 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     await window.rewindClearSteerPending();
     expect(await window.rewindGetSteerPending()).toBeNull();
   });
+
+  test('retains multiple sessions; getIndex(id) recalls each, no-arg returns current', async () => {
+    await window.rewindStartSession('A', 'goal A');
+    await window.rewindPutRecord({ sessionId: 'A', step: 1, instruction: 'a1' });
+    await window.rewindPutRecord({ sessionId: 'A', step: 2, instruction: 'a2' });
+    await window.rewindStartSession('B', 'goal B');
+    await window.rewindPutRecord({ sessionId: 'B', step: 1, instruction: 'b1' });
+
+    // Earlier session A is NOT wiped by starting B.
+    const a = await window.rewindGetIndex('A');
+    expect(a.goal).toBe('goal A');
+    expect(a.steps.map(s => s.step)).toEqual([1, 2]);
+    expect(a.steps[0].sessionId).toBe('A'); // meta carries sessionId for recall
+    expect(await window.rewindGetRecord('A', 2)).not.toBeNull();
+
+    // No-arg getIndex returns the current (most-recent) session.
+    const cur = await window.rewindGetIndex();
+    expect(cur.goal).toBe('goal B');
+
+    const sessions = await window.rewindGetSessions();
+    expect(sessions.map(s => s.sessionId)).toEqual(['A', 'B']); // oldest→newest
+  });
+
+  test('prunes the oldest session beyond the cap (8)', async () => {
+    for (let i = 1; i <= 9; i++) {
+      await window.rewindStartSession('S' + i, 'g' + i);
+      await window.rewindPutRecord({ sessionId: 'S' + i, step: 1, instruction: 'x' });
+    }
+    const sessions = await window.rewindGetSessions();
+    expect(sessions.length).toBe(8);
+    expect(sessions[0].sessionId).toBe('S2');           // S1 pruned
+    expect(await window.rewindGetIndex('S1')).toBeNull();
+    expect(await window.rewindGetRecord('S1', 1)).toBeNull();
+    expect(await window.rewindGetIndex('S9')).not.toBeNull();
+  });
+
+  test('clear wipes every session', async () => {
+    await window.rewindStartSession('A', 'g');
+    await window.rewindPutRecord({ sessionId: 'A', step: 1, instruction: 'a1' });
+    await window.rewindStartSession('B', 'g');
+    await window.rewindClear();
+    expect(await window.rewindGetIndex('A')).toBeNull();
+    expect(await window.rewindGetIndex('B')).toBeNull();
+    expect(await window.rewindGetIndex()).toBeNull();
+    expect(await window.rewindGetSessions()).toEqual([]);
+  });
 });
 
 // Rewind action-replay: resolve a stored target.text against a fresh page index.

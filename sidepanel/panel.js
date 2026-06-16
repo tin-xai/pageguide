@@ -20,6 +20,9 @@ let currentGuideStep = 0;
 let currentGuideRecords = [];
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
+let panelRunning = false;        // True while the agent is generating (send button shows Stop)
+let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
+const _journeyBtnSessions = new Set(); // Guide sessions that already have a "View journey" button
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -358,7 +361,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
   
-  document.getElementById('pageguide-send').addEventListener('click', sendMessage);
+  document.getElementById('pageguide-send').addEventListener('click', () => {
+    if (panelRunning) stopRun(); else sendMessage();
+  });
   initGuideModeToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
@@ -876,8 +881,49 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
   
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
-  
+
   chatMessages.push({ content, type, timestamp: Date.now(), context });
+}
+
+/**
+ * Append a small chat message with a "View journey" button that re-displays a past guide's
+ * task-panel journey (dots + snapshots) so its context isn't lost as new prompts come in.
+ */
+function addJourneyRecallMessage(sessionId, title) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !sessionId) return;
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message system pageguide-journey-recall';
+  const label = title ? `: ${escapeHtml(_truncateText(title))}` : '';
+  msg.innerHTML = `<button type="button" class="pageguide-journey-recall-btn" data-session="${escapeHtml(sessionId)}">📋 View journey${label}</button>`;
+  msg.querySelector('button')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showStoredJourney(sessionId);
+  });
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * Re-populate the task panel with a stored guide session's journey (read-only). Each dot still
+ * opens its screenshot snapshot via showGoalStepPreview → rewindGetRecord(sessionId, step).
+ */
+async function showStoredJourney(sessionId) {
+  let idx = null;
+  try { if (typeof rewindGetIndex === 'function') idx = await rewindGetIndex(sessionId); } catch (e) {}
+  if (!idx || !idx.steps || !idx.steps.length) {
+    addMessage('ℹ️ That journey is no longer available.', 'system');
+    return;
+  }
+  // Attach sessionId to each meta so the dot preview can resolve its record.
+  currentGuideRecords = idx.steps.map(m => Object.assign({}, m, { sessionId }));
+  currentGuidePlan = [];
+  currentGuideVerifications = {};
+  currentGuideTitle = idx.goal || 'Guide journey';
+  const lastStep = currentGuideRecords[currentGuideRecords.length - 1].step;
+  currentGuideStep = lastStep;
+  guideActive = false; // recalled journey is a past, read-only view
+  renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
 }
 
 /**
@@ -1167,7 +1213,32 @@ function addAskStep(result) {
 /**
  * Show typing indicator. In guide mode, appends a Stop button.
  */
+// Morph the send button (➤) into a square Stop (■) while the agent is running, and back.
+// `panelRunning` is the single source of truth used by the click handler to route to stop.
+function setRunning(on) {
+  panelRunning = !!on;
+  const btn = document.getElementById('pageguide-send');
+  if (!btn) return;
+  btn.disabled = false; // stays clickable — it's the Stop control while running
+  btn.classList.toggle('pageguide-send-btn--stop', panelRunning);
+  btn.textContent = panelRunning ? '■' : '➤';
+  btn.title = panelRunning ? 'Stop' : 'Send';
+  btn.setAttribute('aria-label', panelRunning ? 'Stop' : 'Send');
+}
+
+// Stop whatever is running. A guide is aborted for real (stopGuide → gv2StopGuide, also clears
+// SW state); other routes just cancel the UI (the in-flight LLM result is discarded via
+// cancelRequested). stopGuide is called unconditionally because a guide may already be running
+// in the content script even before guideActive flips on the first step — it's harmless for
+// non-guide runs.
+function stopRun() {
+  cancelRequested = true;
+  setRunning(false);
+  stopGuide('⏹ Stopped.');
+}
+
 function showTyping() {
+  setRunning(true);
   const container = document.getElementById('pageguide-messages');
   if (!container || container.querySelector('.pageguide-typing')) return;
 
@@ -1207,6 +1278,7 @@ async function stopGuide(message = '⏹ Guide stopped.') {
  */
 function hideTyping() {
   document.querySelector('.pageguide-typing')?.remove();
+  setRunning(false);
 }
 
 /**
@@ -1743,9 +1815,11 @@ function _initSlashAutocomplete() {
 async function sendMessage() {
   const input = document.getElementById('pageguide-input');
   const btn = document.getElementById('pageguide-send');
-  
+
+  if (panelRunning) return; // already running — the send button is acting as Stop
+
   const query = input?.value.trim() || '';
-  
+
   // Only return early if we have no query AND no attached context
   if (!query && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
     return;
@@ -1753,7 +1827,7 @@ async function sendMessage() {
 
   _hideSlashMenu();
   if (input) input.value = '';
-  if (btn) btn.disabled = true;
+  cancelRequested = false;
 
   // Track if a specific routing is forced by the user
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
@@ -1976,7 +2050,10 @@ async function sendMessage() {
     }
     
     hideTyping();
-    
+
+    // User pressed Stop while this (non-guide) request was in flight → discard the result.
+    if (cancelRequested) { cancelRequested = false; return; }
+
     if (result && result.success) {
       const routedTo = result.routedTo || forcedRoute || (noPageContext ? 'ask' : null);
       if (routedTo) {
@@ -2102,8 +2179,8 @@ async function sendMessage() {
     // Remove failed query from history
     conversationHistory.pop();
   }
-  
-  btn.disabled = false;
+
+  setRunning(false); // ensure the send button is restored (guide runs reset via their own flow)
   input.focus();
 }
 
@@ -2637,6 +2714,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       currentGuideStep = message.meta.planStep || message.meta.step || currentGuideStep;
       renderGoalCard({ route: 'guide', step: currentGuideStep });
       setExportEnabled(true);
+      // First step of a new guide session → post a "View journey" recall button so this
+      // prompt's journey can be brought back later, even after newer guides run.
+      const sid = message.meta.sessionId;
+      if (sid && Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
+        _journeyBtnSessions.add(sid);
+        addJourneyRecallMessage(sid, currentGuideTitle || currentGoal?.prompt || message.meta.instruction);
+      }
     }
   } else if (message.action === 'askStep') {
     // Ask mode step (scroll/expand)
