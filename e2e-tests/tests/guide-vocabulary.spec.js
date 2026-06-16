@@ -337,6 +337,31 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(3);
   });
 
+  test('recall works from in-memory journey, shows a collapse X, no chat error', async () => {
+    await panelPage.evaluate(() => {
+      // In-memory only (no stored index) — simulates the storage-shape mismatch that made
+      // recall always say "no longer available". Recall must still work.
+      // @ts-ignore
+      _journeysBySession['mem'] = { title: 'mem goal', steps: [
+        { sessionId: 'mem', step: 1, instruction: 'a' },
+        { sessionId: 'mem', step: 2, instruction: 'b' }
+      ] };
+      // @ts-ignore
+      addJourneyRecallMessage('mem', 'mem goal');
+    });
+
+    await panelPage.locator('.pageguide-journey-recall-btn').click();
+    // Card shows with the right dots; no "no longer available" chat message (fix #4).
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(2);
+    await expect(panelPage.locator('#pageguide-messages')).not.toContainText('no longer available');
+
+    // Collapse X hides the journey card (fix #3).
+    const x = panelPage.locator('#pageguide-goal-collapse');
+    await expect(x).toBeVisible();
+    await x.click();
+    await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
+  });
+
   test('timeline renders one dot per concrete step', async () => {
     await panelPage.evaluate(() => {
       // No upfront plan in the simple version — the timeline is driven by concrete records.

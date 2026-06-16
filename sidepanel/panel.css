@@ -2397,6 +2397,69 @@ body {
   line-height: 1;
 }
 
+/* Collapse (✕) for a recalled, read-only journey — only shown in recalled mode. */
+.pageguide-goal-collapse {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: var(--pg-hover, rgba(120,87,255,.10));
+  color: var(--pg-muted, #71788c);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pageguide-goal-collapse:hover { background: rgba(255,71,87,.14); color: #ff4757; }
+.pageguide-goal--recalled .pageguide-goal-caret { display: none; }
+
+/* "View journey" recall button (chat) — a compact card-style button. */
+.pageguide-journey-recall {
+  display: flex;
+  margin: 6px 0;
+}
+.pageguide-journey-recall-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px;
+  border: 1px solid var(--pg-border, rgba(120,87,255,.18));
+  border-radius: 11px;
+  background: var(--pg-card, #fff);
+  color: var(--pg-text, #202538);
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(44,45,70,.06);
+  transition: border-color .15s, box-shadow .15s, transform .1s;
+}
+.pageguide-journey-recall-btn:hover {
+  border-color: var(--pg-accent, #7857ff);
+  box-shadow: 0 10px 24px rgba(120,87,255,.14);
+}
+.pageguide-journey-recall-btn:active { transform: scale(.99); }
+.pageguide-journey-recall-ico {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #7857ff, #9a6dff);
+  font-size: 15px;
+}
+.pageguide-journey-recall-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.pageguide-journey-recall-title { font-size: 12.5px; font-weight: 760; line-height: 1.2; }
+.pageguide-journey-recall-sub {
+  font-size: 11px;
+  color: var(--pg-muted, #71788c);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pageguide-journey-recall-arrow { flex-shrink: 0; color: var(--pg-accent, #7857ff); font-weight: 800; }
+
 .pageguide-goal-progress {
   display: flex;
   flex-direction: column;

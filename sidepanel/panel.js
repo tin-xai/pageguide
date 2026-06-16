@@ -23,6 +23,7 @@ let currentGuideWarnings = {};
 let panelRunning = false;        // True while the agent is generating (send button shows Stop)
 let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
 const _journeyBtnSessions = new Set(); // Guide sessions that already have a "View journey" button
+const _journeysBySession = {}; // sessionId -> { title, steps:[meta] } accumulated from guideStepRecord
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -893,9 +894,17 @@ function addJourneyRecallMessage(sessionId, title) {
   const container = document.getElementById('pageguide-messages');
   if (!container || !sessionId) return;
   const msg = document.createElement('div');
-  msg.className = 'pageguide-message system pageguide-journey-recall';
-  const label = title ? `: ${escapeHtml(_truncateText(title))}` : '';
-  msg.innerHTML = `<button type="button" class="pageguide-journey-recall-btn" data-session="${escapeHtml(sessionId)}">📋 View journey${label}</button>`;
+  msg.className = 'pageguide-journey-recall';
+  const sub = title ? `<span class="pageguide-journey-recall-sub">${escapeHtml(_truncateText(title))}</span>` : '';
+  msg.innerHTML = `
+    <button type="button" class="pageguide-journey-recall-btn" data-session="${escapeHtml(sessionId)}">
+      <span class="pageguide-journey-recall-ico">🧭</span>
+      <span class="pageguide-journey-recall-text">
+        <span class="pageguide-journey-recall-title">View journey</span>
+        ${sub}
+      </span>
+      <span class="pageguide-journey-recall-arrow">→</span>
+    </button>`;
   msg.querySelector('button')?.addEventListener('click', (e) => {
     e.stopPropagation();
     showStoredJourney(sessionId);
@@ -905,25 +914,69 @@ function addJourneyRecallMessage(sessionId, title) {
 }
 
 /**
- * Re-populate the task panel with a stored guide session's journey (read-only). Each dot still
- * opens its screenshot snapshot via showGoalStepPreview → rewindGetRecord(sessionId, step).
+ * Re-populate the task panel with a guide session's journey (read-only). Steps come from the
+ * in-memory copy accumulated this session (robust to storage-shape changes); falls back to the
+ * persisted index. Each dot opens its snapshot via showGoalStepPreview → rewindGetRecord. On
+ * success it shows the journey card (no chat notification); only true unavailability posts an
+ * error to the chat.
  */
 async function showStoredJourney(sessionId) {
-  let idx = null;
-  try { if (typeof rewindGetIndex === 'function') idx = await rewindGetIndex(sessionId); } catch (e) {}
-  if (!idx || !idx.steps || !idx.steps.length) {
+  let steps = null, title = '';
+  const mem = _journeysBySession[sessionId];
+  if (mem && mem.steps && mem.steps.length) { steps = mem.steps; title = mem.title || ''; }
+  else {
+    try {
+      if (typeof rewindGetIndex === 'function') {
+        const idx = await rewindGetIndex(sessionId);
+        if (idx && idx.steps && idx.steps.length) { steps = idx.steps; title = idx.goal || ''; }
+      }
+    } catch (e) {}
+  }
+  if (!steps || !steps.length) {
     addMessage('ℹ️ That journey is no longer available.', 'system');
     return;
   }
   // Attach sessionId to each meta so the dot preview can resolve its record.
-  currentGuideRecords = idx.steps.map(m => Object.assign({}, m, { sessionId }));
+  currentGuideRecords = steps.map(m => Object.assign({}, m, { sessionId }));
   currentGuidePlan = [];
   currentGuideVerifications = {};
-  currentGuideTitle = idx.goal || 'Guide journey';
+  currentGuideTitle = title || 'Guide journey';
   const lastStep = currentGuideRecords[currentGuideRecords.length - 1].step;
   currentGuideStep = lastStep;
   guideActive = false; // recalled journey is a past, read-only view
   renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
+  _setJourneyRecalledMode(true);
+}
+
+// Toggle the "recalled journey" affordance on the goal card: a collapse (✕) button that hides
+// the card. Live guide steps clear this so the X only shows for a recalled, read-only view.
+function _setJourneyRecalledMode(on) {
+  const card = document.getElementById('pageguide-goal');
+  if (!card) return;
+  card.classList.toggle('pageguide-goal--recalled', !!on);
+  let btn = document.getElementById('pageguide-goal-collapse');
+  if (on) {
+    if (!btn) {
+      const row = card.querySelector('.pageguide-goal-title-row');
+      if (row) {
+        btn = document.createElement('button');
+        btn.id = 'pageguide-goal-collapse';
+        btn.type = 'button';
+        btn.className = 'pageguide-goal-collapse';
+        btn.title = 'Collapse journey';
+        btn.setAttribute('aria-label', 'Collapse journey');
+        btn.textContent = '✕';
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          card.style.display = 'none';
+          _setJourneyRecalledMode(false);
+        });
+        row.appendChild(btn);
+      }
+    }
+  } else if (btn) {
+    btn.remove();
+  }
 }
 
 /**
@@ -1075,6 +1128,7 @@ function addGuideStep(result) {
 
   guideActive = !result.isLastStep;
   hideTyping();
+  _setJourneyRecalledMode(false); // a live step replaces any recalled read-only view
 
   // Timeline is concrete-step indexed (one dot per step taken), so track the concrete step.
   currentGuideStep = result.step || result.planStep || currentGuideStep;
@@ -2707,6 +2761,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     addGuideStep(message.result);
   } else if (message.action === 'guideStepRecord') {
     if (message.meta) {
+      _setJourneyRecalledMode(false); // a live step is arriving — leave recalled view
       const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
       if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);
       else currentGuideRecords.push(message.meta);
@@ -2714,12 +2769,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       currentGuideStep = message.meta.planStep || message.meta.step || currentGuideStep;
       renderGoalCard({ route: 'guide', step: currentGuideStep });
       setExportEnabled(true);
-      // First step of a new guide session → post a "View journey" recall button so this
-      // prompt's journey can be brought back later, even after newer guides run.
+
+      // Accumulate this session's journey in memory so it can always be recalled later
+      // (independent of the persisted index). Dedup by step.
       const sid = message.meta.sessionId;
-      if (sid && Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
-        _journeyBtnSessions.add(sid);
-        addJourneyRecallMessage(sid, currentGuideTitle || currentGoal?.prompt || message.meta.instruction);
+      if (sid) {
+        const j = _journeysBySession[sid] || (_journeysBySession[sid] = { title: '', steps: [] });
+        const at = j.steps.findIndex(s => Number(s.step) === Number(message.meta.step));
+        if (at >= 0) j.steps[at] = message.meta; else j.steps.push(message.meta);
+        j.steps.sort((a, b) => Number(a.step) - Number(b.step));
+        j.title = j.title || currentGuideTitle || currentGoal?.prompt || message.meta.instruction || '';
+        // First step of a new guide session → post a "View journey" recall button.
+        if (Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
+          _journeyBtnSessions.add(sid);
+          addJourneyRecallMessage(sid, j.title);
+        }
       }
     }
   } else if (message.action === 'askStep') {
