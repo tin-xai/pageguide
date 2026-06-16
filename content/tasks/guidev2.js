@@ -517,8 +517,8 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     chrome.runtime.sendMessage({
       action: 'addMessage',
       content: inPlace
-        ? `♻️ Re-running from step ${fromStep} on this page with your new instruction…`
-        : `♻️ Restoring step ${fromStep} and re-running with your new instruction…`,
+        ? `♻️ Continuing after step ${fromStep} on this page with your new instruction…`
+        : `♻️ Restoring through step ${fromStep} and continuing with your new instruction…`,
       type: 'info'
     });
   } catch (e) {}
@@ -527,10 +527,10 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     // One-shot: clear the handoff so a manual reload can't replay it again.
     if (typeof rewindClearSteerPending === 'function') await rewindClearSteerPending();
 
-    // Read the kept records (1…fromStep−1) that survived the truncate.
+    // Keep steps 1…fromStep (inclusive); the agent re-runs from fromStep+1.
     const kept = [];
     if (typeof rewindGetRecord === 'function') {
-      for (let s = 1; s < fromStep; s++) {
+      for (let s = 1; s <= fromStep; s++) {
         const r = await rewindGetRecord(payload.sessionId, s);
         if (r) kept.push(r);
       }
@@ -544,7 +544,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
         if (idx && idx.goal) goal = idx.goal;
       }
     } catch (e) {}
-    const question = `${goal}\nUSER REDIRECTION at step ${fromStep}: ${payload.newGoal || ''}`.trim();
+    const question = `${goal}\nUSER REDIRECTION after step ${fromStep}: ${payload.newGoal || ''}`.trim();
 
     const captureEnabled = await _gv2IsCaptureEnabled();
     const autoMode = await _gv2IsAutoMode();
@@ -562,9 +562,9 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       sessionId: payload.sessionId,
       captureEnabled,
       autoMode,
-      currentPlanStep: fromStep
+      currentPlanStep: fromStep + 1
     };
-    console.log('[guidev2] steer session built; generating step', fromStep);
+    console.log('[guidev2] steer session built; continuing from step', fromStep + 1);
 
     if (inPlace) {
       // Already on the page with its live state — just let any in-flight changes settle and

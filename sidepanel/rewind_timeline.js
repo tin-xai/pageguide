@@ -249,20 +249,15 @@
     newGoal = (newGoal || '').trim();
     if (!meta || !newGoal) return false;
     const sessionId = meta.sessionId || _sessionId;
-    const step = meta.step;
-    if (!sessionId || !step) return false;
+    const step = Number(meta.step);
+    if (!sessionId || !Number.isFinite(step)) return false;
 
-    // Re-decide step N: land on the page where N was originally presented — i.e. the page
-    // state after step N−1. Fall back to N's own URL for the first step.
+    // Branch AFTER the clicked step: keep steps 1…N, land on step N's page, re-run from N+1.
     let landingUrl = meta.url || null;
     try {
-      if (typeof rewindGetRecord === 'function') {
+      if (!landingUrl && typeof rewindGetRecord === 'function') {
         const recN = await rewindGetRecord(sessionId, step);
         if (recN && recN.url) landingUrl = recN.url;
-        if (step > 1) {
-          const prev = await rewindGetRecord(sessionId, step - 1);
-          if (prev && prev.url) landingUrl = prev.url;
-        }
       }
     } catch (e) {}
     if (!landingUrl) {
@@ -272,14 +267,16 @@
 
     const payload = { sessionId, fromStep: step, newGoal, url: landingUrl, createdAt: Date.now() };
     try {
-      // Overwrite forward from N: drop step N and everything after it; replay rebuilds 1…N−1.
-      if (typeof rewindTruncateAfter === 'function') await rewindTruncateAfter(sessionId, step - 1);
+      // Overwrite forward: drop everything after step N from the store AND the timeline UI.
+      if (typeof rewindTruncateAfter === 'function') await rewindTruncateAfter(sessionId, step);
       // Stash the handoff too — it's the fallback path if we have to reload (different page).
       if (typeof rewindSetSteerPending === 'function') await rewindSetSteerPending(payload);
+      dropStepsAfter(step);
+      if (typeof global.pruneGuideAfter === 'function') { try { global.pruneGuideAfter(step); } catch (e) {} }
       try {
         chrome.runtime.sendMessage({
           action: 'addMessage',
-          content: `🔀 Branching from step ${step} — applying: “${newGoal}”`,
+          content: `🔀 Branching after step ${step} — applying: “${newGoal}”`,
           type: 'info'
         });
       } catch (e) {}
@@ -289,6 +286,17 @@
       console.warn('[rewind] steer failed:', err);
       return false;
     }
+  }
+
+  // Remove Journey-timeline rows after `step` (keeps the live timeline in sync on rebranch).
+  function dropStepsAfter(step) {
+    const n = Number(step);
+    const container = document.getElementById(TIMELINE_ID);
+    if (!container || !Number.isFinite(n)) return;
+    container.querySelectorAll('.rw-step').forEach(r => {
+      const k = parseInt(r.getAttribute('data-step'), 10);
+      if (Number.isFinite(k) && k > n) r.remove();
+    });
   }
 
   // Apply a steer to the working tab. If it's already on the branch URL, fork IN PLACE on the
@@ -452,5 +460,5 @@
     _sessionId = null;
   }
 
-  global.RewindTimeline = { addStep, clear, setPlan, markVerify, openStep: _openInspector, openFullPageStep: _openFullPageInspector, steerFromStep };
+  global.RewindTimeline = { addStep, clear, setPlan, markVerify, openStep: _openInspector, openFullPageStep: _openFullPageInspector, steerFromStep, dropStepsAfter };
 })(typeof window !== 'undefined' ? window : globalThis);

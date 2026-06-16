@@ -262,6 +262,21 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   refreshGuideOnlyActions();
 }
 
+// Steer / rebranch: drop timeline steps AFTER `step` so the UI matches the truncated rewind
+// store. Steps 1…step stay; the agent appends new steps as it re-runs from step+1.
+function pruneGuideAfter(step) {
+  const n = Number(step);
+  if (!Number.isFinite(n)) return;
+  currentGuideRecords = currentGuideRecords.filter(r => Number(r.step) <= n);
+  if (Array.isArray(currentGuidePlan) && currentGuidePlan.length > n) currentGuidePlan = currentGuidePlan.slice(0, n);
+  if (currentGuideVerifications) {
+    Object.keys(currentGuideVerifications).forEach(k => { if (Number(k) > n) delete currentGuideVerifications[k]; });
+  }
+  currentGuideStep = n;
+  renderGoalCard({ route: 'guide', step: n });
+}
+if (typeof window !== 'undefined') window.pruneGuideAfter = pruneGuideAfter;
+
 function clearGoalAndStepPanel() {
   currentGoal = null;
   currentGuidePlan = [];

@@ -153,9 +153,9 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     expect(res.pending).toBeTruthy();
     expect(res.pending.fromStep).toBe(2);
     expect(res.pending.newGoal).toContain('do something different');
-    // Re-decide step 2 → land where step 2 was presented = step 1's recorded URL.
-    expect(res.pending.url).toBe('https://ex.com/a');
-    expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
+    // Branch AFTER step 2 → land on step 2's own page (keep 1..2, re-run from 3).
+    expect(res.pending.url).toBe('https://ex.com/b');
+    expect(res.nav).toBe('https://ex.com/b'); // working tab navigated to the landing URL
   });
 
   test('step preview card "Steer from here" writes a handoff and requests navigation', async () => {
@@ -210,8 +210,55 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     expect(res.pending).toBeTruthy();
     expect(res.pending.fromStep).toBe(2);
     expect(res.pending.newGoal).toContain('do something different');
-    expect(res.pending.url).toBe('https://ex.com/a');
-    expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
+    expect(res.pending.url).toBe('https://ex.com/b');
+    expect(res.nav).toBe('https://ex.com/b'); // working tab navigated to the landing URL
+  });
+
+  test('rebranch prunes timeline steps after the branch point', async () => {
+    await panelPage.evaluate(async () => {
+      // @ts-ignore
+      window.__nav = null;
+      // @ts-ignore
+      chrome.tabs = chrome.tabs || {};
+      // @ts-ignore - working tab is on some other page → steer navigates (not in-place)
+      chrome.tabs.query = async () => [{ id: 3, url: 'https://current.example/x' }];
+      // @ts-ignore
+      chrome.tabs.update = async (id, props) => { window.__nav = props.url; return {}; };
+      // @ts-ignore
+      chrome.tabs.reload = async () => { window.__nav = 'RELOAD'; return {}; };
+      // @ts-ignore
+      chrome.tabs.sendMessage = async () => ({});
+      // @ts-ignore
+      await rewindStartSession('prune-sess', 'goal');
+      // @ts-ignore
+      currentGuidePlan = [];
+      // @ts-ignore
+      currentGuideRecords = [];
+      for (let i = 1; i <= 10; i++) {
+        // @ts-ignore
+        await rewindPutRecord({ sessionId: 'prune-sess', step: i, planStep: i, instruction: 's' + i, action: 'click', url: 'https://p.com/' + i });
+        // @ts-ignore
+        currentGuideRecords.push({ step: i, planStep: i, sessionId: 'prune-sess', url: 'https://p.com/' + i, instruction: 's' + i, confidence: 0.9 });
+      }
+      // @ts-ignore
+      currentGuideStep = 10; guideActive = true;
+      // @ts-ignore
+      renderGoalCard({ route: 'guide', title: 'T', step: 10 });
+    });
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(10);
+
+    await panelPage.evaluate(async () => {
+      // @ts-ignore - rebranch from step 5 → steps 6..10 should be removed
+      await RewindTimeline.steerFromStep({ sessionId: 'prune-sess', step: 5, url: 'https://p.com/5' }, 'go a different way');
+    });
+
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(5);
+    const storeSteps = await panelPage.evaluate(async () => {
+      // @ts-ignore
+      const idx = await rewindGetIndex();
+      return idx.steps.map(s => s.step);
+    });
+    expect(storeSteps).toEqual([1, 2, 3, 4, 5]); // store truncated to match the UI
   });
 
   test('steering a step on the SAME page forks in place (no reload)', async () => {
