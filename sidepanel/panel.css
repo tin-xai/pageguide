@@ -1383,6 +1383,18 @@ body.light-mode .pageguide-history-load-btn:hover {
   transform: none;
 }
 
+/* Running state: the send button becomes a red square Stop control. */
+.pageguide-send-btn.pageguide-send-btn--stop {
+  background: linear-gradient(135deg, #ff5f6d 0%, #ff2d55 100%) !important;
+  border-radius: 9px;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+}
+.pageguide-send-btn.pageguide-send-btn--stop:hover {
+  box-shadow: 0 0 20px rgba(255, 45, 85, 0.45);
+}
+
 /* Collapsible Debug Section */
 .pageguide-debug-wrapper {
   align-self: center;

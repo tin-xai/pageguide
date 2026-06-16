@@ -291,7 +291,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     expect(res.inplace.payload.fromStep).toBe(2);
   });
 
-  test('running shows the guide spinner + in-chat Stop rectangle; send is disabled (not morphed)', async () => {
+  test('send button morphs into a square Stop while running; no in-chat stop rectangle', async () => {
     await panelPage.evaluate(() => {
       // @ts-ignore - capture stop messages to the content script
       window.__sent = [];
@@ -303,21 +303,18 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       showTyping();
     });
     const send = panelPage.locator('#pageguide-send');
-    // Progress is the spinner + a red rectangle Stop in the chat — NOT a morphed send button.
-    await expect(panelPage.locator('.pageguide-typing')).toBeVisible();
-    const stopRect = panelPage.locator('.pageguide-guide-stop-btn');
-    await expect(stopRect).toBeVisible();
-    await expect(send).toBeDisabled();
-    await expect(send).not.toHaveClass(/pageguide-send-btn--stop/);
-    await expect(send).toHaveText('➤');
+    // The send button is the Stop control; there is no separate in-chat stop rectangle.
+    await expect(send).toHaveClass(/pageguide-send-btn--stop/);
+    await expect(send).toHaveText('■');
+    await expect(panelPage.locator('.pageguide-guide-stop-btn')).toHaveCount(0);
 
-    await stopRect.click();
+    await send.click();
     const sent = await panelPage.evaluate(() => window.__sent);
     expect(sent.some(m => m && m.action === 'stopGuide')).toBe(true);
 
-    // Spinner cleared and send re-enabled once stopped.
-    await expect(panelPage.locator('.pageguide-typing')).toHaveCount(0);
-    await expect(send).toBeEnabled();
+    // Reverts to the send shape once stopped.
+    await expect(send).not.toHaveClass(/pageguide-send-btn--stop/);
+    await expect(send).toHaveText('➤');
   });
 
   test('a guide journey can be recalled from its "View journey" button', async () => {
@@ -425,6 +422,12 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(dots).toHaveCount(10);            // all 10 steps shown
     await expect(dots.nth(0)).toHaveClass(/done/); // step 1 < current → done
     await expect(dots.nth(3)).toHaveClass(/current/); // step 4 in progress
+
+    // The live (non-recalled) journey also has a collapse ✕ that hides it.
+    const x = panelPage.locator('#pageguide-goal-collapse');
+    await expect(x).toBeVisible();
+    await x.click();
+    await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
   });
 
   test('low-confidence step is flagged for review (red)', async () => {

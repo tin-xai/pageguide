@@ -20,7 +20,8 @@ let currentGuideStep = 0;
 let currentGuideRecords = [];
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
-let panelRunning = false;        // True while the agent is generating (send button disabled)
+let panelRunning = false;        // True while the agent is generating (send button shows Stop)
+let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
 const _journeyBtnSessions = new Set(); // Guide sessions that already have a "View journey" button
 const _journeysBySession = {}; // sessionId -> { title, steps:[meta] } accumulated from guideStepRecord
 
@@ -261,6 +262,7 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
     progress.style.display = 'none';
   }
 
+  if (isGuide) _ensureGoalCollapseBtn();
   card.style.display = '';
   refreshGuideOnlyActions();
 }
@@ -361,7 +363,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
   
-  document.getElementById('pageguide-send').addEventListener('click', sendMessage);
+  document.getElementById('pageguide-send').addEventListener('click', () => {
+    if (panelRunning) stopRun(); else sendMessage();
+  });
   initGuideModeToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
@@ -945,35 +949,28 @@ async function showStoredJourney(sessionId) {
   _setJourneyRecalledMode(true);
 }
 
-// Toggle the "recalled journey" affordance on the goal card: a collapse (✕) button that hides
-// the card. Live guide steps clear this so the X only shows for a recalled, read-only view.
+// Mark the goal card as a recalled (read-only) view — used only for styling (hides the caret).
 function _setJourneyRecalledMode(on) {
   const card = document.getElementById('pageguide-goal');
-  if (!card) return;
-  card.classList.toggle('pageguide-goal--recalled', !!on);
-  let btn = document.getElementById('pageguide-goal-collapse');
-  if (on) {
-    if (!btn) {
-      const row = card.querySelector('.pageguide-goal-title-row');
-      if (row) {
-        btn = document.createElement('button');
-        btn.id = 'pageguide-goal-collapse';
-        btn.type = 'button';
-        btn.className = 'pageguide-goal-collapse';
-        btn.title = 'Collapse journey';
-        btn.setAttribute('aria-label', 'Collapse journey');
-        btn.textContent = '✕';
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          card.style.display = 'none';
-          _setJourneyRecalledMode(false);
-        });
-        row.appendChild(btn);
-      }
-    }
-  } else if (btn) {
-    btn.remove();
-  }
+  if (card) card.classList.toggle('pageguide-goal--recalled', !!on);
+}
+
+// Ensure the journey/goal card has a collapse (✕) button that hides it. Present in every guide
+// mode (live or recalled), so the user can always collapse the journey.
+function _ensureGoalCollapseBtn() {
+  const card = document.getElementById('pageguide-goal');
+  if (!card || document.getElementById('pageguide-goal-collapse')) return;
+  const row = card.querySelector('.pageguide-goal-title-row');
+  if (!row) return;
+  const btn = document.createElement('button');
+  btn.id = 'pageguide-goal-collapse';
+  btn.type = 'button';
+  btn.className = 'pageguide-goal-collapse';
+  btn.title = 'Collapse journey';
+  btn.setAttribute('aria-label', 'Collapse journey');
+  btn.textContent = '✕';
+  btn.addEventListener('click', (e) => { e.stopPropagation(); card.style.display = 'none'; });
+  row.appendChild(btn);
 }
 
 /**
@@ -1270,13 +1267,27 @@ function addAskStep(result) {
 /**
  * Show typing indicator. In guide mode, appends a Stop button.
  */
-// Track the running state. Progress is shown via the guide spinner (typing indicator) and the
-// red rectangle Stop button inside it — NOT by morphing the send button. The send button is
-// simply disabled while running.
+// Morph the send button (➤) into a square Stop (■) while the agent is running, and back.
+// `panelRunning` is the single source of truth used by the click handler to route to stop.
 function setRunning(on) {
   panelRunning = !!on;
   const btn = document.getElementById('pageguide-send');
-  if (btn) btn.disabled = panelRunning;
+  if (!btn) return;
+  btn.disabled = false; // stays clickable — it's the Stop control while running
+  btn.classList.toggle('pageguide-send-btn--stop', panelRunning);
+  btn.textContent = panelRunning ? '■' : '➤';
+  btn.title = panelRunning ? 'Stop' : 'Send';
+  btn.setAttribute('aria-label', panelRunning ? 'Stop' : 'Send');
+}
+
+// Stop whatever is running. A guide is aborted for real (stopGuide → gv2StopGuide, also clears
+// SW state); other routes just cancel the UI (the in-flight LLM result is discarded via
+// cancelRequested). stopGuide is called unconditionally because a guide may already be running
+// in the content script even before guideActive flips on the first step — harmless otherwise.
+function stopRun() {
+  cancelRequested = true;
+  setRunning(false);
+  stopGuide('⏹ Stopped.');
 }
 
 function showTyping() {
@@ -1287,14 +1298,6 @@ function showTyping() {
   const typing = document.createElement('div');
   typing.className = 'pageguide-typing';
   typing.innerHTML = '<span></span><span></span><span></span>';
-
-  if (guideActive) {
-    const stopBtn = document.createElement('button');
-    stopBtn.className = 'pageguide-guide-stop-btn';
-    stopBtn.textContent = '⏹ Stop';
-    stopBtn.addEventListener('click', (e) => { e.stopPropagation(); stopGuide(); });
-    typing.appendChild(stopBtn);
-  }
 
   container.appendChild(typing);
   container.scrollTop = container.scrollHeight;
@@ -1869,6 +1872,7 @@ async function sendMessage() {
 
   _hideSlashMenu();
   if (input) input.value = '';
+  cancelRequested = false;
 
   // Track if a specific routing is forced by the user
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
@@ -2091,6 +2095,9 @@ async function sendMessage() {
     }
     
     hideTyping();
+
+    // User pressed Stop while this (non-guide) request was in flight → discard the result.
+    if (cancelRequested) { cancelRequested = false; return; }
 
     if (result && result.success) {
       const routedTo = result.routedTo || forcedRoute || (noPageContext ? 'ask' : null);
