@@ -69,6 +69,13 @@
 #${INSPECTOR_ID} .rw-snap-wrap{position:relative}
 #${INSPECTOR_ID} .rw-snap-banner{position:absolute;top:8px;left:8px;background:rgba(20,20,30,.85);color:#ffd166;font:600 11px/1 sans-serif;padding:5px 9px;border-radius:99px;z-index:2}
 #${INSPECTOR_ID} iframe{width:100%;height:60vh;border:1px solid var(--pg-border,rgba(255,255,255,.12));border-radius:8px;background:#fff}
+#${INSPECTOR_ID} .rw-steer{background:var(--pg-hover,rgba(128,128,128,.1));border:1px solid var(--pg-border,rgba(255,255,255,.12));border-radius:8px;padding:10px;margin-bottom:10px}
+#${INSPECTOR_ID} .rw-steer-hdr{font:700 12px/1.3 -apple-system,sans-serif;margin-bottom:7px;color:#7c5cff}
+#${INSPECTOR_ID} .rw-steer-input{width:100%;box-sizing:border-box;resize:vertical;background:var(--pg-bg,#15151f);color:inherit;border:1px solid var(--pg-border,rgba(255,255,255,.18));border-radius:7px;padding:8px;font:400 12px/1.4 -apple-system,sans-serif}
+#${INSPECTOR_ID} .rw-steer-note{font:400 10px/1.4 sans-serif;opacity:.6;margin:6px 0 8px}
+#${INSPECTOR_ID} .rw-steer-actions{display:flex;justify-content:flex-end;gap:8px}
+#${INSPECTOR_ID} .rw-steer-go{background:#7c5cff;color:#fff}
+#${INSPECTOR_ID} .rw-steer-go[disabled]{opacity:.5;cursor:default}
 #${INSPECTOR_ID} details{margin-top:10px;font:400 11px/1.5 monospace}
 #${INSPECTOR_ID} pre{white-space:pre-wrap;word-break:break-word;background:#0004;padding:8px;border-radius:6px;overflow:auto;max-height:240px}`;
     document.head.appendChild(style);
@@ -166,6 +173,7 @@
       <div class="rw-ins-hdr">
         <button class="rw-ins-btn" data-rw="back">← Back</button>
         <span class="rw-ins-title">Step ${_escape(rec.step)}</span>
+        <button class="rw-ins-btn" data-rw="steer" title="Branch off from this step with a new instruction">⤳ Steer from here</button>
         <button class="rw-ins-btn" data-rw="fullpage" title="Open in a new tab">Open detailed view ↗</button>
       </div>
       <div class="rw-ins-body">
@@ -174,6 +182,15 @@
           ${rec.target?.text ? `<div><strong>Element:</strong> ${_escape(rec.target.text)}</div>` : ''}
           ${rec.nextStepHint ? `<div><strong>Next:</strong> ${_escape(rec.nextStepHint)}</div>` : ''}
           ${metaBits.length ? `<div style="margin-top:6px;opacity:.7">${_escape(metaBits.join('  ·  '))}</div>` : ''}
+        </div>
+        <div class="rw-steer" style="display:none">
+          <div class="rw-steer-hdr">⤳ Steer from step ${_escape(rec.step)}</div>
+          <textarea class="rw-steer-input" rows="3" placeholder="What should the agent do differently from here?"></textarea>
+          <div class="rw-steer-note">This re-runs from this step on a fresh load and discards the steps after it.</div>
+          <div class="rw-steer-actions">
+            <button class="rw-ins-btn" data-rw="steer-cancel">Cancel</button>
+            <button class="rw-ins-btn rw-steer-go" data-rw="steer-run">Branch &amp; run →</button>
+          </div>
         </div>
         <div class="rw-tabs">
           <button class="rw-ins-btn ${hasShot ? 'active' : ''}" data-rw="tab" data-view="shot" ${hasShot ? '' : 'disabled'}>📷 Screenshot</button>
@@ -198,7 +215,8 @@
     }
     renderView(hasShot ? 'shot' : 'snap');
 
-    wrap.addEventListener('click', (e) => {
+    const steerBox = wrap.querySelector('.rw-steer');
+    wrap.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-rw]');
       if (!btn) return;
       const kind = btn.getAttribute('data-rw');
@@ -209,8 +227,104 @@
         wrap.querySelectorAll('[data-rw="tab"]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         renderView(btn.getAttribute('data-view'));
+      } else if (kind === 'steer') {
+        if (steerBox) {
+          const showing = steerBox.style.display !== 'none';
+          steerBox.style.display = showing ? 'none' : '';
+          if (!showing) { const ta = steerBox.querySelector('.rw-steer-input'); if (ta) ta.focus(); }
+        }
+      } else if (kind === 'steer-cancel') {
+        if (steerBox) steerBox.style.display = 'none';
+      } else if (kind === 'steer-run') {
+        await _runSteer(wrap, rec, meta, btn);
       }
     });
+  }
+
+  // Branch off from a step: discard records after it, stash a one-shot handoff, then ask the
+  // content script (via the SW) to navigate the working tab back to the step's URL so it can
+  // replay prior actions and re-run from here with the new instruction. Shared by the in-panel
+  // inspector and the goal-dot preview card. Returns true on success.
+  async function steerFromStep(meta, newGoal) {
+    newGoal = (newGoal || '').trim();
+    if (!meta || !newGoal) return false;
+    const sessionId = meta.sessionId || _sessionId;
+    const step = meta.step;
+    if (!sessionId || !step) return false;
+
+    // Re-decide step N: land on the page where N was originally presented — i.e. the page
+    // state after step N−1. Fall back to N's own URL for the first step.
+    let landingUrl = meta.url || null;
+    try {
+      if (typeof rewindGetRecord === 'function') {
+        const recN = await rewindGetRecord(sessionId, step);
+        if (recN && recN.url) landingUrl = recN.url;
+        if (step > 1) {
+          const prev = await rewindGetRecord(sessionId, step - 1);
+          if (prev && prev.url) landingUrl = prev.url;
+        }
+      }
+    } catch (e) {}
+    if (!landingUrl) {
+      try { chrome.runtime.sendMessage({ action: 'addMessage', content: '⚠ Cannot steer this step — missing its page URL.', type: 'error' }); } catch (e) {}
+      return false;
+    }
+
+    const payload = { sessionId, fromStep: step, newGoal, url: landingUrl, createdAt: Date.now() };
+    try {
+      // Overwrite forward from N: drop step N and everything after it; replay rebuilds 1…N−1.
+      if (typeof rewindTruncateAfter === 'function') await rewindTruncateAfter(sessionId, step - 1);
+      // Stash the handoff too — it's the fallback path if we have to reload (different page).
+      if (typeof rewindSetSteerPending === 'function') await rewindSetSteerPending(payload);
+      try {
+        chrome.runtime.sendMessage({
+          action: 'addMessage',
+          content: `🔀 Branching from step ${step} — applying: “${newGoal}”`,
+          type: 'info'
+        });
+      } catch (e) {}
+      await _rwApplySteer(payload);
+      return true;
+    } catch (err) {
+      console.warn('[rewind] steer failed:', err);
+      return false;
+    }
+  }
+
+  // Apply a steer to the working tab. If it's already on the branch URL, fork IN PLACE on the
+  // live page (no reload — vital for SPAs like Google Slides that lose state / prompt on
+  // reload). Different page → navigate there; the content script picks up the stashed handoff
+  // on load. Falls back to the SW navigateTab handler if direct tab access fails.
+  function _rwStripHash(u) { try { const x = new URL(u); return x.origin + x.pathname + x.search; } catch (e) { return u; } }
+  async function _rwApplySteer(payload) {
+    const url = payload.url;
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = tabs && tabs[0];
+      if (tab && tab.id != null) {
+        const samePage = !!tab.url && _rwStripHash(tab.url) === _rwStripHash(url);
+        if (samePage) {
+          // No reload: tell the content script to re-run on the current live DOM.
+          console.log('[rewind] steer: in-place re-run on working tab', tab.id);
+          try { await chrome.tabs.sendMessage(tab.id, { action: 'gv2SteerNow', payload }); return; }
+          catch (e) { console.warn('[rewind] in-place steer message failed, reloading instead:', e); await chrome.tabs.reload(tab.id); return; }
+        }
+        console.log('[rewind] steer: navigating working tab', tab.id, '→', url);
+        await chrome.tabs.update(tab.id, { url });
+        return;
+      }
+    } catch (e) { console.warn('[rewind] steer apply failed, falling back to SW:', e); }
+    try { chrome.runtime.sendMessage({ action: 'navigateTab', url }); } catch (e) {}
+  }
+
+  async function _runSteer(wrap, rec, meta, runBtn) {
+    const ta = wrap.querySelector('.rw-steer-input');
+    const newGoal = ta ? ta.value.trim() : '';
+    if (!newGoal) { if (ta) ta.focus(); return; }
+    if (runBtn) runBtn.disabled = true;
+    const ok = await steerFromStep({ sessionId: rec.sessionId || meta.sessionId, step: rec.step, url: rec.url || meta.url }, newGoal);
+    if (ok) wrap.remove();
+    else if (runBtn) runBtn.disabled = false;
   }
 
   // ---- plan strip ----
@@ -338,5 +452,5 @@
     _sessionId = null;
   }
 
-  global.RewindTimeline = { addStep, clear, setPlan, markVerify, openStep: _openInspector, openFullPageStep: _openFullPageInspector };
+  global.RewindTimeline = { addStep, clear, setPlan, markVerify, openStep: _openInspector, openFullPageStep: _openFullPageInspector, steerFromStep };
 })(typeof window !== 'undefined' ? window : globalThis);

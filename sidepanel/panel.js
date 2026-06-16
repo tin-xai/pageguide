@@ -102,14 +102,55 @@ async function showGoalStepPreview(step, anchor) {
     </div>` : ''}
     ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
     ${meta ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
+    ${meta ? '<button type="button" class="pageguide-goal-step-steer">⤳ Steer from here</button>' : ''}
+    ${meta ? `<div class="pageguide-goal-step-steerbox" style="display:none">
+      <textarea class="pageguide-goal-step-steer-input" rows="2" placeholder="What should the agent do differently from here?"></textarea>
+      <div class="pageguide-goal-step-steer-row">
+        <button type="button" class="pageguide-goal-step-steer-cancel">Cancel</button>
+        <button type="button" class="pageguide-goal-step-steer-go">Branch &amp; run →</button>
+      </div>
+    </div>` : ''}
   `;
 
-  preview.addEventListener('click', (e) => {
+  preview.addEventListener('click', async (e) => {
     e.stopPropagation();
+    const target = e.target;
+    // Toggle the inline steer prompt.
+    if (target.closest('.pageguide-goal-step-steer')) {
+      const box = preview.querySelector('.pageguide-goal-step-steerbox');
+      if (box) {
+        const show = box.style.display === 'none';
+        box.style.display = show ? '' : 'none';
+        if (show) { const ta = box.querySelector('textarea'); if (ta) ta.focus(); }
+      }
+      return;
+    }
+    if (target.closest('.pageguide-goal-step-steer-cancel')) {
+      const box = preview.querySelector('.pageguide-goal-step-steerbox');
+      if (box) box.style.display = 'none';
+      return;
+    }
+    if (target.closest('.pageguide-goal-step-steer-go')) {
+      const ta = preview.querySelector('.pageguide-goal-step-steer-input');
+      const goal = ta ? ta.value.trim() : '';
+      if (!goal) { if (ta) ta.focus(); return; }
+      const goBtn = target.closest('button');
+      if (goBtn) goBtn.disabled = true;
+      if (meta && typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
+        await RewindTimeline.steerFromStep(meta, goal);
+      }
+      hideGoalStepPreview();
+      return;
+    }
+    // Clicks inside the steer box (e.g. the textarea) should not open the inspector.
+    if (target.closest('.pageguide-goal-step-steerbox')) return;
+
+    // Default: open the in-panel inspector (snapshot + "Steer from here"), which steers THIS
+    // working tab and still offers "Open detailed view ↗" for the full-page view.
     if (meta && typeof RewindTimeline !== 'undefined') {
       hideGoalStepPreview();
-      if (typeof RewindTimeline.openFullPageStep === 'function') RewindTimeline.openFullPageStep(meta);
-      else if (typeof RewindTimeline.openStep === 'function') RewindTimeline.openStep(meta);
+      if (typeof RewindTimeline.openStep === 'function') RewindTimeline.openStep(meta);
+      else if (typeof RewindTimeline.openFullPageStep === 'function') RewindTimeline.openFullPageStep(meta);
     }
   });
 

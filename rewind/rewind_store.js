@@ -21,6 +21,9 @@
 (function (global) {
   const RW_INDEX_KEY = 'RW_INDEX';
   const RW_REC_PREFIX = 'RW_REC::';
+  // One-shot handoff for the "Steer from here" branch: written by the side panel, consumed
+  // by the content script after it navigates back to the step's URL. See guidev2 steer pickup.
+  const RW_STEER_PENDING_KEY = 'RW_STEER_PENDING';
 
   function _store() {
     return (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local)
@@ -148,6 +151,24 @@
     }
   }
 
+  // ----- Steer ("branch & re-run") handoff -----
+  // The side panel writes a payload { sessionId, fromStep, newGoal, url, createdAt } and then
+  // navigates the working tab to `url`; the content script reads it on load (taking precedence
+  // over the normal resume), replays prior actions, and forks the session. One-shot: cleared
+  // by the consumer.
+  async function rewindSetSteerPending(payload) {
+    await _set({ [RW_STEER_PENDING_KEY]: payload || null });
+  }
+
+  async function rewindGetSteerPending() {
+    const res = await _get(RW_STEER_PENDING_KEY);
+    return res[RW_STEER_PENDING_KEY] || null;
+  }
+
+  async function rewindClearSteerPending() {
+    await _remove(RW_STEER_PENDING_KEY);
+  }
+
   const api = {
     rewindStartSession,
     rewindPutRecord,
@@ -155,7 +176,10 @@
     rewindGetRecord,
     rewindPatchRecord,
     rewindClear,
-    rewindTruncateAfter
+    rewindTruncateAfter,
+    rewindSetSteerPending,
+    rewindGetSteerPending,
+    rewindClearSteerPending
   };
 
   // Expose as globals (content scripts, panel, inspector) and as a namespace.

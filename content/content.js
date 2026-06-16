@@ -86,6 +86,16 @@ async function handleMessage(request) {
       }
       return { success: false, error: 'Guide not active' };
 
+    case 'gv2SteerNow':
+      // Same-page "Steer from here": fork + re-run on the live DOM without reloading
+      // (reloading a heavy SPA like Google Slides loses state and can prompt "leave site?").
+      console.log('🤖 gv2SteerNow received', request.payload);
+      if (typeof gv2SteerNow === 'function' && request.payload) {
+        gv2SteerNow(request.payload); // fire-and-forget; progress streams via messages
+        return { success: true };
+      }
+      return { success: false, error: 'Steer not available' };
+
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {
         return await continueGuidance();

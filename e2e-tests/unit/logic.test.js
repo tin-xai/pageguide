@@ -583,4 +583,40 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     expect(await window.rewindGetRecord('s1', 2)).not.toBeNull();
     expect(await window.rewindGetRecord('s1', 3)).toBeNull();
   });
+
+  test('steer handoff round-trips and clears (one-shot)', async () => {
+    expect(await window.rewindGetSteerPending()).toBeNull();
+    const payload = { sessionId: 's1', fromStep: 3, newGoal: 'do X instead', url: 'https://x.com/p', createdAt: 1 };
+    await window.rewindSetSteerPending(payload);
+    expect(await window.rewindGetSteerPending()).toEqual(payload);
+    await window.rewindClearSteerPending();
+    expect(await window.rewindGetSteerPending()).toBeNull();
+  });
+});
+
+// Rewind action-replay: resolve a stored target.text against a fresh page index.
+describe('gv2MatchIndexText (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  const idxText = '[1] Sign in\n[2] (button) Create account\n[3] Search the catalogue for items';
+
+  test('exact match (interactive line)', () => {
+    expect(window.gv2MatchIndexText(idxText, 'Sign in')).toBe(1);
+  });
+  test('ignores the annotated role prefix', () => {
+    expect(window.gv2MatchIndexText(idxText, 'Create account')).toBe(2);
+  });
+  test('case-insensitive', () => {
+    expect(window.gv2MatchIndexText(idxText, 'SIGN IN')).toBe(1);
+  });
+  test('truncation-tolerant prefix match', () => {
+    expect(window.gv2MatchIndexText(idxText, 'Search the catalogue...')).toBe(3);
+  });
+  test('containment fallback', () => {
+    expect(window.gv2MatchIndexText(idxText, 'catalogue for items')).toBe(3);
+  });
+  test('no match returns null', () => {
+    expect(window.gv2MatchIndexText(idxText, 'Checkout now')).toBeNull();
+    expect(window.gv2MatchIndexText('', 'Sign in')).toBeNull();
+  });
 });

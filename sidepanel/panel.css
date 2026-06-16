@@ -1263,6 +1263,43 @@ body.light-mode .pageguide-history-load-btn:hover {
   background: var(--pg-danger, #ff526a);
 }
 
+/* Inline "Branch & run" prompt revealed by the Steer button in the preview card. */
+.pageguide-goal-step-steerbox {
+  margin-top: 8px;
+}
+.pageguide-goal-step-steerbox textarea.pageguide-goal-step-steer-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid #e5e7f0;
+  border-radius: 8px;
+  padding: 7px 8px;
+  font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--pg-text, #252b3f);
+  background: #fbfbff;
+}
+.pageguide-goal-step-steer-row {
+  display: flex;
+  gap: 6px;
+}
+.pageguide-goal-step-preview button.pageguide-goal-step-steer-cancel {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 12px;
+  background: #f1f2f7;
+  color: #4d566c;
+}
+.pageguide-goal-step-preview button.pageguide-goal-step-steer-go {
+  flex: 1 1 auto;
+  width: auto;
+  background: var(--pg-accent, #7857ff);
+  color: #fff;
+}
+.pageguide-goal-step-preview button.pageguide-goal-step-steer-go[disabled] {
+  opacity: .55;
+  cursor: default;
+}
+
 /* Guide Mode Toggle (Manual vs Auto) */
 .pageguide-mode-btn {
   background: rgba(255, 255, 255, 0.08);

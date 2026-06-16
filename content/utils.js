@@ -563,6 +563,42 @@ function getIndexedElement(idx) {
 }
 
 /**
+ * Match a stored target text against a page index's `indexText` to find the element index
+ * to act on during Rewind action-replay. Lines look like "[3] Sign in" (guide/interactive
+ * mode) or "[3] (button) Sign in" (annotated mode). Returns the numeric index of the best
+ * match, or null when none is good enough.
+ *
+ * Strategy (most → least strict): exact normalized equality → one is a prefix of the other
+ * (handles "…" truncation) → substring containment. Pure + exported so it is unit-testable.
+ *
+ * @param {string} indexText - the `indexText` from createPageIndex
+ * @param {string} target - the stored target.text to locate
+ * @returns {number|null}
+ */
+function gv2MatchIndexText(indexText, target) {
+  const norm = (s) => String(s == null ? '' : s).replace(/\.\.\.$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const want = norm(target);
+  if (!want || !indexText) return null;
+
+  const rows = [];
+  String(indexText).split('\n').forEach((line) => {
+    const m = line.match(/^\s*\[(\d+)\]\s*(?:\([^)]*\)\s*)?(.*)$/);
+    if (m) rows.push({ idx: parseInt(m[1], 10), text: norm(m[2]) });
+  });
+  if (!rows.length) return null;
+
+  // 1) exact
+  for (const r of rows) if (r.text === want) return r.idx;
+  // 2) prefix either direction (truncation-tolerant)
+  for (const r of rows) if (r.text && (r.text.startsWith(want) || want.startsWith(r.text))) return r.idx;
+  // 3) containment
+  for (const r of rows) if (r.text && (r.text.includes(want) || want.includes(r.text))) return r.idx;
+  return null;
+}
+if (typeof window !== 'undefined') window.gv2MatchIndexText = gv2MatchIndexText;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2MatchIndexText = gv2MatchIndexText;
+
+/**
  * Expand truncated social media posts and other "show more" content before indexing.
  * Clicks visible expand buttons (See more, Show more, Read more, etc.) silently.
  * Returns a promise that resolves after all clicks + a short settle delay.

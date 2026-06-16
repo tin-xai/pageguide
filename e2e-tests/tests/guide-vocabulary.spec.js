@@ -109,6 +109,141 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('#pageguide-messages')).toContainText('Could not continue the guide');
   });
 
+  test('inspector "Steer from here" writes a steer handoff and requests navigation', async () => {
+    await panelPage.evaluate(async () => {
+      // @ts-ignore - record outgoing messages + stub tab navigation
+      window.__sent = [];
+      window.__nav = null;
+      // @ts-ignore
+      chrome.runtime.sendMessage = (msg, cb) => { window.__sent.push(msg); if (cb) cb({}); return Promise.resolve({}); };
+      // @ts-ignore
+      chrome.tabs = chrome.tabs || {};
+      // @ts-ignore
+      chrome.tabs.query = async () => [{ id: 1, url: 'https://current.example/page' }];
+      // @ts-ignore
+      chrome.tabs.update = async (id, props) => { window.__nav = props.url; return {}; };
+      // @ts-ignore
+      chrome.tabs.reload = async () => { window.__nav = 'RELOAD'; return {}; };
+      // @ts-ignore - seed two steps on different pages so the landing URL is step N−1's URL
+      await rewindStartSession('steer-sess', 'original goal');
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'steer-sess', step: 1, instruction: 'open menu', action: 'click', url: 'https://ex.com/a', target: { text: 'Menu' } });
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'steer-sess', step: 2, instruction: 'pick option', action: 'click', url: 'https://ex.com/b', target: { text: 'Option' } });
+      // @ts-ignore
+      RewindTimeline.openStep({ sessionId: 'steer-sess', step: 2 });
+    });
+
+    const steerBtn = panelPage.locator('#pageguide-rewind-inspector [data-rw="steer"]');
+    await expect(steerBtn).toBeVisible();
+    await steerBtn.click();
+
+    const ta = panelPage.locator('#pageguide-rewind-inspector .rw-steer-input');
+    await expect(ta).toBeVisible();
+    await ta.fill('do something different');
+    await panelPage.locator('#pageguide-rewind-inspector [data-rw="steer-run"]').click();
+
+    await panelPage.waitForTimeout(200);
+    const res = await panelPage.evaluate(async () => {
+      // @ts-ignore
+      const pending = await rewindGetSteerPending();
+      // @ts-ignore
+      return { pending, nav: window.__nav };
+    });
+    expect(res.pending).toBeTruthy();
+    expect(res.pending.fromStep).toBe(2);
+    expect(res.pending.newGoal).toContain('do something different');
+    // Re-decide step 2 → land where step 2 was presented = step 1's recorded URL.
+    expect(res.pending.url).toBe('https://ex.com/a');
+    expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
+  });
+
+  test('step preview card "Steer from here" writes a handoff and requests navigation', async () => {
+    await panelPage.evaluate(async () => {
+      // @ts-ignore
+      window.__sent = [];
+      window.__nav = null;
+      // @ts-ignore
+      chrome.runtime.sendMessage = (msg, cb) => { window.__sent.push(msg); if (cb) cb({}); return Promise.resolve({}); };
+      // @ts-ignore
+      chrome.tabs = chrome.tabs || {};
+      // @ts-ignore
+      chrome.tabs.query = async () => [{ id: 1, url: 'https://current.example/page' }];
+      // @ts-ignore
+      chrome.tabs.update = async (id, props) => { window.__nav = props.url; return {}; };
+      // @ts-ignore
+      chrome.tabs.reload = async () => { window.__nav = 'RELOAD'; return {}; };
+      // @ts-ignore
+      await rewindStartSession('steer-card', 'original goal');
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'steer-card', step: 1, instruction: 'open menu', action: 'click', url: 'https://ex.com/a', target: { text: 'Menu' } });
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'steer-card', step: 2, instruction: 'pick option', action: 'click', url: 'https://ex.com/b', target: { text: 'Option' } });
+      // @ts-ignore - the preview card reads its meta from currentGuideRecords
+      currentGuideRecords = [
+        { step: 1, planStep: 1, sessionId: 'steer-card', url: 'https://ex.com/a', instruction: 'open menu', confidence: 0.9 },
+        { step: 2, planStep: 2, sessionId: 'steer-card', url: 'https://ex.com/b', instruction: 'pick option', confidence: 0.9 }
+      ];
+      const anchor = document.createElement('div');
+      anchor.style.cssText = 'position:fixed;top:0;left:0;width:10px;height:10px';
+      document.body.appendChild(anchor);
+      // @ts-ignore
+      showGoalStepPreview(2, anchor);
+    });
+
+    const steerBtn = panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-steer');
+    await expect(steerBtn).toBeVisible();
+    await steerBtn.click();
+
+    const ta = panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-steer-input');
+    await expect(ta).toBeVisible();
+    await ta.fill('do something different');
+    await panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-steer-go').click();
+
+    await panelPage.waitForTimeout(200);
+    const res = await panelPage.evaluate(async () => {
+      // @ts-ignore
+      const pending = await rewindGetSteerPending();
+      // @ts-ignore
+      return { pending, nav: window.__nav };
+    });
+    expect(res.pending).toBeTruthy();
+    expect(res.pending.fromStep).toBe(2);
+    expect(res.pending.newGoal).toContain('do something different');
+    expect(res.pending.url).toBe('https://ex.com/a');
+    expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
+  });
+
+  test('steering a step on the SAME page forks in place (no reload)', async () => {
+    const res = await panelPage.evaluate(async () => {
+      // @ts-ignore
+      window.__nav = null; window.__inplace = null;
+      // @ts-ignore - working tab is already ON the landing URL (same page as step N−1)
+      chrome.tabs = chrome.tabs || {};
+      // @ts-ignore
+      chrome.tabs.query = async () => [{ id: 7, url: 'https://ex.com/a?q=1' }];
+      // @ts-ignore
+      chrome.tabs.update = async (id, props) => { window.__nav = 'UPDATE:' + props.url; return {}; };
+      // @ts-ignore
+      chrome.tabs.reload = async () => { window.__nav = 'RELOAD'; return {}; };
+      // @ts-ignore
+      chrome.tabs.sendMessage = async (id, msg) => { window.__inplace = msg; return {}; };
+      // @ts-ignore
+      await rewindStartSession('steer-same', 'goal');
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'steer-same', step: 1, instruction: 'open menu', action: 'click', url: 'https://ex.com/a?q=1', target: { text: 'Menu' } });
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'steer-same', step: 2, instruction: 'expand panel', action: 'click', url: 'https://ex.com/a?q=1', target: { text: 'More' } });
+      // @ts-ignore - steer step 2 → land on step 1's URL, which equals the current tab URL
+      await RewindTimeline.steerFromStep({ sessionId: 'steer-same', step: 2, url: 'https://ex.com/a?q=1' }, 'do it differently');
+      // @ts-ignore
+      return { nav: window.__nav, inplace: window.__inplace };
+    });
+    expect(res.nav).toBeNull();                       // no reload / no navigation
+    expect(res.inplace && res.inplace.action).toBe('gv2SteerNow'); // in-place re-run message
+    expect(res.inplace.payload.fromStep).toBe(2);
+  });
+
   test('timeline renders one dot per concrete step', async () => {
     await panelPage.evaluate(() => {
       // No upfront plan in the simple version — the timeline is driven by concrete records.
