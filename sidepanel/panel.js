@@ -94,30 +94,40 @@ async function showGoalStepPreview(step, anchor) {
   // Confidence status (green ≥70%, yellow <70%) — no red for confidence.
   const conf = meta?.confidence;
   const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf) : null;
-  const confHtml = tier
-    ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">${tier === 'high' ? '● Confident' : '● Less certain'}${conf != null ? ' · ' + Math.round(conf * 100) + '%' : ''}</div>`
+  // Confidence pinned to the top-left corner of the card.
+  const confHtml = (tier && conf != null)
+    ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
     : '';
   const url = meta?.url || rec?.url || '';
-  const urlHtml = url ? `<div class="pageguide-goal-step-preview-url">🔗 ${escapeHtml(url)}</div>` : '';
-  const regionHtml = rec?.regionShot
-    ? `<div class="pageguide-goal-step-region"><div class="pageguide-goal-step-region-cap">Region around target</div><img src="data:image/jpeg;base64,${rec.regionShot}" alt="region"></div>`
-    : '';
+  // Show the URL as a compact "link" hyperlink rather than the full (often long) address.
+  const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
   const allowSteer = !!meta && !isInitialNode;
 
-  // Timeline shows the BEFORE-action screenshot (the page as the agent saw it when choosing the
-  // step) + the highlighted-region crop. The AFTER-action screenshot lives in "Inspect more".
+  // Card layout: the REGION-around-the-target crop is the picture on top; the full BEFORE-action
+  // screenshot is tucked into a collapsible below it. (Falls back to the before-shot on top when
+  // there's no region crop — e.g. the initial-state node.) The AFTER-action shot is in "Inspect more".
   const beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
+  const regionShot = rec?.regionShot || null;
+  const topShot = regionShot || beforeShot;
+  const topImg = topShot
+    ? `<img src="data:image/jpeg;base64,${topShot}" alt="">`
+    : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>';
+  // Only show the collapsible before-shot when it isn't already the top image.
+  const beforeHtml = (beforeShot && regionShot)
+    ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
+        <img src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
+    : '';
 
   const preview = document.createElement('div');
   preview.id = 'pageguide-goal-step-preview';
   preview.className = 'pageguide-goal-step-preview';
   preview.innerHTML = `
-    ${beforeShot ? `<img src="data:image/jpeg;base64,${beforeShot}" alt="">` : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>'}
+    ${confHtml}
+    ${topImg}
     <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
-    ${confHtml}
     ${urlHtml}
-    ${regionHtml}
+    ${beforeHtml}
     ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
     ${meta ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
     ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">⤳ Steer from here</button>' : ''}
@@ -133,6 +143,10 @@ async function showGoalStepPreview(step, anchor) {
   preview.addEventListener('click', async (e) => {
     e.stopPropagation();
     const target = e.target;
+    // Let the "link" hyperlink open normally; don't also open the inspector.
+    if (target.closest('.pageguide-goal-step-link')) return;
+    // Let the collapsible "Before action" toggle natively; don't open the inspector.
+    if (target.closest('.pageguide-goal-step-before')) return;
     // Toggle the inline steer prompt.
     if (target.closest('.pageguide-goal-step-steer')) {
       const box = preview.querySelector('.pageguide-goal-step-steerbox');
