@@ -263,6 +263,69 @@ let _guidev2WaitingForClick = false;
 // Flag set when the user explicitly stops the guide
 let _guidev2Stopped = false;
 
+// Hard safety cap for concrete Guide v2 steps. If we need step 16, we stop
+// instead of asking the model to continue drifting.
+const GV2_MAX_STEPS = 15;
+
+function _gv2IsStopped() {
+  const g = window._guidev2;
+  return _guidev2Stopped || !g || g.active === false;
+}
+
+function _gv2HidePanelTyping() {
+  try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+}
+
+function _gv2ClearActionTimers() {
+  const g = window._guidev2;
+  if (!g) return;
+  if (g._autoClickTimer) {
+    clearTimeout(g._autoClickTimer);
+    g._autoClickTimer = null;
+  }
+  if (g._autoTypeTimer) {
+    clearTimeout(g._autoTypeTimer);
+    g._autoTypeTimer = null;
+  }
+}
+
+function _gv2StopInternal() {
+  _guidev2Stopped = true;
+  _guidev2Resuming = false;
+  _guidev2WaitingForClick = false;
+  _gv2ClearActionTimers();
+  _gv2RemoveClickListeners();
+  _gv2HideIndicator();
+  gv2HideAutoOverlay();
+  _gv2ClearState();
+}
+
+function _gv2MaxStepMessage(g = window._guidev2) {
+  return g?.autoMode
+    ? `Stopped after ${GV2_MAX_STEPS} steps to avoid an autonomous loop or drifting from the plan.`
+    : `Stopped after ${GV2_MAX_STEPS} steps to avoid looping or drifting from the plan.`;
+}
+
+function _gv2StopForMaxSteps(g = window._guidev2) {
+  const message = _gv2MaxStepMessage(g);
+  _gv2StopInternal();
+  _gv2HidePanelTyping();
+  try {
+    chrome.runtime.sendMessage({
+      action: 'addMessage',
+      content: message,
+      type: 'system'
+    });
+  } catch (e) {}
+  return { success: false, progressed: false, error: message, stoppedByMaxSteps: true };
+}
+
+function _gv2CheckStepCap(g = window._guidev2) {
+  const completedSteps = Array.isArray(g?.previousSteps) ? g.previousSteps.length : 0;
+  if (completedSteps + 1 > GV2_MAX_STEPS) return _gv2StopForMaxSteps(g);
+  return null;
+}
+
 // ===== SESSION-STORAGE FALLBACK (for when SW was killed) =====
 
 async function gv2SaveFallback(extra = {}) {
@@ -447,6 +510,9 @@ async function _gv2ResumeFromState(state) {
   try {
     try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
 
+    const capResult = _gv2CheckStepCap(window._guidev2);
+    if (capResult) return capResult;
+
     // Wait for the new page's DOM to stop mutating before indexing.
     // Add a small initial delay so the new page has time to start rendering,
     // then require 700 ms of DOM silence (up from the default 300 ms).
@@ -455,11 +521,13 @@ async function _gv2ResumeFromState(state) {
 
     // Rewind: the click that triggered this full-page nav is the last recorded step;
     // refresh its snapshot with the post-navigation page before generating the next step.
+    if (_gv2IsStopped()) return null;
     await gv2RecaptureAfterAction(window._guidev2?.previousSteps?.length || 0);
+    if (_gv2IsStopped()) return null;
 
     const result = await gv2GenerateNextStep();
 
-    if (result && result.success !== false) {
+    if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
     } else {
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
@@ -566,20 +634,27 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     };
     console.log('[guidev2] steer session built; continuing from step', fromStep + 1);
 
+    const capResult = _gv2CheckStepCap(window._guidev2);
+    if (capResult) return capResult;
+
     if (inPlace) {
       // Already on the page with its live state — just let any in-flight changes settle and
       // re-ground on the current DOM. No reload, no replay.
       await gv2WaitForDomStable(3000, 300);
+      if (_gv2IsStopped()) return;
     } else {
       // Freshly-loaded landing page: let it settle, then replay the in-page actions to rebuild
       // transient state (open dropdowns, filled forms) before re-deciding the branch step.
       await new Promise(r => setTimeout(r, 500));
+      if (_gv2IsStopped()) return;
       await gv2WaitForDomStable(8000, 700);
+      if (_gv2IsStopped()) return;
       await _gv2ReplayActions(kept, payload.url);
+      if (_gv2IsStopped()) return;
     }
 
     const result = await gv2GenerateNextStep();
-    if (result && result.success !== false) {
+    if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
     } else {
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
@@ -763,12 +838,9 @@ try {
     if (area === 'local' && changes[_GV2_AUTOMODE_PREF_KEY] && window._guidev2) {
       const on = changes[_GV2_AUTOMODE_PREF_KEY].newValue === true;
       window._guidev2.autoMode = on;
-      // Turning Auto off mid-session: drop the overlay and any pending auto-click.
+      // Turning Auto off mid-session: drop the overlay and any pending auto action.
       if (!on) {
-        if (window._guidev2._autoClickTimer) {
-          clearTimeout(window._guidev2._autoClickTimer);
-          window._guidev2._autoClickTimer = null;
-        }
+        _gv2ClearActionTimers();
         if (typeof gv2HideAutoOverlay === 'function') gv2HideAutoOverlay();
       }
     }
@@ -932,7 +1004,10 @@ async function _handleStepByStepGuideV2(question) {
  */
 async function gv2GenerateNextStep() {
   const g = window._guidev2;
-  if (!g.active || _guidev2Stopped) return null;
+  if (_gv2IsStopped()) return null;
+
+  const capResult = _gv2CheckStepCap(g);
+  if (capResult) return capResult;
 
   // Rewind: mark when work on this step began (used for durationMs in the record).
   g._stepStartedAt = Date.now();
@@ -947,13 +1022,14 @@ async function gv2GenerateNextStep() {
   // that shares the same name as the actual interactive button.
   let pageIndex;
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (_gv2IsStopped()) return null;
     pageIndex = createPageIndex(5000, true);
     if (pageIndex.count > 5) break;
     console.log('[guidev2] Sparse DOM (', pageIndex.count, 'el), retrying...');
     await new Promise(r => setTimeout(r, 700));
   }
 
-  if (!g.active || _guidev2Stopped) return null;
+  if (_gv2IsStopped()) return null;
 
   const curSig = (typeof gv2PageSignature === 'function')
     ? gv2PageSignature(pageIndex, window.location.href) : null;
@@ -962,6 +1038,7 @@ async function gv2GenerateNextStep() {
 
   const pageBg = getPageBackground();
   if (typeof showSomIfEnabled === 'function') await showSomIfEnabled(pageIndex);
+  if (_gv2IsStopped()) return null;
 
   const stepNumber = g.previousSteps.length + 1;
   console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
@@ -1001,7 +1078,7 @@ Provide the next step as JSON.`
       }]
     });
 
-    if (_guidev2Stopped) return null;
+    if (_gv2IsStopped()) return null;
 
     if (response?.error) {
       console.warn('[guidev2] LLM error:', response.error);
@@ -1010,6 +1087,7 @@ Provide the next step as JSON.`
     }
     if (response?.content) {
       const result = await gv2ProcessResponse(response.content);
+      if (_guidev2Stopped) return null;
       // On step 1 only, attach tutorial match info so the panel can show it in Details
       if (result?.success && g.tutorialRef && stepNumber === 1) {
         result.tutorialMatch = {
@@ -1099,11 +1177,16 @@ function gv2FindElementByText(searchText) {
 async function gv2ProcessResponse(content) {
   const g = window._guidev2;
   try {
+    if (_gv2IsStopped()) return null;
     const step = (typeof gv2ExtractJsonObject === 'function')
       ? gv2ExtractJsonObject(content)
       : JSON.parse(content);
     if (!step) throw new Error('Could not parse step JSON');
     console.log('[guidev2] Parsed step:', step);
+
+    if (Number(step.step) > GV2_MAX_STEPS) {
+      return _gv2StopForMaxSteps(g);
+    }
 
     // Plan (Slice 2): normalize confidence to 0..1 and advance the plan pointer.
     const confidence = (typeof step.confidence === 'number' && isFinite(step.confidence))
@@ -1156,6 +1239,7 @@ async function gv2ProcessResponse(content) {
     }
 
     if (typeof cleanupSom === 'function') cleanupSom();
+    if (_gv2IsStopped()) return null;
 
     const isLast = !!step.isLastStep;
     g.previousSteps.push(`Step ${step.step}: ${step.instruction}${isLast ? ' ✓' : ''}`);
@@ -1180,7 +1264,11 @@ async function gv2ProcessResponse(content) {
     } else if (action === 'type') {
       await _gv2SetState(false);
       if (autoPerform) {
-        setTimeout(() => _gv2AutoType(step), 200);
+        _gv2ClearActionTimers();
+        g._autoTypeTimer = setTimeout(() => {
+          g._autoTypeTimer = null;
+          if (!_gv2IsStopped()) _gv2AutoType(step);
+        }, 200);
       } else {
         // Manual / handed-back: highlight the field; the user types and presses Next.
         _gv2SetupClickListener();
@@ -1203,9 +1291,10 @@ async function gv2ProcessResponse(content) {
       _gv2SetupClickListener();
       if (autoPerform) {
         console.log('[guidev2] Auto mode: auto-performing low-risk click step', step.step);
+        _gv2ClearActionTimers();
         g._autoClickTimer = setTimeout(() => {
           g._autoClickTimer = null;
-          if (typeof gv2NextStep === 'function') gv2NextStep();
+          if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
         }, 900);
       } else if (g.autoMode && isHighRisk) {
         // High-risk click in auto mode → hand control back for this one.
@@ -1282,6 +1371,7 @@ function _gv2SetupClickListener() {
   _guidev2WaitingForClick = true;
 
   const handler = async (e) => {
+    if (_gv2IsStopped()) return;
     const onHighlight = e.target.closest('[data-pageguide-styled]') ||
                         e.target.hasAttribute('data-pageguide-styled');
     if (!onHighlight) return;
@@ -1334,6 +1424,10 @@ async function _gv2WaitForNavOrSettle(startUrl) {
 
   for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise(r => setTimeout(r, POLL_MS));
+    if (_gv2IsStopped()) {
+      _gv2HidePanelTyping();
+      return;
+    }
 
     // Full page navigation: pagehide has fired.
     // The SW port from this page is now (or about to be) disconnected.
@@ -1350,6 +1444,10 @@ async function _gv2WaitForNavOrSettle(startUrl) {
       // for those cases; 800 ms with early exit keeps SPA detection responsive.
       for (let j = 0; j < 8; j++) {
         await new Promise(r => setTimeout(r, 100));
+        if (_gv2IsStopped()) {
+          _gv2HidePanelTyping();
+          return;
+        }
         if (_guidev2PageHiding) {
           console.log('[guidev2] Full-page nav after URL change — new page will resume via SW');
           return;
@@ -1364,11 +1462,14 @@ async function _gv2WaitForNavOrSettle(startUrl) {
         // delay the observer can resolve on the OLD (static) DOM within 250 ms
         // and capture the wrong page.
         await new Promise(r => setTimeout(r, 600));
+        if (_gv2IsStopped()) return;
         await gv2WaitForDomStable(6000, 600);
+        if (_gv2IsStopped()) return;
         // Rewind: refresh the just-clicked step's snapshot with the post-click view.
         await gv2RecaptureAfterAction(window._guidev2?.previousSteps?.length || 0);
+        if (_gv2IsStopped()) return;
         const result = await gv2GenerateNextStep();
-        if (result && result.success !== false) {
+        if (!_guidev2Stopped && result && result.success !== false) {
           try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
         } else {
           try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
@@ -1384,12 +1485,20 @@ async function _gv2WaitForNavOrSettle(startUrl) {
   // One last guard: if pagehide fired during the polling loop it means a very
   // slow full-page navigation is in progress — let the new page handle it.
   if (_guidev2PageHiding) return;
+  if (_gv2IsStopped()) {
+    _gv2HidePanelTyping();
+    return;
+  }
 
   // Check if the click opened a new tab (target="_blank" / window.open).
   // In that case the SW has transferred guidance ownership to the new tab,
   // so this tab should stop — the new tab will resume on its own.
   try {
     const ownerCheck = await safeSendMessage({ action: 'guidanceV2_isOwner' });
+    if (_gv2IsStopped()) {
+      _gv2HidePanelTyping();
+      return;
+    }
     if (ownerCheck && ownerCheck.isOwner === false) {
       console.log('[guidev2] Guidance transferred to new tab — stopping on this page');
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
@@ -1403,10 +1512,12 @@ async function _gv2WaitForNavOrSettle(startUrl) {
   try {
     // Wait for DOM to settle (e.g. dropdown finished rendering)
     await gv2WaitForDomStable(2000, 300);
+    if (_gv2IsStopped()) return;
     // Rewind: refresh the just-clicked step's snapshot with the post-click view.
     await gv2RecaptureAfterAction(window._guidev2?.previousSteps?.length || 0);
+    if (_gv2IsStopped()) return;
     const result = await gv2GenerateNextStep();
-    if (result && result.success !== false) {
+    if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
     } else {
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
@@ -1423,6 +1534,8 @@ async function _gv2WaitForNavOrSettle(startUrl) {
  * so React / Vue / Angular state management picks up the change.
  */
 async function _gv2AutoType(step) {
+  if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+
   // Slice 5: canonical ACT/type carries text in `value`; legacy type used `typeText`.
   const typeText = (step.typeText != null) ? step.typeText : step.value;
   if (!typeText) {
@@ -1460,6 +1573,7 @@ async function _gv2AutoType(step) {
         input.dispatchEvent(new Event('change', { bubbles: true }));
       }
       await new Promise(r => setTimeout(r, 400));
+      if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
     }
   }
 
@@ -1480,12 +1594,13 @@ async function _gv2AutoType(step) {
   } catch (e) { /* non-fatal */ }
 
   console.log('[guidev2] Auto-type done, generating next step...');
+  if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
   if (_guidev2Resuming) return;
   _guidev2Resuming = true;
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
   try {
     const result = await gv2GenerateNextStep();
-    if (result && result.success !== false) {
+    if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
     } else {
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
@@ -1549,6 +1664,11 @@ window.gv2NextStep = async function (options = {}) {
   const g = window._guidev2;
   const cur = g && g._currentStep;
 
+  if (_gv2IsStopped()) {
+    _gv2HidePanelTyping();
+    return { success: false, progressed: false, error: 'Guide stopped' };
+  }
+
   if (!_guidev2WaitingForClick) {
     if (g?.active && cur) {
       return continueGuide();
@@ -1570,6 +1690,7 @@ window.gv2NextStep = async function (options = {}) {
   if (cur && cur.action === 'type') {
     const text = (cur.typeText != null) ? cur.typeText : cur.value;
     if (text && !cur.highRisk) {
+      if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
       return _gv2AutoType(cur); // types the field, then continues to the next step
     }
     return continueGuide();
@@ -1623,6 +1744,11 @@ window.gv2NextStep = async function (options = {}) {
     if (toClick) console.log('[guidev2] Using highlight-span fallback:', toClick.tagName, toClick.textContent?.slice(0, 60));
   }
 
+  if (_gv2IsStopped()) {
+    _gv2HidePanelTyping();
+    return { success: false, progressed: false, error: 'Guide stopped' };
+  }
+
   if (toClick) {
     try { _gv2DispatchClick(toClick); } catch (e) { console.warn('[guidev2] Auto-click failed:', e); }
   } else {
@@ -1633,6 +1759,7 @@ window.gv2NextStep = async function (options = {}) {
   // SPA nav, or same-page DOM settle, then generates the next step.
   const startUrl = window.location.href;
   await _gv2WaitForNavOrSettle(startUrl);
+  if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
   return continueGuide();
 };
 
@@ -1643,17 +1770,8 @@ window.gv2NextStep = async function (options = {}) {
  * Aborts any in-progress generation and clears all guidance state.
  */
 window.gv2StopGuide = function () {
-  _guidev2Stopped = true;
-  _guidev2Resuming = false;
-  _guidev2WaitingForClick = false;
-  if (window._guidev2 && window._guidev2._autoClickTimer) {
-    clearTimeout(window._guidev2._autoClickTimer);
-    window._guidev2._autoClickTimer = null;
-  }
-  _gv2RemoveClickListeners();
-  _gv2HideIndicator();
-  gv2HideAutoOverlay();
-  _gv2ClearState();
+  _gv2StopInternal();
+  _gv2HidePanelTyping();
 };
 
 // ===== CONTINUATION HELPER =====
@@ -1661,11 +1779,26 @@ window.gv2StopGuide = function () {
 // type continue / take-control resume).
 
 async function _gv2GenerateAndDispatch() {
+  if (_gv2IsStopped()) {
+    _gv2HidePanelTyping();
+    return { success: false, progressed: false, error: 'Guide stopped' };
+  }
   if (_guidev2Resuming) return { success: false, progressed: false, error: 'Guide is already continuing' };
   _guidev2Resuming = true;
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
   try {
+    if (_gv2IsStopped()) {
+      _gv2HidePanelTyping();
+      return { success: false, progressed: false, error: 'Guide stopped' };
+    }
     const result = await gv2GenerateNextStep();
+    if (result?.stoppedByMaxSteps) {
+      return result;
+    }
+    if (_guidev2Stopped) {
+      _gv2HidePanelTyping();
+      return { success: false, progressed: false, error: 'Guide stopped' };
+    }
     if (result && result.success !== false) {
       if (result.progressed === false) {
         try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
@@ -1702,8 +1835,8 @@ window.gv2TakeControl = async function () {
   gv2HideAutoOverlay();
   if (!g || !g.active) return;
 
-  // Cancel a scheduled auto-click (the 900 ms window before it fires).
-  if (g._autoClickTimer) { clearTimeout(g._autoClickTimer); g._autoClickTimer = null; }
+  // Cancel any scheduled auto action before handing control back.
+  _gv2ClearActionTimers();
 
   // Switch this session to Manual and persist so the panel toggle reflects it.
   g.autoMode = false;
@@ -1724,7 +1857,11 @@ window.gv2TakeControl = async function () {
 window.handleStepByStepGuide = function (question, continueFromStep = false) {
   // continueFromStep=true comes from guide.js's continueGuidance() which won't fire
   // when v2 is active (_pageguideGuidance.active = false). Handle defensively anyway.
-  if (continueFromStep) return gv2GenerateNextStep();
+  if (continueFromStep) {
+    const capResult = _gv2CheckStepCap(window._guidev2);
+    if (capResult) return capResult;
+    return gv2GenerateNextStep();
+  }
   return _handleStepByStepGuideV2(question);
 };
 

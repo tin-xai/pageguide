@@ -490,6 +490,7 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
   });
 
   beforeEach(() => {
+    window.chrome.runtime.sendMessage.mockClear();
     window._guidev2 = {
       active: true,
       question: 'answer a form question',
@@ -516,6 +517,39 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
 
     expect(result.success).toBe(false);
     expect(result.progressed).toBe(false);
+  });
+
+  test('stop clears pending auto-click and auto-type timers', () => {
+    window._guidev2._autoClickTimer = setTimeout(() => {}, 1000);
+    window._guidev2._autoTypeTimer = setTimeout(() => {}, 1000);
+
+    window.gv2StopGuide();
+
+    expect(window._guidev2._autoClickTimer).toBeNull();
+    expect(window._guidev2._autoTypeTimer).toBeNull();
+    expect(window._guidev2.active).toBe(false);
+  });
+
+  test('blocks step 16 before generating another guide step', async () => {
+    window._guidev2 = {
+      active: true,
+      question: 'long running guide',
+      previousSteps: Array.from({ length: 15 }, (_, i) => `Step ${i + 1}: done`),
+      currentPlanStep: 15,
+      autoMode: true,
+      _currentStep: { action: 'click', instruction: 'Keep going' }
+    };
+
+    const result = await window.handleStepByStepGuide('long running guide', true);
+
+    expect(result.success).toBe(false);
+    expect(result.progressed).toBe(false);
+    expect(result.stoppedByMaxSteps).toBe(true);
+    expect(result.error).toContain('autonomous loop');
+    expect(window.chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'addMessage',
+      content: expect.stringContaining('Stopped after 15 steps')
+    }));
   });
 });
 

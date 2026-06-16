@@ -1203,7 +1203,9 @@ function addGuideStep(result) {
         hideTyping();
         if (nextBtn.isConnected) nextBtn.disabled = false;
         if (stopHereBtn.isConnected) stopHereBtn.disabled = false;
-        addMessage(`Could not continue the guide: ${err.message}. Try Next again, or stop here.`, 'system');
+        if (!String(err.message || '').startsWith('Stopped after 15 steps')) {
+          addMessage(`Could not continue the guide: ${err.message}. Try Next again, or stop here.`, 'system');
+        }
       }
     });
     btnRow.appendChild(nextBtn);
