@@ -146,6 +146,17 @@ async function showGoalStepPreview(step, anchor) {
       hideGoalStepPreview();
       return;
     }
+    // "Inspect more" opens the full-page inspector tab (full memory record: restore log,
+    // captured state, URL, raw JSON). Has its own handler so it isn't conflated with a
+    // generic card click.
+    if (target.closest('.pageguide-goal-step-inspect')) {
+      hideGoalStepPreview();
+      if (meta && typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.openFullPageStep === 'function') {
+        RewindTimeline.openFullPageStep(meta);
+      }
+      return;
+    }
+
     // Clicks inside the steer box (e.g. the textarea) should not open the inspector.
     if (target.closest('.pageguide-goal-step-steerbox')) return;
 
@@ -911,6 +922,56 @@ function addJourneyRecallMessage(sessionId, title) {
     showStoredJourney(sessionId);
   });
   container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * Steer restore confirmation card: after the agent rebuilds the recorded state for a steered
+ * step, it pauses and shows this card listing what it applied (each action → DOM element) plus
+ * the step's URL. The agent does NOT continue until the user confirms here.
+ */
+function addSteerRestoreCard(message) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+  // Replace any stale card from a previous steer.
+  container.querySelector('.pageguide-steer-restore')?.remove();
+
+  const log = Array.isArray(message.log) ? message.log : [];
+  const describe = (typeof gv2DescribeRestoreAction === 'function')
+    ? gv2DescribeRestoreAction
+    : (e) => (e && e.kind) ? (e.kind + (e.value != null ? ' → ' + e.value : '')) : '';
+  const lines = log.length
+    ? log.map(e => `<li>${escapeHtml(describe(e))}</li>`).join('')
+    : '<li class="pageguide-steer-restore-empty">No state changes were needed.</li>';
+
+  const card = document.createElement('div');
+  card.className = 'pageguide-step-card pageguide-steer-restore';
+  card.innerHTML = `
+    <div class="pageguide-guide-step">
+      <span class="pageguide-step-badge">Restored</span>
+      <span class="pageguide-step-text">Review the restored state for step ${escapeHtml(String(message.fromStep))}, then continue.</span>
+    </div>
+    ${message.url ? `<div class="pageguide-step-meta">🔗 ${escapeHtml(message.url)}</div>` : ''}
+    <ul class="pageguide-steer-restore-log">${lines}</ul>
+    <div class="pageguide-step-btn-row">
+      <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-confirm">✓ Looks right — continue</button>
+      <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-stop">⏹ Stop</button>
+    </div>`;
+
+  card.querySelector('.pageguide-steer-restore-confirm')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    showTyping();
+    sendToContentScript({ action: 'confirmSteerRestore' });
+    card.remove();
+  });
+  card.querySelector('.pageguide-steer-restore-stop')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    stopGuide();
+    card.remove();
+  });
+
+  container.appendChild(card);
   container.scrollTop = container.scrollHeight;
 }
 
@@ -2781,6 +2842,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
     }
+  } else if (message.action === 'steerRestoreReady') {
+    // The agent restored a steered step's state and is waiting for the user to confirm.
+    hideTyping();
+    addSteerRestoreCard(message);
   } else if (message.action === 'askStep') {
     // Ask mode step (scroll/expand)
     hideTyping();

@@ -100,6 +100,55 @@
     } else {
       $('raw-wrap').style.display = 'none';
     }
+
+    renderMemory(rec);
+  }
+
+  // Render the full in-memory record for this step: URL, action→element, the captured restore
+  // state, and the restore action log (what the agent applied back to the page on resume).
+  function renderMemory(rec) {
+    const mem = $('memory');
+    if (mem) {
+      const bits = [];
+      if (rec.url) bits.push(`<div><strong>URL:</strong> <a href="${esc(rec.url)}" target="_blank" rel="noreferrer">${esc(rec.url)}</a></div>`);
+      if (rec.action) {
+        const tgt = (rec.target && rec.target.text) ? ' → “' + esc(rec.target.text) + '”' : '';
+        const typed = rec.typeText ? ' = “' + esc(rec.typeText) + '”' : '';
+        bits.push(`<div><strong>Action:</strong> ${esc(rec.action)}${tgt}${typed}</div>`);
+      }
+      if (rec.risk) bits.push(`<div><strong>Risk:</strong> ${esc(rec.risk)}</div>`);
+
+      const r = rec.restore;
+      if (r) {
+        const ls = r.localStorage ? Object.keys(r.localStorage).length : 0;
+        const ss = r.sessionStorage ? Object.keys(r.sessionStorage).length : 0;
+        const fm = Array.isArray(r.forms) ? r.forms.length : 0;
+        const scroll = r.scroll ? ((r.scroll.x | 0) + ',' + (r.scroll.y | 0)) : '—';
+        bits.push(`<div><strong>Captured state:</strong> ${ls} localStorage · ${ss} sessionStorage · ${fm} form field(s) · scroll ${esc(scroll)}</div>`);
+      }
+
+      if (Array.isArray(rec.restoreLog) && rec.restoreLog.length) {
+        const fmt = (typeof gv2DescribeRestoreAction === 'function') ? gv2DescribeRestoreAction : (e) => (e && e.kind) || '';
+        const when = rec.restoredAt ? ' (' + new Date(rec.restoredAt).toLocaleString() + ')' : '';
+        const items = rec.restoreLog.map(e => `<li>${esc(fmt(e))}</li>`).join('');
+        bits.push(`<div style="margin-top:8px"><strong>Restore log${when}:</strong></div><ul style="margin:6px 0 0;padding-left:18px">${items}</ul>`);
+      }
+
+      if (bits.length) { mem.innerHTML = bits.join(''); mem.style.display = ''; }
+      else mem.style.display = 'none';
+    }
+
+    const recordWrap = $('record-wrap'), recordPre = $('record');
+    if (recordWrap && recordPre) {
+      try {
+        // Trim heavy payloads so the JSON dump stays readable.
+        const copy = Object.assign({}, rec);
+        if (copy.screenshot) copy.screenshot = '[base64 ' + copy.screenshot.length + ' chars]';
+        if (copy.domSnapshot) copy.domSnapshot = '[html ' + copy.domSnapshot.length + ' chars]';
+        recordPre.textContent = JSON.stringify(copy, null, 2);
+        recordWrap.style.display = '';
+      } catch (e) { recordWrap.style.display = 'none'; }
+    }
   }
 
   (async function init() {

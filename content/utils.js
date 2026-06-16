@@ -805,6 +805,199 @@ if (typeof window !== 'undefined') window.gv2SerializeDom = gv2SerializeDom;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2SerializeDom = gv2SerializeDom;
 
 /**
+ * Build a best-effort, reasonably stable selector for a form field so its value can be
+ * re-applied on a fresh load (rewind/resume). Prefers id, then name. Returns null when
+ * neither exists — such fields are skipped (we can't reliably re-target them).
+ */
+function gv2FieldSelector(el) {
+  if (!el || !el.tagName) return null;
+  const esc = (s) => (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(s) : String(s).replace(/([^\w-])/g, '\\$1');
+  if (el.id) return '#' + esc(el.id);
+  const name = el.getAttribute && el.getAttribute('name');
+  if (name) return el.tagName.toLowerCase() + '[name="' + String(name).replace(/"/g, '\\"') + '"]';
+  return null;
+}
+
+/** Set a value into an input/textarea using the native setter + input/change events. */
+function gv2SetFieldValue(el, text) {
+  if (!el) return;
+  try { el.focus(); } catch (e) {}
+  const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+  if (setter) setter.call(el, text); else el.value = text;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/**
+ * Capture the page's restorable state for the rewind/resume feature: web storage, scroll
+ * position, and visible form-field values. Lets a later "Steer from here" on a fresh load
+ * rebuild the page's condition much closer to how it was when the step ran — without keeping
+ * a live tab around. All reads are best-effort (cross-origin / disabled storage throws);
+ * password values are intentionally excluded (privacy, mirrors gv2SerializeDom).
+ *
+ * @param {Window}  [win]  - window to read storage/scroll from (injectable for tests)
+ * @param {Element} [root] - root to scan for form fields (default <html>; injectable for tests)
+ * @returns {{localStorage:object, sessionStorage:object, scroll:{x:number,y:number}, forms:Array}}
+ */
+function gv2CaptureRestoreState(win, root) {
+  win = win || (typeof window !== 'undefined' ? window : null);
+  root = root || (win && win.document ? win.document.documentElement : (typeof document !== 'undefined' ? document.documentElement : null));
+  const out = { localStorage: {}, sessionStorage: {}, scroll: { x: 0, y: 0 }, forms: [] };
+  if (!win) return out;
+
+  const readStore = (store, into) => {
+    try {
+      for (let i = 0; i < store.length; i++) { const k = store.key(i); into[k] = store.getItem(k); }
+    } catch (e) { /* storage may be cross-origin or disabled */ }
+  };
+  try { if (win.localStorage) readStore(win.localStorage, out.localStorage); } catch (e) {}
+  try { if (win.sessionStorage) readStore(win.sessionStorage, out.sessionStorage); } catch (e) {}
+
+  try { out.scroll = { x: win.scrollX || 0, y: win.scrollY || 0 }; } catch (e) {}
+
+  try {
+    if (root && root.querySelectorAll) {
+      root.querySelectorAll('input, textarea, select').forEach(el => {
+        const sel = gv2FieldSelector(el);
+        if (!sel) return;
+        const tag = el.tagName;
+        if (tag === 'INPUT') {
+          const type = (el.getAttribute('type') || 'text').toLowerCase();
+          if (type === 'checkbox' || type === 'radio') out.forms.push({ sel, checked: !!el.checked });
+          else if (type === 'password') { /* never store secrets */ }
+          else out.forms.push({ sel, value: el.value != null ? el.value : '' });
+        } else if (tag === 'TEXTAREA') {
+          out.forms.push({ sel, value: el.value != null ? el.value : '' });
+        } else if (tag === 'SELECT') {
+          out.forms.push({ sel, selectedIndex: el.selectedIndex });
+        }
+      });
+    }
+  } catch (e) { /* form scan is best-effort */ }
+
+  return out;
+}
+
+/**
+ * Re-apply a state captured by gv2CaptureRestoreState onto the current (freshly loaded) page.
+ * Every step is best-effort and isolated in try/catch — a single failure (quota, missing
+ * field) must never abort the resume. Returns a small tally for logging/tests.
+ *
+ * @param {object}  restore - shape produced by gv2CaptureRestoreState
+ * @param {Window}  [win]   - window to write storage/scroll to (injectable for tests)
+ * @param {Element} [root]  - root to scope form re-targeting (default <html>; injectable)
+ * @param {Array}   [log]   - if provided, one entry per applied item is pushed for the
+ *                            restore action log (verification / inspector). Shape:
+ *                            { kind:'localStorage'|'sessionStorage'|'form'|'scroll', key?, sel?, value?, ok }
+ * @returns {{localStorage:number, sessionStorage:number, forms:number, scroll:boolean}}
+ */
+function gv2ApplyRestoreState(restore, win, root, log) {
+  win = win || (typeof window !== 'undefined' ? window : null);
+  root = root || (win && win.document ? win.document.documentElement : (typeof document !== 'undefined' ? document.documentElement : null));
+  const applied = { localStorage: 0, sessionStorage: 0, forms: 0, scroll: false };
+  const rec = Array.isArray(log) ? (e) => { try { log.push(e); } catch (_) {} } : () => {};
+  if (!restore || !win) return applied;
+
+  const writeStore = (store, from, kind) => {
+    if (!store || !from) return;
+    Object.keys(from).forEach(k => {
+      let ok = false;
+      try { store.setItem(k, from[k]); applied[kind]++; ok = true; } catch (e) {}
+      rec({ kind, key: k, value: from[k], ok });
+    });
+  };
+  try { writeStore(win.localStorage, restore.localStorage, 'localStorage'); } catch (e) {}
+  try { writeStore(win.sessionStorage, restore.sessionStorage, 'sessionStorage'); } catch (e) {}
+
+  try {
+    if (Array.isArray(restore.forms) && root && root.querySelector) {
+      restore.forms.forEach(f => {
+        if (!f || !f.sel) return;
+        let el = null;
+        try { el = root.querySelector(f.sel); } catch (e) {}
+        if (!el) { rec({ kind: 'form', sel: f.sel, value: _gv2FormValue(f), ok: false }); return; }
+        let ok = false;
+        try {
+          if (el.tagName === 'SELECT' && f.selectedIndex != null) {
+            el.selectedIndex = f.selectedIndex;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            applied.forms++; ok = true;
+          } else if (f.checked != null) {
+            el.checked = !!f.checked;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            applied.forms++; ok = true;
+          } else if (f.value != null) {
+            gv2SetFieldValue(el, f.value);
+            applied.forms++; ok = true;
+          }
+        } catch (e) { /* one field's failure must not abort the rest */ }
+        rec({ kind: 'form', sel: f.sel, value: _gv2FormValue(f), ok });
+      });
+    }
+  } catch (e) {}
+
+  try {
+    if (restore.scroll && typeof win.scrollTo === 'function') {
+      win.scrollTo(restore.scroll.x || 0, restore.scroll.y || 0);
+      applied.scroll = true;
+      rec({ kind: 'scroll', value: (restore.scroll.x || 0) + ',' + (restore.scroll.y || 0), ok: true });
+    }
+  } catch (e) {}
+
+  return applied;
+}
+
+/** Normalize a captured form field to a printable value (for the restore log). */
+function _gv2FormValue(f) {
+  if (!f) return '';
+  if (f.checked != null) return f.checked ? 'checked' : 'unchecked';
+  if (f.selectedIndex != null) return 'option#' + f.selectedIndex;
+  return f.value != null ? f.value : '';
+}
+
+/**
+ * Format one restore/replay log entry as a short human-readable line for the panel confirm
+ * card and the inspector. Pure (no DOM) so it's unit-testable.
+ *
+ * @param {object} e - { kind, key?, sel?, action?, value?, ok }
+ * @returns {string}
+ */
+function gv2DescribeRestoreAction(e) {
+  if (!e || !e.kind) return '';
+  const mark = e.ok === false ? '✗' : '✓';
+  const val = (e.value != null && e.value !== '') ? ' → "' + String(e.value) + '"' : '';
+  switch (e.kind) {
+    case 'note':           return `${mark} ${e.value != null ? e.value : ''}`.trimEnd();
+    case 'localStorage':   return `${mark} localStorage[${e.key}]${val}`;
+    case 'sessionStorage': return `${mark} sessionStorage[${e.key}]${val}`;
+    case 'scroll':         return `${mark} Scroll to ${e.value}`;
+    case 'form':           return `${mark} Set ${e.sel}${val}`;
+    case 'replay': {
+      const tgt = e.sel || (e.target && e.target.text) || e.target || 'element';
+      const verb = ({ type: 'Type into', select: 'Select in', check: 'Toggle', toggle: 'Toggle' })[e.action] || 'Click';
+      return `${mark} ${verb} ${typeof tgt === 'string' ? tgt : JSON.stringify(tgt)}${val}`;
+    }
+    default:               return `${mark} ${e.kind}${val}`;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.gv2FieldSelector = gv2FieldSelector;
+  window.gv2SetFieldValue = gv2SetFieldValue;
+  window.gv2CaptureRestoreState = gv2CaptureRestoreState;
+  window.gv2ApplyRestoreState = gv2ApplyRestoreState;
+  window.gv2DescribeRestoreAction = gv2DescribeRestoreAction;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.gv2FieldSelector = gv2FieldSelector;
+  module.exports.gv2SetFieldValue = gv2SetFieldValue;
+  module.exports.gv2CaptureRestoreState = gv2CaptureRestoreState;
+  module.exports.gv2ApplyRestoreState = gv2ApplyRestoreState;
+  module.exports.gv2DescribeRestoreAction = gv2DescribeRestoreAction;
+}
+
+/**
  * Tolerant JSON-object extractor for LLM responses (shared by guidev2 plan,
  * confidence, and verification parsing). Handles ```json fences, leading/trailing
  * prose, and returns null on malformed input instead of throwing.

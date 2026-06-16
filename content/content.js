@@ -96,6 +96,15 @@ async function handleMessage(request) {
       }
       return { success: false, error: 'Steer not available' };
 
+    case 'confirmSteerRestore':
+      // User confirmed (in the side panel) that the restored state looks right — let the
+      // agent continue from the branch step with the new instruction.
+      if (typeof gv2ConfirmSteerRestore === 'function') {
+        gv2ConfirmSteerRestore(); // fire-and-forget; progress streams via messages
+        return { success: true };
+      }
+      return { success: false, error: 'Steer restore not available' };
+
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {
         return await continueGuidance();

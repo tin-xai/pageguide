@@ -2124,6 +2124,32 @@ body.light-mode .pageguide-history-overlay {
   margin-top: 10px;
 }
 
+/* Steer restore confirmation card: the list of state changes the agent re-applied. */
+.pageguide-steer-restore-log {
+  margin: 10px 0;
+  padding: 8px 10px 8px 12px;
+  list-style: none;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(45, 212, 191, 0.08);
+  border: 1px solid rgba(20, 184, 166, 0.3);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pageguide-steer-restore-log li {
+  word-break: break-word;
+  padding: 1px 0;
+}
+.pageguide-steer-restore-log .pageguide-steer-restore-empty {
+  opacity: 0.6;
+  font-style: italic;
+}
+.pageguide-steer-restore .pageguide-step-meta {
+  word-break: break-all;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
 .pageguide-step-meta-row {
   display: grid;
   grid-template-columns: 52px 1fr;

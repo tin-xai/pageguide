@@ -105,13 +105,19 @@
         <button class="tab" id="tab-snap" data-view="snap"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10"/><path d="M7 12h7"/><path d="M7 16h5"/></svg></span>Page snapshot</button>
       </div>
       <div class="view" id="view"></div>
+      <div class="why" id="memory" style="display:none"></div>
       <details id="raw-wrap" style="display:none">
         <summary>Raw agent response</summary>
         <pre id="raw"></pre>
       </details>
+      <details id="record-wrap" style="display:none">
+        <summary>Full step record (memory)</summary>
+        <pre id="record"></pre>
+      </details>
     </div>
   </main>
   <script src="rewind_store.js"></script>
+  <script src="../content/utils.js"></script>
   <script src="inspector.js"></script>
 </body>
 </html>

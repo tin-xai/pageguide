@@ -151,6 +151,53 @@ function gv2HideAutoOverlay() {
   if (el) el.classList.remove('on');
 }
 
+// ===== STEER RESTORE OVERLAY =====
+// A teal tint (distinct from auto-mode's yellow) signals the agent is rebuilding the page's
+// recorded state during a "Steer from here". Two phases:
+//   'restoring' — blocking tint + spinner while actions are applied;
+//   'review'    — click-through tint + banner asking the user to confirm in the side panel.
+
+const _GV2_RESTORE_OVERLAY_ID = 'pageguide-gv2-restore';
+let _gv2RestoreOverlayCss = false;
+
+function gv2ShowRestoreOverlay(phase = 'restoring', text = '') {
+  if (!_gv2RestoreOverlayCss) {
+    _gv2RestoreOverlayCss = true;
+    const style = document.createElement('style');
+    style.id = 'pageguide-gv2-restore-css';
+    style.textContent = `
+#${_GV2_RESTORE_OVERLAY_ID}{position:fixed;inset:0;z-index:2147483646;background:rgba(45,212,191,.12);box-shadow:inset 0 0 0 3px rgba(20,184,166,.5);opacity:0;transition:opacity .2s ease}
+#${_GV2_RESTORE_OVERLAY_ID}.on{opacity:1}
+#${_GV2_RESTORE_OVERLAY_ID}.gv2-restoring{pointer-events:all;cursor:progress}
+#${_GV2_RESTORE_OVERLAY_ID}.gv2-review{pointer-events:none}
+#${_GV2_RESTORE_OVERLAY_ID} .gv2-rbanner{position:absolute;top:64px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:rgba(15,23,30,.92);color:#5eead4;border:1px solid rgba(94,234,212,.5);border-radius:999px;padding:10px 18px;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 22px rgba(0,0,0,.45);max-width:80vw}
+#${_GV2_RESTORE_OVERLAY_ID} .gv2-rspin{width:14px;height:14px;border:2px solid rgba(94,234,212,.35);border-top-color:#5eead4;border-radius:50%;animation:gv2spin .75s linear infinite;flex-shrink:0}
+#${_GV2_RESTORE_OVERLAY_ID} .gv2-rdot{width:8px;height:8px;border-radius:50%;background:#5eead4;animation:gv2autopulse 1.2s ease-in-out infinite;flex-shrink:0}`;
+    document.head.appendChild(style);
+  }
+  let el = document.getElementById(_GV2_RESTORE_OVERLAY_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = _GV2_RESTORE_OVERLAY_ID;
+    el.innerHTML = '<div class="gv2-rbanner"><span class="gv2-rmark"></span><span class="gv2-rlabel"></span></div>';
+    document.body.appendChild(el);
+  }
+  const restoring = phase !== 'review';
+  el.classList.toggle('gv2-restoring', restoring);
+  el.classList.toggle('gv2-review', !restoring);
+  const mark = el.querySelector('.gv2-rmark');
+  if (mark) mark.className = restoring ? 'gv2-rmark gv2-rspin' : 'gv2-rmark gv2-rdot';
+  const label = el.querySelector('.gv2-rlabel');
+  if (label) label.textContent = text || (restoring ? 'Restoring state…' : 'State restored — confirm in the panel');
+  el.getBoundingClientRect(); // force reflow so the fade plays
+  el.classList.add('on');
+}
+
+function gv2HideRestoreOverlay() {
+  const el = document.getElementById(_GV2_RESTORE_OVERLAY_ID);
+  if (el) el.remove();
+}
+
 // ===== TUTORIAL REFERENCE LOOKUP =====
 // Strategy:
 //   1. Filter candidates by URL hostname match (primary).
@@ -297,6 +344,7 @@ function _gv2StopInternal() {
   _gv2RemoveClickListeners();
   _gv2HideIndicator();
   gv2HideAutoOverlay();
+  gv2HideRestoreOverlay();
   _gv2ClearState();
 }
 
@@ -630,29 +678,92 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       sessionId: payload.sessionId,
       captureEnabled,
       autoMode,
-      currentPlanStep: fromStep + 1
+      currentPlanStep: fromStep + 1,
+      _restoreLog: []
     };
+    const log = window._guidev2._restoreLog;
     console.log('[guidev2] steer session built; continuing from step', fromStep + 1);
 
     const capResult = _gv2CheckStepCap(window._guidev2);
     if (capResult) return capResult;
 
+    // Colored on-page overlay so the user can see the agent is rebuilding the recorded state.
+    try { gv2ShowRestoreOverlay('restoring'); } catch (e) {}
+
     if (inPlace) {
       // Already on the page with its live state — just let any in-flight changes settle and
-      // re-ground on the current DOM. No reload, no replay.
+      // re-ground on the current DOM. No reload, no replay (state is preserved in place).
       await gv2WaitForDomStable(3000, 300);
       if (_gv2IsStopped()) return;
+      log.push({ kind: 'note', value: 'Live page — state preserved in place (no reload)', ok: true });
     } else {
-      // Freshly-loaded landing page: let it settle, then replay the in-page actions to rebuild
-      // transient state (open dropdowns, filled forms) before re-deciding the branch step.
+      // Freshly-loaded landing page: let it settle, restore the recorded page condition
+      // (web storage + scroll + form values), then replay transient UI actions (open
+      // dropdowns) before re-deciding the branch step.
       await new Promise(r => setTimeout(r, 500));
       if (_gv2IsStopped()) return;
       await gv2WaitForDomStable(8000, 700);
       if (_gv2IsStopped()) return;
-      await _gv2ReplayActions(kept, payload.url);
+
+      // Prefer state restore over re-clicking (re-clicking risks re-firing non-idempotent
+      // actions). The branch step is the last kept record. Best-effort — never aborts resume.
+      const branchRec = kept.length ? kept[kept.length - 1] : null;
+      if (branchRec && branchRec.restore && typeof gv2ApplyRestoreState === 'function') {
+        try { console.log('[guidev2] steer restore applied', gv2ApplyRestoreState(branchRec.restore, window, null, log)); }
+        catch (e) { console.warn('[guidev2] steer restore failed:', e); }
+        await gv2WaitForDomStable(3000, 300);
+        if (_gv2IsStopped()) return;
+      }
+
+      await _gv2ReplayActions(kept, payload.url, log);
       if (_gv2IsStopped()) return;
+
+      // Match gate: only auto-continue if the restored page actually resembles the branch
+      // point. On mismatch, drop to manual so we never silently act on the wrong page.
+      if (!_gv2VerifyResumeMatch(branchRec, payload.url)) {
+        _gv2FlagReplayStuck(fromStep, "the restored page didn't match the recorded step");
+        log.push({ kind: 'note', value: "⚠ Restored page didn't match the recorded step", ok: false });
+      }
     }
 
+    // Persist the restore action log onto the branch record so the inspector can show it.
+    try {
+      if (typeof rewindPatchRecord === 'function') {
+        await rewindPatchRecord(payload.sessionId, fromStep, { restoreLog: log.slice(), restoredAt: Date.now() });
+      }
+    } catch (e) {}
+
+    // PAUSE: do NOT act yet. Switch the overlay to review mode and ask the user to confirm the
+    // restored state in the side panel before the agent continues with the new instruction.
+    window._guidev2._awaitingRestoreConfirm = true;
+    try { gv2ShowRestoreOverlay('review'); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+    try {
+      chrome.runtime.sendMessage({
+        action: 'steerRestoreReady',
+        sessionId: payload.sessionId,
+        fromStep,
+        url: payload.url || window.location.href,
+        inPlace,
+        newGoal: payload.newGoal || '',
+        log: log.slice()
+      });
+    } catch (e) {}
+  } catch (e) {
+    console.error('[guidev2] steer resume error:', e);
+    try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e2) {}
+    try { gv2HideRestoreOverlay(); } catch (e2) {}
+  } finally {
+    _guidev2Resuming = false;
+  }
+}
+
+/**
+ * Generate the branch step and dispatch it to the panel. Shared by the post-confirm flow.
+ * Mirrors the tail that used to run inline at the end of _gv2ResumeFromSteer.
+ */
+async function _gv2GenerateAndDispatchSteer() {
+  try {
     const result = await gv2GenerateNextStep();
     if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
@@ -660,12 +771,28 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
     }
   } catch (e) {
-    console.error('[guidev2] steer resume error:', e);
+    console.error('[guidev2] steer generate error:', e);
     try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e2) {}
-  } finally {
-    _guidev2Resuming = false;
   }
 }
+
+/**
+ * User confirmed (in the side panel) that the restored state looks right. Drop the overlay and
+ * let the agent continue from the branch step with the new instruction. Invoked from the
+ * content-script message router on `confirmSteerRestore`.
+ */
+async function gv2ConfirmSteerRestore() {
+  const g = window._guidev2;
+  if (!g || !g._awaitingRestoreConfirm) {
+    console.warn('[guidev2] confirmSteerRestore: nothing awaiting confirmation');
+    return;
+  }
+  g._awaitingRestoreConfirm = false;
+  try { gv2HideRestoreOverlay(); } catch (e) {}
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+  await _gv2GenerateAndDispatchSteer();
+}
+if (typeof window !== 'undefined') window.gv2ConfirmSteerRestore = gv2ConfirmSteerRestore;
 
 /**
  * Best-effort replay of recorded actions to rebuild transient state (open dropdowns, filled
@@ -674,7 +801,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
  * reload already did that). On a miss it flags the step for the user and stops — the agent
  * then re-grounds on whatever state exists.
  */
-async function _gv2ReplayActions(records, landingUrl) {
+async function _gv2ReplayActions(records, landingUrl, log) {
   if (!Array.isArray(records) || !records.length) return;
   let list = records.filter(r => r && r.url === landingUrl).sort((a, b) => a.step - b.step);
   if (list.length) {
@@ -682,12 +809,14 @@ async function _gv2ReplayActions(records, landingUrl) {
     const prev = records.find(r => r.step === first.step - 1);
     if (prev && prev.url !== landingUrl) list = list.slice(1); // drop the boundary navigator
   }
+  const rec = (e) => { if (Array.isArray(log)) { try { log.push(e); } catch (_) {} } };
   for (const r of list) {
     if (window.location.href !== landingUrl) {
       _gv2FlagReplayStuck(r.step, 'the page changed unexpectedly during replay');
       return;
     }
     const ok = await _gv2ReplayOne(r);
+    rec({ kind: 'replay', action: String(r.action || 'click').toLowerCase(), target: { text: r.target && r.target.text }, value: r.typeText, ok });
     if (!ok) {
       const what = (r.target && r.target.text) ? `"${r.target.text}"` : 'the element';
       _gv2FlagReplayStuck(r.step, `couldn't find ${what}`);
@@ -710,9 +839,38 @@ async function _gv2ReplayOne(r) {
   if (action === 'type') {
     if (r.typeText == null) return true; // no stored value (e.g. a secret) — nothing to refill
     _gv2ReplayType(el, r.typeText);
+  } else if (action === 'select') {
+    // Set the dropdown to the recorded option (by visible text), then fire change.
+    const field = el.matches('select') ? el : el.querySelector('select');
+    if (field && r.typeText != null) {
+      const opt = Array.from(field.options).find(o => (o.textContent || '').trim() === String(r.typeText).trim() || o.value === r.typeText);
+      if (opt) { field.value = opt.value; field.dispatchEvent(new Event('change', { bubbles: true })); }
+    }
+  } else if (action === 'check' || action === 'toggle') {
+    // Restore a checkbox/radio to its recorded state, then fire change.
+    const box = el.matches('input[type=checkbox],input[type=radio]') ? el : el.querySelector('input[type=checkbox],input[type=radio]');
+    if (box) { box.checked = (r.checked != null) ? !!r.checked : true; box.dispatchEvent(new Event('change', { bubbles: true })); }
   } else {
     _gv2DispatchClick(el);
   }
+  return true;
+}
+
+/**
+ * Lightweight gate: does the freshly-restored page actually resemble the branch step? Used
+ * before auto-continuing a reload-path steer so we never silently act on the wrong page.
+ * Decisive signal is the URL (hash-insensitive); we also require the page to have rendered
+ * some interactive content. Returns true (permissive) when there's nothing to compare.
+ */
+function _gv2VerifyResumeMatch(rec, landingUrl) {
+  const strip = (u) => { try { const x = new URL(u); return x.origin + x.pathname + x.search; } catch (e) { return u; } };
+  try {
+    if (landingUrl && strip(window.location.href) !== strip(landingUrl)) return false;
+  } catch (e) {}
+  try {
+    const pageIndex = createPageIndex(5000, true);
+    if (pageIndex && pageIndex.count === 0) return false; // page rendered nothing actionable
+  } catch (e) {}
   return true;
 }
 
@@ -791,6 +949,7 @@ function _gv2ClearState() {
   window._guidev2.active = false;
   _gv2HideIndicator();
   gv2HideAutoOverlay();
+  gv2HideRestoreOverlay();
 
   // Clear from SW
   try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
@@ -884,6 +1043,12 @@ async function gv2CaptureStepRecord(data) {
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
     catch (e) { console.warn('[guidev2] DOM snapshot failed:', e); }
 
+    // Restorable state (web storage + scroll + form values) so a later "Steer from here"
+    // on a fresh load can rebuild the page condition without keeping a live tab around.
+    let restore = null;
+    try { if (typeof gv2CaptureRestoreState === 'function') restore = gv2CaptureRestoreState(); }
+    catch (e) { /* restore capture is best-effort */ }
+
     const record = {
       sessionId: g.sessionId,
       step: data.step,
@@ -900,6 +1065,7 @@ async function gv2CaptureStepRecord(data) {
       durationMs: Date.now() - startedAt,
       screenshot: screenshot || null,
       domSnapshot,
+      restore,
       tutorialMatch: data.tutorialMatch || null,
       rawLlmJson: data.rawLlmJson || ''
     };
@@ -953,6 +1119,9 @@ async function gv2RecaptureAfterAction(stepNumber) {
     const patch = { url: window.location.href };
     if (screenshot) patch.screenshot = screenshot;
     if (domSnapshot) patch.domSnapshot = domSnapshot;
+    // Refresh restorable state to reflect the post-action page (matches screenshot/DOM).
+    try { if (typeof gv2CaptureRestoreState === 'function') patch.restore = gv2CaptureRestoreState(); }
+    catch (e) { /* best-effort */ }
     await rewindPatchRecord(g.sessionId, stepNumber, patch);
   } catch (e) {
     console.warn('[guidev2] gv2RecaptureAfterAction failed:', e);

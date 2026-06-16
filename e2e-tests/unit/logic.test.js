@@ -341,6 +341,155 @@ describe('gv2SerializeDom (content/utils.js)', () => {
   });
 });
 
+// Rewind/resume: capture + re-apply the page's restorable state (web storage, scroll, form
+// values) so "Steer from here" on a fresh load can rebuild the page condition. Passwords are
+// never captured, and apply must be resilient to missing fields / empty input.
+describe('gv2CaptureRestoreState / gv2ApplyRestoreState (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  function makeRoot() {
+    const doc = document.implementation.createHTMLDocument('t');
+    doc.body.innerHTML = [
+      '<input id="name" type="text">',
+      '<input id="pw" type="password">',
+      '<input id="agree" type="checkbox">',
+      '<textarea name="bio"></textarea>',
+      '<select id="color"><option value="r">Red</option><option value="g">Green</option></select>',
+      '<input type="text">'  // no id/name → not addressable, skipped
+    ].join('');
+    doc.getElementById('name').value = 'Ada';
+    doc.getElementById('pw').value = 'secret123';
+    doc.getElementById('agree').checked = true;
+    doc.querySelector('textarea[name="bio"]').value = 'hello';
+    doc.getElementById('color').value = 'g';
+    return doc.documentElement;
+  }
+
+  test('captures form values, excludes passwords, skips unidentifiable fields', () => {
+    const st = window.gv2CaptureRestoreState(window, makeRoot());
+    const bySel = Object.fromEntries(st.forms.map(f => [f.sel, f]));
+    expect(bySel['#name'].value).toBe('Ada');
+    expect(bySel['textarea[name="bio"]'].value).toBe('hello');
+    expect(bySel['#agree'].checked).toBe(true);
+    expect(bySel['#color'].selectedIndex).toBe(1);
+    // password value never captured
+    expect(JSON.stringify(st.forms)).not.toContain('secret123');
+    expect(st.forms.find(f => f.sel === '#pw')).toBeUndefined();
+    // text input with no id/name is skipped (4 captured: name, agree, bio, color)
+    expect(st.forms.length).toBe(4);
+  });
+
+  test('captures web storage and scroll', () => {
+    window.localStorage.clear();
+    window.localStorage.setItem('tok', 'abc');
+    const st = window.gv2CaptureRestoreState(window, makeRoot());
+    expect(st.localStorage.tok).toBe('abc');
+    expect(st.scroll).toEqual({ x: 0, y: 0 });
+  });
+
+  test('apply restores storage + form state onto a fresh page, skipping missing fields', () => {
+    window.localStorage.clear();
+    const restore = {
+      localStorage: { tok: 'xyz' },
+      sessionStorage: {},
+      scroll: { x: 0, y: 0 },
+      forms: [
+        { sel: '#name', value: 'Grace' },
+        { sel: '#agree', checked: true },
+        { sel: '#color', selectedIndex: 1 },
+        { sel: '#missing', value: 'nope' }  // not present → skipped, no throw
+      ]
+    };
+    const doc = document.implementation.createHTMLDocument('t');
+    doc.body.innerHTML = [
+      '<input id="name" type="text">',
+      '<input id="agree" type="checkbox">',
+      '<select id="color"><option value="r">Red</option><option value="g">Green</option></select>'
+    ].join('');
+    const applied = window.gv2ApplyRestoreState(restore, window, doc.documentElement);
+    expect(window.localStorage.getItem('tok')).toBe('xyz');
+    expect(doc.getElementById('name').value).toBe('Grace');
+    expect(doc.getElementById('agree').checked).toBe(true);
+    expect(doc.getElementById('color').selectedIndex).toBe(1);
+    expect(applied.localStorage).toBe(1);
+    expect(applied.forms).toBe(3);  // #missing not counted
+  });
+
+  test('gv2FieldSelector prefers id, then name, else null', () => {
+    const a = document.createElement('input'); a.id = 'x';
+    expect(window.gv2FieldSelector(a)).toBe('#x');
+    const b = document.createElement('input'); b.setAttribute('name', 'y');
+    expect(window.gv2FieldSelector(b)).toBe('input[name="y"]');
+    expect(window.gv2FieldSelector(document.createElement('input'))).toBeNull();
+  });
+
+  test('apply tolerates null restore and returns a zeroed tally', () => {
+    expect(window.gv2ApplyRestoreState(null, window, document.documentElement))
+      .toEqual({ localStorage: 0, sessionStorage: 0, forms: 0, scroll: false });
+  });
+
+  test('apply populates the log array (one entry per item, with ok flags) without changing the return shape', () => {
+    window.localStorage.clear();
+    const restore = {
+      localStorage: { tok: 'xyz' },
+      sessionStorage: {},
+      scroll: { x: 0, y: 0 },
+      forms: [
+        { sel: '#name', value: 'Grace' },
+        { sel: '#missing', value: 'nope' }  // not present → logged as ok:false
+      ]
+    };
+    const doc = document.implementation.createHTMLDocument('t');
+    doc.body.innerHTML = '<input id="name" type="text">';
+    const log = [];
+    const applied = window.gv2ApplyRestoreState(restore, window, doc.documentElement, log);
+    // Return shape unchanged.
+    expect(applied).toEqual({ localStorage: 1, sessionStorage: 0, forms: 1, scroll: true });
+    // One entry per applied item: 1 localStorage + 2 forms + 1 scroll = 4.
+    expect(log.length).toBe(4);
+    const ls = log.find(e => e.kind === 'localStorage');
+    expect(ls).toMatchObject({ kind: 'localStorage', key: 'tok', value: 'xyz', ok: true });
+    expect(log.find(e => e.kind === 'form' && e.sel === '#name').ok).toBe(true);
+    expect(log.find(e => e.kind === 'form' && e.sel === '#missing').ok).toBe(false);
+    expect(log.find(e => e.kind === 'scroll').ok).toBe(true);
+  });
+});
+
+// Restore action log formatting (content/utils.js): pure, used by the panel confirm card and
+// the full-page inspector to print each action the agent re-applied during a steer.
+describe('gv2DescribeRestoreAction (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('formats each kind with a ✓ / ✗ status mark', () => {
+    expect(window.gv2DescribeRestoreAction({ kind: 'localStorage', key: 'tok', value: 'abc', ok: true }))
+      .toBe('✓ localStorage[tok] → "abc"');
+    expect(window.gv2DescribeRestoreAction({ kind: 'sessionStorage', key: 's', value: '1', ok: true }))
+      .toBe('✓ sessionStorage[s] → "1"');
+    expect(window.gv2DescribeRestoreAction({ kind: 'scroll', value: '0,120', ok: true }))
+      .toBe('✓ Scroll to 0,120');
+    expect(window.gv2DescribeRestoreAction({ kind: 'form', sel: '#email', value: 'a@b.c', ok: true }))
+      .toBe('✓ Set #email → "a@b.c"');
+    expect(window.gv2DescribeRestoreAction({ kind: 'form', sel: '#missing', value: 'x', ok: false }))
+      .toBe('✗ Set #missing → "x"');
+  });
+
+  test('formats replay actions by verb and target', () => {
+    expect(window.gv2DescribeRestoreAction({ kind: 'replay', action: 'type', sel: '#q', value: 'hi', ok: true }))
+      .toBe('✓ Type into #q → "hi"');
+    expect(window.gv2DescribeRestoreAction({ kind: 'replay', action: 'click', target: { text: 'Continue' }, ok: true }))
+      .toBe('✓ Click Continue');
+  });
+
+  test('renders a note verbatim and is safe on empty input', () => {
+    expect(window.gv2DescribeRestoreAction({ kind: 'note', value: 'Live page — preserved', ok: true }))
+      .toBe('✓ Live page — preserved');
+    expect(window.gv2DescribeRestoreAction(null)).toBe('');
+    expect(window.gv2DescribeRestoreAction({})).toBe('');
+  });
+});
+
 // Plan/confidence (Slice 2): tolerant JSON-object extractor used for plan,
 // confidence, and verification parsing.
 describe('gv2ExtractJsonObject (content/utils.js)', () => {
@@ -698,5 +847,26 @@ describe('gv2MatchIndexText (content/utils.js)', () => {
   test('no match returns null', () => {
     expect(window.gv2MatchIndexText(idxText, 'Checkout now')).toBeNull();
     expect(window.gv2MatchIndexText('', 'Sign in')).toBeNull();
+  });
+});
+
+// Resume match gate (content/tasks/guidev2.js): after a reload-path steer restores the page,
+// only auto-continue when it actually resembles the branch step. URL is the decisive signal;
+// the page must also have rendered some interactive content. (guidev2.js is loaded by an
+// earlier suite into the shared jsdom window.)
+describe('_gv2VerifyResumeMatch (content/tasks/guidev2.js)', () => {
+  test('passes when the URL matches and the page has actionable content', () => {
+    document.body.innerHTML = '<button>Continue</button>';
+    expect(window._gv2VerifyResumeMatch({ url: window.location.href }, window.location.href)).toBe(true);
+  });
+
+  test('fails when the landing URL does not match (hash ignored)', () => {
+    document.body.innerHTML = '<button>Continue</button>';
+    expect(window._gv2VerifyResumeMatch({}, 'https://elsewhere.example/other')).toBe(false);
+  });
+
+  test('is permissive when there is no landing URL to compare', () => {
+    document.body.innerHTML = '<button>Continue</button>';
+    expect(window._gv2VerifyResumeMatch(null, null)).toBe(true);
   });
 });
