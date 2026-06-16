@@ -291,7 +291,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     expect(res.inplace.payload.fromStep).toBe(2);
   });
 
-  test('send button morphs into a square Stop while running and reverts', async () => {
+  test('running shows the guide spinner + in-chat Stop rectangle; send is disabled (not morphed)', async () => {
     await panelPage.evaluate(() => {
       // @ts-ignore - capture stop messages to the content script
       window.__sent = [];
@@ -303,16 +303,21 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       showTyping();
     });
     const send = panelPage.locator('#pageguide-send');
-    await expect(send).toHaveClass(/pageguide-send-btn--stop/);
-    await expect(send).toHaveText('■');
+    // Progress is the spinner + a red rectangle Stop in the chat — NOT a morphed send button.
+    await expect(panelPage.locator('.pageguide-typing')).toBeVisible();
+    const stopRect = panelPage.locator('.pageguide-guide-stop-btn');
+    await expect(stopRect).toBeVisible();
+    await expect(send).toBeDisabled();
+    await expect(send).not.toHaveClass(/pageguide-send-btn--stop/);
+    await expect(send).toHaveText('➤');
 
-    await send.click();
+    await stopRect.click();
     const sent = await panelPage.evaluate(() => window.__sent);
     expect(sent.some(m => m && m.action === 'stopGuide')).toBe(true);
 
-    // Reverts to the send shape once stopped.
-    await expect(send).not.toHaveClass(/pageguide-send-btn--stop/);
-    await expect(send).toHaveText('➤');
+    // Spinner cleared and send re-enabled once stopped.
+    await expect(panelPage.locator('.pageguide-typing')).toHaveCount(0);
+    await expect(send).toBeEnabled();
   });
 
   test('a guide journey can be recalled from its "View journey" button', async () => {
@@ -360,6 +365,46 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(x).toBeVisible();
     await x.click();
     await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
+  });
+
+  test('each prompt recalls its OWN journey, with distinguishable titles', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore - two distinct guide prompts, each with its own session
+      _journeysBySession['p1'] = { title: 'prompt one', steps: [{ sessionId: 'p1', step: 1, instruction: 'a' }] };
+      // @ts-ignore
+      _journeysBySession['p2'] = { title: 'prompt two', steps: [
+        { sessionId: 'p2', step: 1, instruction: 'x' },
+        { sessionId: 'p2', step: 2, instruction: 'y' },
+        { sessionId: 'p2', step: 3, instruction: 'z' }
+      ] };
+      // @ts-ignore
+      addJourneyRecallMessage('p1', 'prompt one');
+      // @ts-ignore
+      addJourneyRecallMessage('p2', 'prompt two');
+    });
+    const btns = panelPage.locator('.pageguide-journey-recall-btn');
+    await expect(btns).toHaveCount(2);
+    await expect(btns.nth(0)).toContainText('prompt one');
+    await expect(btns.nth(1)).toContainText('prompt two');
+
+    await btns.nth(0).click();
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(1);
+    await btns.nth(1).click();
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(3);
+  });
+
+  test('current step panel shows a collapse X that hides it (guide mode)', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      sendToContentScript = () => Promise.resolve({});
+      // @ts-ignore
+      addGuideStep({ success: true, isGuide: true, isLastStep: false, step: 1, action: 'click', answer: 'Click the thing', targetText: 'Thing' });
+    });
+    const panel = panelPage.locator('#pageguide-step-panel');
+    const x = panel.locator('.pageguide-step-collapse');
+    await expect(x).toBeVisible();
+    await x.click();
+    await expect(panel).toBeHidden();
   });
 
   test('timeline renders one dot per concrete step', async () => {

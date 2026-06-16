@@ -20,8 +20,7 @@ let currentGuideStep = 0;
 let currentGuideRecords = [];
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
-let panelRunning = false;        // True while the agent is generating (send button shows Stop)
-let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
+let panelRunning = false;        // True while the agent is generating (send button disabled)
 const _journeyBtnSessions = new Set(); // Guide sessions that already have a "View journey" button
 const _journeysBySession = {}; // sessionId -> { title, steps:[meta] } accumulated from guideStepRecord
 
@@ -362,9 +361,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
   
-  document.getElementById('pageguide-send').addEventListener('click', () => {
-    if (panelRunning) stopRun(); else sendMessage();
-  });
+  document.getElementById('pageguide-send').addEventListener('click', sendMessage);
   initGuideModeToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
@@ -1151,6 +1148,7 @@ function addGuideStep(result) {
 
   panel.innerHTML = `
     <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
+      <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
       <div class="pageguide-guide-step">
         <span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>
         <span class="pageguide-step-text">${escapeHtml(result.answer || '')}</span>
@@ -1168,6 +1166,11 @@ function addGuideStep(result) {
     if (e.target.closest('button')) return;
     if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
   };
+  // Collapse (✕) hides the current-step panel in guide mode.
+  panel.querySelector('.pageguide-step-collapse')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    panel.style.display = 'none';
+  });
 
   if (!result.isLastStep) {
     const btnRow = panel.querySelector('.pageguide-step-btn-row');
@@ -1267,28 +1270,13 @@ function addAskStep(result) {
 /**
  * Show typing indicator. In guide mode, appends a Stop button.
  */
-// Morph the send button (➤) into a square Stop (■) while the agent is running, and back.
-// `panelRunning` is the single source of truth used by the click handler to route to stop.
+// Track the running state. Progress is shown via the guide spinner (typing indicator) and the
+// red rectangle Stop button inside it — NOT by morphing the send button. The send button is
+// simply disabled while running.
 function setRunning(on) {
   panelRunning = !!on;
   const btn = document.getElementById('pageguide-send');
-  if (!btn) return;
-  btn.disabled = false; // stays clickable — it's the Stop control while running
-  btn.classList.toggle('pageguide-send-btn--stop', panelRunning);
-  btn.textContent = panelRunning ? '■' : '➤';
-  btn.title = panelRunning ? 'Stop' : 'Send';
-  btn.setAttribute('aria-label', panelRunning ? 'Stop' : 'Send');
-}
-
-// Stop whatever is running. A guide is aborted for real (stopGuide → gv2StopGuide, also clears
-// SW state); other routes just cancel the UI (the in-flight LLM result is discarded via
-// cancelRequested). stopGuide is called unconditionally because a guide may already be running
-// in the content script even before guideActive flips on the first step — it's harmless for
-// non-guide runs.
-function stopRun() {
-  cancelRequested = true;
-  setRunning(false);
-  stopGuide('⏹ Stopped.');
+  if (btn) btn.disabled = panelRunning;
 }
 
 function showTyping() {
@@ -1881,7 +1869,6 @@ async function sendMessage() {
 
   _hideSlashMenu();
   if (input) input.value = '';
-  cancelRequested = false;
 
   // Track if a specific routing is forced by the user
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
@@ -2104,9 +2091,6 @@ async function sendMessage() {
     }
     
     hideTyping();
-
-    // User pressed Stop while this (non-guide) request was in flight → discard the result.
-    if (cancelRequested) { cancelRequested = false; return; }
 
     if (result && result.success) {
       const routedTo = result.routedTo || forcedRoute || (noPageContext ? 'ask' : null);
@@ -2778,7 +2762,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const at = j.steps.findIndex(s => Number(s.step) === Number(message.meta.step));
         if (at >= 0) j.steps[at] = message.meta; else j.steps.push(message.meta);
         j.steps.sort((a, b) => Number(a.step) - Number(b.step));
-        j.title = j.title || currentGuideTitle || currentGoal?.prompt || message.meta.instruction || '';
+        // Label the journey by THIS prompt (currentGoal.prompt), not the stale guide title,
+        // so each prompt's button is distinguishable.
+        if (!j.title) j.title = currentGoal?.prompt || message.meta.instruction || '';
         // First step of a new guide session → post a "View journey" recall button.
         if (Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
           _journeyBtnSessions.add(sid);

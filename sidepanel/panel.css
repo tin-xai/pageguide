@@ -1383,18 +1383,6 @@ body.light-mode .pageguide-history-load-btn:hover {
   transform: none;
 }
 
-/* Running state: the send button becomes a red square Stop control. */
-.pageguide-send-btn.pageguide-send-btn--stop {
-  background: linear-gradient(135deg, #ff5f6d 0%, #ff2d55 100%) !important;
-  border-radius: 9px;
-  color: #fff;
-  font-size: 13px;
-  line-height: 1;
-}
-.pageguide-send-btn.pageguide-send-btn--stop:hover {
-  box-shadow: 0 0 20px rgba(255, 45, 85, 0.45);
-}
-
 /* Collapsible Debug Section */
 .pageguide-debug-wrapper {
   align-self: center;
@@ -2089,6 +2077,7 @@ body.light-mode .pageguide-history-overlay {
 }
 
 .pageguide-step-card {
+  position: relative;
   border: 1px solid rgba(141, 124, 255, 0.32);
   background: rgba(141, 124, 255, 0.1);
   border-radius: var(--pg-radius);
@@ -2098,6 +2087,24 @@ body.light-mode .pageguide-history-overlay {
 .pageguide-step-card.pageguide-clickable {
   cursor: pointer;
 }
+
+/* Collapse (✕) for the current-step panel in guide mode. */
+.pageguide-step-collapse {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.16);
+  color: var(--pg-muted, #9aa1b2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+}
+.pageguide-step-collapse:hover { background: rgba(255, 71, 87, 0.16); color: #ff4757; }
 
 .pageguide-step-meta {
   display: grid;
