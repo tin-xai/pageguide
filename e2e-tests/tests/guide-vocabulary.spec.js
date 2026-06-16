@@ -430,20 +430,25 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
   });
 
-  test('low-confidence step is flagged for review (red)', async () => {
+  test('confidence shows as a yellow/green status, never red', async () => {
     await panelPage.evaluate(() => {
       // @ts-ignore
       currentGuidePlan = [];
+      // @ts-ignore — step 1 low confidence (yellow), step 2 high confidence (green)
+      currentGuideRecords = [{ step: 1, planStep: 1, confidence: 0.3 }, { step: 2, planStep: 2, confidence: 0.9 }];
       // @ts-ignore
-      currentGuideRecords = [{ step: 1, planStep: 1, confidence: 0.3 }];
-      // @ts-ignore
-      currentGuideStep = 2;
+      currentGuideStep = 3;
       // @ts-ignore
       guideActive = true;
       // @ts-ignore
-      renderGoalCard({ route: 'guide', title: 'T', step: 2 });
+      renderGoalCard({ route: 'guide', title: 'T', step: 3 });
     });
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot').nth(0)).toHaveClass(/review/);
+    const dots = panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot');
+    // Low confidence → yellow (conf-med), NOT red (review).
+    await expect(dots.nth(0)).toHaveClass(/conf-med/);
+    await expect(dots.nth(0)).not.toHaveClass(/review/);
+    // High confidence → green (conf-high).
+    await expect(dots.nth(1)).toHaveClass(/conf-high/);
   });
 
   test('"More" menu opens downward (not off-screen) in guide mode', async () => {

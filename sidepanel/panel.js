@@ -18,6 +18,7 @@ let currentGuidePlan = [];
 let currentGuideTitle = '';
 let currentGuideStep = 0;
 let currentGuideRecords = [];
+let currentGuideInitial = null; // Phase 1: the "Initial state" node (step 0), kept out of the dot count
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
 let panelRunning = false;        // True while the agent is generating (send button shows Stop)
@@ -80,34 +81,47 @@ function hideGoalStepPreview() {
 
 async function showGoalStepPreview(step, anchor) {
   hideGoalStepPreview();
-  const meta = getGuideStepMeta(step);
-  const label = getGuideStepLabel(step);
+  const isInitialNode = Number(step) === 0;
+  const meta = isInitialNode ? currentGuideInitial : getGuideStepMeta(step);
+  const label = isInitialNode ? 'Initial state' : getGuideStepLabel(step);
   let rec = null;
   try {
     if (meta && typeof rewindGetRecord === 'function') {
-      rec = await rewindGetRecord(meta.sessionId, meta.step);
+      rec = await rewindGetRecord(meta.sessionId, meta.step != null ? meta.step : (isInitialNode ? 0 : step));
     }
   } catch (e) {}
-  const isReview = meta?.confidence != null && meta.confidence < 0.5;
-  const reason = isReview
-    ? 'PageGuide is less confident about this step, so it is marked for review.'
+
+  // Confidence status (green ≥70%, yellow <70%) — no red for confidence.
+  const conf = meta?.confidence;
+  const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf) : null;
+  const confHtml = tier
+    ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">${tier === 'high' ? '● Confident' : '● Less certain'}${conf != null ? ' · ' + Math.round(conf * 100) + '%' : ''}</div>`
     : '';
+  const url = meta?.url || rec?.url || '';
+  const urlHtml = url ? `<div class="pageguide-goal-step-preview-url">🔗 ${escapeHtml(url)}</div>` : '';
+  const regionHtml = rec?.regionShot
+    ? `<div class="pageguide-goal-step-region"><div class="pageguide-goal-step-region-cap">Region around target</div><img src="data:image/jpeg;base64,${rec.regionShot}" alt="region"></div>`
+    : '';
+  const allowSteer = !!meta && !isInitialNode;
+
+  // Timeline shows the BEFORE-action screenshot (the page as the agent saw it when choosing the
+  // step) + the highlighted-region crop. The AFTER-action screenshot lives in "Inspect more".
+  const beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
 
   const preview = document.createElement('div');
   preview.id = 'pageguide-goal-step-preview';
   preview.className = 'pageguide-goal-step-preview';
   preview.innerHTML = `
-    ${rec?.screenshot ? `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="">` : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>'}
-    <div class="pageguide-goal-step-preview-title">Step ${step}</div>
+    ${beforeShot ? `<img src="data:image/jpeg;base64,${beforeShot}" alt="">` : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>'}
+    <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
-    ${reason ? `<div class="pageguide-goal-step-preview-reason">
-      <b>Review note</b>
-      <span>${escapeHtml(reason)}</span>
-    </div>` : ''}
+    ${confHtml}
+    ${urlHtml}
+    ${regionHtml}
     ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
     ${meta ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
-    ${meta ? '<button type="button" class="pageguide-goal-step-steer">⤳ Steer from here</button>' : ''}
-    ${meta ? `<div class="pageguide-goal-step-steerbox" style="display:none">
+    ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">⤳ Steer from here</button>' : ''}
+    ${allowSteer ? `<div class="pageguide-goal-step-steerbox" style="display:none">
       <textarea class="pageguide-goal-step-steer-input" rows="2" placeholder="What should the agent do differently from here?"></textarea>
       <div class="pageguide-goal-step-steer-row">
         <button type="button" class="pageguide-goal-step-steer-cancel">Cancel</button>
@@ -200,10 +214,22 @@ function renderGoalDots(current, total) {
       })
     : [];
 
+  // Initial-state node (step 0): a distinct first dot, never counted as a step.
+  if (currentGuideInitial) {
+    const idot = document.createElement('button');
+    idot.type = 'button';
+    idot.className = 'pageguide-goal-dot initial';
+    idot.dataset.step = '0';
+    idot.title = 'Initial state';
+    idot.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(0, idot); });
+    dots.appendChild(idot);
+  }
+
   // Always render at least `total` dots so the count matches the "Step X of N" text.
   const count = Math.max(total || 0, states.length);
   for (let i = 1; i <= count; i++) {
     const st = states[i - 1] || { status: i < current ? 'done' : (i === current ? 'current' : 'pending'), review: false, verify: null };
+    const rec = getGuideStepMeta(i);
     const dot = document.createElement('button');
     dot.type = 'button';
     dot.className = 'pageguide-goal-dot';
@@ -211,7 +237,12 @@ function renderGoalDots(current, total) {
     dot.title = getGuideStepLabel(i);
     if (st.status === 'done') dot.classList.add('done');
     else if (st.status === 'current') dot.classList.add('current');
-    if (st.review) dot.classList.add('review');
+    // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
+    const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence) : null;
+    if (tier === 'high') dot.classList.add('conf-high');
+    else if (tier === 'med') dot.classList.add('conf-med');
+    // Red is reserved for verification failures and low *grounding* (not confidence).
+    if (rec && typeof rec.grounding === 'number' && rec.grounding < 0.5) dot.classList.add('review');
     if (st.verify) dot.classList.add(`verify-${st.verify}`);
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -299,6 +330,7 @@ function clearGoalAndStepPanel() {
   currentGuideTitle = '';
   currentGuideStep = 0;
   currentGuideRecords = [];
+  currentGuideInitial = null;
   currentGuideVerifications = {};
   currentGuideWarnings = {};
   hideGoalStepPreview();
@@ -998,12 +1030,15 @@ async function showStoredJourney(sessionId) {
     addMessage('ℹ️ That journey is no longer available.', 'system');
     return;
   }
-  // Attach sessionId to each meta so the dot preview can resolve its record.
-  currentGuideRecords = steps.map(m => Object.assign({}, m, { sessionId }));
+  // Attach sessionId to each meta so the dot preview can resolve its record. Split out the
+  // initial-state node (step 0) so it doesn't inflate the step/dot count.
+  const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
+  currentGuideInitial = withSid.find(m => m.isInitial || Number(m.step) === 0) || null;
+  currentGuideRecords = withSid.filter(m => !(m.isInitial || Number(m.step) === 0));
   currentGuidePlan = [];
   currentGuideVerifications = {};
   currentGuideTitle = title || 'Guide journey';
-  const lastStep = currentGuideRecords[currentGuideRecords.length - 1].step;
+  const lastStep = currentGuideRecords.length ? currentGuideRecords[currentGuideRecords.length - 1].step : 0;
   currentGuideStep = lastStep;
   guideActive = false; // recalled journey is a past, read-only view
   renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
@@ -1373,11 +1408,17 @@ function showTyping() {
 async function stopGuide(message = '⏹ Guide stopped.') {
   guideActive = false;
   hideTyping();
+  // Set the Stop tombstone + clear the resume fallback BEFORE messaging the content script, so
+  // Stop is authoritative even if the content script is already gone (mid-navigation): the next
+  // page load reads the tombstone and refuses to resume. Keys match guidev2.js (_GV2_STOP_KEY /
+  // _GV2_KEY).
+  try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
+  try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
+  // Clear SW state directly so it won't tell the next page to resume.
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
   try {
     await sendToContentScript({ action: 'stopGuide' });
   } catch (e) { /* content script may not be reachable */ }
-  // Also clear SW state directly so the next page load won't resume
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
   addMessage(message, 'system');
 }
 
@@ -2814,7 +2855,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hideTyping();
     addGuideStep(message.result);
   } else if (message.action === 'guideStepRecord') {
-    if (message.meta) {
+    if (message.meta && (message.meta.isInitial || Number(message.meta.step) === 0)) {
+      // Initial-state node (step 0): tracked separately so it never inflates the step/dot count,
+      // but still accumulated into the session journey so "View journey" can show it later.
+      _setJourneyRecalledMode(false);
+      currentGuideInitial = message.meta;
+      renderGoalCard({ route: 'guide', step: currentGuideStep });
+      const sid0 = message.meta.sessionId;
+      if (sid0) {
+        const j0 = _journeysBySession[sid0] || (_journeysBySession[sid0] = { title: '', steps: [] });
+        if (!j0.steps.some(s => Number(s.step) === 0)) j0.steps.unshift(message.meta);
+      }
+    } else if (message.meta) {
       _setJourneyRecalledMode(false); // a live step is arriving — leave recalled view
       const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
       if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);

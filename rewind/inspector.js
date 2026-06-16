@@ -37,7 +37,7 @@
     steps.forEach(s => {
       const opt = document.createElement('option');
       opt.value = s.step;
-      opt.textContent = 'Step ' + s.step;
+      opt.textContent = (s.isInitial || Number(s.step) === 0) ? 'Initial state' : 'Step ' + s.step;
       if (s.step === step) opt.selected = true;
       sel.appendChild(opt);
     });
@@ -55,7 +55,7 @@
     }
     $('empty').style.display = 'none';
     $('content').style.display = '';
-    $('title').textContent = 'Step ' + rec.step + ' — Inspector';
+    $('title').textContent = ((rec.isInitial || Number(rec.step) === 0) ? 'Initial state' : 'Step ' + rec.step) + ' — Inspector';
 
     const metaBits = [];
     if (rec.confidence != null) metaBits.push('Confidence: ' + Math.round(rec.confidence * 100) + '%');
@@ -70,20 +70,27 @@
       ${rec.nextStepHint ? `<div><strong>Next:</strong> ${esc(rec.nextStepHint)}</div>` : ''}
       ${metaBits.length ? `<div class="meta">${esc(metaBits.join('   ·   '))}</div>` : ''}`;
 
-    const hasShot = !!rec.screenshot;
-    const hasSnap = !!rec.domSnapshot;
+    // "Inspect more" surfaces the AFTER-action screenshot (the result of the step); the
+    // BEFORE-action shot + region crop live in the Memory section below.
+    const afterShot = rec.screenshotAfter || rec.screenshot || null;
+    const hasShot = !!afterShot;
+    const hasSnap = !!(rec.domSnapshotAfter || rec.domSnapshot);
+    const snap = rec.domSnapshotAfter || rec.domSnapshot;
     const tabShot = $('tab-shot'), tabSnap = $('tab-snap'), view = $('view');
     tabShot.disabled = !hasShot;
     tabSnap.disabled = !hasSnap;
+    // Relabel the screenshot tab to make the before/after split explicit.
+    const shotLabel = tabShot.querySelector('span:last-child') || tabShot;
+    if (shotLabel && shotLabel !== tabShot) shotLabel.textContent = rec.screenshotAfter ? 'After action' : 'Screenshot';
 
     function show(which) {
       tabShot.classList.toggle('active', which === 'shot');
       tabSnap.classList.toggle('active', which === 'snap');
       if (which === 'snap' && hasSnap) {
         view.innerHTML = `<div class="snap-wrap"><div class="snap-banner">🔒 Read-only snapshot — not a live page</div><iframe sandbox></iframe></div>`;
-        view.querySelector('iframe').srcdoc = rec.domSnapshot;
+        view.querySelector('iframe').srcdoc = snap;
       } else if (hasShot) {
-        view.innerHTML = `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="Step ${esc(rec.step)} screenshot">`;
+        view.innerHTML = `<img src="data:image/jpeg;base64,${afterShot}" alt="Step ${esc(rec.step)} after action">`;
       } else if (hasSnap) {
         show('snap'); return;
       } else {
@@ -110,11 +117,18 @@
     const mem = $('memory');
     if (mem) {
       const bits = [];
+      if (rec.title) bits.push(`<div><strong>Title:</strong> ${esc(rec.title)}</div>`);
       if (rec.url) bits.push(`<div><strong>URL:</strong> <a href="${esc(rec.url)}" target="_blank" rel="noreferrer">${esc(rec.url)}</a></div>`);
       if (rec.action) {
         const tgt = (rec.target && rec.target.text) ? ' → “' + esc(rec.target.text) + '”' : '';
         const typed = rec.typeText ? ' = “' + esc(rec.typeText) + '”' : '';
         bits.push(`<div><strong>Action:</strong> ${esc(rec.action)}${tgt}${typed}</div>`);
+      }
+      if (rec.confidence != null) {
+        const pct = Math.round(rec.confidence * 100);
+        const high = rec.confidence >= 0.7;
+        const color = high ? '#16a34a' : '#b8860b';
+        bits.push(`<div><strong>Confidence:</strong> <span style="color:${color};font-weight:700">${pct}% — ${high ? 'Confident' : 'Less certain'}</span></div>`);
       }
       if (rec.risk) bits.push(`<div><strong>Risk:</strong> ${esc(rec.risk)}</div>`);
 
@@ -134,8 +148,37 @@
         bits.push(`<div style="margin-top:8px"><strong>Restore log${when}:</strong></div><ul style="margin:6px 0 0;padding-left:18px">${items}</ul>`);
       }
 
-      if (bits.length) { mem.innerHTML = bits.join(''); mem.style.display = ''; }
-      else mem.style.display = 'none';
+      // Before-action screenshot (what the agent saw when choosing this step). The After-action
+      // shot is the main Screenshot tab above.
+      const beforeShot = rec.screenshotBefore || (rec.screenshotAfter ? null : rec.screenshot) || null;
+      if (beforeShot) {
+        bits.push(`<div style="margin-top:8px"><strong>Before action:</strong></div>
+          <img src="data:image/jpeg;base64,${beforeShot}" alt="before action"
+               style="max-width:420px;width:100%;border-radius:8px;border:1px solid var(--pg-border);margin-top:6px;display:block">`);
+      }
+
+      // Region around the highlighted target element: cropped screenshot + scoped DOM snapshot.
+      if (rec.regionShot) {
+        bits.push(`<div style="margin-top:8px"><strong>Region around target:</strong></div>
+          <img src="data:image/jpeg;base64,${rec.regionShot}" alt="target region"
+               style="max-width:320px;width:100%;border-radius:8px;border:1px solid var(--pg-border);margin-top:6px;display:block">`);
+      }
+      if (rec.regionDom) {
+        bits.push(`<details style="margin-top:8px"><summary>Region DOM snapshot (read-only)</summary>
+          <iframe class="rw-region-dom" sandbox style="width:100%;height:40vh;border:1px solid var(--pg-border);border-radius:8px;background:#fff;margin-top:6px"></iframe></details>`);
+      }
+
+      if (bits.length) {
+        mem.innerHTML = bits.join('');
+        mem.style.display = '';
+        // Populate the sandboxed region-DOM iframe after insertion (srcdoc can't ride in innerHTML safely).
+        if (rec.regionDom) {
+          const frame = mem.querySelector('.rw-region-dom');
+          if (frame) frame.srcdoc = rec.regionDom;
+        }
+      } else {
+        mem.style.display = 'none';
+      }
     }
 
     const recordWrap = $('record-wrap'), recordPre = $('record');
@@ -143,8 +186,12 @@
       try {
         // Trim heavy payloads so the JSON dump stays readable.
         const copy = Object.assign({}, rec);
-        if (copy.screenshot) copy.screenshot = '[base64 ' + copy.screenshot.length + ' chars]';
-        if (copy.domSnapshot) copy.domSnapshot = '[html ' + copy.domSnapshot.length + ' chars]';
+        for (const k of ['screenshot', 'screenshotBefore', 'screenshotAfter', 'regionShot']) {
+          if (copy[k]) copy[k] = '[base64 ' + copy[k].length + ' chars]';
+        }
+        for (const k of ['domSnapshot', 'domSnapshotAfter', 'regionDom']) {
+          if (copy[k]) copy[k] = '[html ' + copy[k].length + ' chars]';
+        }
         recordPre.textContent = JSON.stringify(copy, null, 2);
         recordWrap.style.display = '';
       } catch (e) { recordWrap.style.display = 'none'; }

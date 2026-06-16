@@ -998,6 +998,60 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 /**
+ * Map a step's LLM confidence (0–1, "how sure the model is that this step + element are correct",
+ * judged from the pre-action screenshot/DOM + the chosen action) to a timeline status tier.
+ * Two tiers only — there is intentionally NO red tier for confidence.
+ *
+ * @param {number} confidence - normalized 0..1, or null/NaN if unavailable
+ * @returns {'high'|'med'|null} 'high' (≥0.7, green), 'med' (<0.7, yellow), null (unknown)
+ */
+function gv2ConfidenceTier(confidence) {
+  if (typeof confidence !== 'number' || !isFinite(confidence)) return null;
+  return confidence >= 0.7 ? 'high' : 'med';
+}
+
+/**
+ * Compute the source-crop rectangle (in IMAGE pixels) for cropping a viewport screenshot down to
+ * an element's region. `captureVisibleTab` returns an image at devicePixelRatio scale while
+ * getBoundingClientRect is in CSS px, so we scale by dpr and clamp to the image bounds. Pure
+ * (no DOM/canvas) so it's unit-testable.
+ *
+ * @param {{left:number,top:number,width:number,height:number}} rect - element CSS-px rect
+ * @param {number} dpr   - devicePixelRatio (default 1)
+ * @param {number} imgW  - screenshot width in image px
+ * @param {number} imgH  - screenshot height in image px
+ * @param {number} [pad] - extra CSS-px padding around the element (default 8)
+ * @returns {{sx:number,sy:number,sw:number,sh:number}|null} crop in image px, or null if invalid
+ */
+function gv2CropRect(rect, dpr, imgW, imgH, pad) {
+  if (!rect) return null;
+  const scale = (typeof dpr === 'number' && dpr > 0) ? dpr : 1;
+  pad = (typeof pad === 'number' && pad >= 0) ? pad : 8;
+  const W = (typeof imgW === 'number' && imgW > 0) ? imgW : 0;
+  const H = (typeof imgH === 'number' && imgH > 0) ? imgH : 0;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const left = (rect.left - pad) * scale;
+  const top = (rect.top - pad) * scale;
+  const w = (rect.width + pad * 2) * scale;
+  const h = (rect.height + pad * 2) * scale;
+  const sx = clamp(Math.round(left), 0, W);
+  const sy = clamp(Math.round(top), 0, H);
+  const sw = clamp(Math.round(w), 0, W - sx);
+  const sh = clamp(Math.round(h), 0, H - sy);
+  if (sw <= 0 || sh <= 0) return null;
+  return { sx, sy, sw, sh };
+}
+
+if (typeof window !== 'undefined') {
+  window.gv2ConfidenceTier = gv2ConfidenceTier;
+  window.gv2CropRect = gv2CropRect;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.gv2ConfidenceTier = gv2ConfidenceTier;
+  module.exports.gv2CropRect = gv2CropRect;
+}
+
+/**
  * Tolerant JSON-object extractor for LLM responses (shared by guidev2 plan,
  * confidence, and verification parsing). Handles ```json fences, leading/trailing
  * prose, and returns null on malformed input instead of throwing.

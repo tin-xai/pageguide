@@ -340,12 +340,17 @@ function _gv2StopInternal() {
   _guidev2Stopped = true;
   _guidev2Resuming = false;
   _guidev2WaitingForClick = false;
+  if (window._guidev2) window._guidev2._awaitingRestoreConfirm = false;
   _gv2ClearActionTimers();
   _gv2RemoveClickListeners();
   _gv2HideIndicator();
   gv2HideAutoOverlay();
   gv2HideRestoreOverlay();
   _gv2ClearState();
+  // Persist a tombstone so a navigation already in flight can't resume the agent, and drop any
+  // one-shot steer handoff so it doesn't fire on the next load.
+  _gv2MarkStopped();
+  try { if (typeof rewindClearSteerPending === 'function') rewindClearSteerPending(); } catch (e) {}
 }
 
 function _gv2MaxStepMessage(g = window._guidev2) {
@@ -413,6 +418,22 @@ async function gv2LoadFallback() {
 
 async function gv2ClearFallback() {
   try { await chrome.storage.session.remove(_GV2_KEY); } catch (e) {}
+}
+
+// ===== STOP TOMBSTONE =====
+// `_guidev2Stopped` is in-memory and does NOT survive a navigation, so after the user clicks
+// Stop a pending page-load (from the agent's own click) could otherwise resume the agent on the
+// next page. This persisted marker is checked by the resume paths and is cleared only when the
+// user intentionally starts a new guide or steers.
+const _GV2_STOP_KEY = 'pageguideGuidanceV2Stopped';
+async function _gv2MarkStopped() {
+  try { await chrome.storage.session.set({ [_GV2_STOP_KEY]: Date.now() }); } catch (e) {}
+}
+async function _gv2IsStopMarked() {
+  try { const r = await chrome.storage.session.get(_GV2_STOP_KEY); return !!r[_GV2_STOP_KEY]; } catch (e) { return false; }
+}
+async function _gv2ClearStopMark() {
+  try { await chrome.storage.session.remove(_GV2_STOP_KEY); } catch (e) {}
 }
 
 // ===== SERVICE WORKER PORT (primary state channel) =====
@@ -537,6 +558,13 @@ async function _gv2ResumeFromState(state) {
     console.log('[guidev2] Already resuming, ignoring duplicate resume signal');
     return;
   }
+  // Honor a Stop that happened before this navigation finished — don't auto-wake the agent.
+  if (await _gv2IsStopMarked()) {
+    console.log('[guidev2] resume suppressed — user stopped the guide');
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+    try { await gv2ClearFallback(); } catch (e) {}
+    return;
+  }
   _guidev2Resuming = true;
 
   // Restore in-memory state
@@ -624,6 +652,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
   console.log('[guidev2] steer resume start', { inPlace, payload });
   if (_guidev2Resuming) { console.warn('[guidev2] steer ignored — already resuming'); return; }
   _guidev2Resuming = true;
+  await _gv2ClearStopMark(); // an explicit user steer overrides any prior Stop tombstone
 
   const fromStep = (payload && payload.fromStep) || 1;
   // Immediate, unmissable feedback so it's clear the content script received the steer —
@@ -1024,6 +1053,67 @@ function _gv2ShouldAutoExecute(step) {
  *
  * @param {object} data - reasoning fields for the step (see record shape in plan)
  */
+/**
+ * Capture the region around the currently highlighted target element: its bounding rect, a
+ * cropped screenshot of just that region, and a scoped DOM snapshot of its surrounding
+ * container. Best-effort — returns nulls/'' when no target is resolvable (e.g. post-action,
+ * after the element is gone). `screenshotBase64` is the just-taken viewport screenshot, reused
+ * so we don't capture twice.
+ */
+async function gv2CaptureRegion(screenshotBase64) {
+  const out = { targetRect: null, regionShot: null, regionDom: '' };
+  try {
+    const g = window._guidev2;
+    let el = (g && g.currentTargetEl && document.contains(g.currentTargetEl)) ? g.currentTargetEl : null;
+    if (!el) el = document.querySelector('[data-pageguide-styled]');
+    if (!el || !el.getBoundingClientRect) return out;
+
+    const r = el.getBoundingClientRect();
+    out.targetRect = { left: r.left, top: r.top, width: r.width, height: r.height };
+
+    // Scoped DOM snapshot of the element's surrounding container (not the whole page).
+    try {
+      const container = el.closest('form, section, article, [role], main, li, fieldset') || el.parentElement || el;
+      if (typeof gv2SerializeDom === 'function') out.regionDom = gv2SerializeDom(container);
+    } catch (e) { /* best-effort */ }
+
+    // Crop the viewport screenshot down to the element's region.
+    if (screenshotBase64) out.regionShot = await _gv2CropScreenshot(screenshotBase64, out.targetRect);
+  } catch (e) { /* best-effort */ }
+  return out;
+}
+
+/** Crop a base64 JPEG viewport screenshot to a CSS-px rect using a canvas. Resolves base64 or null. */
+function _gv2CropScreenshot(base64, rect) {
+  return new Promise((resolve) => {
+    // Hard time-box: never let a stuck Image decode hang the caller (which gates the record store).
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    setTimeout(() => finish(null), 1500);
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          // Zoom OUT: pad generously around the element so the crop shows surrounding context,
+          // not a tight box. Floor of 160 CSS px, scaling up for larger targets.
+          const pad = Math.round(Math.max(160, (rect.width || 0) * 0.75, (rect.height || 0) * 0.75));
+          const crop = (typeof gv2CropRect === 'function')
+            ? gv2CropRect(rect, window.devicePixelRatio || 1, img.naturalWidth, img.naturalHeight, pad)
+            : null;
+          if (!crop) return finish(null);
+          const canvas = document.createElement('canvas');
+          canvas.width = crop.sw; canvas.height = crop.sh;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.sw, crop.sh);
+          finish(canvas.toDataURL('image/jpeg', 0.8).replace(/^data:image\/\w+;base64,/, ''));
+        } catch (e) { finish(null); }
+      };
+      img.onerror = () => finish(null);
+      img.src = 'data:image/jpeg;base64,' + base64;
+    } catch (e) { finish(null); }
+  });
+}
+
 async function gv2CaptureStepRecord(data) {
   const g = window._guidev2;
   if (!g || !g.active || !g.captureEnabled || !g.sessionId) return;
@@ -1033,8 +1123,32 @@ async function gv2CaptureStepRecord(data) {
   // same reasoning fields and only refresh the screenshot/DOM snapshot.
   g._lastCaptureData = data;
 
+  const startedAt = g._stepStartedAt || Date.now();
+
+  // ANNOUNCE THE STEP FIRST (lightweight meta, no captures). The timeline dot, the journey
+  // accumulation, and the "View journey" button (added on step 1) all key off this message, so
+  // it must NOT wait on screenshot/region capture — if a capture were slow or hung, the step
+  // would otherwise never appear and the journey button would never show. Heavy assets
+  // (screenshot/DOM/region) are stored next and lazy-loaded on inspect.
   try {
-    const startedAt = g._stepStartedAt || Date.now();
+    chrome.runtime.sendMessage({
+      action: 'guideStepRecord',
+      meta: {
+        sessionId: g.sessionId,
+        step: data.step,
+        planStep: data.planStep != null ? data.planStep : data.step,
+        instruction: data.instruction || '',
+        action: data.action || null,
+        isLastStep: !!data.isLastStep,
+        url: window.location.href,
+        title: document.title || '',
+        timestamp: Date.now(),
+        confidence: data.confidence != null ? data.confidence : null
+      }
+    });
+  } catch (e) { /* panel may be closed */ }
+
+  try {
     let screenshot = null;
     try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
     catch (e) { /* screenshot is best-effort */ }
@@ -1049,12 +1163,18 @@ async function gv2CaptureStepRecord(data) {
     try { if (typeof gv2CaptureRestoreState === 'function') restore = gv2CaptureRestoreState(); }
     catch (e) { /* restore capture is best-effort */ }
 
+    // Region around the highlighted target: rect + cropped screenshot + scoped DOM snapshot.
+    // Best-effort and time-boxed inside gv2CaptureRegion — never blocks the record store.
+    let region = { targetRect: null, regionShot: null, regionDom: '' };
+    try { region = await gv2CaptureRegion(screenshot); } catch (e) { /* best-effort */ }
+
     const record = {
       sessionId: g.sessionId,
       step: data.step,
       planStep: data.planStep != null ? data.planStep : data.step,
       timestamp: Date.now(),
       url: window.location.href,
+      title: document.title || '',
       instruction: data.instruction || '',
       action: data.action || null,
       typeText: data.typeText != null ? data.typeText : null,
@@ -1063,33 +1183,21 @@ async function gv2CaptureStepRecord(data) {
       target: data.target || null,
       confidence: data.confidence != null ? data.confidence : null,
       durationMs: Date.now() - startedAt,
+      // BEFORE-action screenshot (the page as the agent saw it when choosing this step). The
+      // timeline displays this one. `screenshot` mirrors it for back-compat. The AFTER-action
+      // screenshot is filled in later by gv2RecaptureAfterAction and shown only in "Inspect more".
       screenshot: screenshot || null,
+      screenshotBefore: screenshot || null,
       domSnapshot,
       restore,
+      targetRect: region.targetRect,
+      regionShot: region.regionShot,
+      regionDom: region.regionDom,
       tutorialMatch: data.tutorialMatch || null,
       rawLlmJson: data.rawLlmJson || ''
     };
 
     await rewindPutRecord(record);
-
-    // Tell the panel a step record is ready (lightweight — no screenshot/DOM payload).
-    try {
-      chrome.runtime.sendMessage({
-        action: 'guideStepRecord',
-        meta: {
-          sessionId: record.sessionId,
-          step: record.step,
-          planStep: record.planStep,
-          instruction: record.instruction,
-          action: record.action,
-          isLastStep: record.isLastStep,
-          url: record.url,
-          timestamp: record.timestamp,
-          durationMs: record.durationMs,
-          confidence: record.confidence
-        }
-      });
-    } catch (e) { /* panel may be closed */ }
   } catch (e) {
     console.warn('[guidev2] gv2CaptureStepRecord failed:', e);
   }
@@ -1116,15 +1224,64 @@ async function gv2RecaptureAfterAction(stepNumber) {
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
     catch (e) { /* best-effort */ }
 
-    const patch = { url: window.location.href };
-    if (screenshot) patch.screenshot = screenshot;
-    if (domSnapshot) patch.domSnapshot = domSnapshot;
-    // Refresh restorable state to reflect the post-action page (matches screenshot/DOM).
+    // Store the AFTER-action screenshot SEPARATELY — do NOT overwrite the before-shot or the
+    // region crop (those belong to the pre-action moment when the target was highlighted). The
+    // after-shot is surfaced only in "Inspect more".
+    const patch = { url: window.location.href, title: document.title || '' };
+    if (screenshot) patch.screenshotAfter = screenshot;
+    if (domSnapshot) patch.domSnapshotAfter = domSnapshot;
+    // Refresh restorable state to reflect the post-action page (used by steer/resume).
     try { if (typeof gv2CaptureRestoreState === 'function') patch.restore = gv2CaptureRestoreState(); }
     catch (e) { /* best-effort */ }
     await rewindPatchRecord(g.sessionId, stepNumber, patch);
   } catch (e) {
     console.warn('[guidev2] gv2RecaptureAfterAction failed:', e);
+  }
+}
+
+/**
+ * Capture the "Initial State" node (step 0) at guide start: the page as it was before any
+ * agent action. Stored like a step record (screenshot + DOM + restore + url + title) and
+ * announced to the panel with `isInitial:true` so the timeline can show it as the first node.
+ * Fire-and-forget.
+ */
+async function gv2CaptureInitialState() {
+  const g = window._guidev2;
+  if (!g || !g.captureEnabled || !g.sessionId) return;
+  if (typeof rewindPutRecord !== 'function') return;
+  try {
+    let screenshot = null;
+    try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
+    catch (e) { /* best-effort */ }
+    let domSnapshot = '';
+    try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
+    catch (e) { /* best-effort */ }
+    let restore = null;
+    try { if (typeof gv2CaptureRestoreState === 'function') restore = gv2CaptureRestoreState(); }
+    catch (e) { /* best-effort */ }
+
+    const record = {
+      sessionId: g.sessionId, step: 0, planStep: 0, timestamp: Date.now(),
+      url: window.location.href, title: document.title || '',
+      instruction: 'Initial state', action: null, isInitial: true,
+      isLastStep: false, target: null, confidence: null, durationMs: 0,
+      screenshot: screenshot || null, screenshotBefore: screenshot || null,
+      domSnapshot, restore, rawLlmJson: ''
+    };
+    await rewindPutRecord(record);
+
+    try {
+      chrome.runtime.sendMessage({
+        action: 'guideStepRecord',
+        meta: {
+          sessionId: record.sessionId, step: 0, planStep: 0,
+          instruction: 'Initial state', isInitial: true,
+          url: record.url, title: record.title, timestamp: record.timestamp
+        }
+      });
+    } catch (e) { /* panel may be closed */ }
+  } catch (e) {
+    console.warn('[guidev2] gv2CaptureInitialState failed:', e);
   }
 }
 
@@ -1135,6 +1292,7 @@ async function gv2RecaptureAfterAction(stepNumber) {
  */
 async function _handleStepByStepGuideV2(question) {
   _guidev2Stopped = false;
+  await _gv2ClearStopMark(); // a fresh guide overrides any prior Stop tombstone
   // Look up a pre-verified tutorial ONCE at the start. Result is cached in
   // window._guidev2.tutorialRef so intermediate steps reuse it for free.
   const match = await _gv2FindTutorial(question, window.location.href);
@@ -1160,6 +1318,10 @@ async function _handleStepByStepGuideV2(question) {
   if (captureEnabled && typeof rewindStartSession === 'function') {
     try { await rewindStartSession(sessionId, question); } catch (e) { /* non-fatal */ }
   }
+
+  // Phase 1: capture the Initial State (node 0) before the first step, so the timeline shows
+  // where the journey began (screenshot + URL + title + restorable state).
+  try { await gv2CaptureInitialState(); } catch (e) { /* non-fatal */ }
 
   // Not pending resume on first step — we're already on the right page
   await _gv2SetState(false);
@@ -1851,6 +2013,10 @@ window.gv2NextStep = async function (options = {}) {
   if (_guidev2Resuming) return { success: false, progressed: false, error: 'Guide is already continuing' };
 
   if (fromPanel && g?.active) {
+    // Manual "Next →" = "I performed this step, continue." The page now reflects the result,
+    // so refresh the just-completed step's snapshot (post-action) before generating the next —
+    // the user-click path does this via _gv2WaitForNavOrSettle, but the panel button doesn't.
+    try { await gv2RecaptureAfterAction(g.previousSteps?.length || 0); } catch (e) {}
     return continueGuide();
   }
 

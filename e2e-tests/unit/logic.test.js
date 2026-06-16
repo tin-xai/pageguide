@@ -490,6 +490,55 @@ describe('gv2DescribeRestoreAction (content/utils.js)', () => {
   });
 });
 
+// Phase 1 (observation/timeline): confidence tier (green ≥0.7 / yellow <0.7, never red) and the
+// screenshot crop-rect math used to crop a viewport capture to the highlighted element's region.
+describe('gv2ConfidenceTier (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('high at ≥0.7, med below 0.7 — never a red/low tier', () => {
+    expect(window.gv2ConfidenceTier(0.7)).toBe('high');
+    expect(window.gv2ConfidenceTier(0.95)).toBe('high');
+    expect(window.gv2ConfidenceTier(0.69)).toBe('med');
+    expect(window.gv2ConfidenceTier(0.2)).toBe('med');   // low confidence is YELLOW, not red
+    expect(window.gv2ConfidenceTier(0)).toBe('med');
+  });
+
+  test('null/NaN/non-number → null (unknown)', () => {
+    expect(window.gv2ConfidenceTier(null)).toBeNull();
+    expect(window.gv2ConfidenceTier(undefined)).toBeNull();
+    expect(window.gv2ConfidenceTier(NaN)).toBeNull();
+    expect(window.gv2ConfidenceTier('0.8')).toBeNull();
+  });
+});
+
+describe('gv2CropRect (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('scales CSS px by devicePixelRatio, adds padding, clamps to image bounds', () => {
+    // rect 100,50 size 40x20; dpr 2; pad 0 → 200,100 size 80x40 in image px.
+    const c = window.gv2CropRect({ left: 100, top: 50, width: 40, height: 20 }, 2, 1000, 1000, 0);
+    expect(c).toEqual({ sx: 200, sy: 100, sw: 80, sh: 40 });
+  });
+
+  test('clamps a rect that runs past the image edge', () => {
+    const c = window.gv2CropRect({ left: 990, top: 990, width: 40, height: 40 }, 1, 1000, 1000, 0);
+    expect(c.sx).toBe(990);
+    expect(c.sy).toBe(990);
+    expect(c.sw).toBe(10); // 1000 - 990
+    expect(c.sh).toBe(10);
+  });
+
+  test('applies default padding (8 CSS px) around the element', () => {
+    const c = window.gv2CropRect({ left: 100, top: 100, width: 50, height: 50 }, 1, 1000, 1000);
+    expect(c).toEqual({ sx: 92, sy: 92, sw: 66, sh: 66 }); // 50 + 2*8 = 66
+  });
+
+  test('returns null for invalid rect or zero-size crop', () => {
+    expect(window.gv2CropRect(null, 1, 100, 100)).toBeNull();
+    expect(window.gv2CropRect({ left: 200, top: 0, width: 10, height: 10 }, 1, 100, 100, 0)).toBeNull();
+  });
+});
+
 // Plan/confidence (Slice 2): tolerant JSON-object extractor used for plan,
 // confidence, and verification parsing.
 describe('gv2ExtractJsonObject (content/utils.js)', () => {

@@ -349,35 +349,44 @@ async function extractPdfText(pdfUrl, maxPages = 15) {
 }
 
 // ===== Screenshot Capture =====
-async function captureScreenshot(tabId) {
+// Chrome rate-limits chrome.tabs.captureVisibleTab to ~2 calls/sec. In Guide mode we capture a
+// BEFORE shot and an AFTER shot per step (plus an initial-state shot), and step N's before-shot
+// fires right after step N-1's after-shot — so back-to-back calls otherwise hit
+// "MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND" and the second one (typically step 2's screenshot)
+// comes back empty. Serialize every capture through a single chain and enforce a minimum gap so
+// no call is ever dropped.
+const _CAPTURE_MIN_GAP_MS = 650;
+let _captureChain = Promise.resolve();
+let _lastCaptureTs = 0;
+
+function captureScreenshot(tabId) {
+  const run = _captureChain.then(() => _doCaptureScreenshot(tabId));
+  // Keep the chain alive regardless of individual success/failure.
+  _captureChain = run.then(() => {}, () => {});
+  return run;
+}
+
+async function _doCaptureScreenshot(tabId) {
   try {
-    // Get the current active tab if no tabId provided
     if (!tabId) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       tabId = tab?.id;
     }
-    
-    if (!tabId) {
-      return { error: 'No active tab found' };
+    if (!tabId) return { error: 'No active tab found' };
+
+    // Throttle: ensure at least _CAPTURE_MIN_GAP_MS since the previous capture.
+    const since = Date.now() - _lastCaptureTs;
+    if (since < _CAPTURE_MIN_GAP_MS) {
+      await new Promise(r => setTimeout(r, _CAPTURE_MIN_GAP_MS - since));
     }
-    
-    // Capture the visible area of the tab
-    const dataUrl = await chrome.tabs.captureVisibleTab(null, {
-      format: 'jpeg',
-      quality: 80  // Good balance between quality and size
-    });
-    
-    // Remove the data URL prefix to get just the base64
+
+    const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 80 });
+    _lastCaptureTs = Date.now();
     const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    
     console.log('📸 Screenshot captured, size:', Math.round(base64.length / 1024), 'KB');
-    
-    return { 
-      success: true, 
-      imageBase64: base64,
-      format: 'jpeg'
-    };
+    return { success: true, imageBase64: base64, format: 'jpeg' };
   } catch (error) {
+    _lastCaptureTs = Date.now();
     console.error('📸 Screenshot error:', error);
     return { error: `Screenshot failed: ${error.message}` };
   }

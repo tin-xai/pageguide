@@ -123,10 +123,14 @@
   }
 
   // Store (or overwrite) the full record for a step and update the session's index meta.
-  async function rewindPutRecord(record) {
+  // Pass { skipIndex: true } to store the record only (used by the Initial-state node, which is
+  // not a journey "step" and must not appear in / inflate the step index).
+  async function rewindPutRecord(record, opts) {
     if (!record || record.sessionId == null || record.step == null) return;
     const sid = record.sessionId;
     await _set({ [_recKey(sid, record.step)]: record });
+
+    if (opts && opts.skipIndex) return;
 
     const res = await _get(_idxKey(sid));
     const index = res[_idxKey(sid)] || { sessionId: sid, goal: '', startedAt: Date.now(), steps: [] };
