@@ -87,7 +87,12 @@
       risk: record.risk,
       mode: record.mode,
       verification: record.verification,
-      cost: record.cost
+      cost: record.cost,
+      title: record.title,
+      isInitial: record.isInitial,
+      // Verification flag: does this step have any screenshot? Steps without one are "void" and
+      // get pruned from the timeline / recall.
+      hasShot: !!(record.screenshot || record.screenshotBefore || record.screenshotAfter)
     };
   }
 
@@ -212,6 +217,17 @@
     }
   }
 
+  // Delete a single step's record + its index entry (used to prune "void" screenshot-less steps).
+  async function rewindDeleteRecord(sessionId, step) {
+    await _remove(_recKey(sessionId, step));
+    const res = await _get(_idxKey(sessionId));
+    const index = res[_idxKey(sessionId)];
+    if (index && Array.isArray(index.steps)) {
+      index.steps = index.steps.filter(s => Number(s.step) !== Number(step));
+      await _set({ [_idxKey(sessionId)]: index });
+    }
+  }
+
   // ----- Steer ("branch & re-run") handoff -----
   // The side panel writes a payload { sessionId, fromStep, newGoal, url, createdAt } and then
   // navigates the working tab to `url`; the content script reads it on load (taking precedence
@@ -239,6 +255,7 @@
     rewindPatchRecord,
     rewindClear,
     rewindTruncateAfter,
+    rewindDeleteRecord,
     rewindSetSteerPending,
     rewindGetSteerPending,
     rewindClearSteerPending

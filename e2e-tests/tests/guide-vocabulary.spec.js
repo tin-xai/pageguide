@@ -151,11 +151,11 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       return { pending, nav: window.__nav };
     });
     expect(res.pending).toBeTruthy();
-    expect(res.pending.fromStep).toBe(2);
+    // Redo step 2 → branch after step 1 → restore the state BEFORE step 2 (== step 1's page).
+    expect(res.pending.fromStep).toBe(1);
     expect(res.pending.newGoal).toContain('do something different');
-    // Branch AFTER step 2 → land on step 2's own page (keep 1..2, re-run from 3).
-    expect(res.pending.url).toBe('https://ex.com/b');
-    expect(res.nav).toBe('https://ex.com/b'); // working tab navigated to the landing URL
+    expect(res.pending.url).toBe('https://ex.com/a'); // land on step 1's page (before step 2)
+    expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
   });
 
   test('step preview card "Steer from here" writes a handoff and requests navigation', async () => {
@@ -208,10 +208,11 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       return { pending, nav: window.__nav };
     });
     expect(res.pending).toBeTruthy();
-    expect(res.pending.fromStep).toBe(2);
+    // Redo step 2 → branch after step 1 → restore the state BEFORE step 2 (== step 1's page).
+    expect(res.pending.fromStep).toBe(1);
     expect(res.pending.newGoal).toContain('do something different');
-    expect(res.pending.url).toBe('https://ex.com/b');
-    expect(res.nav).toBe('https://ex.com/b'); // working tab navigated to the landing URL
+    expect(res.pending.url).toBe('https://ex.com/a'); // land on step 1's page (before step 2)
+    expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
   });
 
   test('rebranch prunes timeline steps after the branch point', async () => {
@@ -248,17 +249,17 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(10);
 
     await panelPage.evaluate(async () => {
-      // @ts-ignore - rebranch from step 5 → steps 6..10 should be removed
+      // @ts-ignore - redo step 5 → branch after step 4 → steps 5..10 should be removed
       await RewindTimeline.steerFromStep({ sessionId: 'prune-sess', step: 5, url: 'https://p.com/5' }, 'go a different way');
     });
 
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(5);
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(4);
     const storeSteps = await panelPage.evaluate(async () => {
       // @ts-ignore
       const idx = await rewindGetIndex();
       return idx.steps.map(s => s.step);
     });
-    expect(storeSteps).toEqual([1, 2, 3, 4, 5]); // store truncated to match the UI
+    expect(storeSteps).toEqual([1, 2, 3, 4]); // store truncated to before the redone step
   });
 
   test('steering a step on the SAME page forks in place (no reload)', async () => {
@@ -288,7 +289,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     });
     expect(res.nav).toBeNull();                       // no reload / no navigation
     expect(res.inplace && res.inplace.action).toBe('gv2SteerNow'); // in-place re-run message
-    expect(res.inplace.payload.fromStep).toBe(2);
+    expect(res.inplace.payload.fromStep).toBe(1);     // redo step 2 → branch after step 1
   });
 
   test('send button morphs into a square Stop while running; no in-chat stop rectangle', async () => {
@@ -319,14 +320,16 @@ test.describe('Guide timeline + menu (simple agent)', () => {
 
   test('a guide journey can be recalled from its "View journey" button', async () => {
     await panelPage.evaluate(async () => {
-      // @ts-ignore - seed a stored guide session with 3 steps
+      // @ts-ignore - seed a stored guide session with 3 valid (screenshotted) steps + 1 void one
       await rewindStartSession('jrn', 'my journey goal');
       for (let i = 1; i <= 3; i++) {
-        // @ts-ignore
-        await rewindPutRecord({ sessionId: 'jrn', step: i, planStep: i, instruction: 'step ' + i, url: 'https://x/' + i });
+        // @ts-ignore — each valid step has a screenshot
+        await rewindPutRecord({ sessionId: 'jrn', step: i, planStep: i, instruction: 'step ' + i, url: 'https://x/' + i, screenshot: 'AAAA' });
       }
+      // @ts-ignore — a void step (no screenshot) must be pruned from the recalled timeline
+      await rewindPutRecord({ sessionId: 'jrn', step: 4, planStep: 4, instruction: 'void step', url: 'https://x/4' });
       // @ts-ignore - reset live state so the recall is what populates the dots
-      currentGuideRecords = []; currentGuidePlan = []; currentGuideStep = 0; guideActive = false;
+      currentGuideRecords = []; currentGuidePlan = []; currentGuideStep = 0; guideActive = false; currentGuideInitial = null;
       // @ts-ignore
       addJourneyRecallMessage('jrn', 'my journey goal');
     });
@@ -335,8 +338,32 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(btn).toBeVisible();
     await btn.click();
 
-    // The task-panel journey re-populates with that session's steps.
+    // The task-panel journey re-populates with the 3 valid steps; the void (screenshot-less) step is pruned.
     await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(3);
+  });
+
+  test('View journey button still works after the chat is restored on a tab switch', async () => {
+    await panelPage.evaluate(async () => {
+      // @ts-ignore - seed a 2-step journey in both the store and the in-memory map
+      await rewindStartSession('tabsw', 'goal');
+      // @ts-ignore
+      _journeysBySession['tabsw'] = { title: 'goal', steps: [
+        { sessionId: 'tabsw', step: 1, instruction: 's1' },
+        { sessionId: 'tabsw', step: 2, instruction: 's2' }
+      ] };
+      // @ts-ignore
+      currentGuideRecords = []; currentGuidePlan = []; currentGuideStep = 0; guideActive = false; currentGuideInitial = null;
+      // @ts-ignore
+      addJourneyRecallMessage('tabsw', 'goal');
+      // Simulate the tab-switch restore (_restoreTabSession does `container.innerHTML = session.html`),
+      // which rebuilds the DOM and would drop any per-button click listener.
+      const c = document.getElementById('pageguide-messages');
+      c.innerHTML = c.innerHTML;
+    });
+
+    // The delegated container listener still handles the click after the innerHTML rebuild.
+    await panelPage.locator('.pageguide-journey-recall-btn').click();
+    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(2);
   });
 
   test('recall works from in-memory journey, shows a collapse X, no chat error', async () => {

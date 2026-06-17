@@ -816,6 +816,27 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     expect(await window.rewindGetRecord('s1', 3)).toBeNull();
   });
 
+  test('deleteRecord removes one step from records and index', async () => {
+    await window.rewindStartSession('s1', 'g');
+    for (let i = 1; i <= 3; i++) await window.rewindPutRecord({ sessionId: 's1', step: i, instruction: 's' + i });
+    await window.rewindDeleteRecord('s1', 2);
+    const idx = await window.rewindGetIndex('s1');
+    expect(idx.steps.map(s => s.step)).toEqual([1, 3]);
+    expect(await window.rewindGetRecord('s1', 2)).toBeNull();
+    expect(await window.rewindGetRecord('s1', 1)).not.toBeNull();
+  });
+
+  test('index meta carries hasShot (true with a screenshot, false without) for void-step pruning', async () => {
+    await window.rewindStartSession('shot', 'g');
+    await window.rewindPutRecord({ sessionId: 'shot', step: 1, instruction: 'has', screenshot: 'AAAA' });
+    await window.rewindPutRecord({ sessionId: 'shot', step: 2, instruction: 'void' }); // no screenshot
+    const idx = await window.rewindGetIndex('shot');
+    const m1 = idx.steps.find(s => s.step === 1);
+    const m2 = idx.steps.find(s => s.step === 2);
+    expect(m1.hasShot).toBe(true);
+    expect(m2.hasShot).toBe(false);
+  });
+
   test('steer handoff round-trips and clears (one-shot)', async () => {
     expect(await window.rewindGetSteerPending()).toBeNull();
     const payload = { sessionId: 's1', fromStep: 3, newGoal: 'do X instead', url: 'https://x.com/p', createdAt: 1 };

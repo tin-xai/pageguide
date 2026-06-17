@@ -654,7 +654,10 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
   _guidev2Resuming = true;
   await _gv2ClearStopMark(); // an explicit user steer overrides any prior Stop tombstone
 
-  const fromStep = (payload && payload.fromStep) || 1;
+  // `fromStep` is the ANCHOR step we branch after; the step being REDONE is fromStep+1. Allow 0
+  // (redo step 1 from the Initial-state node) — `|| 1` would wrongly turn 0 into 1.
+  const fromStep = (payload && Number.isFinite(payload.fromStep)) ? payload.fromStep : 1;
+  const redoStep = fromStep + 1;
   // Immediate, unmissable feedback so it's clear the content script received the steer —
   // this fires BEFORE any record reads or LLM calls, so a later failure can't hide it.
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
@@ -662,8 +665,8 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     chrome.runtime.sendMessage({
       action: 'addMessage',
       content: inPlace
-        ? `♻️ Continuing after step ${fromStep} on this page with your new instruction…`
-        : `♻️ Restoring through step ${fromStep} and continuing with your new instruction…`,
+        ? `♻️ Rewinding to before step ${redoStep} on this page and redoing it…`
+        : `♻️ Restoring the state before step ${redoStep} and redoing it…`,
       type: 'info'
     });
   } catch (e) {}
@@ -689,7 +692,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
         if (idx && idx.goal) goal = idx.goal;
       }
     } catch (e) {}
-    const question = `${goal}\nUSER REDIRECTION after step ${fromStep}: ${payload.newGoal || ''}`.trim();
+    const question = `${goal}\nUSER REDIRECTION — redo step ${redoStep} differently: ${payload.newGoal || ''}`.trim();
 
     const captureEnabled = await _gv2IsCaptureEnabled();
     const autoMode = await _gv2IsAutoMode();
@@ -735,8 +738,12 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       if (_gv2IsStopped()) return;
 
       // Prefer state restore over re-clicking (re-clicking risks re-firing non-idempotent
-      // actions). The branch step is the last kept record. Best-effort — never aborts resume.
-      const branchRec = kept.length ? kept[kept.length - 1] : null;
+      // actions). The restore anchor is the kept record we branch after; when redoing step 1
+      // (fromStep 0) `kept` is empty, so read record(0) — the Initial-state node. Best-effort.
+      let branchRec = kept.length ? kept[kept.length - 1] : null;
+      if (!branchRec && typeof rewindGetRecord === 'function') {
+        try { branchRec = await rewindGetRecord(payload.sessionId, fromStep); } catch (e) {}
+      }
       if (branchRec && branchRec.restore && typeof gv2ApplyRestoreState === 'function') {
         try { console.log('[guidev2] steer restore applied', gv2ApplyRestoreState(branchRec.restore, window, null, log)); }
         catch (e) { console.warn('[guidev2] steer restore failed:', e); }
@@ -772,6 +779,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
         action: 'steerRestoreReady',
         sessionId: payload.sessionId,
         fromStep,
+        redoStep,
         url: payload.url || window.location.href,
         inPlace,
         newGoal: payload.newGoal || '',
@@ -1125,11 +1133,26 @@ async function gv2CaptureStepRecord(data) {
 
   const startedAt = g._stepStartedAt || Date.now();
 
-  // ANNOUNCE THE STEP FIRST (lightweight meta, no captures). The timeline dot, the journey
-  // accumulation, and the "View journey" button (added on step 1) all key off this message, so
-  // it must NOT wait on screenshot/region capture — if a capture were slow or hung, the step
-  // would otherwise never appear and the journey button would never show. Heavy assets
-  // (screenshot/DOM/region) are stored next and lazy-loaded on inspect.
+  // BEFORE-action screenshot = the PREVIOUS step's AFTER-shot (carried forward). The page hasn't
+  // changed between step N-1's after-capture and step N's before, so this is the same image — and
+  // reusing it avoids a second back-to-back captureVisibleTab that Chrome rate-limits (the cause
+  // of "step 2 has no screenshot"). Fall back to a fresh capture only when there's no carried shot
+  // yet (the first step, or right after a navigation-resume).
+  let beforeShot = g._lastAfterShot || null;
+  if (!beforeShot) {
+    try { if (typeof captureScreenshot === 'function') beforeShot = await captureScreenshot(); }
+    catch (e) { /* best-effort */ }
+  }
+
+  // VERIFICATION: a step with no screenshot is void — skip it entirely (don't announce a dot,
+  // don't store a record), so the timeline and the stored journey only contain valid steps.
+  if (!beforeShot) {
+    console.warn('[guidev2] skipping void step (no screenshot available):', data.step);
+    return;
+  }
+
+  // ANNOUNCE THE STEP FIRST (lightweight meta, no heavy captures) so the timeline dot, journey
+  // accumulation, and the "View journey" button (added on step 1) appear immediately.
   try {
     chrome.runtime.sendMessage({
       action: 'guideStepRecord',
@@ -1143,16 +1166,13 @@ async function gv2CaptureStepRecord(data) {
         url: window.location.href,
         title: document.title || '',
         timestamp: Date.now(),
-        confidence: data.confidence != null ? data.confidence : null
+        confidence: data.confidence != null ? data.confidence : null,
+        hasShot: true
       }
     });
   } catch (e) { /* panel may be closed */ }
 
   try {
-    let screenshot = null;
-    try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
-    catch (e) { /* screenshot is best-effort */ }
-
     let domSnapshot = '';
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
     catch (e) { console.warn('[guidev2] DOM snapshot failed:', e); }
@@ -1163,10 +1183,10 @@ async function gv2CaptureStepRecord(data) {
     try { if (typeof gv2CaptureRestoreState === 'function') restore = gv2CaptureRestoreState(); }
     catch (e) { /* restore capture is best-effort */ }
 
-    // Region around the highlighted target: rect + cropped screenshot + scoped DOM snapshot.
+    // Region around the highlighted target, cropped from the BEFORE-shot (same page as now).
     // Best-effort and time-boxed inside gv2CaptureRegion — never blocks the record store.
     let region = { targetRect: null, regionShot: null, regionDom: '' };
-    try { region = await gv2CaptureRegion(screenshot); } catch (e) { /* best-effort */ }
+    try { region = await gv2CaptureRegion(beforeShot); } catch (e) { /* best-effort */ }
 
     const record = {
       sessionId: g.sessionId,
@@ -1183,11 +1203,11 @@ async function gv2CaptureStepRecord(data) {
       target: data.target || null,
       confidence: data.confidence != null ? data.confidence : null,
       durationMs: Date.now() - startedAt,
-      // BEFORE-action screenshot (the page as the agent saw it when choosing this step). The
-      // timeline displays this one. `screenshot` mirrors it for back-compat. The AFTER-action
-      // screenshot is filled in later by gv2RecaptureAfterAction and shown only in "Inspect more".
-      screenshot: screenshot || null,
-      screenshotBefore: screenshot || null,
+      // BEFORE-action screenshot (carried from the previous step's after-shot). The timeline shows
+      // this. `screenshot` mirrors it for back-compat. The AFTER-action shot is added later by
+      // gv2RecaptureAfterAction and shown only in "Inspect more".
+      screenshot: beforeShot,
+      screenshotBefore: beforeShot,
       domSnapshot,
       restore,
       targetRect: region.targetRect,
@@ -1219,6 +1239,10 @@ async function gv2RecaptureAfterAction(stepNumber) {
     let screenshot = null;
     try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
     catch (e) { /* best-effort */ }
+
+    // Carry this AFTER-shot forward: it becomes the NEXT step's before-shot (same page until the
+    // next action), so we never take a second back-to-back capture for the next step.
+    if (screenshot) g._lastAfterShot = screenshot;
 
     let domSnapshot = '';
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
@@ -1253,6 +1277,8 @@ async function gv2CaptureInitialState() {
     let screenshot = null;
     try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
     catch (e) { /* best-effort */ }
+    // Carry forward so step 1's before-shot is this initial-state screenshot.
+    if (screenshot) g._lastAfterShot = screenshot;
     let domSnapshot = '';
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
     catch (e) { /* best-effort */ }

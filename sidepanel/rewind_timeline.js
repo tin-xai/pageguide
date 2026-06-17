@@ -241,42 +241,45 @@
     });
   }
 
-  // Branch off from a step: discard records after it, stash a one-shot handoff, then ask the
-  // content script (via the SW) to navigate the working tab back to the step's URL so it can
-  // replay prior actions and re-run from here with the new instruction. Shared by the in-panel
-  // inspector and the goal-dot preview card. Returns true on success.
+  // Rewind to BEFORE the clicked step and redo it: restore the page to the state before step N's
+  // action (== the state after step N-1) and re-run from step N with the new instruction. This is
+  // implemented as "branch after step N-1": step N-1's record holds that before-N state (its
+  // post-action url + restore). For step 1, the anchor is the Initial-state node (step 0). Shared
+  // by the in-panel inspector and the goal-dot preview card. Returns true on success.
   async function steerFromStep(meta, newGoal) {
     newGoal = (newGoal || '').trim();
     if (!meta || !newGoal) return false;
     const sessionId = meta.sessionId || _sessionId;
-    const step = Number(meta.step);
-    if (!sessionId || !Number.isFinite(step)) return false;
+    const redoStep = Number(meta.step);
+    if (!sessionId || !Number.isFinite(redoStep)) return false;
+    const anchorStep = redoStep - 1; // branch after this step (its after-state == before redoStep)
 
-    // Branch AFTER the clicked step: keep steps 1…N, land on step N's page, re-run from N+1.
-    let landingUrl = meta.url || null;
+    // Land on the ANCHOR's page (the state before the step we're redoing).
+    let landingUrl = null;
     try {
-      if (!landingUrl && typeof rewindGetRecord === 'function') {
-        const recN = await rewindGetRecord(sessionId, step);
-        if (recN && recN.url) landingUrl = recN.url;
+      if (typeof rewindGetRecord === 'function') {
+        const anchorRec = await rewindGetRecord(sessionId, anchorStep); // anchorStep may be 0 (initial node)
+        if (anchorRec && anchorRec.url) landingUrl = anchorRec.url;
       }
     } catch (e) {}
+    if (!landingUrl) landingUrl = meta.url || null; // fallback to the clicked step's url
     if (!landingUrl) {
-      try { chrome.runtime.sendMessage({ action: 'addMessage', content: '⚠ Cannot steer this step — missing its page URL.', type: 'error' }); } catch (e) {}
+      try { chrome.runtime.sendMessage({ action: 'addMessage', content: '⚠ Cannot rewind this step — missing its page URL.', type: 'error' }); } catch (e) {}
       return false;
     }
 
-    const payload = { sessionId, fromStep: step, newGoal, url: landingUrl, createdAt: Date.now() };
+    const payload = { sessionId, fromStep: anchorStep, newGoal, url: landingUrl, createdAt: Date.now() };
     try {
-      // Overwrite forward: drop everything after step N from the store AND the timeline UI.
-      if (typeof rewindTruncateAfter === 'function') await rewindTruncateAfter(sessionId, step);
+      // Overwrite forward: drop the redone step and everything after it, from the store AND the UI.
+      if (typeof rewindTruncateAfter === 'function') await rewindTruncateAfter(sessionId, anchorStep);
       // Stash the handoff too — it's the fallback path if we have to reload (different page).
       if (typeof rewindSetSteerPending === 'function') await rewindSetSteerPending(payload);
-      dropStepsAfter(step);
-      if (typeof global.pruneGuideAfter === 'function') { try { global.pruneGuideAfter(step); } catch (e) {} }
+      dropStepsAfter(anchorStep);
+      if (typeof global.pruneGuideAfter === 'function') { try { global.pruneGuideAfter(anchorStep); } catch (e) {} }
       try {
         chrome.runtime.sendMessage({
           action: 'addMessage',
-          content: `🔀 Branching after step ${step} — applying: “${newGoal}”`,
+          content: `↩ Rewinding to before step ${redoStep} and redoing it — applying: “${newGoal}”`,
           type: 'info'
         });
       } catch (e) {}

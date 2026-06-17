@@ -809,6 +809,16 @@ async function showModelStatus() {
  */
 function _setupMessageContainerDelegate(container) {
   container.addEventListener('click', async (e) => {
+    // 0. "View journey" recall button. Delegated (not a per-button listener) so it keeps working
+    // after a tab switch, which restores the chat via innerHTML and would drop direct listeners.
+    const recallBtn = e.target.closest('.pageguide-journey-recall-btn');
+    if (recallBtn) {
+      e.stopPropagation();
+      const sid = recallBtn.dataset.session;
+      if (sid) showStoredJourney(sid);
+      return;
+    }
+
     // 1. PDF citation → PDF navigation (with range cycling)
     const pdfCit = e.target.closest('.pageguide-pdf-citation');
     if (pdfCit) {
@@ -963,10 +973,8 @@ function addJourneyRecallMessage(sessionId, title) {
       </span>
       <span class="pageguide-journey-recall-arrow">→</span>
     </button>`;
-  msg.querySelector('button')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    showStoredJourney(sessionId);
-  });
+  // Click is handled by the delegated container listener (_setupMessageContainerDelegate) via the
+  // button's data-session, so it survives the innerHTML restore that happens on tab switches.
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
 }
@@ -995,7 +1003,7 @@ function addSteerRestoreCard(message) {
   card.innerHTML = `
     <div class="pageguide-guide-step">
       <span class="pageguide-step-badge">Restored</span>
-      <span class="pageguide-step-text">Review the restored state for step ${escapeHtml(String(message.fromStep))}, then continue.</span>
+      <span class="pageguide-step-text">Review the restored state before step ${escapeHtml(String(message.redoStep != null ? message.redoStep : message.fromStep))}, then continue to redo it.</span>
     </div>
     ${message.url ? `<div class="pageguide-step-meta">🔗 ${escapeHtml(message.url)}</div>` : ''}
     <ul class="pageguide-steer-restore-log">${lines}</ul>
@@ -1047,8 +1055,15 @@ async function showStoredJourney(sessionId) {
   // Attach sessionId to each meta so the dot preview can resolve its record. Split out the
   // initial-state node (step 0) so it doesn't inflate the step/dot count.
   const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
-  currentGuideInitial = withSid.find(m => m.isInitial || Number(m.step) === 0) || null;
-  currentGuideRecords = withSid.filter(m => !(m.isInitial || Number(m.step) === 0));
+  // VERIFICATION: prune "void" steps that have no screenshot (e.g. a capture that failed before
+  // this fix) — drop them from the timeline AND delete their stored record.
+  const voidSteps = withSid.filter(m => m.hasShot === false && !(m.isInitial || Number(m.step) === 0));
+  if (voidSteps.length && typeof rewindDeleteRecord === 'function') {
+    voidSteps.forEach(m => { try { rewindDeleteRecord(sessionId, m.step); } catch (e) {} });
+  }
+  const valid = withSid.filter(m => !voidSteps.includes(m));
+  currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
+  currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
   currentGuidePlan = [];
   currentGuideVerifications = {};
   currentGuideTitle = title || 'Guide journey';
@@ -2880,6 +2895,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const j0 = _journeysBySession[sid0] || (_journeysBySession[sid0] = { title: '', steps: [] });
         if (!j0.steps.some(s => Number(s.step) === 0)) j0.steps.unshift(message.meta);
       }
+    } else if (message.meta && message.meta.hasShot === false) {
+      // Void step (no screenshot) — don't add it to the timeline or the journey.
     } else if (message.meta) {
       _setJourneyRecalledMode(false); // a live step is arriving — leave recalled view
       const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
