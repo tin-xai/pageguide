@@ -62,22 +62,66 @@
     * { box-sizing: border-box; }
     body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
            background: var(--pg-bg); color: var(--pg-text); }
-    header { display: flex; align-items: center; gap: 14px; padding: 14px 20px;
+    header { display: grid; gap: 14px; padding: 14px 20px 16px;
              border-bottom: 1px solid var(--pg-border); position: sticky; top: 0; background: var(--pg-panel); backdrop-filter: blur(18px); z-index: 5; }
+    .header-top { display:flex; align-items:center; gap:14px; }
     header h1 { font-size: 16px; margin: 0; flex: 1; }
     header select { background: var(--pg-card); color: inherit; border: 1px solid var(--pg-border);
                     border-radius: 7px; padding: 6px 10px; font: inherit; }
     main { max-width: 1100px; margin: 0 auto; padding: 20px; }
-    .why { background: var(--pg-card); border: 1px solid var(--pg-border); border-radius: 10px;
-           padding: 14px 16px; margin-bottom: 16px; box-shadow: var(--pg-shadow); }
+    .timeline { display:grid; gap:8px; }
+    .timeline-track { display:flex; gap:8px; overflow-x:auto; padding:2px 1px 6px; scrollbar-width:thin; }
+    .step-chip { position:relative; flex:0 0 158px; display:grid; grid-template-columns:18px minmax(0,1fr); gap:8px; align-items:start;
+                 text-align:left; border:1px solid var(--pg-border); border-radius:12px; background:var(--pg-card); color:var(--pg-text);
+                 padding:10px; cursor:pointer; box-shadow:0 8px 22px rgba(44,45,70,.06); }
+    .step-chip:hover { background:var(--pg-hover); }
+    .step-chip.current { border-color:rgba(120,87,255,.42); background:#f7f5ff; box-shadow:0 10px 28px rgba(120,87,255,.12); }
+    body.dark-mode .step-chip.current { background:#292542; }
+    .step-chip.review { border-color:rgba(255,176,32,.45); }
+    .step-dot { width:13px; height:13px; margin-top:2px; border-radius:999px; background:#c5cad8; box-shadow:0 0 0 3px rgba(197,202,216,.18); }
+    .step-chip.done .step-dot { background:#24c46c; box-shadow:0 0 0 3px rgba(36,196,108,.14); }
+    .step-chip.done .step-dot::after { content:"✓"; display:block; color:#fff; font:900 9px/13px sans-serif; text-align:center; }
+    .step-chip.review .step-dot { background:#ffb020; box-shadow:0 0 0 3px rgba(255,176,32,.16); }
+    .step-chip.current .step-dot { width:16px; height:16px; background:linear-gradient(135deg,var(--pg-accent),var(--pg-accent-2)); box-shadow:0 0 0 4px rgba(120,87,255,.16); }
+    .step-chip-title { display:block; color:inherit; font:800 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin-bottom:4px; }
+    .step-chip.current .step-chip-title { color:var(--pg-accent); }
+    .step-chip-text { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--pg-muted); font:650 11px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .step-chip-meta { display:block; color:var(--pg-muted); font:700 10px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin-top:5px; }
+    .why { background: var(--pg-card); border: 1px solid var(--pg-border); border-radius: 14px;
+           padding: 14px 16px; margin-bottom: 14px; box-shadow: var(--pg-shadow); }
     .why div { margin: 3px 0; }
-    .meta { color: var(--pg-muted); margin-top: 8px; font-size: 13px; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+    .current-task { display:grid; gap:12px; }
+    .task-head { display:flex; align-items:center; gap:10px; }
+    .step-badge { display:inline-flex; align-items:center; border-radius:999px; padding:6px 10px; color:#fff;
+                  background:linear-gradient(135deg,var(--pg-accent),var(--pg-accent-2)); font:800 12px/1 sans-serif; }
+    .task-title { margin:0; font-size:18px; line-height:1.25; }
+    .task-grid { display:grid; gap:8px; }
+    .task-row { display:grid; grid-template-columns:88px minmax(0,1fr); gap:10px; align-items:start; }
+    .task-key { color:var(--pg-muted); font-weight:800; font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
+    .task-value { min-width:0; overflow-wrap:anywhere; font-weight:650; }
+    .task-value a { color:var(--pg-accent); text-decoration:none; }
+    .task-value a:hover { text-decoration:underline; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; color: var(--pg-muted); font-size: 13px; }
+    .pill { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:5px 9px; background:var(--pg-hover); color:var(--pg-muted); font-weight:750; }
+    .pill.ok { color:#138a49; background:rgba(36,196,108,.12); }
+    .pill.review { color:#9a6700; background:rgba(255,176,32,.16); }
+    body.dark-mode .pill.ok { color:#7ee4a8; }
+    body.dark-mode .pill.review { color:#ffd27a; }
+    @media (prefers-color-scheme: dark) {
+      .pill.ok { color:#7ee4a8; }
+      .pill.review { color:#ffd27a; }
+    }
+    .memory-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; margin-top:10px; }
+    .memory-item { border:1px solid var(--pg-border); border-radius:10px; padding:10px; background:rgba(120,87,255,.045); }
+    .memory-item b { display:block; font-size:12px; color:var(--pg-muted); margin-bottom:4px; }
+    .restore-list { margin:8px 0 0; padding-left:18px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
     .tab { background: var(--pg-card); color: inherit; border: 1px solid var(--pg-border); border-radius: 8px;
-           padding: 8px 14px; font: 600 13px/1 sans-serif; cursor: pointer; display:inline-flex; align-items:center; gap:7px; }
+           padding: 8px 14px; min-width: 136px; font: 600 13px/1 sans-serif; cursor: pointer; display:inline-flex; align-items:center; justify-content:center; gap:9px; white-space:nowrap; }
     .tab.active { background: linear-gradient(135deg,var(--pg-accent),var(--pg-accent-2)); color: #fff; border-color: transparent; }
     .tab[disabled] { opacity: .4; cursor: not-allowed; }
-    .view img { width: 100%; border-radius: 10px; border: 1px solid var(--pg-border); box-shadow: var(--pg-shadow); }
+    .view { min-height:320px; }
+    .view img { width: 100%; max-height:72vh; object-fit:contain; background:rgba(0,0,0,.04); border-radius: 12px; border: 1px solid var(--pg-border); box-shadow: var(--pg-shadow); display:block; }
     .snap-wrap { position: relative; }
     .snap-banner { position: absolute; top: 10px; left: 10px; background: rgba(120,87,255,.92);
                    color: #fff; font: 600 12px/1 sans-serif; padding: 6px 11px; border-radius: 99px; z-index: 2; }
@@ -87,25 +131,39 @@
     pre { white-space: pre-wrap; word-break: break-word; background: var(--pg-card); border: 1px solid var(--pg-border); padding: 12px;
           border-radius: 8px; overflow: auto; font: 12px/1.5 monospace; }
     .empty { color: var(--pg-muted); padding: 40px; text-align: center; }
-    .ico { width:15px; height:15px; display:inline-block; }
+    .ico { width:15px; height:15px; display:inline-flex; flex:0 0 15px; align-items:center; justify-content:center; }
     .ico svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; display:block; }
+    .tab-label { display:inline-block; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    @media (max-width: 720px) {
+      main { padding:14px; }
+      .header-top { flex-wrap:wrap; }
+      .step-chip { flex-basis:138px; }
+      .task-row { grid-template-columns:1fr; gap:2px; }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1 id="title">Step Inspector</h1>
-    <label>Step <select id="step-select"></select></label>
+    <div class="header-top">
+      <h1 id="title">Step Inspector</h1>
+      <label>Step <select id="step-select"></select></label>
+    </div>
+    <div class="timeline" id="timeline" style="display:none">
+      <div class="timeline-track" id="timeline-track"></div>
+    </div>
   </header>
   <main id="main">
     <div class="empty" id="empty" style="display:none">No capture record found for this step.</div>
     <div id="content" style="display:none">
       <div class="why" id="why"></div>
+      <div class="why" id="memory" style="display:none"></div>
+      
       <div class="tabs">
-        <button class="tab" id="tab-shot" data-view="shot"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7a2 2 0 0 1 2-2h3l2-2h2l2 2h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="4"/></svg></span>Screenshot</button>
-        <button class="tab" id="tab-snap" data-view="snap"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10"/><path d="M7 12h7"/><path d="M7 16h5"/></svg></span>Page snapshot</button>
+        <button class="tab" id="tab-before" data-view="before"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18 9 12l6-6"/><path d="M9 12h12"/><path d="M3 5v14"/></svg></span><span class="tab-label">Before action</span></button>
+        <button class="tab" id="tab-snap" data-view="snap"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10"/><path d="M7 12h7"/><path d="M7 16h5"/></svg></span><span class="tab-label">Page snapshot</span></button>
+        <button class="tab" id="tab-after" data-view="after"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/><path d="M3 12h12"/><path d="M21 5v14"/></svg></span><span class="tab-label">After action</span></button>
       </div>
       <div class="view" id="view"></div>
-      <div class="why" id="memory" style="display:none"></div>
       <details id="raw-wrap" style="display:none">
         <summary>Raw agent response</summary>
         <pre id="raw"></pre>

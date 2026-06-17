@@ -91,8 +91,7 @@ async function handleMessage(request) {
       // (reloading a heavy SPA like Google Slides loses state and can prompt "leave site?").
       console.log('🤖 gv2SteerNow received', request.payload);
       if (typeof gv2SteerNow === 'function' && request.payload) {
-        gv2SteerNow(request.payload); // fire-and-forget; progress streams via messages
-        return { success: true };
+        return await gv2SteerNow(request.payload); // progress also streams via messages
       }
       return { success: false, error: 'Steer not available' };
 
@@ -104,6 +103,30 @@ async function handleMessage(request) {
         return { success: true };
       }
       return { success: false, error: 'Steer restore not available' };
+
+    case 'retrySteerRestore':
+      // User asked to re-apply the saved restore once (deterministic re-run).
+      if (typeof gv2RetrySteerRestore === 'function') {
+        gv2RetrySteerRestore(); // fire-and-forget; progress streams via messages
+        return { success: true };
+      }
+      return { success: false, error: 'Steer restore not available' };
+
+    case 'fixSteerRestore':
+      // User reported the restore is wrong and described what's off — let the agent work on it.
+      if (typeof gv2FixSteerRestore === 'function') {
+        gv2FixSteerRestore(request.note); // fire-and-forget; progress streams via messages
+        return { success: true };
+      }
+      return { success: false, error: 'Steer restore not available' };
+
+    case 'compareSteerRestoreState':
+      // Explicit user-triggered screenshot comparison. This is intentionally not run
+      // automatically during steer restore or retry.
+      if (typeof gv2CompareSteerRestoreState === 'function') {
+        return await gv2CompareSteerRestoreState();
+      }
+      return { success: false, error: 'Steer restore comparison not available' };
 
     case 'continueGuidance':
       if (typeof continueGuidance === 'function') {

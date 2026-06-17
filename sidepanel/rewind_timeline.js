@@ -65,7 +65,7 @@
 #${INSPECTOR_ID} .rw-ins-body{flex:1;overflow:auto;padding:12px}
 #${INSPECTOR_ID} .rw-why{font:400 12px/1.5 -apple-system,sans-serif;background:var(--pg-hover,rgba(128,128,128,.1));border-radius:8px;padding:10px;margin-bottom:10px}
 #${INSPECTOR_ID} .rw-tabs{display:flex;gap:6px;margin-bottom:10px}
-#${INSPECTOR_ID} .rw-view img{width:100%;border-radius:8px;border:1px solid var(--pg-border,rgba(255,255,255,.12))}
+#${INSPECTOR_ID} .rw-view img{width:100%;max-width:100%;border-radius:8px;border:1px solid var(--pg-border,rgba(255,255,255,.12))}
 #${INSPECTOR_ID} .rw-snap-wrap{position:relative}
 #${INSPECTOR_ID} .rw-snap-banner{position:absolute;top:8px;left:8px;background:rgba(20,20,30,.85);color:#ffd166;font:600 11px/1 sans-serif;padding:5px 9px;border-radius:99px;z-index:2}
 #${INSPECTOR_ID} iframe{width:100%;height:60vh;border:1px solid var(--pg-border,rgba(255,255,255,.12));border-radius:8px;background:#fff}
@@ -105,17 +105,55 @@
     if (!cost || cost.usd == null) return '';
     return '$' + Number(cost.usd).toFixed(4);
   }
+  function _recordShot(rec) {
+    if (typeof global.rewindResolveScreenshot === 'function') return global.rewindResolveScreenshot(rec);
+    return rec ? (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter || null) : null;
+  }
+  function _removeTimelineStep(meta) {
+    if (!meta) return;
+    const container = document.getElementById(TIMELINE_ID);
+    const row = container?.querySelector(`[data-step="${meta.step}"]`);
+    if (row) row.remove();
+    try {
+      if (typeof global.removeGuideStepRecord === 'function') {
+        global.removeGuideStepRecord(meta.sessionId || _sessionId, meta.step);
+      }
+    } catch (e) {}
+  }
+  async function _getVerifiedRecord(meta, attempts = 3) {
+    if (!meta || typeof rewindGetRecord !== 'function') return null;
+    for (let i = 0; i < attempts; i++) {
+      let rec = null;
+      try { rec = await rewindGetRecord(meta.sessionId, meta.step); } catch (e) {}
+      if (rec && _recordShot(rec)) return rec;
+      if (rec && (rec.isInitial || Number(rec.step) === 0) && rec.domSnapshot) return rec;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 350));
+    }
+    return null;
+  }
+  function _clearPanelLoading() {
+    try {
+      if (typeof global.hideTyping === 'function') global.hideTyping();
+      else document.querySelector('.pageguide-typing')?.remove();
+    } catch (e) {}
+  }
+  function _branchSessionId(parentSessionId, redoStep) {
+    return String(parentSessionId) + '--branch-' + String(redoStep) + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  }
 
   // ---- hover preview (lazy-loads the full record for the thumbnail) ----
   let _hoverCard = null;
   async function _showHover(meta, anchorEl) {
     _hideHover();
-    let rec = null;
-    try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(meta.sessionId, meta.step); }
-    catch (e) {}
+    let rec = await _getVerifiedRecord(meta, 1);
+    if (!rec && !(meta.isInitial || Number(meta.step) === 0)) {
+      _removeTimelineStep(meta);
+      return;
+    }
     const card = document.createElement('div');
     card.className = 'rw-hovercard';
-    const img = rec && rec.screenshot ? `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="">` : '';
+    const shot = _recordShot(rec);
+    const img = shot ? `<img src="data:image/jpeg;base64,${shot}" alt="">` : '';
     const bits = [];
     if (meta.confidence != null && meta.confidence < 0.5) bits.push('Review suggested');
     if (meta.durationMs != null) bits.push(_fmtDuration(meta.durationMs));
@@ -152,10 +190,13 @@
   }
 
   async function _openInspector(meta) {
+    _injectCss(); // ensure inspector styles exist even when the live timeline never mounted
     _hideHover();
-    let rec = null;
-    try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(meta.sessionId, meta.step); }
-    catch (e) {}
+    let rec = await _getVerifiedRecord(meta, 1);
+    if (!rec && !(meta.isInitial || Number(meta.step) === 0)) {
+      _removeTimelineStep(meta);
+      return;
+    }
     if (!rec) rec = meta; // fall back to lightweight meta
 
     const wrap = document.createElement('div');
@@ -166,7 +207,8 @@
     const cost = _fmtCost(rec.cost); if (cost) metaBits.push('Cost: ' + cost);
     if (rec.verification?.status) metaBits.push('Verify: ' + rec.verification.status);
 
-    const hasShot = !!rec.screenshot;
+    const shot = _recordShot(rec);
+    const hasShot = !!shot;
     const hasSnap = !!rec.domSnapshot;
 
     wrap.innerHTML = `
@@ -189,7 +231,7 @@
           <div class="rw-steer-note">This re-runs from this step on a fresh load and discards the steps after it.</div>
           <div class="rw-steer-actions">
             <button class="rw-ins-btn" data-rw="steer-cancel">Cancel</button>
-            <button class="rw-ins-btn rw-steer-go" data-rw="steer-run">Branch &amp; run →</button>
+            <button class="rw-ins-btn rw-steer-go" data-rw="steer-run">Run</button>
           </div>
         </div>
         <div class="rw-tabs">
@@ -208,7 +250,7 @@
         const iframe = view.querySelector('iframe');
         iframe.srcdoc = rec.domSnapshot;
       } else if (hasShot) {
-        view.innerHTML = `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="Step ${_escape(rec.step)} screenshot">`;
+        view.innerHTML = `<img src="data:image/jpeg;base64,${shot}" alt="Step ${_escape(rec.step)} screenshot">`;
       } else {
         view.innerHTML = `<div style="opacity:.6">No capture available for this step.</div>`;
       }
@@ -268,14 +310,31 @@
       return false;
     }
 
-    const payload = { sessionId, fromStep: anchorStep, newGoal, url: landingUrl, createdAt: Date.now() };
+    const branchSessionId = _branchSessionId(sessionId, redoStep);
+    const branchLabel = 'View journey before Step ' + redoStep;
+    const branchTitle = 'Before Step ' + redoStep;
+    const payload = {
+      sessionId: branchSessionId,
+      parentSessionId: sessionId,
+      fromStep: anchorStep,
+      redoStep,
+      newGoal,
+      url: landingUrl,
+      branchLabel,
+      createdAt: Date.now()
+    };
     try {
-      // Overwrite forward: drop the redone step and everything after it, from the store AND the UI.
-      if (typeof rewindTruncateAfter === 'function') await rewindTruncateAfter(sessionId, anchorStep);
+      // Branch forward: copy the prefix into a new session. The original journey stays intact.
+      if (typeof rewindCreateBranchSession === 'function') {
+        await rewindCreateBranchSession(sessionId, branchSessionId, anchorStep, {
+          redoStep,
+          branchLabel,
+          branchStatus: 'pending_restore',
+          goal: branchTitle
+        });
+      }
       // Stash the handoff too — it's the fallback path if we have to reload (different page).
       if (typeof rewindSetSteerPending === 'function') await rewindSetSteerPending(payload);
-      dropStepsAfter(anchorStep);
-      if (typeof global.pruneGuideAfter === 'function') { try { global.pruneGuideAfter(anchorStep); } catch (e) {} }
       try {
         chrome.runtime.sendMessage({
           action: 'addMessage',
@@ -283,7 +342,26 @@
           type: 'info'
         });
       } catch (e) {}
-      await _rwApplySteer(payload);
+      const applied = await _rwApplySteer(payload);
+      if (!applied) {
+        _clearPanelLoading();
+        try {
+          chrome.runtime.sendMessage({
+            action: 'addMessage',
+            content: '⚠ Could not rewind this step. Try opening the page again, then run the steer from there.',
+            type: 'error'
+          });
+        } catch (e) {}
+        return false;
+      }
+      try {
+        if (typeof global.registerBranchJourney === 'function') {
+          await global.registerBranchJourney(branchSessionId, branchLabel);
+        } else if (typeof global.addJourneyRecallMessage === 'function') {
+          global.addJourneyRecallMessage(branchSessionId, branchTitle, branchLabel);
+        }
+        if (typeof global.showStoredJourney === 'function') await global.showStoredJourney(branchSessionId);
+      } catch (e) {}
       return true;
     } catch (err) {
       console.warn('[rewind] steer failed:', err);
@@ -317,15 +395,20 @@
         if (samePage) {
           // No reload: tell the content script to re-run on the current live DOM.
           console.log('[rewind] steer: in-place re-run on working tab', tab.id);
-          try { await chrome.tabs.sendMessage(tab.id, { action: 'gv2SteerNow', payload }); return; }
-          catch (e) { console.warn('[rewind] in-place steer message failed, reloading instead:', e); await chrome.tabs.reload(tab.id); return; }
+          try {
+            const res = await chrome.tabs.sendMessage(tab.id, { action: 'gv2SteerNow', payload });
+            if (!res || res.success === false) return false;
+            return true;
+          }
+          catch (e) { console.warn('[rewind] in-place steer message failed, reloading instead:', e); await chrome.tabs.reload(tab.id); return true; }
         }
         console.log('[rewind] steer: navigating working tab', tab.id, '→', url);
         await chrome.tabs.update(tab.id, { url });
-        return;
+        return true;
       }
     } catch (e) { console.warn('[rewind] steer apply failed, falling back to SW:', e); }
-    try { chrome.runtime.sendMessage({ action: 'navigateTab', url }); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'navigateTab', url }); return true; } catch (e) {}
+    return false;
   }
 
   async function _runSteer(wrap, rec, meta, runBtn) {
@@ -335,7 +418,10 @@
     if (runBtn) runBtn.disabled = true;
     const ok = await steerFromStep({ sessionId: rec.sessionId || meta.sessionId, step: rec.step, url: rec.url || meta.url }, newGoal);
     if (ok) wrap.remove();
-    else if (runBtn) runBtn.disabled = false;
+    else {
+      _clearPanelLoading();
+      if (runBtn) runBtn.disabled = false;
+    }
   }
 
   // ---- plan strip ----
@@ -421,10 +507,13 @@
 
     // Lazy-load the snapshot thumbnail from the store (kept out of the message payload).
     if (typeof rewindGetRecord === 'function') {
-      rewindGetRecord(meta.sessionId, meta.step).then(rec => {
-        if (rec && rec.screenshot) {
+      _getVerifiedRecord(meta).then(rec => {
+        const shot = _recordShot(rec);
+        if (shot) {
           const img = row.querySelector('.rw-thumb');
-          if (img) { img.src = 'data:image/jpeg;base64,' + rec.screenshot; img.style.display = ''; }
+          if (img) { img.src = 'data:image/jpeg;base64,' + shot; img.style.display = ''; }
+        } else if (!(meta.isInitial || Number(meta.step) === 0)) {
+          _removeTimelineStep(meta);
         }
       }).catch(() => {});
     }

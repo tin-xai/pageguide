@@ -488,6 +488,95 @@ describe('gv2DescribeRestoreAction (content/utils.js)', () => {
     expect(window.gv2DescribeRestoreAction(null)).toBe('');
     expect(window.gv2DescribeRestoreAction({})).toBe('');
   });
+
+  test('friendly labels hide raw Cloudflare-style selectors by default', () => {
+    const entry = {
+      kind: 'form',
+      sel: '#cf-chl-widget-tdsao_response',
+      value: '1.Q8s-f1r2GqAG9b5ON-S4BgSO96KfC-rgZJdljScFwaZ1pSea3DR85pLTOwhVQA02SB6Ydg',
+      ok: false
+    };
+
+    expect(window.gv2FriendlyRestoreAction(entry)).toBe('Skipped a hidden page security field');
+    expect(window.gv2IsHiddenRestoreField(entry)).toBe(true);
+    expect(window.gv2FriendlyRestoreAction({ kind: 'localStorage', key: 'tok', ok: true }))
+      .toBe('Restored saved page settings');
+    expect(window.gv2FriendlyRestoreAction({ kind: 'form', sel: '#email_address', ok: true }))
+      .toBe('Restored “email address” field');
+    expect(window.gv2FriendlyRestoreAction({ kind: 'replay', action: 'click', target: { text: 'Account menu' }, ok: true }))
+      .toBe('Opened “Account menu”');
+
+    const technical = window.gv2RestoreTechnicalDetail(entry);
+    expect(technical).toContain('#cf-chl-widget-tdsao_response');
+    expect(technical.length).toBeLessThan(140);
+  });
+});
+
+// Restore card v2: the error summary that names the first concrete action that failed to restore,
+// so "Retry restore" can report e.g. "the menu dropdown could not be applied".
+describe('gv2RestoreErrorSummary (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('summarizes the first failed concrete action', () => {
+    const log = [
+      { kind: 'localStorage', key: 'tok', value: 'a', ok: true },
+      { kind: 'replay', action: 'click', target: { text: 'Idiomas' }, ok: false },
+      { kind: 'replay', action: 'click', target: { text: 'Other' }, ok: false }
+    ];
+    const out = window.gv2RestoreErrorSummary(log);
+    expect(out).toContain('Click');
+    expect(out).toContain('did not apply');
+    expect(out).toContain('Idiomas'); // names the first failed action
+  });
+
+  test('summarizes hidden security-field failures without leaking raw selector or value', () => {
+    const out = window.gv2RestoreErrorSummary([
+      {
+        kind: 'form',
+        sel: '#cf-chl-widget-tdsao_response',
+        value: '1.Q8s-f1r2GqAG9b5ON-S4BgSO96KfC-rgZJdljScFwaZ1pSea3DR85pLTOwhVQA02SB6Ydg',
+        ok: false
+      }
+    ]);
+    expect(out).toContain('hidden page state');
+    expect(out).not.toContain('cf-chl');
+    expect(out).not.toContain('Q8s');
+  });
+
+  test('returns empty string when nothing actionable failed (notes are advisory)', () => {
+    expect(window.gv2RestoreErrorSummary([{ kind: 'replay', action: 'click', target: { text: 'X' }, ok: true }])).toBe('');
+    expect(window.gv2RestoreErrorSummary([{ kind: 'note', value: '⚠ mismatch', ok: false }])).toBe('');
+    expect(window.gv2RestoreErrorSummary([])).toBe('');
+    expect(window.gv2RestoreErrorSummary(null)).toBe('');
+  });
+});
+
+describe('gv2 restore screenshot comparison helpers (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('prompt asks for comparison JSON and mentions both screenshot roles', () => {
+    const prompt = window.gv2BuildRestoreComparePrompt({ redoStep: 3, newGoal: 'open account menu' });
+    expect(prompt).toContain('saved target state before step 3');
+    expect(prompt).toContain('current page after PageGuide tried to restore');
+    expect(prompt).toContain('"notRestored"');
+    expect(prompt).toContain('open account menu');
+  });
+
+  test('parser handles fenced JSON and clamps confidence', () => {
+    const parsed = window.gv2ParseRestoreComparison('```json\n{"summary":"Mostly restored","restored":["menu open"],"notRestored":["language not selected"],"recommendation":"Tell the agent what is missing.","confidence":1.4}\n```');
+    expect(parsed.summary).toBe('Mostly restored');
+    expect(parsed.restored).toEqual(['menu open']);
+    expect(parsed.notRestored).toEqual(['language not selected']);
+    expect(parsed.confidence).toBe(1);
+  });
+
+  test('parser falls back gracefully for malformed responses', () => {
+    const parsed = window.gv2ParseRestoreComparison('The page looks similar but I cannot produce JSON.');
+    expect(parsed.summary).toContain('The page looks similar');
+    expect(parsed.restored).toEqual([]);
+    expect(parsed.notRestored).toEqual([]);
+    expect(parsed.confidence).toBeNull();
+  });
 });
 
 // Phase 1 (observation/timeline): confidence tier (green ≥0.7 / yellow <0.7, never red) and the
@@ -728,6 +817,18 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
     expect(window._guidev2.active).toBe(false);
   });
 
+  test('stop unlocks the auto-mode page overlay immediately', () => {
+    window.gv2ShowAutoOverlay();
+    const overlay = document.getElementById('pageguide-gv2-auto');
+    expect(overlay).toBeTruthy();
+    expect(overlay.classList.contains('on')).toBe(true);
+
+    window.gv2StopGuide();
+
+    expect(overlay.classList.contains('on')).toBe(false);
+    expect(overlay.style.pointerEvents).toBe('none');
+  });
+
   test('blocks step 16 before generating another guide step', async () => {
     window._guidev2 = {
       active: true,
@@ -747,6 +848,22 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
     expect(window.chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
       action: 'addMessage',
       content: expect.stringContaining('Stopped after 15 steps')
+    }));
+  });
+
+  test('restore comparison returns a recoverable error when screenshots are missing', async () => {
+    window._guidev2 = {
+      active: true,
+      _awaitingRestoreConfirm: true,
+      _restoreContext: { redoStep: 2, redoBeforeShot: null, restoreShot: 'CURRENT' }
+    };
+
+    const result = await window.gv2CompareSteerRestoreState();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Need both saved and current screenshots');
+    expect(window.chrome.runtime.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      action: 'callLLMWithImages'
     }));
   });
 });
@@ -816,6 +933,36 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     expect(await window.rewindGetRecord('s1', 3)).toBeNull();
   });
 
+  test('createBranchSession copies prefix and leaves parent intact', async () => {
+    await window.rewindStartSession('parent', 'original');
+    for (let i = 0; i <= 5; i++) {
+      await window.rewindPutRecord({
+        sessionId: 'parent',
+        step: i,
+        instruction: i === 0 ? 'initial' : 's' + i,
+        screenshot: 'IMG' + i,
+        isInitial: i === 0
+      });
+    }
+
+    const branch = await window.rewindCreateBranchSession('parent', 'branch', 3, {
+      redoStep: 4,
+      branchLabel: 'View journey before Step 4'
+    });
+
+    expect(branch.sessionId).toBe('branch');
+    expect(branch.parentSessionId).toBe('parent');
+    expect(branch.branchFromStep).toBe(3);
+    expect(branch.redoStep).toBe(4);
+    expect(branch.branchStatus).toBe('pending_restore');
+    expect(branch.steps.map(s => s.step)).toEqual([0, 1, 2, 3]);
+
+    const parent = await window.rewindGetIndex('parent');
+    expect(parent.steps.map(s => s.step)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect((await window.rewindGetRecord('branch', 3)).sessionId).toBe('branch');
+    expect(await window.rewindGetRecord('branch', 4)).toBeNull();
+  });
+
   test('deleteRecord removes one step from records and index', async () => {
     await window.rewindStartSession('s1', 'g');
     for (let i = 1; i <= 3; i++) await window.rewindPutRecord({ sessionId: 's1', step: i, instruction: 's' + i });
@@ -835,6 +982,27 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     const m2 = idx.steps.find(s => s.step === 2);
     expect(m1.hasShot).toBe(true);
     expect(m2.hasShot).toBe(false);
+  });
+
+  test('resolveScreenshot accepts before, legacy, or after screenshots', () => {
+    expect(window.rewindResolveScreenshot({ screenshotBefore: 'BEFORE', screenshot: 'LEGACY', screenshotAfter: 'AFTER' })).toBe('BEFORE');
+    expect(window.rewindResolveScreenshot({ screenshot: 'LEGACY', screenshotAfter: 'AFTER' })).toBe('LEGACY');
+    expect(window.rewindResolveScreenshot({ screenshotAfter: 'AFTER' })).toBe('AFTER');
+    expect(window.rewindResolveScreenshot({})).toBeNull();
+  });
+
+  test('verifyScreenshots removes non-initial records with no screenshot and keeps fallback shots', async () => {
+    await window.rewindStartSession('verify', 'g');
+    await window.rewindPutRecord({ sessionId: 'verify', step: 0, instruction: 'init', isInitial: true, domSnapshot: '<html></html>' });
+    await window.rewindPutRecord({ sessionId: 'verify', step: 1, instruction: 'before', screenshotBefore: 'BEFORE' });
+    await window.rewindPutRecord({ sessionId: 'verify', step: 2, instruction: 'void' });
+    await window.rewindPutRecord({ sessionId: 'verify', step: 3, instruction: 'after', screenshotAfter: 'AFTER' });
+
+    const idx = await window.rewindVerifyScreenshots('verify');
+    expect(idx.steps.map(s => s.step)).toEqual([0, 1, 3]);
+    expect(await window.rewindGetRecord('verify', 2)).toBeNull();
+    expect((await window.rewindGetRecord('verify', 1)).screenshotBefore).toBe('BEFORE');
+    expect((await window.rewindGetRecord('verify', 3)).screenshotAfter).toBe('AFTER');
   });
 
   test('steer handoff round-trips and clears (one-shot)', async () => {

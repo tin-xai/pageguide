@@ -106,9 +106,8 @@ function _gv2HideIndicator() {
 }
 
 // ===== AUTO-MODE OVERLAY + TAKE-CONTROL BUTTON (Slice 4) =====
-// A light-yellow, click-through tint over the page signals that the agent is acting
-// autonomously. A floating "Take control" button (which IS clickable) lets the user
-// reclaim control at any moment.
+// A light-yellow lock over the page signals that the agent is acting autonomously.
+// It blocks user interaction with the page while leaving the take-over button clickable.
 
 const _GV2_AUTO_OVERLAY_ID = 'pageguide-gv2-auto';
 let _gv2AutoOverlayCss = false;
@@ -119,11 +118,12 @@ function gv2ShowAutoOverlay() {
     const style = document.createElement('style');
     style.id = 'pageguide-gv2-auto-css';
     style.textContent = `
-#${_GV2_AUTO_OVERLAY_ID}{position:fixed;inset:0;z-index:2147483646;pointer-events:none;background:rgba(255,221,87,.10);box-shadow:inset 0 0 0 3px rgba(255,200,0,.45);opacity:0;transition:opacity .2s ease}
+#${_GV2_AUTO_OVERLAY_ID}{position:fixed;inset:0;z-index:2147483646;pointer-events:none;background:rgba(255,248,220,.36);box-shadow:inset 0 0 0 3px rgba(245,158,11,.38);opacity:0;transition:opacity .2s ease;cursor:not-allowed;touch-action:none;overscroll-behavior:contain}
 #${_GV2_AUTO_OVERLAY_ID}.on{opacity:1}
-#${_GV2_AUTO_OVERLAY_ID} .gv2-take{position:absolute;top:64px;left:50%;transform:translateX(-50%);pointer-events:auto;display:flex;align-items:center;gap:8px;background:rgba(20,20,30,.92);color:#ffd166;border:1px solid rgba(255,209,102,.5);border-radius:999px;padding:9px 16px;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;box-shadow:0 4px 22px rgba(0,0,0,.45);opacity:.7;transition:opacity .15s ease}
-#${_GV2_AUTO_OVERLAY_ID} .gv2-take:hover{opacity:1;background:rgba(44,44,60,.96);border-color:rgba(255,209,102,.8)}
-#${_GV2_AUTO_OVERLAY_ID} .gv2-take .gv2-dot{width:8px;height:8px;border-radius:50%;background:#ffd166;animation:gv2autopulse 1.2s ease-in-out infinite;flex-shrink:0}
+#${_GV2_AUTO_OVERLAY_ID}.on{pointer-events:all}
+#${_GV2_AUTO_OVERLAY_ID} .gv2-take{position:absolute;top:10px;left:50%;transform:translateX(-50%);pointer-events:auto;display:flex;align-items:center;gap:10px;background:rgba(255,251,235,.97);color:#221a06;border:1px solid rgba(245,158,11,.62);border-radius:999px;padding:12px 22px;font:800 15px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;box-shadow:0 10px 34px rgba(180,83,9,.24);opacity:1;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}
+#${_GV2_AUTO_OVERLAY_ID} .gv2-take:hover{transform:translateX(-50%) translateY(-1px);background:#fff7d6;box-shadow:0 14px 40px rgba(180,83,9,.3)}
+#${_GV2_AUTO_OVERLAY_ID} .gv2-take .gv2-pause{font-size:18px;line-height:1;color:#b45309}
 @keyframes gv2autopulse{0%,100%{opacity:1}50%{opacity:.25}}`;
     document.head.appendChild(style);
   }
@@ -131,9 +131,17 @@ function gv2ShowAutoOverlay() {
   if (!el) {
     el = document.createElement('div');
     el.id = _GV2_AUTO_OVERLAY_ID;
+    el.tabIndex = -1;
+    ['pointerdown', 'pointerup', 'pointermove', 'mousedown', 'mouseup', 'mouseover', 'mousemove', 'click', 'dblclick', 'contextmenu', 'wheel', 'touchstart', 'touchmove', 'dragstart'].forEach(evt => {
+      el.addEventListener(evt, (e) => {
+        if (e.target && e.target.closest && e.target.closest('.gv2-take')) return;
+        e.preventDefault();
+        e.stopPropagation();
+      }, { capture: true, passive: false });
+    });
     const btn = document.createElement('button');
     btn.className = 'gv2-take';
-    btn.innerHTML = '<span class="gv2-dot"></span><span>✋ Take control</span>';
+    btn.innerHTML = '<span class="gv2-pause" aria-hidden="true">Ⅱ</span><span>Take over task</span>';
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -142,13 +150,22 @@ function gv2ShowAutoOverlay() {
     el.appendChild(btn);
     document.body.appendChild(el);
   }
+  try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
+  el.style.pointerEvents = '';
   el.getBoundingClientRect(); // force reflow so the fade plays
   el.classList.add('on');
+  try { el.focus({ preventScroll: true }); } catch (e) {}
 }
 
 function gv2HideAutoOverlay() {
   const el = document.getElementById(_GV2_AUTO_OVERLAY_ID);
-  if (el) el.classList.remove('on');
+  if (el) {
+    el.classList.remove('on');
+    el.style.pointerEvents = 'none';
+    setTimeout(() => {
+      if (!el.classList.contains('on')) el.remove();
+    }, 220);
+  }
 }
 
 // ===== STEER RESTORE OVERLAY =====
@@ -337,6 +354,7 @@ function _gv2ClearActionTimers() {
 }
 
 function _gv2StopInternal() {
+  const restoreCtx = window._guidev2 && window._guidev2._restoreContext;
   _guidev2Stopped = true;
   _guidev2Resuming = false;
   _guidev2WaitingForClick = false;
@@ -347,6 +365,11 @@ function _gv2StopInternal() {
   gv2HideAutoOverlay();
   gv2HideRestoreOverlay();
   _gv2ClearState();
+  try {
+    if (restoreCtx && restoreCtx.sessionId && typeof rewindUpdateSessionMeta === 'function') {
+      rewindUpdateSessionMeta(restoreCtx.sessionId, { branchStatus: 'stopped' });
+    }
+  } catch (e) {}
   // Persist a tombstone so a navigation already in flight can't resume the agent, and drop any
   // one-shot steer handoff so it doesn't fire on the next load.
   _gv2MarkStopped();
@@ -395,6 +418,8 @@ async function gv2SaveFallback(extra = {}) {
         tutorialReason: s.tutorialReason,
         currentPlanStep: s.currentPlanStep,
         autoMode: s.autoMode,
+        lastActionStepNumber: s._lastActionStepNumber || null,
+        activeStepNumber: s._activeStepNumber || null,
         lastUrl: window.location.href,
         timestamp: Date.now(),
         ...extra
@@ -577,7 +602,9 @@ async function _gv2ResumeFromState(state) {
     tutorialRef: state.tutorialRef || null,
     tutorialReason: state.tutorialReason || null,
     currentPlanStep: state.currentPlanStep || 1,
-    autoMode: state.autoMode === true
+    autoMode: state.autoMode === true,
+    _lastActionStepNumber: state.lastActionStepNumber || state.activeStepNumber || (state.previousSteps || []).length || null,
+    _activeStepNumber: state.activeStepNumber || null
   };
 
   console.log('[guidev2] Resuming on new page — next step will be',
@@ -598,7 +625,7 @@ async function _gv2ResumeFromState(state) {
     // Rewind: the click that triggered this full-page nav is the last recorded step;
     // refresh its snapshot with the post-navigation page before generating the next step.
     if (_gv2IsStopped()) return null;
-    await gv2RecaptureAfterAction(window._guidev2?.previousSteps?.length || 0);
+    await gv2RecaptureAfterAction(_gv2CompletedStepNumber());
     if (_gv2IsStopped()) return null;
 
     const result = await gv2GenerateNextStep();
@@ -650,7 +677,11 @@ async function gv2SteerNow(payload) {
 async function _gv2ResumeFromSteer(payload, opts = {}) {
   const inPlace = !!opts.inPlace;
   console.log('[guidev2] steer resume start', { inPlace, payload });
-  if (_guidev2Resuming) { console.warn('[guidev2] steer ignored — already resuming'); return; }
+  if (_guidev2Resuming) {
+    console.warn('[guidev2] steer ignored — already resuming');
+    _gv2HidePanelTyping();
+    return { success: false, progressed: false, error: 'Guide is already rewinding' };
+  }
   _guidev2Resuming = true;
   await _gv2ClearStopMark(); // an explicit user steer overrides any prior Stop tombstone
 
@@ -711,55 +742,43 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       captureEnabled,
       autoMode,
       currentPlanStep: fromStep + 1,
+      _lastActionStepNumber: fromStep || null,
+      _activeStepNumber: fromStep + 1,
       _restoreLog: []
     };
     const log = window._guidev2._restoreLog;
     console.log('[guidev2] steer session built; continuing from step', fromStep + 1);
 
     const capResult = _gv2CheckStepCap(window._guidev2);
-    if (capResult) return capResult;
+    if (capResult) {
+      _gv2HidePanelTyping();
+      try { gv2HideRestoreOverlay(); } catch (e) {}
+      return capResult;
+    }
 
     // Colored on-page overlay so the user can see the agent is rebuilding the recorded state.
     try { gv2ShowRestoreOverlay('restoring'); } catch (e) {}
 
-    if (inPlace) {
-      // Already on the page with its live state — just let any in-flight changes settle and
-      // re-ground on the current DOM. No reload, no replay (state is preserved in place).
-      await gv2WaitForDomStable(3000, 300);
-      if (_gv2IsStopped()) return;
-      log.push({ kind: 'note', value: 'Live page — state preserved in place (no reload)', ok: true });
-    } else {
-      // Freshly-loaded landing page: let it settle, restore the recorded page condition
-      // (web storage + scroll + form values), then replay transient UI actions (open
-      // dropdowns) before re-deciding the branch step.
-      await new Promise(r => setTimeout(r, 500));
-      if (_gv2IsStopped()) return;
-      await gv2WaitForDomStable(8000, 700);
-      if (_gv2IsStopped()) return;
+    // The restore anchor is the kept record we branch after; when redoing step 1 (fromStep 0)
+    // `kept` is empty, so read record(0) — the Initial-state node. Best-effort.
+    let branchRec = kept.length ? kept[kept.length - 1] : null;
+    if (!branchRec && typeof rewindGetRecord === 'function') {
+      try { branchRec = await rewindGetRecord(payload.sessionId, fromStep); } catch (e) {}
+    }
 
-      // Prefer state restore over re-clicking (re-clicking risks re-firing non-idempotent
-      // actions). The restore anchor is the kept record we branch after; when redoing step 1
-      // (fromStep 0) `kept` is empty, so read record(0) — the Initial-state node. Best-effort.
-      let branchRec = kept.length ? kept[kept.length - 1] : null;
-      if (!branchRec && typeof rewindGetRecord === 'function') {
-        try { branchRec = await rewindGetRecord(payload.sessionId, fromStep); } catch (e) {}
-      }
-      if (branchRec && branchRec.restore && typeof gv2ApplyRestoreState === 'function') {
-        try { console.log('[guidev2] steer restore applied', gv2ApplyRestoreState(branchRec.restore, window, null, log)); }
-        catch (e) { console.warn('[guidev2] steer restore failed:', e); }
-        await gv2WaitForDomStable(3000, 300);
-        if (_gv2IsStopped()) return;
-      }
-
-      await _gv2ReplayActions(kept, payload.url, log);
-      if (_gv2IsStopped()) return;
-
-      // Match gate: only auto-continue if the restored page actually resembles the branch
-      // point. On mismatch, drop to manual so we never silently act on the wrong page.
-      if (!_gv2VerifyResumeMatch(branchRec, payload.url)) {
-        _gv2FlagReplayStuck(fromStep, "the restored page didn't match the recorded step");
-        log.push({ kind: 'note', value: "⚠ Restored page didn't match the recorded step", ok: false });
-      }
+    try {
+      await _gv2PerformRestore(kept, branchRec, payload, fromStep, inPlace, log);
+    } catch (restoreErr) {
+      console.warn('[guidev2] steer restore attempt failed:', restoreErr);
+      log.push({ kind: 'note', value: 'Restore needs review: ' + (restoreErr?.message || 'PageGuide could not finish applying the saved state.'), ok: false });
+    }
+    if (!log.length) {
+      log.push({ kind: 'note', value: 'Checked the saved page state', ok: true });
+    }
+    if (_gv2IsStopped()) {
+      _gv2HidePanelTyping();
+      try { gv2HideRestoreOverlay(); } catch (e) {}
+      return { success: false, progressed: false, error: 'Guide stopped' };
     }
 
     // Persist the restore action log onto the branch record so the inspector can show it.
@@ -769,27 +788,38 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       }
     } catch (e) {}
 
+    // Stash the full restore context so the panel's "Retry restore" / "Tell agent" buttons can
+    // re-run against the same anchor without re-deriving everything.
+    const ctx = {
+      sessionId: payload.sessionId,
+      fromStep, redoStep,
+      url: payload.url || window.location.href,
+      inPlace,
+      newGoal: payload.newGoal || '',
+      parentSessionId: payload.parentSessionId || null,
+      branchLabel: payload.branchLabel || '',
+      recorded: _gv2RecordedActions(kept),
+      // The recorded "before the redo step" screenshot == the anchor's post-action shot (carry-
+      // forward design), so the panel can show the exact target state we're restoring to.
+      redoBeforeShot: branchRec ? (branchRec.screenshotAfter || branchRec.screenshotBefore || branchRec.screenshot || null) : null,
+      kept, branchRec, payload
+    };
+    window._guidev2._restoreContext = ctx;
+    window._guidev2._restoreRetried = false;
+
     // PAUSE: do NOT act yet. Switch the overlay to review mode and ask the user to confirm the
     // restored state in the side panel before the agent continues with the new instruction.
     window._guidev2._awaitingRestoreConfirm = true;
     try { gv2ShowRestoreOverlay('review'); } catch (e) {}
     try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
-    try {
-      chrome.runtime.sendMessage({
-        action: 'steerRestoreReady',
-        sessionId: payload.sessionId,
-        fromStep,
-        redoStep,
-        url: payload.url || window.location.href,
-        inPlace,
-        newGoal: payload.newGoal || '',
-        log: log.slice()
-      });
-    } catch (e) {}
+    ctx._lastLog = log;
+    await _gv2SendRestoreReady(ctx, log, { canRetry: true });
+    return { success: true, progressed: true, awaitingRestoreConfirm: true };
   } catch (e) {
     console.error('[guidev2] steer resume error:', e);
     try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e2) {}
     try { gv2HideRestoreOverlay(); } catch (e2) {}
+    return { success: false, progressed: false, error: e?.message || 'Could not rewind this step' };
   } finally {
     _guidev2Resuming = false;
   }
@@ -825,11 +855,205 @@ async function gv2ConfirmSteerRestore() {
     return;
   }
   g._awaitingRestoreConfirm = false;
+  try {
+    const sid = g._restoreContext && g._restoreContext.sessionId;
+    if (sid && typeof rewindUpdateSessionMeta === 'function') {
+      await rewindUpdateSessionMeta(sid, { branchStatus: 'active' });
+    }
+  } catch (e) {}
   try { gv2HideRestoreOverlay(); } catch (e) {}
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
   await _gv2GenerateAndDispatchSteer();
 }
 if (typeof window !== 'undefined') window.gv2ConfirmSteerRestore = gv2ConfirmSteerRestore;
+
+/**
+ * Perform the actual page restore for a steer branch: settle, re-apply the recorded page
+ * condition (web storage + scroll + forms) and replay transient UI actions. Pushes a per-item
+ * entry into `log`. Shared by the initial resume and the "Retry restore" handler so both apply
+ * the exact same restore. Respects the Stop tombstone (bails early).
+ */
+async function _gv2PerformRestore(kept, branchRec, payload, fromStep, inPlace, log) {
+  if (inPlace) {
+    // Already on the page with its live state — let in-flight changes settle, no reload/replay.
+    await gv2WaitForDomStable(3000, 300);
+    if (_gv2IsStopped()) return;
+    log.push({ kind: 'note', value: 'Live page — state preserved in place (no reload)', ok: true });
+    return;
+  }
+  // Freshly-loaded landing page: settle, restore recorded condition, then replay transient UI.
+  await new Promise(r => setTimeout(r, 500));
+  if (_gv2IsStopped()) return;
+  await gv2WaitForDomStable(8000, 700);
+  if (_gv2IsStopped()) return;
+
+  // Prefer state restore over re-clicking (re-clicking risks re-firing non-idempotent actions).
+  if (branchRec && branchRec.restore && typeof gv2ApplyRestoreState === 'function') {
+    try { console.log('[guidev2] steer restore applied', gv2ApplyRestoreState(branchRec.restore, window, null, log)); }
+    catch (e) { console.warn('[guidev2] steer restore failed:', e); }
+    await gv2WaitForDomStable(3000, 300);
+    if (_gv2IsStopped()) return;
+  }
+
+  await _gv2ReplayActions(kept, payload.url, log);
+  if (_gv2IsStopped()) return;
+
+  // Match gate: flag (but don't block) if the restored page doesn't resemble the branch point.
+  if (!_gv2VerifyResumeMatch(branchRec, payload.url)) {
+    _gv2FlagReplayStuck(fromStep, "the restored page didn't match the recorded step");
+    log.push({ kind: 'note', value: "⚠ Restored page didn't match the recorded step", ok: false });
+  }
+}
+
+/** Project kept records into the "from memory" action list shown beside the restore checklist. */
+function _gv2RecordedActions(kept) {
+  return (Array.isArray(kept) ? kept : []).map(r => ({
+    step: r.step,
+    action: r.action || null,
+    instruction: r.instruction || '',
+    target: { text: (r.target && r.target.text) || '' },
+    url: r.url || ''
+  }));
+}
+
+/** Whole-page screenshot for the restore card's hover preview; best-effort. */
+async function _gv2CaptureRestoreShot() {
+  try { return await captureScreenshot(); } catch (e) { return null; }
+}
+
+/** Capture a fresh shot and send the (enriched) steerRestoreReady message to the panel. */
+async function _gv2SendRestoreReady(ctx, log, opts = {}) {
+  const restoreShot = await _gv2CaptureRestoreShot();
+  if (ctx) ctx.restoreShot = restoreShot || null;
+  const error = ('error' in opts)
+    ? opts.error
+    : ((typeof gv2RestoreErrorSummary === 'function') ? gv2RestoreErrorSummary(log) : '');
+  try {
+    chrome.runtime.sendMessage({
+      action: 'steerRestoreReady',
+      sessionId: ctx.sessionId,
+      fromStep: ctx.fromStep,
+      redoStep: ctx.redoStep,
+      url: ctx.url,
+      inPlace: ctx.inPlace,
+      newGoal: ctx.newGoal,
+      parentSessionId: ctx.parentSessionId || null,
+      branchLabel: ctx.branchLabel || '',
+      log: Array.isArray(log) ? log.slice() : [],
+      recorded: ctx.recorded || [],
+      restoreShot,
+      redoBeforeShot: ctx.redoBeforeShot || null,
+      error: error || null,
+      canRetry: opts.canRetry !== false
+    });
+  } catch (e) {}
+}
+
+async function gv2CompareSteerRestoreState() {
+  const g = window._guidev2;
+  const ctx = g && g._restoreContext;
+  if (!g || !g._awaitingRestoreConfirm || !ctx) {
+    return { success: false, error: 'No restore review is active.' };
+  }
+  const beforeShot = ctx.redoBeforeShot || null;
+  const restoreShot = ctx.restoreShot || null;
+  if (!beforeShot || !restoreShot) {
+    return { success: false, error: 'Need both saved and current screenshots to compare.' };
+  }
+
+  const prompt = (typeof gv2BuildRestoreComparePrompt === 'function')
+    ? gv2BuildRestoreComparePrompt(ctx)
+    : 'Compare the saved before screenshot with the current restored screenshot. Return JSON with summary, restored, notRestored, recommendation, and confidence.';
+  const response = await safeSendMessage({
+    action: 'callLLMWithImages',
+    systemPrompt: 'You compare browser screenshots for a restore-quality check. Be concise, practical, and return JSON only.',
+    messages: [{ role: 'user', content: prompt }],
+    images: [
+      { base64: beforeShot, label: 'Saved state before the step' },
+      { base64: restoreShot, label: 'Current page after restore' }
+    ]
+  });
+  if (response?.error) return { success: false, error: response.error };
+  const comparison = (typeof gv2ParseRestoreComparison === 'function')
+    ? gv2ParseRestoreComparison(response?.content || '')
+    : { summary: response?.content || 'Comparison complete.', restored: [], notRestored: [], recommendation: '', confidence: null };
+  return { success: true, comparison };
+}
+if (typeof window !== 'undefined') window.gv2CompareSteerRestoreState = gv2CompareSteerRestoreState;
+
+/**
+ * Deterministically re-apply the saved restore ONCE. Invoked from the message router on
+ * `retrySteerRestore`. Rebuilds the restore on the same anchor; on persistent failure the
+ * resent card carries a specific error and disables further retries.
+ */
+async function gv2RetrySteerRestore() {
+  const g = window._guidev2;
+  const ctx = g && g._restoreContext;
+  if (!g || !g._awaitingRestoreConfirm || !ctx) {
+    console.warn('[guidev2] retrySteerRestore: nothing to retry');
+    // Un-stick the panel (its buttons are disabled waiting on us).
+    try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'addMessage', content: '⚠ Nothing to retry — the restore session expired.', type: 'error' }); } catch (e) {}
+    return;
+  }
+  if (g._restoreRetried) {
+    // Already used the single retry — just re-send current state with retry disabled.
+    await _gv2SendRestoreReady(ctx, ctx._lastLog || [], { canRetry: false });
+    return;
+  }
+  g._restoreRetried = true;
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+  try { gv2ShowRestoreOverlay('restoring', 'Retrying restore…'); } catch (e) {}
+  const log = [];
+  g._restoreLog = log;
+  try {
+    await _gv2PerformRestore(ctx.kept, ctx.branchRec, ctx.payload, ctx.fromStep, ctx.inPlace, log);
+  } catch (e) {
+    console.error('[guidev2] retry restore error:', e);
+    log.push({ kind: 'note', value: 'Restore retry needs review: ' + (e?.message || 'PageGuide could not finish applying the saved state.'), ok: false });
+  }
+  if (!log.length) log.push({ kind: 'note', value: 'Checked the saved page state', ok: true });
+  ctx._lastLog = log;
+  try {
+    if (typeof rewindPatchRecord === 'function') {
+      await rewindPatchRecord(ctx.sessionId, ctx.fromStep, { restoreLog: log.slice(), restoredAt: Date.now() });
+    }
+  } catch (e) {}
+  if (_gv2IsStopped()) return;
+  try { gv2ShowRestoreOverlay('review'); } catch (e) {}
+  try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+  await _gv2SendRestoreReady(ctx, log, { canRetry: false });
+}
+if (typeof window !== 'undefined') window.gv2RetrySteerRestore = gv2RetrySteerRestore;
+
+/**
+ * User says the restore is wrong and describes what's off. We hand the correction to the agent:
+ * fold the note into the branch instruction, drop the confirm gate, and let the agent proceed —
+ * it re-grounds on the live page each step, so it can take whatever action is needed to reach the
+ * desired state (this is what makes "tell agent" actually DO something, unlike a deterministic
+ * re-apply). Invoked from the router on `fixSteerRestore`.
+ */
+async function gv2FixSteerRestore(note) {
+  const g = window._guidev2;
+  const ctx = g && g._restoreContext;
+  if (!g || !g._awaitingRestoreConfirm || !ctx) {
+    console.warn('[guidev2] fixSteerRestore: nothing to fix');
+    try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'addMessage', content: '⚠ Nothing to fix — the restore session expired.', type: 'error' }); } catch (e) {}
+    return;
+  }
+  note = String(note || '').trim();
+  if (note) {
+    g.question = `${g.question}\nRESTORE FIX — the state before step ${ctx.redoStep} wasn't fully restored: ${note}. Take whatever action is needed to fix this before continuing.`;
+    try { chrome.runtime.sendMessage({ action: 'addMessage', content: `🔧 Asking the agent to fix the restore: “${note}”`, type: 'info' }); } catch (e) {}
+  }
+  // Hand off to the agent (same tail as Confirm), so it acts on the correction now.
+  g._awaitingRestoreConfirm = false;
+  try { gv2HideRestoreOverlay(); } catch (e) {}
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+  await _gv2GenerateAndDispatchSteer();
+}
+if (typeof window !== 'undefined') window.gv2FixSteerRestore = gv2FixSteerRestore;
 
 /**
  * Best-effort replay of recorded actions to rebuild transient state (open dropdowns, filled
@@ -850,7 +1074,7 @@ async function _gv2ReplayActions(records, landingUrl, log) {
   for (const r of list) {
     if (window.location.href !== landingUrl) {
       _gv2FlagReplayStuck(r.step, 'the page changed unexpectedly during replay');
-      return;
+      return { success: false, progressed: false, navigated: true, capturedAfter: false };
     }
     const ok = await _gv2ReplayOne(r);
     rec({ kind: 'replay', action: String(r.action || 'click').toLowerCase(), target: { text: r.target && r.target.text }, value: r.typeText, ok });
@@ -967,6 +1191,8 @@ async function _gv2SetState(pendingResume) {
     tutorialRef: s.tutorialRef,
     tutorialReason: s.tutorialReason,
     currentPlanStep: s.currentPlanStep,
+    lastActionStepNumber: s._lastActionStepNumber || null,
+    activeStepNumber: s._activeStepNumber || null,
     // Mode: carry Manual/Auto across navigations.
     autoMode: s.autoMode
   };
@@ -979,7 +1205,11 @@ async function _gv2SetState(pendingResume) {
   }
 
   // Fallback: session storage (survives SW restart)
-  await gv2SaveFallback({ pendingResume });
+  await gv2SaveFallback({
+    pendingResume,
+    lastActionStepNumber: s._lastActionStepNumber || null,
+    activeStepNumber: s._activeStepNumber || null
+  });
 }
 
 function _gv2ClearState() {
@@ -1138,7 +1368,8 @@ async function gv2CaptureStepRecord(data) {
   // reusing it avoids a second back-to-back captureVisibleTab that Chrome rate-limits (the cause
   // of "step 2 has no screenshot"). Fall back to a fresh capture only when there's no carried shot
   // yet (the first step, or right after a navigation-resume).
-  let beforeShot = g._lastAfterShot || null;
+  const stepNum = Number(data.step);
+  let beforeShot = (Number.isFinite(stepNum) && g._lastAfterShotStep === stepNum - 1) ? g._lastAfterShot : null;
   if (!beforeShot) {
     try { if (typeof captureScreenshot === 'function') beforeShot = await captureScreenshot(); }
     catch (e) { /* best-effort */ }
@@ -1223,6 +1454,12 @@ async function gv2CaptureStepRecord(data) {
   }
 }
 
+function _gv2CompletedStepNumber() {
+  const g = window._guidev2;
+  if (!g) return 0;
+  return Number(g._lastActionStepNumber || g._activeStepNumber || (Array.isArray(g.previousSteps) ? g.previousSteps.length : 0)) || 0;
+}
+
 /**
  * Refresh a step's stored record with the page state AFTER its action ran (screenshot +
  * DOM snapshot + URL), so the inspector shows the result of the click — not the pre-click
@@ -1242,7 +1479,10 @@ async function gv2RecaptureAfterAction(stepNumber) {
 
     // Carry this AFTER-shot forward: it becomes the NEXT step's before-shot (same page until the
     // next action), so we never take a second back-to-back capture for the next step.
-    if (screenshot) g._lastAfterShot = screenshot;
+    if (screenshot) {
+      g._lastAfterShot = screenshot;
+      g._lastAfterShotStep = Number(stepNumber);
+    }
 
     let domSnapshot = '';
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
@@ -1251,7 +1491,11 @@ async function gv2RecaptureAfterAction(stepNumber) {
     // Store the AFTER-action screenshot SEPARATELY — do NOT overwrite the before-shot or the
     // region crop (those belong to the pre-action moment when the target was highlighted). The
     // after-shot is surfaced only in "Inspect more".
-    const patch = { url: window.location.href, title: document.title || '' };
+    const patch = {
+      url: window.location.href,
+      title: document.title || '',
+      afterCaptureStatus: screenshot ? 'captured' : 'missing'
+    };
     if (screenshot) patch.screenshotAfter = screenshot;
     if (domSnapshot) patch.domSnapshotAfter = domSnapshot;
     // Refresh restorable state to reflect the post-action page (used by steer/resume).
@@ -1278,7 +1522,10 @@ async function gv2CaptureInitialState() {
     try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
     catch (e) { /* best-effort */ }
     // Carry forward so step 1's before-shot is this initial-state screenshot.
-    if (screenshot) g._lastAfterShot = screenshot;
+    if (screenshot) {
+      g._lastAfterShot = screenshot;
+      g._lastAfterShotStep = 0;
+    }
     let domSnapshot = '';
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
     catch (e) { /* best-effort */ }
@@ -1599,6 +1846,7 @@ async function gv2ProcessResponse(content) {
     if (_gv2IsStopped()) return null;
 
     const isLast = !!step.isLastStep;
+    g._activeStepNumber = Number(step.step) || (g.previousSteps.length + 1);
     g.previousSteps.push(`Step ${step.step}: ${step.instruction}${isLast ? ' ✓' : ''}`);
 
     // Simple dispatch: click | type | done.
@@ -1606,6 +1854,7 @@ async function gv2ProcessResponse(content) {
     const risk = (typeof gv2AssessRisk === 'function') ? gv2AssessRisk(step) : 'low';
     const isHighRisk = risk === 'high';
     g._lastAction = action;
+    if (!isLast && action !== 'done') g._lastActionStepNumber = g._activeStepNumber;
 
     // Remember the live step so the panel "Next →" (manual mode) can perform it and advance.
     g._currentStep = { action, typeText: step.typeText, value: step.value, instruction: step.instruction, highRisk: isHighRisk };
@@ -1783,7 +2032,7 @@ async function _gv2WaitForNavOrSettle(startUrl) {
     await new Promise(r => setTimeout(r, POLL_MS));
     if (_gv2IsStopped()) {
       _gv2HidePanelTyping();
-      return;
+      return { success: false, progressed: false, navigated: false, capturedAfter: false, error: 'Guide stopped' };
     }
 
     // Full page navigation: pagehide has fired.
@@ -1791,7 +2040,7 @@ async function _gv2WaitForNavOrSettle(startUrl) {
     // The new page's content script will connect to SW and get the state.
     if (_guidev2PageHiding) {
       console.log('[guidev2] Full page navigation detected — new page will resume via SW');
-      return;
+      return { success: false, progressed: false, navigated: true, capturedAfter: false };
     }
 
     // SPA navigation: URL changed but page is still alive.
@@ -1803,15 +2052,15 @@ async function _gv2WaitForNavOrSettle(startUrl) {
         await new Promise(r => setTimeout(r, 100));
         if (_gv2IsStopped()) {
           _gv2HidePanelTyping();
-          return;
+          return { success: false, progressed: false, navigated: true, capturedAfter: false };
         }
         if (_guidev2PageHiding) {
           console.log('[guidev2] Full-page nav after URL change — new page will resume via SW');
-          return;
+          return { success: false, progressed: false, navigated: true, capturedAfter: false };
         }
       }
       console.log('[guidev2] SPA navigation confirmed');
-      if (_guidev2Resuming) return;
+      if (_guidev2Resuming) return { success: false, progressed: false, navigated: true, capturedAfter: false, error: 'Guide is already continuing' };
       _guidev2Resuming = true;  // Set BEFORE any await to prevent double-fire
       try {
         // Give the SPA framework time to tear down the old view and render the
@@ -1819,32 +2068,34 @@ async function _gv2WaitForNavOrSettle(startUrl) {
         // delay the observer can resolve on the OLD (static) DOM within 250 ms
         // and capture the wrong page.
         await new Promise(r => setTimeout(r, 600));
-        if (_gv2IsStopped()) return;
+        if (_gv2IsStopped()) return { success: false, progressed: false, navigated: true, capturedAfter: false, error: 'Guide stopped' };
         await gv2WaitForDomStable(6000, 600);
-        if (_gv2IsStopped()) return;
+        if (_gv2IsStopped()) return { success: false, progressed: false, navigated: true, capturedAfter: false, error: 'Guide stopped' };
         // Rewind: refresh the just-clicked step's snapshot with the post-click view.
-        await gv2RecaptureAfterAction(window._guidev2?.previousSteps?.length || 0);
-        if (_gv2IsStopped()) return;
+        await gv2RecaptureAfterAction(_gv2CompletedStepNumber());
+        if (_gv2IsStopped()) return { success: false, progressed: false, navigated: true, capturedAfter: true, error: 'Guide stopped' };
         const result = await gv2GenerateNextStep();
         if (!_guidev2Stopped && result && result.success !== false) {
           try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+          return { success: true, progressed: true, navigated: true, capturedAfter: true };
         } else {
           try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+          return { success: false, progressed: false, navigated: true, capturedAfter: true, error: result?.error };
         }
       } finally {
         _guidev2Resuming = false;
       }
-      return;
+      return { success: false, progressed: false, navigated: true, capturedAfter: false };
     }
   }
 
   // No navigation after 2 s — same page (dropdown, modal, etc.)
   // One last guard: if pagehide fired during the polling loop it means a very
   // slow full-page navigation is in progress — let the new page handle it.
-  if (_guidev2PageHiding) return;
+  if (_guidev2PageHiding) return { success: false, progressed: false, navigated: true, capturedAfter: false };
   if (_gv2IsStopped()) {
     _gv2HidePanelTyping();
-    return;
+    return { success: false, progressed: false, navigated: false, capturedAfter: false, error: 'Guide stopped' };
   }
 
   // Check if the click opened a new tab (target="_blank" / window.open).
@@ -1854,30 +2105,32 @@ async function _gv2WaitForNavOrSettle(startUrl) {
     const ownerCheck = await safeSendMessage({ action: 'guidanceV2_isOwner' });
     if (_gv2IsStopped()) {
       _gv2HidePanelTyping();
-      return;
+      return { success: false, progressed: false, navigated: false, capturedAfter: false };
     }
     if (ownerCheck && ownerCheck.isOwner === false) {
       console.log('[guidev2] Guidance transferred to new tab — stopping on this page');
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
-      return;
+      return { success: false, progressed: false, navigated: true, capturedAfter: false };
     }
   } catch (e) { /* SW unavailable — proceed with same-page behaviour */ }
 
   console.log('[guidev2] No navigation — continuing on same page');
-  if (_guidev2Resuming) return;
+  if (_guidev2Resuming) return { success: false, progressed: false, navigated: false, capturedAfter: false, error: 'Guide is already continuing' };
   _guidev2Resuming = true;
   try {
     // Wait for DOM to settle (e.g. dropdown finished rendering)
     await gv2WaitForDomStable(2000, 300);
-    if (_gv2IsStopped()) return;
+    if (_gv2IsStopped()) return { success: false, progressed: false, navigated: false, capturedAfter: false, error: 'Guide stopped' };
     // Rewind: refresh the just-clicked step's snapshot with the post-click view.
-    await gv2RecaptureAfterAction(window._guidev2?.previousSteps?.length || 0);
-    if (_gv2IsStopped()) return;
+    await gv2RecaptureAfterAction(_gv2CompletedStepNumber());
+    if (_gv2IsStopped()) return { success: false, progressed: false, navigated: false, capturedAfter: true, error: 'Guide stopped' };
     const result = await gv2GenerateNextStep();
     if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+      return { success: true, progressed: true, navigated: false, capturedAfter: true };
     } else {
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+      return { success: false, progressed: false, navigated: false, capturedAfter: true, error: result?.error };
     }
   } finally {
     _guidev2Resuming = false;
@@ -1934,21 +2187,8 @@ async function _gv2AutoType(step) {
     }
   }
 
-  // Rewind: re-capture this step now that the field is filled, overwriting the
-  // pre-fill snapshot so the inspector shows the typed value. Reuse the stashed
-  // reasoning fields so rawLlmJson/tutorialMatch are preserved.
-  try {
-    const reuse = (window._guidev2 && window._guidev2._lastCaptureData) || {
-      step: step.step,
-      instruction: step.instruction,
-      action: step.action,
-      typeText: (step.typeText != null ? step.typeText : step.value) || null,
-      isLastStep: !!step.isLastStep,
-      nextStepHint: step.nextStepHint,
-      target: { text: step.element?.text || null, llmIndex: step.element?.index ?? null }
-    };
-    await gv2CaptureStepRecord(reuse);
-  } catch (e) { /* non-fatal */ }
+  // Rewind: patch the just-completed TYPE step with the post-fill state.
+  try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) { /* non-fatal */ }
 
   console.log('[guidev2] Auto-type done, generating next step...');
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
@@ -2042,7 +2282,7 @@ window.gv2NextStep = async function (options = {}) {
     // Manual "Next →" = "I performed this step, continue." The page now reflects the result,
     // so refresh the just-completed step's snapshot (post-action) before generating the next —
     // the user-click path does this via _gv2WaitForNavOrSettle, but the panel button doesn't.
-    try { await gv2RecaptureAfterAction(g.previousSteps?.length || 0); } catch (e) {}
+    try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) {}
     return continueGuide();
   }
 
@@ -2119,8 +2359,9 @@ window.gv2NextStep = async function (options = {}) {
   // Use the same post-click flow as a real user click: detects full-page nav,
   // SPA nav, or same-page DOM settle, then generates the next step.
   const startUrl = window.location.href;
-  await _gv2WaitForNavOrSettle(startUrl);
+  const outcome = await _gv2WaitForNavOrSettle(startUrl);
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+  if (outcome) return outcome;
   return continueGuide();
 };
 

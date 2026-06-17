@@ -23,13 +23,19 @@ let currentGuideVerifications = {};
 let currentGuideWarnings = {};
 let panelRunning = false;        // True while the agent is generating (send button shows Stop)
 let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
+let guideStopped = false;        // True after Stop: drop late "still working" messages from an
+                                 // in-flight content script until a new send / user-initiated steer
 const _journeyBtnSessions = new Set(); // Guide sessions that already have a "View journey" button
 const _journeysBySession = {}; // sessionId -> { title, steps:[meta] } accumulated from guideStepRecord
+let visibleJourneySessionId = null;
+let visibleJourneyTitle = '';
+let visibleJourneyRecalled = false;
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
 // Cleared when the tab is closed, navigates to a new URL, or the user manually resets.
 const _tabSessions = new Map();
+const _hiddenTabChips = new Set();
 
 // Open a persistent port to the service worker.
 // When the panel is closed (by any means — X button, keyboard shortcut, etc.)
@@ -52,6 +58,55 @@ const UI_ICONS = {
 function _truncateText(text, max = 72) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+function _tabChipFallbackIcon() {
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#7857ff"/><path d="M7 7h10v10H7z" fill="white" opacity=".9"/></svg>'
+  );
+}
+
+function hideWorkingTabChip() {
+  if (currentTabId != null) _hiddenTabChips.add(currentTabId);
+  const chip = document.getElementById('pageguide-tab-chip');
+  if (chip) chip.style.display = 'none';
+}
+
+function renderWorkingTabChip(tab) {
+  const chip = document.getElementById('pageguide-tab-chip');
+  if (!chip || !tab || _hiddenTabChips.has(tab.id)) {
+    if (chip) chip.style.display = 'none';
+    return;
+  }
+  const title = tab.title || tab.url || 'Current tab';
+  const url = tab.url || '';
+  const favicon = document.getElementById('pageguide-tab-chip-favicon');
+  const label = document.getElementById('pageguide-tab-chip-title');
+  if (favicon) {
+    favicon.src = tab.favIconUrl || _tabChipFallbackIcon();
+    favicon.style.display = '';
+  }
+  if (label) label.textContent = `Working on “${_truncateText(title, 58)}”`;
+  chip.title = [title, url].filter(Boolean).join('\n');
+  chip.style.display = '';
+}
+
+async function refreshWorkingTabChip(tabId = currentTabId) {
+  try {
+    let tab = null;
+    if (tabId != null && chrome.tabs?.get) {
+      try { tab = await chrome.tabs.get(tabId); } catch (e) {}
+    }
+    if (!tab) {
+      const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = active || null;
+      if (tab?.id != null) currentTabId = tab.id;
+    }
+    renderWorkingTabChip(tab);
+  } catch (e) {
+    const chip = document.getElementById('pageguide-tab-chip');
+    if (chip) chip.style.display = 'none';
+  }
 }
 
 function _normalizeRouteForTab(route) {
@@ -77,6 +132,30 @@ function getGuideStepLabel(step) {
 
 function hideGoalStepPreview() {
   document.getElementById('pageguide-goal-step-preview')?.remove();
+}
+
+function closeMemoryShotLightbox() {
+  document.getElementById('pageguide-memory-shot-lightbox')?.remove();
+}
+
+function openMemoryShotLightbox(base64, title = 'Before action — what PageGuide saw before this step') {
+  if (!base64) return;
+  closeMemoryShotLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <div class="pageguide-memory-shot-head">
+        <span>${escapeHtml(title)}</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close screenshot preview">×</button>
+      </div>
+      <img src="data:image/jpeg;base64,${base64}" alt="${escapeHtml(title)}">
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
 }
 
 async function showGoalStepPreview(step, anchor) {
@@ -110,12 +189,12 @@ async function showGoalStepPreview(step, anchor) {
   const regionShot = rec?.regionShot || null;
   const topShot = regionShot || beforeShot;
   const topImg = topShot
-    ? `<img src="data:image/jpeg;base64,${topShot}" alt="">`
+    ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>`
     : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>';
   // Only show the collapsible before-shot when it isn't already the top image.
   const beforeHtml = (beforeShot && regionShot)
     ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
-        <img src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
+        <img class="pageguide-memory-shot-trigger" data-shot-kind="before" src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
     : '';
 
   const preview = document.createElement('div');
@@ -135,7 +214,7 @@ async function showGoalStepPreview(step, anchor) {
       <textarea class="pageguide-goal-step-steer-input" rows="2" placeholder="What should the agent do differently from here?"></textarea>
       <div class="pageguide-goal-step-steer-row">
         <button type="button" class="pageguide-goal-step-steer-cancel">Cancel</button>
-        <button type="button" class="pageguide-goal-step-steer-go">Branch &amp; run →</button>
+        <button type="button" class="pageguide-goal-step-steer-go">Run</button>
       </div>
     </div>` : ''}
   `;
@@ -145,6 +224,10 @@ async function showGoalStepPreview(step, anchor) {
     const target = e.target;
     // Let the "link" hyperlink open normally; don't also open the inspector.
     if (target.closest('.pageguide-goal-step-link')) return;
+    if (target.closest('.pageguide-memory-shot-trigger')) {
+      openMemoryShotLightbox(beforeShot, isInitialNode ? 'Initial state — saved page memory' : 'Before action — what PageGuide saw before this step');
+      return;
+    }
     // Let the collapsible "Before action" toggle natively; don't open the inspector.
     if (target.closest('.pageguide-goal-step-before')) return;
     // Toggle the inline steer prompt.
@@ -168,6 +251,7 @@ async function showGoalStepPreview(step, anchor) {
       if (!goal) { if (ta) ta.focus(); return; }
       const goBtn = target.closest('button');
       if (goBtn) goBtn.disabled = true;
+      guideStopped = false; // a steer is a deliberate user action — re-arm running-state messages
       if (meta && typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
         await RewindTimeline.steerFromStep(meta, goal);
       }
@@ -205,9 +289,13 @@ async function showGoalStepPreview(step, anchor) {
 }
 
 document.addEventListener('click', (e) => {
-  if (!e.target.closest?.('#pageguide-goal-step-preview, .pageguide-goal-dot')) {
+  if (!e.target.closest?.('#pageguide-goal-step-preview, .pageguide-goal-dot, #pageguide-memory-shot-lightbox')) {
     hideGoalStepPreview();
   }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeMemoryShotLightbox();
 });
 
 function renderGoalDots(current, total) {
@@ -347,6 +435,9 @@ function clearGoalAndStepPanel() {
   currentGuideInitial = null;
   currentGuideVerifications = {};
   currentGuideWarnings = {};
+  visibleJourneySessionId = null;
+  visibleJourneyTitle = '';
+  visibleJourneyRecalled = false;
   hideGoalStepPreview();
   const goal = document.getElementById('pageguide-goal');
   const stepPanel = document.getElementById('pageguide-step-panel');
@@ -394,6 +485,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Get current tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab?.id;
+  renderWorkingTabChip(tab);
   
   // Attach event listeners
   document.getElementById('pageguide-settings')?.addEventListener('click', () => {
@@ -419,6 +511,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
+  document.getElementById('pageguide-tab-chip-close')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    hideWorkingTabChip();
+  });
   
   document.getElementById('pageguide-send').addEventListener('click', () => {
     if (panelRunning) stopRun(); else sendMessage();
@@ -519,6 +615,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const prevTabId = currentTabId;
     currentTabId = activeInfo.tabId;
+    _hiddenTabChips.delete(activeInfo.tabId);
+    refreshWorkingTabChip(activeInfo.tabId);
 
     if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive)) return;
 
@@ -539,10 +637,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (tabId !== currentTabId) return;
+    if (!('title' in changeInfo) && !('favIconUrl' in changeInfo) && !('url' in changeInfo) && changeInfo.status !== 'complete') return;
+    renderWorkingTabChip(tab);
+  });
 
   // Clean up sessions for closed tabs to avoid memory leaks
   chrome.tabs.onRemoved.addListener((tabId) => {
     _tabSessions.delete(tabId);
+    _hiddenTabChips.delete(tabId);
   });
 });
 
@@ -958,7 +1062,7 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
  * Append a small chat message with a "View journey" button that re-displays a past guide's
  * task-panel journey (dots + snapshots) so its context isn't lost as new prompts come in.
  */
-function addJourneyRecallMessage(sessionId, title) {
+function addJourneyRecallMessage(sessionId, title, label = 'View journey') {
   const container = document.getElementById('pageguide-messages');
   if (!container || !sessionId) return;
   const msg = document.createElement('div');
@@ -968,7 +1072,7 @@ function addJourneyRecallMessage(sessionId, title) {
     <button type="button" class="pageguide-journey-recall-btn" data-session="${escapeHtml(sessionId)}">
       <span class="pageguide-journey-recall-ico">🧭</span>
       <span class="pageguide-journey-recall-text">
-        <span class="pageguide-journey-recall-title">View journey</span>
+        <span class="pageguide-journey-recall-title">${escapeHtml(label || 'View journey')}</span>
         ${sub}
       </span>
       <span class="pageguide-journey-recall-arrow">→</span>
@@ -980,37 +1084,157 @@ function addJourneyRecallMessage(sessionId, title) {
 }
 
 /**
- * Steer restore confirmation card: after the agent rebuilds the recorded state for a steered
- * step, it pauses and shows this card listing what it applied (each action → DOM element) plus
- * the step's URL. The agent does NOT continue until the user confirms here.
+ * Concise, action-first label for one restore log entry, so the checklist reads cleanly (the
+ * action up front; storage keys / selectors are secondary detail). Pure.
+ */
+function _steerActionLabel(e) {
+  if (!e) return '';
+  if (typeof gv2FriendlyRestoreAction === 'function') return gv2FriendlyRestoreAction(e);
+  const t = (e.target && e.target.text) || e.sel || 'element';
+  switch (e.kind) {
+    case 'note':           return e.value || '';
+    case 'localStorage':
+    case 'sessionStorage': return `Restore saved setting${e.key ? ` “${e.key}”` : ''}`;
+    case 'scroll':         return 'Restore scroll position';
+    case 'form':           return `Refill ${e.sel || 'a field'}`;
+    case 'replay': {
+      const verb = ({ type: 'Type into', select: 'Select', check: 'Toggle', toggle: 'Toggle' })[e.action] || 'Click';
+      return `${verb} “${t}”`;
+    }
+    default:               return e.kind;
+  }
+}
+
+function _steerTechnicalLabel(e) {
+  if (typeof gv2RestoreTechnicalDetail === 'function') return gv2RestoreTechnicalDetail(e);
+  if (typeof gv2DescribeRestoreAction === 'function') return gv2DescribeRestoreAction(e);
+  return _steerActionLabel(e);
+}
+
+function renderRestoreComparison(comparison) {
+  const restored = Array.isArray(comparison?.restored) ? comparison.restored.filter(Boolean) : [];
+  const notRestored = Array.isArray(comparison?.notRestored) ? comparison.notRestored.filter(Boolean) : [];
+  const confidence = typeof comparison?.confidence === 'number' ? comparison.confidence : null;
+  const needsReview = notRestored.length > 0 || (confidence != null && confidence < 0.65);
+  const list = (items, empty) => items.length
+    ? `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : `<div class="pageguide-steer-compare-empty">${escapeHtml(empty)}</div>`;
+  const conf = confidence != null ? `<span>${Math.round(confidence * 100)}% confident</span>` : '';
+  return `
+    <div class="pageguide-steer-compare-card ${needsReview ? 'needs-review' : 'looks-restored'}">
+      <div class="pageguide-steer-compare-head">
+        <strong>${needsReview ? 'Needs review' : 'Looks restored'}</strong>
+        ${conf}
+      </div>
+      <div class="pageguide-steer-compare-summary">${escapeHtml(comparison?.summary || 'Comparison complete.')}</div>
+      <div class="pageguide-steer-compare-grid">
+        <div><b>Restored</b>${list(restored, 'No clear restored items were identified.')}</div>
+        <div><b>Still different</b>${list(notRestored, 'No meaningful visible differences found.')}</div>
+      </div>
+      ${comparison?.recommendation ? `<div class="pageguide-steer-compare-rec">${escapeHtml(comparison.recommendation)}</div>` : ''}
+    </div>`;
+}
+
+/**
+ * Steer restore confirmation card: after the agent rebuilds the recorded state for a steered step,
+ * it pauses and shows the target "before step N" screenshot, a clean action checklist (with
+ * advisory checkboxes), a hover snapshot of the live restored page, and recovery controls
+ * (retry once / tell the agent what's wrong). The agent does NOT continue until the user acts.
  */
 function addSteerRestoreCard(message) {
   const container = document.getElementById('pageguide-messages');
   if (!container) return;
-  // Replace any stale card from a previous steer.
+  // Replace any stale card from a previous steer (also how retry/fix re-render in place).
   container.querySelector('.pageguide-steer-restore')?.remove();
 
   const log = Array.isArray(message.log) ? message.log : [];
-  const describe = (typeof gv2DescribeRestoreAction === 'function')
-    ? gv2DescribeRestoreAction
-    : (e) => (e && e.kind) ? (e.kind + (e.value != null ? ' → ' + e.value : '')) : '';
+
+  // Clean checklist: one line per action, action first, failed ones flagged in red. No raw
+  // selectors/keys cluttering the primary line — the goal is a quick, calm inspection.
   const lines = log.length
-    ? log.map(e => `<li>${escapeHtml(describe(e))}</li>`).join('')
+    ? log.map((e, i) => {
+        const ok = e.ok !== false;
+        return `<li class="pageguide-steer-restore-item${ok ? '' : ' failed'}">
+          <label><input type="checkbox" class="pageguide-steer-restore-check" data-idx="${i}" ${ok ? 'checked' : ''}>
+            <span class="pageguide-steer-restore-action">${escapeHtml(_steerActionLabel(e))}</span></label>
+        </li>`;
+      }).join('')
     : '<li class="pageguide-steer-restore-empty">No state changes were needed.</li>';
+  const technicalDetails = log.length
+    ? `<details class="pageguide-steer-restore-details">
+         <summary>Technical details</summary>
+         <ul>${log.map(e => `<li>${escapeHtml(_steerTechnicalLabel(e))}</li>`).join('')}</ul>
+       </details>`
+    : '';
+
+  const stepLabel = escapeHtml(String(message.redoStep != null ? message.redoStep : message.fromStep));
+  // The recorded "before step N" screenshot — the exact target state we're restoring to.
+  const targetImg = message.redoBeforeShot
+    ? `<div class="pageguide-steer-restore-target">
+         <div class="pageguide-steer-restore-target-cap">Target — page before step ${stepLabel}</div>
+         <img class="pageguide-memory-shot-trigger" data-shot-kind="restore-target" alt="Before step ${stepLabel}" src="data:image/jpeg;base64,${message.redoBeforeShot}">
+       </div>`
+    : '';
+  const snapBtn = message.restoreShot
+    ? `<span class="pageguide-steer-restore-snap-wrap">
+         <button type="button" class="pageguide-steer-restore-snap" title="Hover to preview the live restored page">📷 Live</button>
+         <div class="pageguide-steer-restore-snap-pop"><img alt="Restored page" src="data:image/jpeg;base64,${message.restoreShot}"></div>
+       </span>`
+    : '';
+  const errHtml = message.error
+    ? `<div class="pageguide-steer-restore-error">${escapeHtml(message.error)}</div>`
+    : '';
+  const retryBtn = message.canRetry === false
+    ? ''
+    : '<button type="button" class="pageguide-step-next-btn pageguide-steer-restore-retry">↻ Retry restore</button>';
+  const canCompare = !!(message.redoBeforeShot && message.restoreShot);
+  const compareBtn = `<button type="button" class="pageguide-step-next-btn pageguide-steer-restore-compare" ${canCompare ? '' : 'disabled'} title="${canCompare ? 'Compare the saved and restored screenshots' : 'Need both saved and current screenshots to compare.'}">Compare state</button>`;
+  const branchBtn = message.branchLabel
+    ? `<button type="button" class="pageguide-step-next-btn pageguide-steer-restore-journey">${escapeHtml(message.branchLabel)}</button>`
+    : '';
 
   const card = document.createElement('div');
   card.className = 'pageguide-step-card pageguide-steer-restore';
   card.innerHTML = `
-    <div class="pageguide-guide-step">
+    <div class="pageguide-guide-step pageguide-steer-restore-hdr">
       <span class="pageguide-step-badge">Restored</span>
-      <span class="pageguide-step-text">Review the restored state before step ${escapeHtml(String(message.redoStep != null ? message.redoStep : message.fromStep))}, then continue to redo it.</span>
+      <span class="pageguide-step-text">Review the restored state before step ${stepLabel}, then continue to redo it.</span>
+      ${snapBtn}
     </div>
+    ${targetImg}
     ${message.url ? `<div class="pageguide-step-meta">🔗 ${escapeHtml(message.url)}</div>` : ''}
     <ul class="pageguide-steer-restore-log">${lines}</ul>
+    ${technicalDetails}
+    ${errHtml}
+    <div class="pageguide-steer-compare-result" style="display:none"></div>
     <div class="pageguide-step-btn-row">
       <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-confirm">✓ Looks right — continue</button>
+      ${branchBtn}
+      ${compareBtn}
+      ${retryBtn}
+      <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-fix">✗ Not restored — tell agent</button>
       <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-stop">⏹ Stop</button>
+    </div>
+    <div class="pageguide-steer-restore-fixbox" style="display:none">
+      <textarea class="pageguide-steer-restore-fix-input" rows="2" placeholder="What didn't restore correctly? (e.g. the menu dropdown isn't open)"></textarea>
+      <div class="pageguide-steer-restore-fix-row">
+        <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-fix-send">Send to agent</button>
+      </div>
     </div>`;
+
+  // Re-enable the card's controls and surface an inline error when the content script can't be
+  // reached — so the buttons never get stuck disabled.
+  const recover = (msg) => {
+    hideTyping();
+    card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    let errEl = card.querySelector('.pageguide-steer-restore-error');
+    if (!errEl) {
+      errEl = document.createElement('div');
+      errEl.className = 'pageguide-steer-restore-error';
+      card.querySelector('.pageguide-step-btn-row')?.before(errEl);
+    }
+    errEl.textContent = msg;
+  };
 
   card.querySelector('.pageguide-steer-restore-confirm')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1018,6 +1242,75 @@ function addSteerRestoreCard(message) {
     showTyping();
     sendToContentScript({ action: 'confirmSteerRestore' });
     card.remove();
+  });
+  card.querySelector('.pageguide-steer-restore-journey')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (message.sessionId) await showStoredJourney(message.sessionId);
+  });
+  card.querySelector('.pageguide-steer-restore-target img')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMemoryShotLightbox(message.redoBeforeShot, `Before action — saved state before step ${stepLabel}`);
+  });
+  card.querySelector('.pageguide-steer-restore-compare')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    if (!btn || btn.disabled) return;
+    const resultEl = card.querySelector('.pageguide-steer-compare-result');
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = 'Comparing...';
+    if (resultEl) {
+      resultEl.style.display = '';
+      resultEl.innerHTML = '<div class="pageguide-steer-compare-card loading">Comparing saved and restored screenshots...</div>';
+    }
+    try {
+      const res = await sendToContentScript({ action: 'compareSteerRestoreState' });
+      if (!res || res.success === false) throw new Error(res?.error || 'Could not compare screenshots');
+      if (resultEl) resultEl.innerHTML = renderRestoreComparison(res.comparison || {});
+    } catch (err) {
+      if (resultEl) {
+        resultEl.innerHTML = `<div class="pageguide-steer-compare-card needs-review">⚠ ${escapeHtml(err.message || 'Could not compare screenshots.')}</div>`;
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  });
+  card.querySelector('.pageguide-steer-restore-retry')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    showTyping();
+    try {
+      const res = await sendToContentScript({ action: 'retrySteerRestore' });
+      if (res && res.success === false) throw new Error(res.error || 'unavailable');
+      // On success the content script re-sends steerRestoreReady, which re-renders this card.
+    } catch (err) {
+      recover('⚠ Couldn’t reach the page to retry. Try again.');
+    }
+  });
+  card.querySelector('.pageguide-steer-restore-fix')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const box = card.querySelector('.pageguide-steer-restore-fixbox');
+    if (!box) return;
+    const show = box.style.display === 'none';
+    box.style.display = show ? '' : 'none';
+    if (show) { const ta = box.querySelector('textarea'); if (ta) ta.focus(); }
+  });
+  card.querySelector('.pageguide-steer-restore-fix-send')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const ta = card.querySelector('.pageguide-steer-restore-fix-input');
+    const note = ta ? ta.value.trim() : '';
+    if (!note) { if (ta) ta.focus(); return; }
+    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    showTyping();
+    try {
+      const res = await sendToContentScript({ action: 'fixSteerRestore', note });
+      if (res && res.success === false) throw new Error(res.error || 'unavailable');
+      // The agent takes over from here (it re-grounds on the live page); drop the restore card.
+      card.remove();
+    } catch (err) {
+      recover('⚠ Couldn’t reach the page. Try again.');
+    }
   });
   card.querySelector('.pageguide-steer-restore-stop')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1037,17 +1330,22 @@ function addSteerRestoreCard(message) {
  * error to the chat.
  */
 async function showStoredJourney(sessionId) {
-  let steps = null, title = '';
-  const mem = _journeysBySession[sessionId];
-  if (mem && mem.steps && mem.steps.length) { steps = mem.steps; title = mem.title || ''; }
-  else {
-    try {
-      if (typeof rewindGetIndex === 'function') {
-        const idx = await rewindGetIndex(sessionId);
-        if (idx && idx.steps && idx.steps.length) { steps = idx.steps; title = idx.goal || ''; }
-      }
-    } catch (e) {}
+  let steps = null, title = '', isBranchJourney = false;
+  if (sessionId && typeof rewindVerifyScreenshots === 'function') {
+    try { await rewindVerifyScreenshots(sessionId); } catch (e) {}
   }
+  const mem = _journeysBySession[sessionId];
+  try {
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(sessionId);
+      if (idx && idx.steps && idx.steps.length) {
+        steps = idx.steps;
+        title = idx.branchLabel || idx.goal || '';
+        isBranchJourney = !!idx.parentSessionId;
+      }
+    }
+  } catch (e) {}
+  if ((!steps || !steps.length) && mem && mem.steps && mem.steps.length) { steps = mem.steps; title = mem.title || ''; }
   if (!steps || !steps.length) {
     addMessage('ℹ️ That journey is no longer available.', 'system');
     return;
@@ -1055,12 +1353,7 @@ async function showStoredJourney(sessionId) {
   // Attach sessionId to each meta so the dot preview can resolve its record. Split out the
   // initial-state node (step 0) so it doesn't inflate the step/dot count.
   const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
-  // VERIFICATION: prune "void" steps that have no screenshot (e.g. a capture that failed before
-  // this fix) — drop them from the timeline AND delete their stored record.
   const voidSteps = withSid.filter(m => m.hasShot === false && !(m.isInitial || Number(m.step) === 0));
-  if (voidSteps.length && typeof rewindDeleteRecord === 'function') {
-    voidSteps.forEach(m => { try { rewindDeleteRecord(sessionId, m.step); } catch (e) {} });
-  }
   const valid = withSid.filter(m => !voidSteps.includes(m));
   currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
   currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
@@ -1072,12 +1365,48 @@ async function showStoredJourney(sessionId) {
   guideActive = false; // recalled journey is a past, read-only view
   renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
   _setJourneyRecalledMode(true);
+  visibleJourneySessionId = sessionId;
+  visibleJourneyTitle = currentGuideTitle;
+  visibleJourneyRecalled = true;
 }
+if (typeof window !== 'undefined') window.showStoredJourney = showStoredJourney;
+
+function removeGuideStepRecord(sessionId, step) {
+  const n = Number(step);
+  if (!Number.isFinite(n)) return;
+  currentGuideRecords = currentGuideRecords.filter(r => Number(r.step) !== n);
+  if (currentGuideInitial && Number(currentGuideInitial.step) === n) currentGuideInitial = null;
+  if (sessionId && _journeysBySession[sessionId]?.steps) {
+    _journeysBySession[sessionId].steps = _journeysBySession[sessionId].steps.filter(s => Number(s.step) !== n);
+  }
+  const last = currentGuideRecords.length ? currentGuideRecords[currentGuideRecords.length - 1].step : 0;
+  currentGuideStep = last;
+  renderGoalCard({ route: 'guide', step: last });
+}
+if (typeof window !== 'undefined') window.removeGuideStepRecord = removeGuideStepRecord;
+
+async function registerBranchJourney(sessionId, label) {
+  if (!sessionId) return;
+  const title = label || 'View branch journey';
+  if (!_journeysBySession[sessionId]) _journeysBySession[sessionId] = { title, steps: [] };
+  _journeysBySession[sessionId].title = title;
+  if (!_journeyBtnSessions.has(sessionId)) {
+    _journeyBtnSessions.add(sessionId);
+    addJourneyRecallMessage(sessionId, title, title);
+  }
+}
+if (typeof window !== 'undefined') window.registerBranchJourney = registerBranchJourney;
+if (typeof window !== 'undefined') window.addJourneyRecallMessage = addJourneyRecallMessage;
 
 // Mark the goal card as a recalled (read-only) view — used only for styling (hides the caret).
 function _setJourneyRecalledMode(on) {
   const card = document.getElementById('pageguide-goal');
   if (card) card.classList.toggle('pageguide-goal--recalled', !!on);
+  if (!on) {
+    visibleJourneySessionId = null;
+    visibleJourneyTitle = '';
+    visibleJourneyRecalled = false;
+  }
 }
 
 // Ensure the journey/goal card has a collapse (✕) button that hides it. Present in every guide
@@ -1094,7 +1423,13 @@ function _ensureGoalCollapseBtn() {
   btn.title = 'Collapse journey';
   btn.setAttribute('aria-label', 'Collapse journey');
   btn.textContent = '✕';
-  btn.addEventListener('click', (e) => { e.stopPropagation(); card.style.display = 'none'; });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    card.style.display = 'none';
+    visibleJourneySessionId = null;
+    visibleJourneyTitle = '';
+    visibleJourneyRecalled = false;
+  });
   row.appendChild(btn);
 }
 
@@ -1436,6 +1771,7 @@ function showTyping() {
  */
 async function stopGuide(message = '⏹ Guide stopped.') {
   guideActive = false;
+  guideStopped = true; // suppress any late running-state messages from an in-flight content script
   hideTyping();
   // Set the Stop tombstone + clear the resume fallback BEFORE messaging the content script, so
   // Stop is authoritative even if the content script is already gone (mid-navigation): the next
@@ -2006,6 +2342,7 @@ async function sendMessage() {
   _hideSlashMenu();
   if (input) input.value = '';
   cancelRequested = false;
+  guideStopped = false; // a fresh send re-arms the panel for running-state messages
 
   // Track if a specific routing is forced by the user
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
@@ -2470,7 +2807,10 @@ function _saveTabSession(tabId) {
     chatMessages: [...chatMessages],
     conversationHistory: [...conversationHistory],
     hasImageInConversation,
-    html: container ? container.innerHTML : ''
+    html: container ? container.innerHTML : '',
+    visibleJourneySessionId,
+    visibleJourneyTitle,
+    visibleJourneyRecalled
   });
 }
 
@@ -2503,6 +2843,15 @@ function _restoreTabSession(session) {
   uploadedFileName = null;
   const filePreview = document.getElementById('pageguide-file-preview');
   if (filePreview) filePreview.style.display = 'none';
+
+  visibleJourneySessionId = session.visibleJourneySessionId || null;
+  visibleJourneyTitle = session.visibleJourneyTitle || '';
+  visibleJourneyRecalled = !!session.visibleJourneyRecalled;
+  if (visibleJourneyRecalled && visibleJourneySessionId) {
+    showStoredJourney(visibleJourneySessionId);
+  } else {
+    clearGoalAndStepPanel();
+  }
 }
 
 /**
@@ -2609,6 +2958,7 @@ async function exportJourneyPdf() {
   let index = null;
   try {
     if (typeof rewindGetIndex === 'function') index = await rewindGetIndex();
+    if (index?.sessionId && typeof rewindVerifyScreenshots === 'function') index = await rewindVerifyScreenshots(index.sessionId);
   } catch (e) {}
 
   if (!index?.steps?.length) {
@@ -2623,7 +2973,10 @@ async function exportJourneyPdf() {
     try {
       if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(index.sessionId, meta.step);
     } catch (e) {}
-    records.push(rec || meta);
+    const shot = typeof rewindResolveScreenshot === 'function'
+      ? rewindResolveScreenshot(rec)
+      : (rec && (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter));
+    if (rec && (meta.isInitial || Number(meta.step) === 0 || shot)) records.push(rec);
   }
 
   const title = currentGuideTitle || index.title || _truncateText(index.goal || 'PageGuide Journey', 90);
@@ -2640,7 +2993,12 @@ async function exportJourneyPdf() {
         ${rec.target?.text ? `<p><strong>Target:</strong> ${escapeHtml(rec.target.text)}</p>` : ''}
         ${rec.nextStepHint ? `<p><strong>Next:</strong> ${escapeHtml(rec.nextStepHint)}</p>` : ''}
         ${bits.length ? `<p class="meta">${bits.join(' · ')}</p>` : ''}
-        ${rec.screenshot ? `<img src="data:image/jpeg;base64,${rec.screenshot}" alt="Step ${escapeHtml(rec.step)} screenshot">` : ''}
+        ${(() => {
+          const shot = typeof rewindResolveScreenshot === 'function'
+            ? rewindResolveScreenshot(rec)
+            : (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter);
+          return shot ? `<img src="data:image/jpeg;base64,${shot}" alt="Step ${escapeHtml(rec.step)} screenshot">` : '';
+        })()}
       </section>`;
   }).join('');
 
@@ -2879,7 +3237,17 @@ function loadHistoryChat(entry) {
 }
 
 // Listen for messages from content script and background
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+function handleContentMessage(message, sender, sendResponse) {
+  // After a Stop, an in-flight content script can still emit "still working" messages. Drop them
+  // so the running animation, the red Stop button, and the timeline dots don't re-arm themselves.
+  // A new send (sendMessage) or a user-initiated steer (steerRestoreReady, handled below) clears it.
+  if (guideStopped && (
+        message.action === 'showTyping' ||
+        message.action === 'guideStep' ||
+        message.action === 'guideStepRecord' ||
+        message.action === 'askStep')) {
+    return;
+  }
   if (message.action === 'guideStep') {
     hideTyping();
     addGuideStep(message.result);
@@ -2926,8 +3294,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
   } else if (message.action === 'steerRestoreReady') {
-    // The agent restored a steered step's state and is waiting for the user to confirm.
+    // The agent restored a steered step's state and is waiting for the user to confirm. A steer is
+    // a deliberate user action, so it overrides a prior Stop.
+    guideStopped = false;
     hideTyping();
+    if (message.sessionId && message.branchLabel) {
+      registerBranchJourney(message.sessionId, message.branchLabel);
+    }
     addSteerRestoreCard(message);
   } else if (message.action === 'askStep') {
     // Ask mode step (scroll/expand)
@@ -2984,7 +3357,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
   }
-});
+}
+chrome.runtime.onMessage.addListener(handleContentMessage);
+if (typeof window !== 'undefined') window.handleContentMessage = handleContentMessage;
 
 // Notify background when panel is closed.
 // The service worker clears page highlights upon receiving panelClosed.

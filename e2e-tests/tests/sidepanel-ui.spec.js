@@ -80,6 +80,21 @@ test.describe('Side Panel UI', () => {
     await expect(input).toHaveValue('Hello, PageGuide!');
   });
 
+  test('working tab chip appears and can be hidden without clearing chat', async () => {
+    const chip = panelPage.locator('#pageguide-tab-chip');
+    const title = panelPage.locator('#pageguide-tab-chip-title');
+    const input = panelPage.locator('#pageguide-input');
+
+    await expect(chip).toBeVisible({ timeout: 10000 });
+    await expect(title).not.toHaveText('');
+
+    await input.fill('keep this draft');
+    await panelPage.locator('#pageguide-tab-chip-close').click();
+
+    await expect(chip).toBeHidden();
+    await expect(input).toHaveValue('keep this draft');
+  });
+
   test('send button is clickable', async () => {
     const sendBtn = panelPage.locator('#pageguide-send');
     await expect(sendBtn).toBeEnabled();

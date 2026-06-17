@@ -982,12 +982,106 @@ function gv2DescribeRestoreAction(e) {
   }
 }
 
+const _GV2_HIDDEN_RESTORE_FIELD_RE = /\b(cf-chl|captcha|challenge|token|csrf|recaptcha|hcaptcha|turnstile)\b/i;
+
+function gv2IsHiddenRestoreField(e) {
+  if (!e || e.kind !== 'form') return false;
+  const haystack = [e.sel, e.key, e.name, e.id].filter(Boolean).join(' ');
+  return _GV2_HIDDEN_RESTORE_FIELD_RE.test(haystack);
+}
+
+function gv2TruncateRestoreText(value, max = 72) {
+  const s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  return s.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
+}
+
+function gv2FriendlySelectorName(sel) {
+  const s = String(sel == null ? '' : sel).trim();
+  if (!s) return 'saved field';
+  const clean = s
+    .replace(/^#/, '')
+    .replace(/^\[name=["']?([^"'\]]+)["']?\]$/, '$1')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!clean || clean.length > 48 || /[>#:[\]]/.test(clean)) return 'saved field';
+  return clean;
+}
+
+function gv2RestoreTechnicalDetail(e) {
+  if (!e || !e.kind) return '';
+  const copy = { ...e };
+  ['key', 'sel', 'value'].forEach(k => {
+    if (copy[k] != null) copy[k] = gv2TruncateRestoreText(copy[k]);
+  });
+  if (copy.target && typeof copy.target === 'object') {
+    copy.target = { ...copy.target };
+    if (copy.target.text != null) copy.target.text = gv2TruncateRestoreText(copy.target.text);
+  }
+  return gv2DescribeRestoreAction(copy);
+}
+
+function gv2FriendlyRestoreAction(e) {
+  if (!e || !e.kind) return '';
+  const ok = e.ok !== false;
+  switch (e.kind) {
+    case 'note':
+      return String(e.value || '').replace(/^✓\s*/, '').trim();
+    case 'localStorage':
+    case 'sessionStorage':
+      return ok ? 'Restored saved page settings' : 'Skipped saved page settings';
+    case 'scroll':
+      return ok ? 'Restored scroll position' : 'Could not restore scroll position';
+    case 'form':
+      if (gv2IsHiddenRestoreField(e)) {
+        return ok ? 'Restored hidden page security state' : 'Skipped a hidden page security field';
+      }
+      return ok ? `Restored “${gv2FriendlySelectorName(e.sel)}” field` : `Could not restore “${gv2FriendlySelectorName(e.sel)}” field`;
+    case 'replay': {
+      const target = gv2TruncateRestoreText((e.target && e.target.text) || e.sel || e.target || 'the target');
+      const action = String(e.action || 'click').toLowerCase();
+      if (action === 'type') return ok ? `Filled “${target}”` : `Fill “${target}” did not apply`;
+      if (action === 'select') return ok ? `Selected “${target}”` : `Select “${target}” did not apply`;
+      if (action === 'check' || action === 'toggle') return ok ? `Toggled “${target}”` : `Toggle “${target}” did not apply`;
+      if (/\b(menu|dropdown|settings|panel)\b/i.test(target)) return ok ? `Opened “${target}”` : `Open “${target}” did not apply`;
+      return ok ? `Clicked “${target}”` : `Click “${target}” did not apply`;
+    }
+    default:
+      return ok ? `Restored ${e.kind}` : `Could not restore ${e.kind}`;
+  }
+}
+
+/**
+ * Summarize the first concrete restore action that failed into a short user-facing error, e.g.
+ * "⚠ Couldn't apply: Click Idiomas". Returns '' when nothing actionable failed. `note` entries
+ * are advisory and never counted as a hard failure. Pure (no DOM) so it's unit-testable.
+ *
+ * @param {Array<object>} log - restore log entries ({ kind, ok, ... })
+ * @returns {string}
+ */
+function gv2RestoreErrorSummary(log) {
+  if (!Array.isArray(log)) return '';
+  const failed = log.filter(e => e && e.ok === false && e.kind && e.kind !== 'note');
+  if (!failed.length) return '';
+  const actionable = failed.find(e => !gv2IsHiddenRestoreField(e));
+  if (!actionable) {
+    return 'Some hidden page state could not be restored. This can happen when the site regenerates security fields.';
+  }
+  const what = gv2FriendlyRestoreAction(actionable) || 'Some page state could not be restored';
+  return `${what}. Retry, continue if the page looks right, or tell the agent what is missing.`;
+}
+
 if (typeof window !== 'undefined') {
   window.gv2FieldSelector = gv2FieldSelector;
   window.gv2SetFieldValue = gv2SetFieldValue;
   window.gv2CaptureRestoreState = gv2CaptureRestoreState;
   window.gv2ApplyRestoreState = gv2ApplyRestoreState;
   window.gv2DescribeRestoreAction = gv2DescribeRestoreAction;
+  window.gv2FriendlyRestoreAction = gv2FriendlyRestoreAction;
+  window.gv2RestoreTechnicalDetail = gv2RestoreTechnicalDetail;
+  window.gv2IsHiddenRestoreField = gv2IsHiddenRestoreField;
+  window.gv2RestoreErrorSummary = gv2RestoreErrorSummary;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2FieldSelector = gv2FieldSelector;
@@ -995,6 +1089,10 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2CaptureRestoreState = gv2CaptureRestoreState;
   module.exports.gv2ApplyRestoreState = gv2ApplyRestoreState;
   module.exports.gv2DescribeRestoreAction = gv2DescribeRestoreAction;
+  module.exports.gv2FriendlyRestoreAction = gv2FriendlyRestoreAction;
+  module.exports.gv2RestoreTechnicalDetail = gv2RestoreTechnicalDetail;
+  module.exports.gv2IsHiddenRestoreField = gv2IsHiddenRestoreField;
+  module.exports.gv2RestoreErrorSummary = gv2RestoreErrorSummary;
 }
 
 /**
@@ -1070,6 +1168,63 @@ function gv2ExtractJsonObject(content) {
 
 if (typeof window !== 'undefined') window.gv2ExtractJsonObject = gv2ExtractJsonObject;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2ExtractJsonObject = gv2ExtractJsonObject;
+
+function gv2BuildRestoreComparePrompt(ctx = {}) {
+  const step = ctx.redoStep != null ? ctx.redoStep : 'the selected';
+  const goal = ctx.newGoal ? `\nUser redirection: ${ctx.newGoal}` : '';
+  return `Compare two screenshots for PageGuide's restore check.
+
+Image 1 is the saved target state before step ${step}.
+Image 2 is the current page after PageGuide tried to restore that state.${goal}
+
+Decide whether the visible page state has been restored closely enough for the user to continue.
+Focus only on visible UI state: open menus/dialogs, selected options, filled visible fields, scroll position, and visible page location.
+Ignore hidden security fields, tokens, analytics IDs, and anything that cannot be seen in the screenshots.
+
+Return JSON only:
+{
+  "summary": "one short sentence",
+  "restored": ["short visible thing that appears restored"],
+  "notRestored": ["short visible thing missing or different"],
+  "recommendation": "one sentence telling the user whether to continue, retry, or describe what is missing",
+  "confidence": 0.0
+}`;
+}
+
+function gv2ParseRestoreComparison(content) {
+  const obj = gv2ExtractJsonObject(content);
+  const asList = (v) => Array.isArray(v)
+    ? v.map(x => gv2TruncateRestoreText(x, 140)).filter(Boolean).slice(0, 5)
+    : [];
+  if (!obj) {
+    return {
+      summary: gv2TruncateRestoreText(content || 'Could not parse the comparison.', 220),
+      restored: [],
+      notRestored: [],
+      recommendation: 'Review the screenshots manually before continuing.',
+      confidence: null
+    };
+  }
+  const confidence = (typeof obj.confidence === 'number' && isFinite(obj.confidence))
+    ? Math.max(0, Math.min(1, obj.confidence))
+    : null;
+  return {
+    summary: gv2TruncateRestoreText(obj.summary || 'Comparison complete.', 220),
+    restored: asList(obj.restored),
+    notRestored: asList(obj.notRestored),
+    recommendation: gv2TruncateRestoreText(obj.recommendation || 'Review the result before continuing.', 220),
+    confidence
+  };
+}
+
+if (typeof window !== 'undefined') {
+  window.gv2BuildRestoreComparePrompt = gv2BuildRestoreComparePrompt;
+  window.gv2ParseRestoreComparison = gv2ParseRestoreComparison;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.gv2BuildRestoreComparePrompt = gv2BuildRestoreComparePrompt;
+  module.exports.gv2ParseRestoreComparison = gv2ParseRestoreComparison;
+}
 
 // Patterns for actions that are sensitive or hard to undo. Used to ESCALATE a step's
 // risk so the agent never auto-performs these in autonomous mode, even if the model

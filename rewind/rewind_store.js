@@ -13,9 +13,9 @@
 //
 // Layout (multi-session — each guide prompt keeps its own journey, so an earlier guide's
 // journey can be recalled later):
-//   RW_SESSIONS                  -> [{ sessionId, goal, startedAt }] oldest→newest (capped)
+//   RW_SESSIONS                  -> [{ sessionId, goal, startedAt, ...branchMeta }] oldest→newest (capped)
 //   RW_CURRENT                   -> sessionId of the active/most-recent session
-//   RW_IDX::<sessionId>          -> { sessionId, goal, startedAt, steps:[lightweight meta] }
+//   RW_IDX::<sessionId>          -> { sessionId, goal, startedAt, steps:[lightweight meta], ...branchMeta }
 //   RW_REC::<sessionId>::<step>  -> full record (incl. screenshot + domSnapshot)
 //
 // The lightweight index keeps the timeline fast to render; full records (with the heavy
@@ -92,8 +92,12 @@
       isInitial: record.isInitial,
       // Verification flag: does this step have any screenshot? Steps without one are "void" and
       // get pruned from the timeline / recall.
-      hasShot: !!(record.screenshot || record.screenshotBefore || record.screenshotAfter)
+      hasShot: !!rewindResolveScreenshot(record)
     };
+  }
+
+  function rewindResolveScreenshot(record) {
+    return record ? (record.screenshotBefore || record.screenshot || record.screenshotAfter || null) : null;
   }
 
   async function _getSessions() {
@@ -125,6 +129,73 @@
       [RW_CURRENT_KEY]: sessionId,
       [_idxKey(sessionId)]: { sessionId, goal: goal || '', startedAt: Date.now(), steps: [] }
     });
+  }
+
+  // Create a branch journey by copying a parent session's prefix into a new ordinary session.
+  // The parent is intentionally left untouched, so its original "View journey" remains complete.
+  async function rewindCreateBranchSession(parentSessionId, branchSessionId, anchorStep, meta) {
+    if (!parentSessionId || !branchSessionId || !Number.isFinite(Number(anchorStep))) return null;
+    const parent = await rewindGetIndex(parentSessionId);
+    if (!parent || !Array.isArray(parent.steps)) return null;
+
+    const n = Number(anchorStep);
+    const startedAt = Date.now();
+    const branchMeta = Object.assign({
+      parentSessionId,
+      branchFromStep: n,
+      redoStep: n + 1,
+      branchStatus: 'pending_restore',
+      branchLabel: 'View journey before Step ' + (n + 1)
+    }, meta || {});
+    const goal = branchMeta.goal || parent.goal || '';
+    const branchIndex = Object.assign({
+      sessionId: branchSessionId,
+      goal,
+      startedAt,
+      steps: []
+    }, branchMeta);
+
+    const writes = {};
+    const parentSteps = parent.steps
+      .filter(s => (s.isInitial || Number(s.step) === 0 || Number(s.step) <= n))
+      .sort((a, b) => Number(a.step) - Number(b.step));
+    for (const m of parentSteps) {
+      const rec = await rewindGetRecord(parentSessionId, m.step);
+      if (!rec) continue;
+      const copy = Object.assign({}, rec, {
+        sessionId: branchSessionId,
+        parentSessionId,
+        branchFromStep: n
+      });
+      writes[_recKey(branchSessionId, copy.step)] = copy;
+      branchIndex.steps.push(_toMeta(copy));
+    }
+
+    let sessions = await _getSessions();
+    sessions = sessions.filter(s => s.sessionId !== branchSessionId);
+    sessions.push(Object.assign({ sessionId: branchSessionId, goal, startedAt }, branchMeta));
+    while (sessions.length > RW_SESSION_CAP) {
+      const dropped = sessions.shift();
+      if (dropped) await _removeSession(dropped.sessionId);
+    }
+
+    writes[RW_SESSIONS_KEY] = sessions;
+    writes[RW_CURRENT_KEY] = branchSessionId;
+    writes[_idxKey(branchSessionId)] = branchIndex;
+    await _set(writes);
+    return branchIndex;
+  }
+
+  async function rewindUpdateSessionMeta(sessionId, patch) {
+    if (!sessionId || !patch) return null;
+    const res = await _get(_idxKey(sessionId));
+    const index = res[_idxKey(sessionId)];
+    if (!index) return null;
+    Object.assign(index, patch);
+    let sessions = await _getSessions();
+    sessions = sessions.map(s => s.sessionId === sessionId ? Object.assign({}, s, patch) : s);
+    await _set({ [_idxKey(sessionId)]: index, [RW_SESSIONS_KEY]: sessions });
+    return index;
   }
 
   // Store (or overwrite) the full record for a step and update the session's index meta.
@@ -228,6 +299,29 @@
     }
   }
 
+  async function rewindVerifyScreenshots(sessionId) {
+    const index = await rewindGetIndex(sessionId);
+    if (!index || !Array.isArray(index.steps)) return index || null;
+
+    const kept = [];
+    const removeKeys = [];
+    for (const meta of index.steps.slice().sort((a, b) => Number(a.step) - Number(b.step))) {
+      const rec = await rewindGetRecord(index.sessionId, meta.step);
+      const isInitial = !!(meta.isInitial || rec?.isInitial || Number(meta.step) === 0);
+      const hasShot = !!rewindResolveScreenshot(rec);
+      const hasSnapshot = !!(rec && rec.domSnapshot);
+      const keep = isInitial ? (hasShot || hasSnapshot) : hasShot;
+      if (rec && keep) kept.push(_toMeta(rec));
+      else if (!isInitial) removeKeys.push(_recKey(index.sessionId, meta.step));
+      else if (rec && !keep) removeKeys.push(_recKey(index.sessionId, meta.step));
+    }
+
+    if (removeKeys.length) await _remove(removeKeys);
+    index.steps = kept.sort((a, b) => Number(a.step) - Number(b.step));
+    await _set({ [_idxKey(index.sessionId)]: index });
+    return Object.assign({}, index, { removed: removeKeys.length });
+  }
+
   // ----- Steer ("branch & re-run") handoff -----
   // The side panel writes a payload { sessionId, fromStep, newGoal, url, createdAt } and then
   // navigates the working tab to `url`; the content script reads it on load (taking precedence
@@ -248,11 +342,15 @@
 
   const api = {
     rewindStartSession,
+    rewindCreateBranchSession,
+    rewindUpdateSessionMeta,
     rewindPutRecord,
     rewindGetIndex,
     rewindGetSessions,
     rewindGetRecord,
     rewindPatchRecord,
+    rewindResolveScreenshot,
+    rewindVerifyScreenshots,
     rewindClear,
     rewindTruncateAfter,
     rewindDeleteRecord,

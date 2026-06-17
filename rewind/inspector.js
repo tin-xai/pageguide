@@ -1,13 +1,17 @@
-// PageGuide - Full-page Step Inspector (Slice 1)
-// Reads ?session=<id>&step=<n>, loads the record from the rewind store, and renders
-// the static DOM snapshot (read-only, sandboxed), screenshot, reasoning, and raw JSON.
+// PageGuide - Full-page Step Inspector
+// Reads ?session=<id>&step=<n>, then renders a slider-driven inspection view with
+// before-action screenshot, read-only page snapshot, after-action screenshot, and raw memory.
 
 (function () {
   const params = new URLSearchParams(location.search);
   let sessionId = params.get('session');
   let step = parseInt(params.get('step'), 10);
+  let indexSteps = [];
+  let currentRecord = null;
+  let currentView = null;
 
   const $ = id => document.getElementById(id);
+
   try {
     const savedTheme = localStorage.getItem('pageguide-theme');
     if (savedTheme === 'light') document.body.classList.add('light-mode');
@@ -17,90 +21,259 @@
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   }
+
   function fmtDuration(ms) {
     if (ms == null) return '';
     return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's';
   }
+
   function fmtCost(cost) {
     if (!cost || cost.usd == null) return '';
     return '$' + Number(cost.usd).toFixed(4);
   }
 
-  async function populateStepSelect() {
-    let index = null;
-    // Prefer the session from the URL (?session=); fall back to the current session.
-    try { index = await rewindGetIndex(sessionId || undefined); } catch (e) {}
-    const sel = $('step-select');
-    sel.innerHTML = '';
-    const steps = (index && index.steps) ? index.steps : [];
-    if (index && !sessionId) sessionId = index.sessionId;
-    steps.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.step;
-      opt.textContent = (s.isInitial || Number(s.step) === 0) ? 'Initial state' : 'Step ' + s.step;
-      if (s.step === step) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    sel.onchange = () => { step = parseInt(sel.value, 10); render(); };
+  function stepName(s) {
+    return (s && (s.isInitial || Number(s.step) === 0)) ? 'Initial state' : 'Step ' + (s ? s.step : step);
   }
 
-  async function render() {
-    let rec = null;
-    try { rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  function currentStepIndex() {
+    const idx = indexSteps.findIndex(s => Number(s.step) === Number(step));
+    return idx >= 0 ? idx : 0;
+  }
 
-    if (!rec) {
-      $('empty').style.display = '';
-      $('content').style.display = 'none';
+  async function populateStepSelect() {
+    let index = null;
+    try {
+      index = await rewindGetIndex(sessionId || undefined);
+      if (index?.sessionId && typeof rewindVerifyScreenshots === 'function') {
+        index = await rewindVerifyScreenshots(index.sessionId);
+      }
+    } catch (e) {}
+    const sel = $('step-select');
+    sel.innerHTML = '';
+    indexSteps = (index && Array.isArray(index.steps)) ? index.steps.slice().sort((a, b) => Number(a.step) - Number(b.step)) : [];
+    if (index && !sessionId) sessionId = index.sessionId;
+    if (!indexSteps.length && Number.isFinite(step)) indexSteps = [{ sessionId, step }];
+    if (indexSteps.length && !indexSteps.some(s => Number(s.step) === Number(step))) {
+      step = Number(indexSteps[0].step);
+    }
+
+    indexSteps.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.step;
+      opt.textContent = stepName(s);
+      if (Number(s.step) === Number(step)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.onchange = () => setStep(parseInt(sel.value, 10));
+    renderTimeline();
+  }
+
+  function renderTimeline() {
+    const wrap = $('timeline');
+    const track = $('timeline-track');
+    if (!wrap || !track) return;
+
+    if (!indexSteps.length) {
+      wrap.style.display = 'none';
       return;
     }
-    $('empty').style.display = 'none';
-    $('content').style.display = '';
-    $('title').textContent = ((rec.isInitial || Number(rec.step) === 0) ? 'Initial state' : 'Step ' + rec.step) + ' — Inspector';
 
-    const metaBits = [];
-    if (rec.confidence != null) metaBits.push('Confidence: ' + Math.round(rec.confidence * 100) + '%');
-    if (rec.durationMs != null) metaBits.push('Duration: ' + fmtDuration(rec.durationMs));
-    const cost = fmtCost(rec.cost); if (cost) metaBits.push('Cost: ' + cost);
-    if (rec.verification && rec.verification.status) metaBits.push('Verify: ' + rec.verification.status);
-    if (rec.url) metaBits.push(rec.url);
+    const idx = currentStepIndex();
+    wrap.style.display = '';
+
+    track.innerHTML = indexSteps.map((s, i) => {
+      const conf = typeof s.confidence === 'number' ? s.confidence : null;
+      const verifyFailed = s.verification && s.verification.status && s.verification.status !== 'success';
+      const review = verifyFailed || (conf != null && conf < 0.7);
+      const cls = ['step-chip'];
+      if (i < idx) cls.push('done');
+      if (review) cls.push('review');
+      if (i === idx) cls.push('current');
+      const meta = [];
+      if (s.durationMs != null) meta.push(fmtDuration(s.durationMs));
+      if (review) meta.push('Review');
+      return `<button type="button" class="${cls.join(' ')}" data-step="${esc(s.step)}" title="${esc(stepName(s) + (s.instruction ? ' — ' + s.instruction : ''))}" aria-current="${i === idx ? 'step' : 'false'}">
+        <span class="step-dot" aria-hidden="true"></span>
+        <span>
+          <span class="step-chip-title">${esc((s.isInitial || Number(s.step) === 0) ? 'Init' : 'Step ' + s.step)}</span>
+          <span class="step-chip-text">${esc(s.instruction || stepName(s))}</span>
+          ${meta.length ? `<span class="step-chip-meta">${esc(meta.join(' · '))}</span>` : ''}
+        </span>
+      </button>`;
+    }).join('');
+    track.querySelectorAll('[data-step]').forEach(btn => {
+      btn.addEventListener('click', () => setStep(Number(btn.getAttribute('data-step'))));
+    });
+    const current = track.querySelector('.step-chip.current');
+    if (current && typeof current.scrollIntoView === 'function') {
+      try { current.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (e) {}
+    }
+  }
+
+  async function setStep(nextStep) {
+    if (!Number.isFinite(nextStep)) return;
+    step = nextStep;
+    const sel = $('step-select');
+    if (sel) sel.value = String(step);
+    currentView = null;
+    await render();
+  }
+
+  function confidencePill(confidence) {
+    if (confidence == null || !Number.isFinite(Number(confidence))) return '';
+    const val = Math.max(0, Math.min(1, Number(confidence)));
+    const review = val < 0.7;
+    return `<span class="pill ${review ? 'review' : 'ok'}">${review ? 'Needs review' : 'Confident'} · ${Math.round(val * 100)}%</span>`;
+  }
+
+  function verificationPill(verification) {
+    if (!verification || !verification.status) return '';
+    const ok = verification.status === 'success';
+    return `<span class="pill ${ok ? 'ok' : 'review'}">Verify: ${esc(verification.status)}</span>`;
+  }
+
+  function renderTaskPanel(rec) {
+    const cost = fmtCost(rec.cost);
+    const meta = [
+      confidencePill(rec.confidence),
+      rec.durationMs != null ? `<span class="pill">Duration: ${esc(fmtDuration(rec.durationMs))}</span>` : '',
+      cost ? `<span class="pill">Cost: ${esc(cost)}</span>` : '',
+      verificationPill(rec.verification)
+    ].filter(Boolean).join('');
+    const url = rec.url
+      ? `<a href="${esc(rec.url)}" target="_blank" rel="noreferrer">${esc(rec.url)}</a>`
+      : '';
+    const targetText = rec.target && rec.target.text ? rec.target.text : '';
+    const title = rec.isInitial || Number(rec.step) === 0 ? 'Initial page state' : (rec.instruction || 'Captured step');
 
     $('why').innerHTML = `
-      <div><strong>What:</strong> ${esc(rec.instruction)}</div>
-      ${rec.target && rec.target.text ? `<div><strong>Element:</strong> ${esc(rec.target.text)}</div>` : ''}
-      ${rec.nextStepHint ? `<div><strong>Next:</strong> ${esc(rec.nextStepHint)}</div>` : ''}
-      ${metaBits.length ? `<div class="meta">${esc(metaBits.join('   ·   '))}</div>` : ''}`;
+      <div class="current-task">
+        <div class="task-head">
+          <span class="step-badge">${esc(stepName(rec))}</span>
+          <h2 class="task-title">${esc(title)}</h2>
+        </div>
+        <div class="task-grid">
+          <div class="task-row"><span class="task-key">Target</span><span class="task-value">${esc(rec.instruction || 'Initial state')}</span></div>
+          ${targetText ? `<div class="task-row"><span class="task-key">Element</span><span class="task-value">${esc(targetText)}</span></div>` : ''}
+          ${rec.nextStepHint ? `<div class="task-row"><span class="task-key">Next</span><span class="task-value">${esc(rec.nextStepHint)}</span></div>` : ''}
+          ${rec.action ? `<div class="task-row"><span class="task-key">Action</span><span class="task-value">${esc(rec.action)}${rec.typeText ? ' = "' + esc(rec.typeText) + '"' : ''}</span></div>` : ''}
+          ${url ? `<div class="task-row"><span class="task-key">Link</span><span class="task-value">${url}</span></div>` : ''}
+        </div>
+        ${meta ? `<div class="meta">${meta}</div>` : ''}
+      </div>`;
+  }
 
-    // "Inspect more" surfaces the AFTER-action screenshot (the result of the step); the
-    // BEFORE-action shot + region crop live in the Memory section below.
-    const afterShot = rec.screenshotAfter || rec.screenshot || null;
-    const hasShot = !!afterShot;
-    const hasSnap = !!(rec.domSnapshotAfter || rec.domSnapshot);
-    const snap = rec.domSnapshotAfter || rec.domSnapshot;
-    const tabShot = $('tab-shot'), tabSnap = $('tab-snap'), view = $('view');
-    tabShot.disabled = !hasShot;
-    tabSnap.disabled = !hasSnap;
-    // Relabel the screenshot tab to make the before/after split explicit.
-    const shotLabel = tabShot.querySelector('span:last-child') || tabShot;
-    if (shotLabel && shotLabel !== tabShot) shotLabel.textContent = rec.screenshotAfter ? 'After action' : 'Screenshot';
+  function renderMemoryPanel(rec) {
+    const mem = $('memory');
+    if (!mem) return;
+    const bits = [];
 
-    function show(which) {
-      tabShot.classList.toggle('active', which === 'shot');
-      tabSnap.classList.toggle('active', which === 'snap');
-      if (which === 'snap' && hasSnap) {
-        view.innerHTML = `<div class="snap-wrap"><div class="snap-banner">🔒 Read-only snapshot — not a live page</div><iframe sandbox></iframe></div>`;
-        view.querySelector('iframe').srcdoc = snap;
-      } else if (hasShot) {
-        view.innerHTML = `<img src="data:image/jpeg;base64,${afterShot}" alt="Step ${esc(rec.step)} after action">`;
-      } else if (hasSnap) {
-        show('snap'); return;
-      } else {
-        view.innerHTML = `<div class="empty">No capture available.</div>`;
+    if (rec.title || rec.risk || rec.restore) {
+      const stateBits = [];
+      if (rec.title) stateBits.push(`<div class="memory-item"><b>Page title</b>${esc(rec.title)}</div>`);
+      if (rec.risk) stateBits.push(`<div class="memory-item"><b>Risk</b>${esc(rec.risk)}</div>`);
+      if (rec.restore) {
+        const r = rec.restore;
+        const ls = r.localStorage ? Object.keys(r.localStorage).length : 0;
+        const ss = r.sessionStorage ? Object.keys(r.sessionStorage).length : 0;
+        const fm = Array.isArray(r.forms) ? r.forms.length : 0;
+        const scroll = r.scroll ? ((r.scroll.x | 0) + ',' + (r.scroll.y | 0)) : 'none';
+        stateBits.push(`<div class="memory-item"><b>Captured state</b>${ls} localStorage · ${ss} sessionStorage · ${fm} field(s) · scroll ${esc(scroll)}</div>`);
       }
+      if (stateBits.length) bits.push(`<div class="memory-grid">${stateBits.join('')}</div>`);
     }
-    tabShot.onclick = () => !tabShot.disabled && show('shot');
-    tabSnap.onclick = () => !tabSnap.disabled && show('snap');
-    show(hasShot ? 'shot' : 'snap');
 
+    if (Array.isArray(rec.restoreLog) && rec.restoreLog.length) {
+      const fmt = (typeof gv2FriendlyRestoreAction === 'function') ? gv2FriendlyRestoreAction : ((typeof gv2DescribeRestoreAction === 'function') ? gv2DescribeRestoreAction : (e) => (e && e.kind) || '');
+      const tech = (typeof gv2RestoreTechnicalDetail === 'function') ? gv2RestoreTechnicalDetail : ((typeof gv2DescribeRestoreAction === 'function') ? gv2DescribeRestoreAction : (e) => (e && e.kind) || '');
+      const when = rec.restoredAt ? ' · ' + new Date(rec.restoredAt).toLocaleString() : '';
+      const items = rec.restoreLog.map(e => `<li>${esc(fmt(e))}</li>`).join('');
+      const techItems = rec.restoreLog.map(e => `<li>${esc(tech(e))}</li>`).join('');
+      bits.push(`<details open><summary>Restore log${esc(when)}</summary><ul class="restore-list">${items}</ul>
+        <details><summary>Technical details</summary><ul class="restore-list">${techItems}</ul></details></details>`);
+    }
+
+    if (rec.regionShot || rec.regionDom) {
+      const region = [];
+      if (rec.regionShot) {
+        region.push(`<div class="memory-item"><b>Target region</b><img src="data:image/jpeg;base64,${rec.regionShot}" alt="target region" style="width:100%;border-radius:8px;border:1px solid var(--pg-border);display:block"></div>`);
+      }
+      if (rec.regionDom) {
+        region.push(`<details class="memory-item"><summary>Region DOM snapshot</summary><iframe class="rw-region-dom" sandbox style="height:40vh;margin-top:8px"></iframe></details>`);
+      }
+      bits.push(`<div class="memory-grid">${region.join('')}</div>`);
+    }
+
+    if (!bits.length) {
+      mem.style.display = 'none';
+      mem.innerHTML = '';
+      return;
+    }
+    mem.innerHTML = bits.join('');
+    mem.style.display = '';
+    if (rec.regionDom) {
+      const frame = mem.querySelector('.rw-region-dom');
+      if (frame) frame.srcdoc = rec.regionDom;
+    }
+  }
+
+  function viewAvailability(rec) {
+    const resolved = (typeof rewindResolveScreenshot === 'function')
+      ? rewindResolveScreenshot(rec)
+      : (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter || null);
+    return {
+      beforeShot: rec.screenshotBefore || rec.screenshot || resolved || null,
+      beforeSnap: rec.domSnapshot || null,
+      afterShot: rec.screenshotAfter || null
+    };
+  }
+
+  function defaultView(rec) {
+    const a = viewAvailability(rec);
+    if (a.beforeShot) return 'before';
+    if (a.afterShot) return 'after';
+    if (a.beforeSnap) return 'snap';
+    return 'before';
+  }
+
+  function showView(which) {
+    if (!currentRecord) return;
+    const a = viewAvailability(currentRecord);
+    const available = {
+      before: !!a.beforeShot,
+      snap: !!a.beforeSnap,
+      after: !!a.afterShot
+    };
+    if (!available[which]) which = defaultView(currentRecord);
+    currentView = which;
+
+    const tabs = {
+      before: $('tab-before'),
+      snap: $('tab-snap'),
+      after: $('tab-after')
+    };
+    Object.keys(tabs).forEach(k => {
+      if (!tabs[k]) return;
+      tabs[k].disabled = !available[k];
+      tabs[k].classList.toggle('active', which === k && available[k]);
+      tabs[k].onclick = () => !tabs[k].disabled && showView(k);
+    });
+
+    const view = $('view');
+    if (which === 'snap' && a.beforeSnap) {
+      view.innerHTML = `<div class="snap-wrap"><div class="snap-banner">Read-only page snapshot — before action</div><iframe sandbox></iframe></div>`;
+      view.querySelector('iframe').srcdoc = a.beforeSnap;
+    } else if (which === 'after' && a.afterShot) {
+      view.innerHTML = `<img src="data:image/jpeg;base64,${a.afterShot}" alt="${esc(stepName(currentRecord))} after action">`;
+    } else if (a.beforeShot) {
+      view.innerHTML = `<img src="data:image/jpeg;base64,${a.beforeShot}" alt="${esc(stepName(currentRecord))} before action">`;
+    } else {
+      view.innerHTML = `<div class="empty">No ${esc(which)} capture available for this step.</div>`;
+    }
+  }
+
+  function renderRawAndRecord(rec) {
     if (rec.rawLlmJson) {
       $('raw-wrap').style.display = '';
       $('raw').textContent = rec.rawLlmJson;
@@ -108,102 +281,54 @@
       $('raw-wrap').style.display = 'none';
     }
 
-    renderMemory(rec);
+    const recordWrap = $('record-wrap'), recordPre = $('record');
+    if (!recordWrap || !recordPre) return;
+    try {
+      const copy = Object.assign({}, rec);
+      for (const k of ['screenshot', 'screenshotBefore', 'screenshotAfter', 'regionShot']) {
+        if (copy[k]) copy[k] = '[base64 ' + copy[k].length + ' chars]';
+      }
+      for (const k of ['domSnapshot', 'domSnapshotAfter', 'regionDom']) {
+        if (copy[k]) copy[k] = '[html ' + copy[k].length + ' chars]';
+      }
+      recordPre.textContent = JSON.stringify(copy, null, 2);
+      recordWrap.style.display = '';
+    } catch (e) {
+      recordWrap.style.display = 'none';
+    }
   }
 
-  // Render the full in-memory record for this step: URL, action→element, the captured restore
-  // state, and the restore action log (what the agent applied back to the page on resume).
-  function renderMemory(rec) {
-    const mem = $('memory');
-    if (mem) {
-      const bits = [];
-      if (rec.title) bits.push(`<div><strong>Title:</strong> ${esc(rec.title)}</div>`);
-      if (rec.url) bits.push(`<div><strong>URL:</strong> <a href="${esc(rec.url)}" target="_blank" rel="noreferrer">${esc(rec.url)}</a></div>`);
-      if (rec.action) {
-        const tgt = (rec.target && rec.target.text) ? ' → “' + esc(rec.target.text) + '”' : '';
-        const typed = rec.typeText ? ' = “' + esc(rec.typeText) + '”' : '';
-        bits.push(`<div><strong>Action:</strong> ${esc(rec.action)}${tgt}${typed}</div>`);
-      }
-      if (rec.confidence != null) {
-        const pct = Math.round(rec.confidence * 100);
-        const high = rec.confidence >= 0.7;
-        const color = high ? '#16a34a' : '#b8860b';
-        bits.push(`<div><strong>Confidence:</strong> <span style="color:${color};font-weight:700">${pct}% — ${high ? 'Confident' : 'Less certain'}</span></div>`);
-      }
-      if (rec.risk) bits.push(`<div><strong>Risk:</strong> ${esc(rec.risk)}</div>`);
+  async function render() {
+    let rec = null;
+    try { rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+    currentRecord = rec;
 
-      const r = rec.restore;
-      if (r) {
-        const ls = r.localStorage ? Object.keys(r.localStorage).length : 0;
-        const ss = r.sessionStorage ? Object.keys(r.sessionStorage).length : 0;
-        const fm = Array.isArray(r.forms) ? r.forms.length : 0;
-        const scroll = r.scroll ? ((r.scroll.x | 0) + ',' + (r.scroll.y | 0)) : '—';
-        bits.push(`<div><strong>Captured state:</strong> ${ls} localStorage · ${ss} sessionStorage · ${fm} form field(s) · scroll ${esc(scroll)}</div>`);
-      }
-
-      if (Array.isArray(rec.restoreLog) && rec.restoreLog.length) {
-        const fmt = (typeof gv2DescribeRestoreAction === 'function') ? gv2DescribeRestoreAction : (e) => (e && e.kind) || '';
-        const when = rec.restoredAt ? ' (' + new Date(rec.restoredAt).toLocaleString() + ')' : '';
-        const items = rec.restoreLog.map(e => `<li>${esc(fmt(e))}</li>`).join('');
-        bits.push(`<div style="margin-top:8px"><strong>Restore log${when}:</strong></div><ul style="margin:6px 0 0;padding-left:18px">${items}</ul>`);
-      }
-
-      // Before-action screenshot (what the agent saw when choosing this step). The After-action
-      // shot is the main Screenshot tab above.
-      const beforeShot = rec.screenshotBefore || (rec.screenshotAfter ? null : rec.screenshot) || null;
-      if (beforeShot) {
-        bits.push(`<div style="margin-top:8px"><strong>Before action:</strong></div>
-          <img src="data:image/jpeg;base64,${beforeShot}" alt="before action"
-               style="max-width:420px;width:100%;border-radius:8px;border:1px solid var(--pg-border);margin-top:6px;display:block">`);
-      }
-
-      // Region around the highlighted target element: cropped screenshot + scoped DOM snapshot.
-      if (rec.regionShot) {
-        bits.push(`<div style="margin-top:8px"><strong>Region around target:</strong></div>
-          <img src="data:image/jpeg;base64,${rec.regionShot}" alt="target region"
-               style="max-width:320px;width:100%;border-radius:8px;border:1px solid var(--pg-border);margin-top:6px;display:block">`);
-      }
-      if (rec.regionDom) {
-        bits.push(`<details style="margin-top:8px"><summary>Region DOM snapshot (read-only)</summary>
-          <iframe class="rw-region-dom" sandbox style="width:100%;height:40vh;border:1px solid var(--pg-border);border-radius:8px;background:#fff;margin-top:6px"></iframe></details>`);
-      }
-
-      if (bits.length) {
-        mem.innerHTML = bits.join('');
-        mem.style.display = '';
-        // Populate the sandboxed region-DOM iframe after insertion (srcdoc can't ride in innerHTML safely).
-        if (rec.regionDom) {
-          const frame = mem.querySelector('.rw-region-dom');
-          if (frame) frame.srcdoc = rec.regionDom;
-        }
-      } else {
-        mem.style.display = 'none';
-      }
+    if (!rec) {
+      $('empty').style.display = '';
+      $('content').style.display = 'none';
+      renderTimeline();
+      return;
     }
 
-    const recordWrap = $('record-wrap'), recordPre = $('record');
-    if (recordWrap && recordPre) {
-      try {
-        // Trim heavy payloads so the JSON dump stays readable.
-        const copy = Object.assign({}, rec);
-        for (const k of ['screenshot', 'screenshotBefore', 'screenshotAfter', 'regionShot']) {
-          if (copy[k]) copy[k] = '[base64 ' + copy[k].length + ' chars]';
-        }
-        for (const k of ['domSnapshot', 'domSnapshotAfter', 'regionDom']) {
-          if (copy[k]) copy[k] = '[html ' + copy[k].length + ' chars]';
-        }
-        recordPre.textContent = JSON.stringify(copy, null, 2);
-        recordWrap.style.display = '';
-      } catch (e) { recordWrap.style.display = 'none'; }
-    }
+    $('empty').style.display = 'none';
+    $('content').style.display = '';
+    $('title').textContent = stepName(rec) + ' — Inspector';
+
+    renderTimeline();
+    renderTaskPanel(rec);
+    renderMemoryPanel(rec);
+    showView(currentView || defaultView(rec));
+    renderRawAndRecord(rec);
   }
 
   (async function init() {
     await populateStepSelect();
     if (!Number.isFinite(step)) {
-      const sel = $('step-select');
-      if (sel.options.length) step = parseInt(sel.options[0].value, 10);
+      const first = indexSteps[0];
+      if (first) step = Number(first.step);
     }
+    const sel = $('step-select');
+    if (sel && Number.isFinite(step)) sel.value = String(step);
     await render();
   })();
 })();

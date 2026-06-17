@@ -2150,6 +2150,190 @@ body.light-mode .pageguide-history-overlay {
   opacity: 0.85;
 }
 
+/* Checklist item: one clean line per action — advisory checkbox + the action up front. */
+.pageguide-steer-restore-log .pageguide-steer-restore-item {
+  padding: 2px 0;
+}
+.pageguide-steer-restore-log .pageguide-steer-restore-item label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.pageguide-steer-restore-check {
+  margin: 0;
+  flex-shrink: 0;
+}
+.pageguide-steer-restore-action { flex: 1; }
+.pageguide-steer-restore-item.failed .pageguide-steer-restore-action { color: #ff8585; }
+.pageguide-steer-restore-details {
+  margin: -2px 0 8px;
+  font-size: 11px;
+  color: var(--pg-muted, #7b8498);
+}
+.pageguide-steer-restore-details summary {
+  cursor: pointer;
+  user-select: none;
+}
+.pageguide-steer-restore-details ul {
+  margin: 6px 0 0;
+  padding: 7px 10px 7px 20px;
+  border-radius: 8px;
+  background: rgba(120, 87, 255, 0.06);
+  border: 1px solid rgba(120, 87, 255, 0.16);
+}
+.pageguide-steer-restore-details li {
+  word-break: break-word;
+  margin: 2px 0;
+}
+
+/* The recorded "before step N" screenshot — the target state we're restoring to. */
+.pageguide-steer-restore-target {
+  margin: 8px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--pg-border, rgba(255, 255, 255, 0.12));
+}
+.pageguide-steer-restore-target-cap {
+  font-size: 11px;
+  opacity: 0.7;
+  padding: 5px 8px;
+  background: rgba(120, 87, 255, 0.08);
+}
+.pageguide-steer-restore-target img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  object-position: top;
+  background: #00000010;
+  cursor: zoom-in;
+}
+
+/* Whole-page restored-state snapshot, shown big (~60% of view) on hover. */
+.pageguide-steer-restore-hdr { position: relative; }
+.pageguide-steer-restore-snap-wrap { position: relative; margin-left: auto; }
+.pageguide-steer-restore-snap {
+  background: rgba(45, 212, 191, 0.12);
+  border: 1px solid rgba(20, 184, 166, 0.4);
+  color: #2dd4bf;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pageguide-steer-restore-snap:hover { background: rgba(45, 212, 191, 0.22); }
+.pageguide-steer-restore-snap-pop {
+  display: none;
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 60vw;
+  max-height: 60vh;
+  z-index: 2147483647;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--pg-bg, #1e1e28);
+  border: 1px solid var(--pg-border, rgba(255, 255, 255, 0.18));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.pageguide-steer-restore-snap-wrap:hover .pageguide-steer-restore-snap-pop { display: block; }
+.pageguide-steer-restore-snap-pop img {
+  display: block;
+  width: 100%;
+  max-height: calc(60vh - 12px);
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+/* Error banner + the "tell agent what's wrong" prompt box. */
+.pageguide-steer-restore-error {
+  margin: 8px 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 193, 7, 0.12);
+  border: 1px solid rgba(255, 193, 7, 0.35);
+  color: #b7791f;
+  font-size: 12px;
+}
+.pageguide-steer-compare-result {
+  margin: 8px 0;
+}
+.pageguide-steer-compare-card {
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(120, 87, 255, 0.22);
+  background: rgba(120, 87, 255, 0.07);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.pageguide-steer-compare-card.loading {
+  color: var(--pg-muted, #7b8498);
+}
+.pageguide-steer-compare-card.looks-restored {
+  background: rgba(34, 197, 94, 0.09);
+  border-color: rgba(34, 197, 94, 0.28);
+}
+.pageguide-steer-compare-card.needs-review {
+  background: rgba(255, 193, 7, 0.1);
+  border-color: rgba(255, 193, 7, 0.34);
+}
+.pageguide-steer-compare-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.pageguide-steer-compare-head span {
+  color: var(--pg-muted, #7b8498);
+  font-size: 11px;
+}
+.pageguide-steer-compare-summary {
+  font-weight: 650;
+  margin-bottom: 7px;
+}
+.pageguide-steer-compare-grid {
+  display: grid;
+  gap: 8px;
+}
+.pageguide-steer-compare-grid b {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 11px;
+  color: var(--pg-muted, #7b8498);
+}
+.pageguide-steer-compare-grid ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.pageguide-steer-compare-empty {
+  color: var(--pg-muted, #7b8498);
+}
+.pageguide-steer-compare-rec {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(120, 87, 255, 0.16);
+}
+.pageguide-steer-restore-fixbox { margin-top: 8px; }
+.pageguide-steer-restore-fix-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border-radius: 7px;
+  padding: 7px;
+  font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.pageguide-steer-restore-fix-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
 .pageguide-step-meta-row {
   display: grid;
   grid-template-columns: 52px 1fr;
@@ -2667,6 +2851,74 @@ body {
   border: 1px solid var(--pg-border);
   margin-top: 6px;
   display: block;
+  cursor: zoom-in;
+}
+
+.pageguide-goal-step-preview img.pageguide-memory-shot-trigger {
+  cursor: zoom-in;
+}
+
+.pageguide-memory-shot-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(15, 17, 26, 0.58);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.pageguide-memory-shot-dialog {
+  width: min(980px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--pg-border, rgba(255, 255, 255, 0.16));
+  background: var(--pg-surface, #fff);
+  box-shadow: 0 24px 80px rgba(20, 18, 40, 0.38);
+}
+
+.pageguide-memory-shot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  font: 700 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--pg-text, #202436);
+  border-bottom: 1px solid var(--pg-border, rgba(120, 87, 255, 0.18));
+}
+
+.pageguide-memory-shot-close {
+  border: 0;
+  background: transparent;
+  color: var(--pg-muted, #7b8498);
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.pageguide-memory-shot-close:hover {
+  background: rgba(120, 87, 255, 0.1);
+  color: var(--pg-accent, #7857ff);
+}
+
+.pageguide-memory-shot-dialog img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 96px);
+  object-fit: contain;
+  object-position: center;
+  background: #080912;
 }
 
 .pageguide-step-panel {
@@ -3811,4 +4063,60 @@ body:not(.light-mode) .pageguide-send-btn {
   display: block;
   width: 100%;
   margin-top: 6px;
+}
+
+/* Working tab chip above the composer input. */
+.pageguide-tab-chip,
+body.light-mode .pageguide-tab-chip,
+body:not(.light-mode) .pageguide-tab-chip {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin: 0 0 7px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(120, 87, 255, 0.08);
+  border: 1px solid rgba(120, 87, 255, 0.14);
+  color: var(--pg-text);
+}
+
+.pageguide-tab-chip-favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.pageguide-tab-chip-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 650 12px/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.pageguide-tab-chip-close {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--pg-muted);
+  cursor: pointer;
+  font: 700 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.pageguide-tab-chip-close:hover {
+  background: rgba(120, 87, 255, 0.12);
+  color: var(--pg-accent);
+}
+
+body:not(.light-mode) .pageguide-tab-chip {
+  background: rgba(154, 132, 255, 0.1);
+  border-color: rgba(154, 132, 255, 0.18);
 }
