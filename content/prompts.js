@@ -153,7 +153,8 @@ IMPORTANT CONCEPTS:
 Return JSON:
 {
   "step": 1,
-  "instruction": "Clear instruction for this step",
+  "thought": "Your internal reasoning or chain of thought about why this is the next step",
+  "instruction": "Concise, action-oriented instruction for this step (max 1-2 sentences)",
   "highlight": {"index": N, "text": "element to highlight"},
   "waitFor": "click" | "input" | "scroll" | null,
   "isLastStep": false,
@@ -162,11 +163,13 @@ Return JSON:
 
 RULES:
 1. ONE step at a time - don't overwhelm the user
-2. If target is likely hidden in a menu, first step should open that menu
-3. Use "waitFor": "click" when user needs to click something
-4. Set "isLastStep": true only when the goal is achieved
-5. Make instructions clear and specific
-6. Highlight the element user needs to interact with
+2. "thought": write your internal chain-of-thought/reasoning here first (analyzing the page state and visible elements).
+3. "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum). Do NOT put any chain-of-thought, reasoning, meta-commentary, or explanation here. Keep it short and readable for the user.
+4. If target is likely hidden in a menu, first step should open that menu
+5. Use "waitFor": "click" when user needs to click something
+6. Set "isLastStep": true only when the goal is achieved
+7. Make instructions clear and specific
+8. Highlight the element user needs to interact with
 
 COMMON PATTERNS:
 

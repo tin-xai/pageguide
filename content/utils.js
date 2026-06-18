@@ -1163,7 +1163,38 @@ function gv2ExtractJsonObject(content) {
     .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
   const m = json.match(/\{[\s\S]*\}/);
   if (m) json = m[0];
-  try { return JSON.parse(json); } catch (e) { return null; }
+
+  const escapeJsonVal = (str) => {
+    return str.trim()
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t');
+  };
+
+  // Fix 1: Missing colon and quotes after key, e.g. "thought The user wants..."
+  json = json.replace(/("(?:thought|instruction|nextStepHint|riskReason))(\s+[\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|nextStepHint|confidence|risk|riskReason)"\s*:)/g, (match, key, val, next) => {
+    return `${key}": "${escapeJsonVal(val)}` + next;
+  });
+
+  // Fix 2: Missing quotes on value, e.g. "thought": The user wants..."
+  json = json.replace(/("(?:thought|instruction|nextStepHint|riskReason)"\s*:\s*)([a-zA-Z][\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|nextStepHint|confidence|risk|riskReason)"\s*:)/g, (match, keyCol, val, next) => {
+    return `${keyCol}"${escapeJsonVal(val)}` + next;
+  });
+
+  try { return JSON.parse(json); } catch (e) {
+    try {
+      // Fix 3: Escape unescaped double quotes in middle of double-quoted text fields
+      let fixedJson = json.replace(/("(?:thought|instruction|nextStepHint|riskReason)"\s*:\s*")([\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|nextStepHint|confidence|risk|riskReason)"\s*:)/g, (match, prefix, val, suffix) => {
+        const escapedVal = val.replace(/(?<!\\)"/g, '\\"');
+        return prefix + escapedVal + suffix;
+      });
+      return JSON.parse(fixedJson);
+    } catch (err) {
+      return null;
+    }
+  }
 }
 
 if (typeof window !== 'undefined') window.gv2ExtractJsonObject = gv2ExtractJsonObject;

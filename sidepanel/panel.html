@@ -19,6 +19,24 @@
       <div class="pageguide-history-body" id="pageguide-history-body"></div>
     </div>
 
+    <!-- Branch Tree Backdrop -->
+    <div class="pageguide-branch-backdrop" id="pageguide-branch-backdrop" style="display:none;"></div>
+
+    <!-- Branch Tree overlay (covers 80% of screen when visible) -->
+    <div class="pageguide-branch-overlay" id="pageguide-branch-overlay" style="display:none;">
+      <div class="pageguide-branch-hdr">
+        <span class="pageguide-branch-hdr-title">Diverted Journeys</span>
+        <div class="pg-tree-zoom-controls">
+          <button type="button" class="pg-zoom-btn" id="pg-zoom-out" title="Zoom Out">-</button>
+          <span class="pg-zoom-label" id="pg-zoom-label">100%</span>
+          <button type="button" class="pg-zoom-btn" id="pg-zoom-in" title="Zoom In">+</button>
+          <button type="button" class="pg-zoom-btn" id="pg-zoom-reset" title="Reset Zoom">↺</button>
+        </div>
+        <button class="pageguide-branch-close-btn" id="pageguide-branch-close" title="Close" aria-label="Close branch panel">✕</button>
+      </div>
+      <div class="pageguide-branch-body" id="pageguide-branch-body"></div>
+    </div>
+
     <!-- Header -->
     <div class="pageguide-chat-header">
       <div class="pageguide-header-right">
@@ -49,6 +67,7 @@
           <div class="pageguide-goal-dots" id="pageguide-goal-dots"></div>
           <div class="pageguide-goal-bar"><div class="pageguide-goal-bar-fill" id="pageguide-goal-bar-fill"></div></div>
         </div>
+
       </div>
     </div>
 
@@ -106,6 +125,16 @@
           <!-- Secondary actions kept near attachment controls so the chat box stays clean. -->
           <div class="pageguide-action-bar">
             <button class="pageguide-quick-btn" data-action="reset" title="Clear chat and highlights"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 15 6-6"/><path d="m8 19 7-7"/><path d="M14 5l5 5"/><path d="m3 21 5-2 11-11-3-3L5 16Z"/></svg></span>Clear</button>
+            <button type="button" class="pageguide-quick-btn" id="pageguide-show-branch-btn" title="Show branch tree visualizer" style="display:none;">
+              <span class="pageguide-inline-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="6" y1="3" x2="6" y2="15"></line>
+                  <circle cx="18" cy="6" r="3"></circle>
+                  <circle cx="6" cy="18" r="3"></circle>
+                  <path d="M18 9a9 9 0 0 1-9 9"></path>
+                </svg>
+              </span>Show branch
+            </button>
           </div>
 
           <!-- Manual vs Autonomous mode selector (opens a menu with descriptions) -->

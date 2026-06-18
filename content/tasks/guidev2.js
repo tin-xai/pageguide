@@ -23,7 +23,8 @@ Given the current page and the user's goal, provide ONE step at a time.
 Return JSON only:
 {
   "step": N,
-  "instruction": "Clear instruction shown to the user",
+  "thought": "Your internal chain-of-thought reasoning about the page state and chosen action",
+  "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
   "element": {"index": N, "text": "element text to highlight"},
   "action": "click" | "type" | "done",
   "typeText": "text to type (only when action=type)",
@@ -34,20 +35,18 @@ Return JSON only:
   "riskReason": "short reason for the risk level"
 }
 
-confidence: 0.0–1.0 — how sure you are that THIS step and the chosen element are correct
-  for the user's goal on the current page. Be honest: use a low value (< 0.5) when the
-  target is ambiguous, not clearly visible, or you are guessing.
-risk: "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling
-  a setting that can be undone, navigating, typing a search query) — safe for the agent to
-  perform automatically. "high" if it is sensitive or hard to undo: signing in,
-  payments/purchases, deleting or removing data, sending/posting/publishing, or entering a
-  password or other sensitive text. High-risk steps are left for the user to perform.
+"thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
+"instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
+"confidence": 0.0–1.0 — how sure you are that THIS step and the chosen element are correct for the user's goal on the current page. Be honest: use a low value (< 0.5) when the target is ambiguous, not clearly visible, or you are guessing.
+"risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 
 RULES:
 1. ONE step at a time — never list multiple things to do
-2. action="click": click the highlighted element (the agent does this for low-risk steps;
+2. "thought": write your internal chain-of-thought/reasoning here first (analyzing the page state, completed steps, user goals, and candidate actions).
+3. "instruction": must be a very concise, direct action-oriented instruction (1-2 sentences maximum, e.g. "Click on 'Languages' to open the language settings"). Do NOT put any chain-of-thought, reasoning, meta-commentary, or explanation here. Keep it short and readable for the user.
+4. action="click": click the highlighted element (the agent does this for low-risk steps;
    the user does it for high-risk ones)
-3. action="type": provide typeText; the agent auto-fills low-risk fields, and lets the user
+5. action="type": provide typeText; the agent auto-fills low-risk fields, and lets the user
    type high-risk ones (e.g. passwords)
 4. action="done": set isLastStep=true; no element interaction needed
 5. Highlight the element to interact with using its index from PAGE INDEX
@@ -1373,6 +1372,31 @@ async function gv2CaptureStepRecord(data) {
   if (!beforeShot) {
     try { if (typeof captureScreenshot === 'function') beforeShot = await captureScreenshot(); }
     catch (e) { /* best-effort */ }
+  }
+
+  if (!beforeShot) {
+    // Fallback: search for the latest screenshot from previous steps in this session
+    try {
+      if (typeof rewindGetIndex === 'function') {
+        const idx = await rewindGetIndex(g.sessionId);
+        if (idx && idx.steps) {
+          const sorted = idx.steps.slice().sort((a, b) => Number(b.step) - Number(a.step));
+          for (const meta of sorted) {
+            if (Number(meta.step) < stepNum) {
+              const rec = typeof rewindGetRecord === 'function' ? await rewindGetRecord(g.sessionId, meta.step) : null;
+              const shot = rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot;
+              if (shot) {
+                beforeShot = shot;
+                console.log(`📸 Found fallback screenshot from step ${meta.step} for step ${stepNum}`);
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[guidev2] fallback screenshot search failed:', e);
+    }
   }
 
   // VERIFICATION: a step with no screenshot is void — skip it entirely (don't announce a dot,

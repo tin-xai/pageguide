@@ -652,6 +652,30 @@ describe('gv2ExtractJsonObject (content/utils.js)', () => {
     expect(window.gv2ExtractJsonObject('{ broken: ')).toBeNull();
     expect(window.gv2ExtractJsonObject(null)).toBeNull();
   });
+
+  test('successfully repairs and parses malformed LLM JSON outputs', () => {
+    // Test case 1: Missing colon and quotes after key, containing unescaped double quotes
+    const malformed1 = `{ "step": 2, "thought The user wants to type "funny cat" into the search bar. ", "instruction": "Type 'funny cat' into the search bar.", "element": { "index": 41, "text": "Pesquisar" }, "action": "type", "typeText": "funny cat", "isLastStep": false }`;
+    const parsed1 = window.gv2ExtractJsonObject(malformed1);
+    expect(parsed1).not.toBeNull();
+    expect(parsed1.step).toBe(2);
+    expect(parsed1.thought).toContain('funny cat');
+    expect(parsed1.instruction).toBe("Type 'funny cat' into the search bar.");
+
+    // Test case 2: Missing quotes on value
+    const malformed2 = `{ "step": 3, "thought": The user wants to click search. ", "instruction": "Click search.", "action": "click", "isLastStep": false }`;
+    const parsed2 = window.gv2ExtractJsonObject(malformed2);
+    expect(parsed2).not.toBeNull();
+    expect(parsed2.step).toBe(3);
+    expect(parsed2.thought).toContain('The user wants to click search.');
+
+    // Test case 3: Unescaped double quotes inside value
+    const malformed3 = `{ "step": 4, "thought": "The user wants to find the "pink sofa" on the screen.", "instruction": "Find the sofa.", "action": "done", "isLastStep": true }`;
+    const parsed3 = window.gv2ExtractJsonObject(malformed3);
+    expect(parsed3).not.toBeNull();
+    expect(parsed3.step).toBe(4);
+    expect(parsed3.thought).toBe('The user wants to find the \"pink sofa\" on the screen.');
+  });
 });
 
 // Autonomous mode (mode toggle): risk assessment that gates auto-execution.

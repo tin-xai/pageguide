@@ -4120,3 +4120,570 @@ body:not(.light-mode) .pageguide-tab-chip {
   background: rgba(154, 132, 255, 0.1);
   border-color: rgba(154, 132, 255, 0.18);
 }
+
+/* ==========================================================================
+   Diverted Journeys / Branch Tree Visualizer
+   ========================================================================== */
+
+/* Branch Tree Backdrop */
+.pageguide-branch-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 17, 26, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 2147483644;
+}
+
+/* Branch Tree Overlay (Centered Modal format, 80% screen size) */
+.pageguide-branch-overlay {
+  position: fixed;
+  left: 10%;
+  top: 10%;
+  width: 80%;
+  height: 80%;
+  z-index: 2147483645;
+  background: var(--pg-bg, #f5f6fa);
+  color: var(--pg-text, #282d3f);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  border: 1px solid var(--pg-border, #eceef5);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  animation: pgModalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+body.light-mode .pageguide-branch-overlay {
+  background: #f5f6fa;
+  color: #282d3f;
+  border-color: #eceef5;
+}
+body:not(.light-mode) .pageguide-branch-overlay {
+  background: #15151f;
+  color: #eee;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+@keyframes pgModalFadeIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.pageguide-branch-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--pg-border, #eceef5);
+  background: var(--pg-surface, #fff);
+  flex-shrink: 0;
+}
+body:not(.light-mode) .pageguide-branch-hdr {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+  background: #1b1b26;
+}
+
+.pageguide-branch-hdr-title {
+  font-size: 14px;
+  font-weight: 760;
+  color: var(--pg-text);
+}
+
+/* Zoom controls styling */
+.pg-tree-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--pg-bg, #f5f6fa);
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--pg-border, #eceef5);
+}
+body:not(.light-mode) .pg-tree-zoom-controls {
+  background: #15151f;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.pg-zoom-btn {
+  background: transparent;
+  border: 0;
+  color: var(--pg-text);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.pg-zoom-btn:hover {
+  background: var(--pg-hover, rgba(120, 87, 255, 0.1));
+  color: var(--pg-accent, #7857ff);
+}
+.pg-zoom-label {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 38px;
+  text-align: center;
+  color: var(--pg-muted, #71788c);
+}
+
+.pageguide-branch-close-btn {
+  border: 0;
+  background: transparent;
+  color: var(--pg-muted, #71788c);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+.pageguide-branch-close-btn:hover {
+  background: var(--pg-hover, rgba(120, 87, 255, 0.1));
+  color: var(--pg-accent, #7857ff);
+}
+
+.pageguide-branch-body {
+  flex: 1;
+  overflow: hidden; /* handled by pg-tree-viewport */
+  padding: 0;
+  position: relative;
+  background: var(--pg-bg, #f5f6fa);
+}
+body:not(.light-mode) .pageguide-branch-body {
+  background: #15151f;
+}
+
+/* Horizontal Tree Styling */
+.pg-tree-container {
+  display: flex;
+  white-space: nowrap;
+}
+
+.pg-tree-branch {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.pg-tree-node {
+  background: var(--pg-surface, #fff);
+  border: 1px solid var(--pg-border, #eceef5);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin: 15px 24px;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 110px;
+  max-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease-in-out;
+  text-align: left;
+  z-index: 2;
+}
+body:not(.light-mode) .pg-tree-node {
+  background: #1b1b26;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.pg-tree-node:hover {
+  border-color: var(--pg-accent, #7857ff);
+  box-shadow: 0 6px 20px rgba(120, 87, 255, 0.18);
+  transform: translateY(-2px);
+}
+
+.pg-tree-node.active-session-step {
+  border-color: var(--pg-accent-2, #ff8a1d);
+  background: rgba(255, 138, 29, 0.05);
+  box-shadow: 0 4px 14px rgba(255, 138, 29, 0.12);
+}
+
+.pg-tree-node.original-path {
+  border-color: #3b82f6; /* Beautiful Blue for original track */
+}
+body.light-mode .pg-tree-node.original-path {
+  background: rgba(59, 130, 246, 0.02);
+}
+body:not(.light-mode) .pg-tree-node.original-path {
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.pg-tree-node.diverted-path {
+  border-color: #a855f7; /* Beautiful Purple for branches */
+}
+body.light-mode .pg-tree-node.diverted-path {
+  background: rgba(168, 85, 247, 0.02);
+}
+body:not(.light-mode) .pg-tree-node.diverted-path {
+  background: rgba(168, 85, 247, 0.05);
+}
+
+.pg-tree-branch-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+  margin-top: 3px;
+  width: max-content;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+body:not(.light-mode) .pg-tree-branch-badge {
+  background: rgba(168, 85, 247, 0.25);
+  color: #c084fc;
+}
+
+.pg-tree-node-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pg-muted, #71788c);
+}
+.pg-tree-node.active-session-step .pg-tree-node-label {
+  color: var(--pg-accent-2, #ff8a1d);
+}
+
+.pg-tree-node-desc {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pg-text, #282d3f);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body:not(.light-mode) .pg-tree-node-desc {
+  color: #eee;
+}
+
+.pg-tree-children {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+  padding-left: 24px;
+}
+
+/* Connectors using CSS pseudo-elements */
+.pg-tree-node::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -24px;
+  width: 24px;
+  height: 2px;
+  background: var(--pg-border, #eceef5);
+  display: none;
+  z-index: 1;
+}
+body:not(.light-mode) .pg-tree-node::after {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.pg-tree-branch:has(.pg-tree-children) > .pg-tree-node::after {
+  display: block;
+}
+
+.pg-tree-children > .pg-tree-branch::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -24px;
+  width: 24px;
+  height: 2px;
+  background: var(--pg-border, #eceef5);
+  z-index: 1;
+}
+body:not(.light-mode) .pg-tree-children > .pg-tree-branch::before {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Vertical Sibling connector line */
+.pg-tree-children::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  bottom: 50%;
+  width: 2px;
+  background: var(--pg-border, #eceef5);
+  z-index: 1;
+}
+body:not(.light-mode) .pg-tree-children::before {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.pg-tree-children > .pg-tree-branch:first-child::after {
+  content: "";
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  bottom: 0;
+  width: 2px;
+  background: var(--pg-border, #eceef5);
+  z-index: 1;
+}
+
+.pg-tree-children > .pg-tree-branch:last-child::after {
+  content: "";
+  position: absolute;
+  left: -24px;
+  top: 0;
+  bottom: 50%;
+  width: 2px;
+  background: var(--pg-border, #eceef5);
+  z-index: 1;
+}
+
+.pg-tree-children > .pg-tree-branch:not(:first-child):not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: -24px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--pg-border, #eceef5);
+  z-index: 1;
+}
+body:not(.light-mode) .pg-tree-children > .pg-tree-branch:first-child::after,
+body:not(.light-mode) .pg-tree-children > .pg-tree-branch:last-child::after,
+body:not(.light-mode) .pg-tree-children > .pg-tree-branch:not(:first-child):not(:last-child)::after {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.pg-tree-children > .pg-tree-branch:only-child::after {
+  display: none;
+}
+
+/* Tooltip/Hover card styling */
+.pg-tree-hovercard {
+  position: fixed;
+  z-index: 2147483646;
+  width: 240px;
+  background: var(--pg-surface, #fff);
+  color: var(--pg-text, #282d3f);
+  border: 1px solid var(--pg-border, #eceef5);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.15);
+  padding: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: auto;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: transform 0.15s ease-out, opacity 0.15s ease-out;
+}
+.pg-tree-hovercard.pageguide-goal-step-preview {
+  width: 220px;
+  padding: 10px;
+  box-shadow: 0 18px 45px rgba(38, 43, 60, 0.22);
+}
+body:not(.light-mode) .pg-tree-hovercard.pageguide-goal-step-preview {
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.5);
+}
+body:not(.light-mode) .pg-tree-hovercard {
+  background: #1b1b26;
+  color: #eee;
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.pg-tree-hovercard-img {
+  width: 100%;
+  border-radius: 8px;
+  display: block;
+  background: rgba(0, 0, 0, 0.05);
+  max-height: 150px;
+  object-fit: contain;
+}
+
+.pg-tree-hovercard-title {
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.pg-tree-hovercard-desc {
+  font-size: 12px;
+  color: var(--pg-muted, #71788c);
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.pg-tree-hovercard-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  width: 100%;
+}
+
+.pg-tree-hovercard-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+.pg-tree-hovercard-badge.conf-high {
+  background: #e2fbe8;
+  color: #1e8a38;
+  border-color: rgba(30, 138, 56, 0.15);
+}
+body:not(.light-mode) .pg-tree-hovercard-badge.conf-high {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.25);
+}
+.pg-tree-hovercard-badge.conf-med {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: rgba(180, 83, 9, 0.15);
+}
+body:not(.light-mode) .pg-tree-hovercard-badge.conf-med {
+  background: rgba(250, 204, 21, 0.12);
+  color: #eab308;
+  border-color: rgba(250, 204, 21, 0.25);
+}
+
+/* Viewport panning & canvas styles */
+.pg-tree-viewport {
+  cursor: grab;
+  user-select: none;
+}
+.pg-tree-viewport:active {
+  cursor: grabbing;
+}
+
+/* Ensure node card is positioned for status dot placement */
+.pg-tree-node {
+  position: relative;
+}
+
+/* Status dot in the top-right corner of node cards */
+.pg-tree-node-status-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.15);
+  z-index: 5;
+}
+
+/* Recent branch badge styling with pulse animation */
+.pg-tree-branch-badge.recent-branch {
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.25);
+  animation: pgPulseBadge 2s infinite ease-in-out;
+}
+@keyframes pgPulseBadge {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+
+/* Show branch button in chat action bar styling */
+#pageguide-show-branch-btn {
+  background: rgba(120, 87, 255, 0.1);
+  border-color: rgba(120, 87, 255, 0.2);
+  color: #c5b8ff;
+}
+#pageguide-show-branch-btn:hover {
+  background: rgba(120, 87, 255, 0.25);
+  border-color: rgba(120, 87, 255, 0.5);
+  color: #e3ddff;
+}
+body.light-mode #pageguide-show-branch-btn {
+  background: rgba(120, 87, 255, 0.08);
+  border-color: rgba(120, 87, 255, 0.2);
+  color: #7857ff;
+}
+body.light-mode #pageguide-show-branch-btn:hover {
+  background: rgba(120, 87, 255, 0.15);
+  border-color: rgba(120, 87, 255, 0.4);
+  color: #603feb;
+}
+
+/* "View journey" recall button in dark mode — black text on white background */
+body:not(.light-mode) .pageguide-journey-recall-btn {
+  background: #ffffff !important;
+  color: #000000 !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25) !important;
+}
+body:not(.light-mode) .pageguide-journey-recall-btn .pageguide-journey-recall-title {
+  color: #000000 !important;
+  font-weight: 700;
+}
+body:not(.light-mode) .pageguide-journey-recall-btn:hover {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 10px 24px rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Styled inspector badges */
+.rw-ins-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 99px;
+  border: 1px solid transparent;
+}
+.rw-ins-badge.conf-high {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.25);
+}
+.rw-ins-badge.conf-med {
+  background: rgba(250, 204, 21, 0.12);
+  color: #eab308;
+  border-color: rgba(250, 204, 21, 0.25);
+}
+.rw-ins-badge.verify-ok {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.25);
+}
+.rw-ins-badge.verify-failed {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.25);
+}
+.rw-ins-badge.verify-blocked {
+  background: rgba(249, 115, 22, 0.12);
+  color: #f97316;
+  border-color: rgba(249, 115, 22, 0.25);
+}
+
+/* Fix input action bar horizontal overflow and button cutoff */
+.pageguide-input-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: 100% !important;
+}
+
+.pageguide-action-bar {
+  display: contents !important;
+}
+
+.pageguide-send-btn {
+  margin-left: auto !important;
+  grid-column: auto !important;
+}
+

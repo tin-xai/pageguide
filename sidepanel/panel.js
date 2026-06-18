@@ -30,6 +30,13 @@ const _journeysBySession = {}; // sessionId -> { title, steps:[meta] } accumulat
 let visibleJourneySessionId = null;
 let visibleJourneyTitle = '';
 let visibleJourneyRecalled = false;
+let currentTreeScale = 1.0;
+let isPanning = false;
+let startX = 0;
+let startY = 0;
+let scrollLeft = 0;
+let scrollTop = 0;
+let wasDragging = false;
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -409,6 +416,7 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   if (isGuide) _ensureGoalCollapseBtn();
   card.style.display = '';
   refreshGuideOnlyActions();
+  checkShowBranchButton();
 }
 
 // Steer / rebranch: drop timeline steps AFTER `step` so the UI matches the truncated rewind
@@ -514,6 +522,47 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-tab-chip-close')?.addEventListener('click', (e) => {
     e.stopPropagation();
     hideWorkingTabChip();
+  });
+
+  document.getElementById('pageguide-show-branch-btn')?.addEventListener('click', () => {
+    const backdrop = document.getElementById('pageguide-branch-backdrop');
+    if (backdrop) backdrop.style.display = 'block';
+    showBranchTree();
+  });
+  
+  const closeBranchOverlay = () => {
+    _hideBranchTreeHover(true);
+    const overlay = document.getElementById('pageguide-branch-overlay');
+    const backdrop = document.getElementById('pageguide-branch-backdrop');
+    if (overlay) overlay.style.display = 'none';
+    if (backdrop) backdrop.style.display = 'none';
+  };
+
+  document.addEventListener('click', (e) => {
+    if (_branchTreeHoverCard && !e.target.closest('.pg-tree-hovercard') && !e.target.closest('.pg-tree-node')) {
+      _hideBranchTreeHover(true);
+    }
+  });
+  
+  document.getElementById('pageguide-branch-close')?.addEventListener('click', closeBranchOverlay);
+  document.getElementById('pageguide-branch-backdrop')?.addEventListener('click', closeBranchOverlay);
+
+  const updateTreeScale = (scale) => {
+    currentTreeScale = Math.max(0.5, Math.min(2.0, scale));
+    const content = document.getElementById('pg-tree-content');
+    const label = document.getElementById('pg-zoom-label');
+    if (content) content.style.transform = `scale(${currentTreeScale})`;
+    if (label) label.textContent = `${Math.round(currentTreeScale * 100)}%`;
+  };
+
+  document.getElementById('pg-zoom-in')?.addEventListener('click', () => {
+    updateTreeScale(currentTreeScale + 0.1);
+  });
+  document.getElementById('pg-zoom-out')?.addEventListener('click', () => {
+    updateTreeScale(currentTreeScale - 0.1);
+  });
+  document.getElementById('pg-zoom-reset')?.addEventListener('click', () => {
+    updateTreeScale(1.0);
   });
   
   document.getElementById('pageguide-send').addEventListener('click', () => {
@@ -1323,6 +1372,38 @@ function addSteerRestoreCard(message) {
 }
 
 /**
+ * Load prefix steps of a session into memory.
+ */
+async function loadSessionSteps(sessionId) {
+  let steps = null, title = '';
+  if (sessionId && typeof rewindVerifyScreenshots === 'function') {
+    try { await rewindVerifyScreenshots(sessionId); } catch (e) {}
+  }
+  const mem = _journeysBySession[sessionId];
+  try {
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(sessionId);
+      if (idx && idx.steps && idx.steps.length) {
+        steps = idx.steps;
+        title = idx.branchLabel || idx.goal || '';
+      }
+    }
+  } catch (e) {}
+  if ((!steps || !steps.length) && mem && mem.steps && mem.steps.length) {
+    steps = mem.steps;
+    title = mem.title || '';
+  }
+  if (!steps || !steps.length) return;
+
+  const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
+  const voidSteps = withSid.filter(m => m.hasShot === false && !(m.isInitial || Number(m.step) === 0));
+  const valid = withSid.filter(m => !voidSteps.includes(m));
+  currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
+  currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
+  currentGuideTitle = title || '';
+}
+
+/**
  * Re-populate the task panel with a guide session's journey (read-only). Steps come from the
  * in-memory copy accumulated this session (robust to storage-shape changes); falls back to the
  * persisted index. Each dot opens its snapshot via showGoalStepPreview → rewindGetRecord. On
@@ -1363,11 +1444,11 @@ async function showStoredJourney(sessionId) {
   const lastStep = currentGuideRecords.length ? currentGuideRecords[currentGuideRecords.length - 1].step : 0;
   currentGuideStep = lastStep;
   guideActive = false; // recalled journey is a past, read-only view
-  renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
-  _setJourneyRecalledMode(true);
   visibleJourneySessionId = sessionId;
   visibleJourneyTitle = currentGuideTitle;
   visibleJourneyRecalled = true;
+  renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
+  _setJourneyRecalledMode(true);
 }
 if (typeof window !== 'undefined') window.showStoredJourney = showStoredJourney;
 
@@ -1385,6 +1466,480 @@ function removeGuideStepRecord(sessionId, step) {
 }
 if (typeof window !== 'undefined') window.removeGuideStepRecord = removeGuideStepRecord;
 
+function getActiveSessionId() {
+  return visibleJourneySessionId || currentGuideInitial?.sessionId || (currentGuideRecords[0] ? currentGuideRecords[0].sessionId : null);
+}
+
+async function checkShowBranchButton() {
+  const btn = document.getElementById('pageguide-show-branch-btn');
+  if (!btn) return;
+
+  const activeSessionId = getActiveSessionId();
+  if (!activeSessionId) {
+    btn.style.display = 'none';
+    return;
+  }
+
+  btn.style.display = 'inline-flex';
+}
+
+let _branchTreeHoverCard = null;
+let _hovercardPinned = false;
+let _hovercardHideTimeout = null;
+let _hovercardActiveNodeEl = null;
+
+function _hideBranchTreeHover(force = false) {
+  if (_hovercardPinned && !force) return;
+  if (_branchTreeHoverCard) {
+    _branchTreeHoverCard.remove();
+    _branchTreeHoverCard = null;
+  }
+  if (force) {
+    _hovercardPinned = false;
+    _hovercardActiveNodeEl = null;
+    if (_hovercardHideTimeout) {
+      clearTimeout(_hovercardHideTimeout);
+      _hovercardHideTimeout = null;
+    }
+  }
+}
+
+async function showBranchTree(keepZoom = false) {
+  const overlay = document.getElementById('pageguide-branch-overlay');
+  const body = document.getElementById('pageguide-branch-body');
+  if (!overlay || !body) return;
+
+  if (!keepZoom) {
+    body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">Building tree view...</div>';
+  }
+  overlay.style.display = 'flex';
+
+  if (!keepZoom) {
+    // Reset scale to 1.0 when opening
+    currentTreeScale = 1.0;
+  }
+  const zoomLabel = document.getElementById('pg-zoom-label');
+  if (zoomLabel) zoomLabel.textContent = `${Math.round(currentTreeScale * 100)}%`;
+
+  const activeSessionId = getActiveSessionId();
+  if (!activeSessionId) {
+    body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">No active guide session found.</div>';
+    return;
+  }
+
+  try {
+    const sessions = await rewindGetSessions();
+    const sessionsMap = {};
+    for (const s of sessions) {
+      sessionsMap[s.sessionId] = s;
+    }
+
+    let rootSessionId = activeSessionId;
+    while (sessionsMap[rootSessionId]?.parentSessionId) {
+      rootSessionId = sessionsMap[rootSessionId].parentSessionId;
+    }
+
+    const related = sessions.filter(s => {
+      let tempId = s.sessionId;
+      while (tempId && tempId !== rootSessionId) {
+        tempId = sessionsMap[tempId]?.parentSessionId;
+      }
+      return tempId === rootSessionId;
+    });
+
+    const indices = await Promise.all(related.map(s => rewindGetIndex(s.sessionId)));
+    const validIndices = indices.filter(idx => idx && Array.isArray(idx.steps) && idx.steps.length > 0);
+
+    if (validIndices.length === 0) {
+      body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">No steps available for this tree.</div>';
+      return;
+    }
+
+    const canonicalNodes = {};
+
+    function getCanonicalKey(sessionId, stepNum) {
+      let sess = sessionsMap[sessionId];
+      while (sess && sess.parentSessionId && stepNum <= sess.branchFromStep) {
+        sessionId = sess.parentSessionId;
+        sess = sessionsMap[sessionId];
+      }
+      return `${sessionId}::${stepNum}`;
+    }
+
+    for (const idx of validIndices) {
+      for (const s of idx.steps) {
+        const stepNum = Number(s.step);
+        const key = getCanonicalKey(idx.sessionId, stepNum);
+        if (!canonicalNodes[key]) {
+          canonicalNodes[key] = {
+            key,
+            sessionId: key.split('::')[0],
+            stepNum,
+            meta: s,
+            children: new Set()
+          };
+        }
+      }
+    }
+
+    for (const idx of validIndices) {
+      const sortedSteps = idx.steps.slice().sort((a, b) => Number(a.step) - Number(b.step));
+      for (let i = 1; i < sortedSteps.length; i++) {
+        const parentStep = sortedSteps[i - 1];
+        const childStep = sortedSteps[i];
+        const parentKey = getCanonicalKey(idx.sessionId, Number(parentStep.step));
+        const childKey = getCanonicalKey(idx.sessionId, Number(childStep.step));
+        if (parentKey !== childKey) {
+          canonicalNodes[parentKey].children.add(childKey);
+        }
+      }
+    }
+
+    const rootKey = getCanonicalKey(rootSessionId, 0);
+    if (!canonicalNodes[rootKey]) {
+      const keys = Object.keys(canonicalNodes);
+      if (keys.length === 0) {
+        body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">No steps available for this tree.</div>';
+        return;
+      }
+    }
+
+    function renderTreeNode(key) {
+      const node = canonicalNodes[key];
+      if (!node) return '';
+
+      const childrenKeys = Array.from(node.children).sort();
+      const isCurrent = (key === getCanonicalKey(activeSessionId, currentGuideStep));
+      const stepLabel = node.stepNum === 0 ? 'Initial' : `Step ${node.stepNum}`;
+
+      // Check if this node is the starting point of a branch diversion
+      const S = sessionsMap[node.sessionId];
+      const isBranchStart = S && S.parentSessionId && (node.stepNum === S.branchFromStep + 1);
+      let branchBadgeHtml = '';
+      if (isBranchStart) {
+        const branchTitle = S.branchLabel || S.goal || 'Diverted';
+        let ageText = '';
+        let isRecent = false;
+        if (S.startedAt) {
+          const ageMs = Date.now() - S.startedAt;
+          if (ageMs < 120000) {
+            ageText = 'just now';
+            isRecent = true;
+          } else {
+            const ageMin = Math.round(ageMs / 60000);
+            if (ageMin < 60) {
+              ageText = `${ageMin}m ago`;
+            } else {
+              const ageHr = Math.round(ageMin / 60);
+              ageText = `${ageHr}h ago`;
+            }
+          }
+        }
+        const badgeLabel = ageText ? `${branchTitle} (${ageText})` : branchTitle;
+        branchBadgeHtml = `<span class="pg-tree-branch-badge ${isRecent ? 'recent-branch' : ''}" title="${escapeHtml(branchTitle)}">${escapeHtml(badgeLabel)}</span>`;
+      }
+
+      const conf = node.meta.confidence;
+      let statusDotHtml = '';
+      if (conf != null) {
+        const isGood = conf >= 0.7;
+        const color = isGood ? '#22c55e' : '#eab308';
+        const title = `Confidence: ${Math.round(conf * 100)}%`;
+        statusDotHtml = `<span class="pg-tree-node-status-dot" style="background: ${color};" title="${title}"></span>`;
+      }
+
+      const isOriginal = (node.sessionId === rootSessionId);
+
+      let childrenHtml = '';
+      if (childrenKeys.length > 0) {
+        childrenHtml = `
+          <div class="pg-tree-children ${isOriginal ? 'original-path' : 'diverted-path'}">
+            ${childrenKeys.map(childKey => renderTreeNode(childKey)).join('')}
+          </div>
+        `;
+      }
+
+      return `
+        <div class="pg-tree-branch ${isOriginal ? 'original-path' : 'diverted-path'}">
+          <div class="pg-tree-node ${isCurrent ? 'active-session-step' : ''} ${isOriginal ? 'original-path' : 'diverted-path'}" data-key="${key}">
+            ${statusDotHtml}
+            <span class="pg-tree-node-label">${stepLabel}</span>
+            <span class="pg-tree-node-desc">${escapeHtml(_truncateText(node.meta.instruction || ''))}</span>
+            ${branchBadgeHtml}
+          </div>
+          ${childrenHtml}
+        </div>
+      `;
+    }
+
+    const oldViewport = body.querySelector('#pg-tree-viewport');
+    const oldScrollLeft = oldViewport ? oldViewport.scrollLeft : 0;
+    const oldScrollTop = oldViewport ? oldViewport.scrollTop : 0;
+
+    body.innerHTML = `
+      <div class="pg-tree-viewport" id="pg-tree-viewport" style="width: 100%; height: 100%; overflow: auto;">
+        <div class="pg-tree-content" id="pg-tree-content" style="transform: scale(${currentTreeScale}); transform-origin: top left; display: inline-block; padding: 20px;">
+          ${renderTreeNode(rootKey)}
+        </div>
+      </div>
+    `;
+
+    // Canvas Panning dragging event handling
+    const viewport = body.querySelector('#pg-tree-viewport');
+    if (viewport && keepZoom) {
+      viewport.scrollLeft = oldScrollLeft;
+      viewport.scrollTop = oldScrollTop;
+    }
+    if (viewport) {
+      viewport.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        isPanning = true;
+        wasDragging = false;
+        startX = e.pageX - viewport.offsetLeft;
+        startY = e.pageY - viewport.offsetTop;
+        scrollLeft = viewport.scrollLeft;
+        scrollTop = viewport.scrollTop;
+      });
+
+      const onMouseMove = (e) => {
+        if (!isPanning) return;
+        const x = e.pageX - viewport.offsetLeft;
+        const y = e.pageY - viewport.offsetTop;
+        const walkX = x - startX;
+        const walkY = y - startY;
+        if (Math.abs(walkX) > 3 || Math.abs(walkY) > 3) {
+          wasDragging = true;
+        }
+        viewport.scrollLeft = scrollLeft - walkX;
+        viewport.scrollTop = scrollTop - walkY;
+      };
+
+      const onMouseUp = () => {
+        isPanning = false;
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    }
+
+    const showCard = async (nodeEl) => {
+      const key = nodeEl.dataset.key;
+      const node = canonicalNodes[key];
+      if (!node) return;
+
+      let rec = null;
+      try {
+        rec = await rewindGetRecord(node.sessionId, node.stepNum);
+      } catch (e) {}
+
+      if (_branchTreeHoverCard && _hovercardActiveNodeEl === nodeEl) return;
+
+      if (_branchTreeHoverCard) {
+        _branchTreeHoverCard.remove();
+        _branchTreeHoverCard = null;
+      }
+
+      const card = document.createElement('div');
+      card.className = 'pg-tree-hovercard pageguide-goal-step-preview';
+
+      const beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
+      const regionShot = rec?.regionShot || null;
+      const topShot = regionShot || beforeShot;
+      const imgHtml = topShot 
+        ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>` 
+        : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>';
+
+      const beforeHtml = (beforeShot && regionShot)
+        ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
+            <img class="pageguide-memory-shot-trigger" data-shot-kind="before" src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
+        : '';
+
+      const conf = node.meta.confidence;
+      const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf) : null;
+      const badgeHtml = (tier && conf != null)
+        ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
+        : '';
+
+      const actionText = node.meta.action ? `[${node.meta.action.toUpperCase()}] ` : '';
+      const instruction = node.meta.instruction || 'Initial state';
+
+      const url = node.meta.url || rec?.url || '';
+      const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
+
+      const allowSteer = node.stepNum > 0;
+
+      card.innerHTML = `
+        ${badgeHtml}
+        ${imgHtml}
+        <div class="pageguide-goal-step-preview-title">${node.stepNum === 0 ? 'Initial State' : 'Step ' + node.stepNum}</div>
+        <div class="pageguide-goal-step-preview-text"><b>${actionText}</b>${escapeHtml(instruction)}</div>
+        ${urlHtml}
+        ${beforeHtml}
+        ${node.meta.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(node.meta.durationMs)}</div>` : ''}
+        <button type="button" class="pageguide-goal-step-inspect">Inspect more</button>
+        ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">⤳ Steer from here</button>' : ''}
+        ${allowSteer ? `<div class="pageguide-goal-step-steerbox" style="display:none">
+          <textarea class="pageguide-goal-step-steer-input" rows="2" placeholder="What should the agent do differently?"></textarea>
+          <div class="pageguide-goal-step-steer-row">
+            <button type="button" class="pageguide-goal-step-steer-cancel">Cancel</button>
+            <button type="button" class="pageguide-goal-step-steer-go">Run</button>
+          </div>
+        </div>` : ''}
+      `;
+
+      if (allowSteer) {
+        const steerBtn = card.querySelector('.pageguide-goal-step-steer');
+        const steerBox = card.querySelector('.pageguide-goal-step-steerbox');
+        const cancelBtn = card.querySelector('.pageguide-goal-step-steer-cancel');
+        const runBtn = card.querySelector('.pageguide-goal-step-steer-go');
+        const ta = card.querySelector('.pageguide-goal-step-steer-input');
+
+        steerBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _hovercardPinned = true;
+          steerBox.style.display = 'block';
+          steerBtn.style.display = 'none';
+          if (ta) ta.focus();
+        });
+
+        cancelBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          steerBox.style.display = 'none';
+          steerBtn.style.display = 'block';
+        });
+
+        runBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const newGoal = ta ? ta.value.trim() : '';
+          if (!newGoal) { if (ta) ta.focus(); return; }
+          runBtn.disabled = true;
+          runBtn.textContent = 'Running...';
+          
+          if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
+            const ok = await RewindTimeline.steerFromStep({
+              sessionId: node.sessionId,
+              step: node.stepNum,
+              url: node.meta.url
+            }, newGoal);
+            if (ok) {
+              _hideBranchTreeHover(true);
+            } else {
+              runBtn.disabled = false;
+              runBtn.textContent = 'Run';
+            }
+          }
+        });
+      }
+
+      const inspectBtn = card.querySelector('.pageguide-goal-step-inspect');
+      if (inspectBtn) {
+        inspectBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _hideBranchTreeHover(true);
+          if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.openStep === 'function') {
+            RewindTimeline.openStep(node.meta);
+          }
+        });
+      }
+
+      card.addEventListener('click', (e) => {
+        const target = e.target;
+        if (target.closest('button') || 
+            target.closest('textarea') || 
+            target.closest('a') ||
+            target.closest('.pageguide-goal-step-steerbox')) {
+          return;
+        }
+        if (target.closest('.pageguide-memory-shot-trigger')) {
+          const isInitialNode = node.stepNum === 0;
+          if (typeof openMemoryShotLightbox === 'function') {
+            openMemoryShotLightbox(beforeShot, isInitialNode ? 'Initial state — saved page memory' : 'Before action — what PageGuide saw before this step');
+          }
+          return;
+        }
+        if (target.closest('.pageguide-goal-step-before')) {
+          return;
+        }
+        _hideBranchTreeHover(true);
+        if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.openStep === 'function') {
+          RewindTimeline.openStep(node.meta);
+        }
+      });
+
+      document.body.appendChild(card);
+      _branchTreeHoverCard = card;
+      _hovercardActiveNodeEl = nodeEl;
+
+      const r = nodeEl.getBoundingClientRect();
+      let left = r.right + 10;
+      let top = Math.max(8, Math.min(r.top, window.innerHeight - card.offsetHeight - 8));
+
+      if (left + card.offsetWidth > window.innerWidth) {
+        left = Math.max(8, r.left - card.offsetWidth - 10);
+      }
+
+      card.style.left = left + 'px';
+      card.style.top = top + 'px';
+
+      card.addEventListener('mouseenter', () => {
+        cancelHideTimer();
+      });
+      card.addEventListener('mouseleave', () => {
+        startHideTimer();
+      });
+    };
+
+    const cancelHideTimer = () => {
+      if (_hovercardHideTimeout) {
+        clearTimeout(_hovercardHideTimeout);
+        _hovercardHideTimeout = null;
+      }
+    };
+
+    const startHideTimer = () => {
+      if (_hovercardPinned) return;
+      cancelHideTimer();
+      _hovercardHideTimeout = setTimeout(() => {
+        _hideBranchTreeHover();
+      }, 300);
+    };
+
+    body.querySelectorAll('.pg-tree-node').forEach(nodeEl => {
+      nodeEl.addEventListener('mouseenter', async () => {
+        cancelHideTimer();
+        if (_hovercardPinned && _hovercardActiveNodeEl === nodeEl) return;
+        await showCard(nodeEl);
+      });
+
+      nodeEl.addEventListener('mouseleave', () => {
+        startHideTimer();
+      });
+
+      nodeEl.addEventListener('click', async (e) => {
+        if (wasDragging) return;
+        e.stopPropagation();
+        
+        cancelHideTimer();
+        _hovercardPinned = true;
+        
+        if (!_branchTreeHoverCard || _hovercardActiveNodeEl !== nodeEl) {
+          await showCard(nodeEl);
+        }
+      });
+    });
+
+  } catch (e) {
+    console.error('Failed to build branch tree:', e);
+    body.innerHTML = `<div style="color: var(--pg-danger); padding: 20px;">Failed to load branch tree: ${escapeHtml(e.message)}</div>`;
+  }
+}
+if (typeof window !== 'undefined') {
+  window.checkShowBranchButton = checkShowBranchButton;
+  window.showBranchTree = showBranchTree;
+}
+
 async function registerBranchJourney(sessionId, label) {
   if (!sessionId) return;
   const title = label || 'View branch journey';
@@ -1394,6 +1949,7 @@ async function registerBranchJourney(sessionId, label) {
     _journeyBtnSessions.add(sessionId);
     addJourneyRecallMessage(sessionId, title, title);
   }
+  checkShowBranchButton();
 }
 if (typeof window !== 'undefined') window.registerBranchJourney = registerBranchJourney;
 if (typeof window !== 'undefined') window.addJourneyRecallMessage = addJourneyRecallMessage;
@@ -3266,32 +3822,45 @@ function handleContentMessage(message, sender, sendResponse) {
     } else if (message.meta && message.meta.hasShot === false) {
       // Void step (no screenshot) — don't add it to the timeline or the journey.
     } else if (message.meta) {
-      _setJourneyRecalledMode(false); // a live step is arriving — leave recalled view
-      const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
-      if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);
-      else currentGuideRecords.push(message.meta);
-      currentGuideRecords.sort((a, b) => Number(a.step) - Number(b.step));
-      currentGuideStep = message.meta.planStep || message.meta.step || currentGuideStep;
-      renderGoalCard({ route: 'guide', step: currentGuideStep });
-      setExportEnabled(true);
-
-      // Accumulate this session's journey in memory so it can always be recalled later
-      // (independent of the persisted index). Dedup by step.
-      const sid = message.meta.sessionId;
-      if (sid) {
-        const j = _journeysBySession[sid] || (_journeysBySession[sid] = { title: '', steps: [] });
-        const at = j.steps.findIndex(s => Number(s.step) === Number(message.meta.step));
-        if (at >= 0) j.steps[at] = message.meta; else j.steps.push(message.meta);
-        j.steps.sort((a, b) => Number(a.step) - Number(b.step));
-        // Label the journey by THIS prompt (currentGoal.prompt), not the stale guide title,
-        // so each prompt's button is distinguishable.
-        if (!j.title) j.title = currentGoal?.prompt || message.meta.instruction || '';
-        // First step of a new guide session → post a "View journey" recall button.
-        if (Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
-          _journeyBtnSessions.add(sid);
-          addJourneyRecallMessage(sid, j.title);
+      const handleRecord = async () => {
+        const liveSessionId = message.meta.sessionId;
+        if (liveSessionId && getActiveSessionId() !== liveSessionId) {
+          await loadSessionSteps(liveSessionId);
         }
-      }
+        _setJourneyRecalledMode(false); // a live step is arriving — leave recalled view
+        const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
+        if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);
+        else currentGuideRecords.push(message.meta);
+        currentGuideRecords.sort((a, b) => Number(a.step) - Number(b.step));
+        currentGuideStep = message.meta.planStep || message.meta.step || currentGuideStep;
+        renderGoalCard({ route: 'guide', step: currentGuideStep });
+        setExportEnabled(true);
+
+        // Accumulate this session's journey in memory so it can always be recalled later
+        // (independent of the persisted index). Dedup by step.
+        const sid = message.meta.sessionId;
+        if (sid) {
+          const j = _journeysBySession[sid] || (_journeysBySession[sid] = { title: '', steps: [] });
+          const at = j.steps.findIndex(s => Number(s.step) === Number(message.meta.step));
+          if (at >= 0) j.steps[at] = message.meta; else j.steps.push(message.meta);
+          j.steps.sort((a, b) => Number(a.step) - Number(b.step));
+          // Label the journey by THIS prompt (currentGoal.prompt), not the stale guide title,
+          // so each prompt's button is distinguishable.
+          if (!j.title) j.title = currentGoal?.prompt || message.meta.instruction || '';
+          // First step of a new guide session → post a "View journey" recall button.
+          if (Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
+            _journeyBtnSessions.add(sid);
+            addJourneyRecallMessage(sid, j.title);
+          }
+        }
+
+        // If the branch tree overlay is open, update the tree in real time (preserving zoom/scroll)
+        const overlay = document.getElementById('pageguide-branch-overlay');
+        if (overlay && overlay.style.display !== 'none') {
+          showBranchTree(true);
+        }
+      };
+      handleRecord();
     }
   } else if (message.action === 'steerRestoreReady') {
     // The agent restored a steered step's state and is waiting for the user to confirm. A steer is

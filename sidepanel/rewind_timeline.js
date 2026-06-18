@@ -201,11 +201,21 @@
 
     const wrap = document.createElement('div');
     wrap.id = INSPECTOR_ID;
-    const metaBits = [];
-    if (rec.confidence != null) metaBits.push('Confidence: ' + Math.round(rec.confidence * 100) + '%');
-    if (rec.durationMs != null) metaBits.push('Duration: ' + _fmtDuration(rec.durationMs));
-    const cost = _fmtCost(rec.cost); if (cost) metaBits.push('Cost: ' + cost);
-    if (rec.verification?.status) metaBits.push('Verify: ' + rec.verification.status);
+    let badgesHtml = '';
+    if (rec.confidence != null) {
+      const isHigh = rec.confidence >= 0.7;
+      badgesHtml += `<span class="rw-ins-badge ${isHigh ? 'conf-high' : 'conf-med'}">● Confidence: ${Math.round(rec.confidence * 100)}%</span>`;
+    }
+    if (rec.verification?.status) {
+      const v = rec.verification.status;
+      const cls = v === 'success' ? 'verify-ok' : (v === 'failed' ? 'verify-failed' : 'verify-blocked');
+      const label = v === 'success' ? 'Verified' : (v === 'failed' ? 'Failed' : 'Blocked');
+      badgesHtml += `<span class="rw-ins-badge ${cls}">● ${label}</span>`;
+    }
+
+    const durationText = rec.durationMs != null ? 'Duration: ' + _fmtDuration(rec.durationMs) : '';
+    const costText = _fmtCost(rec.cost) ? 'Cost: ' + _fmtCost(rec.cost) : '';
+    const extraMeta = [durationText, costText].filter(Boolean).join('  ·  ');
 
     const shot = _recordShot(rec);
     const hasShot = !!shot;
@@ -223,7 +233,10 @@
           <div><strong>What:</strong> ${_escape(rec.instruction)}</div>
           ${rec.target?.text ? `<div><strong>Element:</strong> ${_escape(rec.target.text)}</div>` : ''}
           ${rec.nextStepHint ? `<div><strong>Next:</strong> ${_escape(rec.nextStepHint)}</div>` : ''}
-          ${metaBits.length ? `<div style="margin-top:6px;opacity:.7">${_escape(metaBits.join('  ·  '))}</div>` : ''}
+          <div style="margin-top:8px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;">
+            ${badgesHtml}
+            ${extraMeta ? `<span style="opacity:.6; font-size:11px; margin-left:4px;">${_escape(extraMeta)}</span>` : ''}
+          </div>
         </div>
         <div class="rw-steer" style="display:none">
           <div class="rw-steer-hdr">⤳ Steer from step ${_escape(rec.step)}</div>
@@ -361,6 +374,9 @@
           global.addJourneyRecallMessage(branchSessionId, branchTitle, branchLabel);
         }
         if (typeof global.showStoredJourney === 'function') await global.showStoredJourney(branchSessionId);
+        if (typeof global.showBranchTree === 'function') {
+          global.showBranchTree();
+        }
       } catch (e) {}
       return true;
     } catch (err) {
