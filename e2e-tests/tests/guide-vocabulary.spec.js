@@ -109,7 +109,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('#pageguide-messages')).toContainText('Could not continue the guide');
   });
 
-  test('inspector "Steer from here" writes a steer handoff and requests navigation', async () => {
+  test('inspector "Restore here" writes a restore handoff and requests navigation', async () => {
     await panelPage.evaluate(async () => {
       // @ts-ignore - record outgoing messages + stub tab navigation
       window.__sent = [];
@@ -134,14 +134,10 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       RewindTimeline.openStep({ sessionId: 'steer-sess', step: 2 });
     });
 
+    // "Restore here" is a one-click action — no instruction box, restores the recorded state.
     const steerBtn = panelPage.locator('#pageguide-rewind-inspector [data-rw="steer"]');
-    await expect(steerBtn).toBeVisible();
+    await expect(steerBtn).toHaveText(/Restore here/);
     await steerBtn.click();
-
-    const ta = panelPage.locator('#pageguide-rewind-inspector .rw-steer-input');
-    await expect(ta).toBeVisible();
-    await ta.fill('do something different');
-    await panelPage.locator('#pageguide-rewind-inspector [data-rw="steer-run"]').click();
 
     await panelPage.waitForTimeout(200);
     const res = await panelPage.evaluate(async () => {
@@ -151,14 +147,14 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       return { pending, nav: window.__nav };
     });
     expect(res.pending).toBeTruthy();
-    // Redo step 2 → branch after step 1 → restore the state BEFORE step 2 (== step 1's page).
+    // Restore step 2 → branch after step 1 → restore the state BEFORE step 2 (== step 1's page).
     expect(res.pending.fromStep).toBe(1);
-    expect(res.pending.newGoal).toContain('do something different');
+    expect(res.pending.newGoal).toBe(''); // restore-only: no new instruction
     expect(res.pending.url).toBe('https://ex.com/a'); // land on step 1's page (before step 2)
     expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
   });
 
-  test('step preview card "Steer from here" writes a handoff and requests navigation', async () => {
+  test('step preview card "Restore here" writes a handoff and requests navigation', async () => {
     await panelPage.evaluate(async () => {
       // @ts-ignore
       window.__sent = [];
@@ -191,14 +187,10 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       showGoalStepPreview(2, anchor);
     });
 
+    // "Restore here" is a one-click action — restores the recorded state, no instruction box.
     const steerBtn = panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-steer');
-    await expect(steerBtn).toBeVisible();
+    await expect(steerBtn).toHaveText(/Restore here/);
     await steerBtn.click();
-
-    const ta = panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-steer-input');
-    await expect(ta).toBeVisible();
-    await ta.fill('do something different');
-    await panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-steer-go').click();
 
     await panelPage.waitForTimeout(200);
     const res = await panelPage.evaluate(async () => {
@@ -208,9 +200,9 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       return { pending, nav: window.__nav };
     });
     expect(res.pending).toBeTruthy();
-    // Redo step 2 → branch after step 1 → restore the state BEFORE step 2 (== step 1's page).
+    // Restore step 2 → branch after step 1 → restore the state BEFORE step 2 (== step 1's page).
     expect(res.pending.fromStep).toBe(1);
-    expect(res.pending.newGoal).toContain('do something different');
+    expect(res.pending.newGoal).toBe(''); // restore-only: no new instruction
     expect(res.pending.url).toBe('https://ex.com/a'); // land on step 1's page (before step 2)
     expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
   });
@@ -482,16 +474,16 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       addSteerRestoreCard({
         fromStep: 1, redoStep: 2, url: 'https://ex.com/a', restoreShot: 'AAAA', redoBeforeShot: 'BBBB', canRetry: true,
         log: [
-          { kind: 'localStorage', key: 'tok', value: 'a', ok: true },
+          { kind: 'replay', action: 'type', target: { text: 'Search' }, ok: true },
           { kind: 'replay', action: 'click', target: { text: 'Idiomas' }, ok: false }
         ],
         recorded: [{ step: 1, action: 'click', target: { text: 'Idiomas' }, instruction: 'open menu' }]
       });
     });
-    // Two checklist items, two checkboxes; the failed one is unchecked.
+    // Two checklist items, each with an action icon; the failed one is flagged.
     await expect(panelPage.locator('.pageguide-steer-restore-item')).toHaveCount(2);
-    await expect(panelPage.locator('.pageguide-steer-restore-check')).toHaveCount(2);
-    await expect(panelPage.locator('.pageguide-steer-restore-item.failed .pageguide-steer-restore-check')).not.toBeChecked();
+    await expect(panelPage.locator('.pageguide-steer-restore-item .pageguide-steer-restore-icon')).toHaveCount(2);
+    await expect(panelPage.locator('.pageguide-steer-restore-item.failed')).toHaveCount(1);
     // Action-first labels: the replay shows the human action up front, no raw selector clutter.
     await expect(panelPage.locator('.pageguide-steer-restore-item.failed .pageguide-steer-restore-action')).toContainText('Click');
     await expect(panelPage.locator('.pageguide-steer-restore-item.failed .pageguide-steer-restore-action')).toContainText('Idiomas');
@@ -506,32 +498,24 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('.pageguide-steer-restore-snap')).toBeVisible();
   });
 
-  test('restore card v2: Retry sends retrySteerRestore; Tell-agent sends fixSteerRestore with the note', async () => {
+  test('restore card v2: "Do it yourself" sends manualRestoreHere; Confirm sends confirmSteerRestore', async () => {
     await panelPage.evaluate(() => {
       // @ts-ignore
       window.__sent = [];
       // @ts-ignore
-      sendToContentScript = (msg) => { window.__sent.push(msg); return Promise.resolve({}); };
+      sendToContentScript = (msg) => { window.__sent.push(msg); return Promise.resolve({ success: true }); };
       // @ts-ignore
       addSteerRestoreCard({ fromStep: 1, redoStep: 2, url: 'https://ex.com/a', canRetry: true, log: [], recorded: [] });
     });
 
-    await panelPage.locator('.pageguide-steer-restore-retry').click();
-    // Retry disables the card's buttons (a fresh card arrives on reply); re-render to test fix.
-    await panelPage.evaluate(() => {
-      // @ts-ignore
-      addSteerRestoreCard({ fromStep: 1, redoStep: 2, url: 'https://ex.com/a', canRetry: true, log: [], recorded: [] });
-    });
-    // Open the fix box, type a note, send.
-    await panelPage.locator('.pageguide-steer-restore-fix').click();
-    await panelPage.locator('.pageguide-steer-restore-fix-input').fill('the menu dropdown is not open');
-    await panelPage.locator('.pageguide-steer-restore-fix-send').click();
+    // "Do it yourself" hands control back via manualRestoreHere (the card stays put).
+    await panelPage.locator('.pageguide-steer-restore-manual').click();
+    // Confirm accepts the restored state and continues.
+    await panelPage.locator('.pageguide-steer-restore-confirm').click();
 
     const sent = await panelPage.evaluate(() => window.__sent);
-    expect(sent.some(m => m.action === 'retrySteerRestore')).toBe(true);
-    const fix = sent.find(m => m.action === 'fixSteerRestore');
-    expect(fix).toBeTruthy();
-    expect(fix.note).toBe('the menu dropdown is not open');
+    expect(sent.some(m => m.action === 'manualRestoreHere')).toBe(true);
+    expect(sent.some(m => m.action === 'confirmSteerRestore')).toBe(true);
   });
 
   test('restore card v2: error banner shows and the Retry button is hidden when canRetry is false', async () => {
@@ -619,6 +603,68 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await inspectorPage.close();
   });
 
+  test('full-page inspector task panel: debug chart (3 lines) + download button from memory', async () => {
+    await panelPage.evaluate(async () => {
+      // @ts-ignore - enable debug so the inspector surfaces the chart + download tools
+      await chrome.storage.sync.set({ debugEnabled: true });
+      // @ts-ignore
+      await rewindStartSession('chart-sess', 'change language');
+      const img = 'AAAA';
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'chart-sess', step: 1, planStep: 1, instruction: 'open', confidence: 0.87, grounded: 0.9, loop: 0.2, progress: 0.5, confidenceFormula: 'full', url: 'https://ex.com/a', rawLlmJson: '{"step":1}', screenshot: img, screenshotBefore: img });
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'chart-sess', step: 2, planStep: 2, instruction: 'pick', confidence: 0.49, grounded: 0.8, loop: 0.1, progress: -0.4, confidenceFormula: 'full', url: 'https://ex.com/b', rawLlmJson: '{"step":2}', screenshot: img, screenshotBefore: img });
+    });
+
+    const inspectorPage = await context.newPage();
+    await inspectorPage.goto(`chrome-extension://${extensionId}/rewind/inspector.html?session=chart-sess&step=1`);
+    await inspectorPage.waitForLoadState('domcontentloaded');
+
+    // Task panel breakdown shows all three formula versions.
+    await expect(inspectorPage.locator('#why')).toContainText('Full:');
+    await expect(inspectorPage.locator('#why')).toContainText('No-progress:');
+    await expect(inspectorPage.locator('#why')).toContainText('No-loop:');
+
+    // The chart section lives in the task panel, is collapsed by default, and expanding lazily
+    // renders a 3-line SVG.
+    const wrap = inspectorPage.locator('#dev-chart-wrap');
+    await expect(wrap).toBeVisible();
+    await expect(inspectorPage.locator('#dev-chart svg polyline')).toHaveCount(0);
+    await wrap.locator('summary').click();
+    await expect(inspectorPage.locator('#dev-chart svg polyline')).toHaveCount(3);
+
+    // Chart filters are display-only: hide No-progress and keep Full + No-loop visible.
+    await inspectorPage.locator('#dev-chart-filters [data-chart-version="reduced"]').click();
+    await expect(inspectorPage.locator('#dev-chart svg polyline')).toHaveCount(2);
+    await expect(inspectorPage.locator('#dev-chart svg polyline[data-version="noloop"]')).toHaveCount(1);
+
+    // Refresh asks for confirmation; cancel keeps the existing chart untouched.
+    inspectorPage.once('dialog', async dialog => {
+      expect(dialog.message()).toContain('Refresh the confidence chart');
+      await dialog.dismiss();
+    });
+    await inspectorPage.locator('#dev-chart-btn').click();
+    await expect(inspectorPage.locator('#dev-chart svg polyline')).toHaveCount(2);
+
+    inspectorPage.once('dialog', async dialog => {
+      expect(dialog.message()).toContain('Refresh the confidence chart');
+      await dialog.accept();
+    });
+    await inspectorPage.locator('#dev-chart-btn').click();
+    await expect(inspectorPage.locator('#dev-chart svg polyline')).toHaveCount(2);
+    await expect(wrap).toContainText('No-loop');
+
+    // The developer download button triggers a JSON download with every step's data.
+    const downloadPromise = inspectorPage.waitForEvent('download');
+    await inspectorPage.locator('#dev-download-btn').click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toContain('pageguide-steps');
+
+    // Reset the debug flag so it doesn't leak into later tests.
+    await panelPage.evaluate(async () => { await chrome.storage.sync.set({ debugEnabled: false }); });
+    await inspectorPage.close();
+  });
+
   test('timeline inspector uses before/after screenshot fallbacks', async () => {
     await panelPage.evaluate(async () => {
       // @ts-ignore
@@ -648,7 +694,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('#pageguide-rewind-inspector .rw-view img')).toBeVisible();
   });
 
-  test('the steer run button is labeled "Run"', async () => {
+  test('the inspector restore button is labeled "Restore here"', async () => {
     await panelPage.evaluate(async () => {
       // @ts-ignore
       await rewindStartSession('run', 'run');
@@ -657,7 +703,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       // @ts-ignore
       RewindTimeline.openStep({ sessionId: 'run', step: 2, instruction: 'x', url: 'https://ex.com' });
     });
-    await expect(panelPage.locator('#pageguide-rewind-inspector [data-rw="steer-run"]')).toHaveText('Run');
+    await expect(panelPage.locator('#pageguide-rewind-inspector [data-rw="steer"]')).toHaveText(/Restore here/);
   });
 
   test('recall works from in-memory journey, shows a collapse X, no chat error', async () => {
@@ -770,6 +816,74 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(dots.nth(0)).not.toHaveClass(/review/);
     // High confidence → green (conf-high).
     await expect(dots.nth(1)).toHaveClass(/conf-high/);
+  });
+
+  test('debug mode: triple-version confidence chart + per-step scores in the timeline', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore - debug mode publishes this global (normally set by updateDebugButtonVisibility)
+      window.__pgDebugEnabled = true;
+      // @ts-ignore
+      currentGuidePlan = [];
+      // @ts-ignore - two steps carrying the three LLM signals; progress differs in sign
+      currentGuideRecords = [
+        { step: 1, planStep: 1, sessionId: 'dbg', url: 'https://ex.com/a', instruction: 'open', confidence: 0.87, grounded: 0.9, loop: 0.2, progress: 0.5, confidenceFormula: 'full' },
+        { step: 2, planStep: 2, sessionId: 'dbg', url: 'https://ex.com/b', instruction: 'pick', confidence: 0.49, grounded: 0.8, loop: 0.1, progress: -0.4, confidenceFormula: 'full' }
+      ];
+      // @ts-ignore
+      currentGuideStep = 2;
+      // @ts-ignore
+      guideActive = true;
+      // @ts-ignore
+      renderGoalCard({ route: 'guide', title: 'T', step: 2 });
+    });
+
+    // Chart shell is visible but collapsed by default; expanding renders all three versions.
+    const chart = panelPage.locator('#pageguide-conf-chart');
+    await expect(chart).toBeVisible();
+    await expect(chart.locator('svg polyline')).toHaveCount(0);
+    await chart.locator('summary').click();
+    await expect(chart.locator('svg polyline')).toHaveCount(3);
+    await expect(chart).toContainText('Full');
+    await expect(chart).toContainText('No-progress');
+    await expect(chart).toContainText('No-loop');
+    await chart.locator('[data-chart-version="reduced"]').click();
+    await expect(chart.locator('svg polyline')).toHaveCount(2);
+    await expect(chart.locator('svg polyline[data-version="noloop"]')).toHaveCount(1);
+
+    panelPage.once('dialog', async dialog => {
+      expect(dialog.message()).toContain('Refresh the confidence chart');
+      await dialog.dismiss();
+    });
+    await chart.locator('#pageguide-conf-chart-refresh').click();
+    await expect(chart.locator('svg polyline')).toHaveCount(2);
+
+    // Per-step preview shows all three formula versions.
+    await panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot').nth(0).click();
+    const dual = panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-dual');
+    await expect(dual).toBeVisible();
+    await expect(dual).toContainText('Full:');
+    await expect(dual).toContainText('No-progress:');
+    await expect(dual).toContainText('No-loop:');
+  });
+
+  test('debug off: the confidence chart and dual scores are hidden', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      window.__pgDebugEnabled = false;
+      // @ts-ignore
+      currentGuidePlan = [];
+      // @ts-ignore
+      currentGuideRecords = [{ step: 1, planStep: 1, sessionId: 'dbg2', confidence: 0.87, grounded: 0.9, loop: 0.2, progress: 0.5 }];
+      // @ts-ignore
+      currentGuideStep = 1;
+      // @ts-ignore
+      guideActive = true;
+      // @ts-ignore
+      renderGoalCard({ route: 'guide', title: 'T', step: 1 });
+    });
+    await expect(panelPage.locator('#pageguide-conf-chart')).toBeHidden();
+    await panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot').nth(0).click();
+    await expect(panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-dual')).toHaveCount(0);
   });
 
   test('"More" menu opens downward (not off-screen) in guide mode', async () => {

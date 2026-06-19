@@ -276,7 +276,12 @@ Step ${guidance.currentStep}
 ${guidance.previousSteps.length > 0 ? guidance.previousSteps.join('\n') : 'None (this is the first step)'}
 
 Provide the next step. Return JSON only.`
-      }]
+      }],
+      metadata: {
+        mode: 'guide_v1',
+        step: guidance.currentStep,
+        url: window.location.href
+      }
     });
     
     if (response?.error) {
@@ -316,6 +321,8 @@ async function processGuideResponse(content) {
     if (match) jsonStr = match[0];
     
     const result = JSON.parse(jsonStr);
+    if (!result) throw new Error('Could not parse step JSON');
+    if (!result.instruction) throw new Error('LLM response JSON is missing instruction field');
     console.log('🎯 Parsed guide step:', result);
     
     // Clear previous highlights
@@ -379,9 +386,8 @@ async function processGuideResponse(content) {
     await clearGuidanceState();
     cleanupSom();
     return {
-      success: true,
-      answer: content,
-      isGuide: false
+      success: false,
+      error: e.message || 'Could not parse step JSON'
     };
   }
 }

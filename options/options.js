@@ -18,7 +18,8 @@ async function loadSettings() {
     'openrouterApiKey', 'openrouterModel',
     'openaiApiKey', 'openaiModel',
     'visionEnabled',
-    'somEnabled'
+    'somEnabled',
+    'debugEnabled'
   ]);
 
   // Set current provider
@@ -42,6 +43,14 @@ async function loadSettings() {
 
   // Load SoM setting (default: disabled)
   document.getElementById('somEnabled').checked = settings.somEnabled === true;
+
+  // Load Debug setting (default: disabled)
+  const debugEnabled = settings.debugEnabled === true;
+  document.getElementById('debugEnabled').checked = debugEnabled;
+  if (debugEnabled) {
+    document.getElementById('debugCode').value = 'PAGEGUIDE2026';
+    document.getElementById('debugToggleGroup').style.display = 'block';
+  }
 
   // Load Rewind capture setting from local storage (default: enabled).
   // Kept in chrome.storage.local (not sync) because the capture writes large
@@ -86,7 +95,8 @@ async function saveSettings() {
     openaiApiKey: document.getElementById('openaiApiKey').value.trim(),
     openaiModel: document.getElementById('openaiModel').value,
     visionEnabled: document.getElementById('visionEnabled').checked,
-    somEnabled: document.getElementById('somEnabled').checked
+    somEnabled: document.getElementById('somEnabled').checked,
+    debugEnabled: document.getElementById('debugEnabled').checked
   };
 
   await chrome.storage.sync.set(settings);
@@ -263,6 +273,21 @@ document.addEventListener('DOMContentLoaded', () => {
         await chrome.storage.local.set({ rewindCaptureEnabled: rewindToggle.checked });
         showStatus(rewindToggle.checked ? 'Rewind capture enabled' : 'Rewind capture disabled', 'success');
       } catch (e) {}
+    });
+  }
+
+  // Debug code entry event listener
+  const debugCodeInput = document.getElementById('debugCode');
+  const debugToggleGroup = document.getElementById('debugToggleGroup');
+  const debugEnabledToggle = document.getElementById('debugEnabled');
+  if (debugCodeInput && debugToggleGroup && debugEnabledToggle) {
+    debugCodeInput.addEventListener('input', () => {
+      if (debugCodeInput.value.trim() === 'PAGEGUIDE2026') {
+        debugToggleGroup.style.display = 'block';
+      } else {
+        debugToggleGroup.style.display = 'none';
+        debugEnabledToggle.checked = false;
+      }
     });
   }
 });

@@ -138,7 +138,12 @@ async function handleImageAsk(query) {
       images: [
         { base64: uploadedImage, label: 'User uploaded image (what to find)' },
         { base64: viewportScreenshot, label: 'Current page viewport (where to search)' }
-      ]
+      ],
+      metadata: {
+        mode: 'image_ask_step',
+        step: step,
+        url: window.location.href
+      }
     });
     
     if (response?.error) {

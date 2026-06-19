@@ -10,6 +10,7 @@ let uploadedFileContent = null; // Text content of an attached file
 let uploadedFileName = null;    // Display name of the attached file
 let currentSelectedText = null; // Stores text selected on the webpage
 let guideActive = false; // True while guide is generating steps (shows stop button)
+let guidePaused = false; // True when an active guide is paused and can be resumed
 let noPageContext = false; // When true, skip page scraping and answer from AI knowledge only
 let panelForcedMode = null; // Sticky route chosen by Find / Guide / Hide tabs; null = Auto
 let panelLastRoute = null;  // Last route returned by the router, used only for tab highlight
@@ -59,7 +60,8 @@ const UI_ICONS = {
   pageOff: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 2.2A10 10 0 0 1 21.8 13.4"/><path d="M13.4 21.8A10 10 0 0 1 2.2 10.6"/><path d="M2 12h10"/><path d="M12 2a15 15 0 0 1 2.3 9.8"/></svg></span>',
   bolt: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7Z"/></svg></span>',
   hand: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V7a2 2 0 0 0-4 0v4"/><path d="M14 10V5a2 2 0 0 0-4 0v7"/><path d="M10 11V6a2 2 0 0 0-4 0v8"/><path d="M6 14v-2a2 2 0 0 0-4 0v3a7 7 0 0 0 7 7h4a7 7 0 0 0 7-7v-4a2 2 0 0 0-2-2Z"/></svg></span>',
-  quote: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10"/><path d="M7 12h7"/><path d="M5 20h14"/><path d="M4 4h16v12H4z"/></svg></span>'
+  quote: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10"/><path d="M7 12h7"/><path d="M5 20h14"/><path d="M4 4h16v12H4z"/></svg></span>',
+  gauge: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a4 4 0 1 0-4-4"/><path d="M12 14v-4"/><path d="M3 21a9 9 0 0 1 18 0"/></svg></span>'
 };
 
 function _truncateText(text, max = 72) {
@@ -165,6 +167,20 @@ function openMemoryShotLightbox(base64, title = 'Before action — what PageGuid
   document.body.appendChild(overlay);
 }
 
+// Compute all three confidence formula versions for a step from its stored LLM signals
+// (grounded/loop/progress). Pure — no LLM call — so Full vs No-progress vs No-loop can be compared
+// at a glance. Returns { full, reduced, noloop } (each 0..1 or null), or null when no signals.
+function _dualConfidence(rec) {
+  if (!rec || typeof gv2ComputeConfidence !== 'function') return null;
+  if (rec.grounded == null && rec.loop == null && rec.progress == null) return null;
+  const signals = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
+  const full = gv2ComputeConfidence(signals, 'full').confidence;
+  const reduced = gv2ComputeConfidence(signals, 'reduced').confidence;
+  const noloop = gv2ComputeConfidence(signals, 'noloop').confidence;
+  if (full == null && reduced == null && noloop == null) return null;
+  return { full, reduced, noloop };
+}
+
 async function showGoalStepPreview(step, anchor) {
   hideGoalStepPreview();
   const isInitialNode = Number(step) === 0;
@@ -184,6 +200,12 @@ async function showGoalStepPreview(step, anchor) {
   const confHtml = (tier && conf != null)
     ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
     : '';
+  // Debug-only: all three formula versions side by side (Full / No-progress / No-loop).
+  const dual = window.__pgDebugEnabled ? _dualConfidence(meta) : null;
+  const pctOf = (c) => (c != null) ? Math.round(c * 100) + '%' : '—';
+  const dualHtml = dual
+    ? `<div class="pageguide-goal-step-dual">🐞 Full: <b>${pctOf(dual.full)}</b> · No-progress: <b>${pctOf(dual.reduced)}</b> · No-loop: <b>${pctOf(dual.noloop)}</b></div>`
+    : '';
   const url = meta?.url || rec?.url || '';
   // Show the URL as a compact "link" hyperlink rather than the full (often long) address.
   const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
@@ -192,8 +214,11 @@ async function showGoalStepPreview(step, anchor) {
   // Card layout: the REGION-around-the-target crop is the picture on top; the full BEFORE-action
   // screenshot is tucked into a collapsible below it. (Falls back to the before-shot on top when
   // there's no region crop — e.g. the initial-state node.) The AFTER-action shot is in "Inspect more".
-  const beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
-  const regionShot = rec?.regionShot || null;
+  const PLACEHOLDER_SHOT = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  let beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
+  if (beforeShot === PLACEHOLDER_SHOT) beforeShot = null;
+  let regionShot = rec?.regionShot || null;
+  if (regionShot === PLACEHOLDER_SHOT) regionShot = null;
   const topShot = regionShot || beforeShot;
   const topImg = topShot
     ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>`
@@ -212,18 +237,12 @@ async function showGoalStepPreview(step, anchor) {
     ${topImg}
     <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
+    ${dualHtml}
     ${urlHtml}
     ${beforeHtml}
     ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
     ${meta ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
-    ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">⤳ Steer from here</button>' : ''}
-    ${allowSteer ? `<div class="pageguide-goal-step-steerbox" style="display:none">
-      <textarea class="pageguide-goal-step-steer-input" rows="2" placeholder="What should the agent do differently from here?"></textarea>
-      <div class="pageguide-goal-step-steer-row">
-        <button type="button" class="pageguide-goal-step-steer-cancel">Cancel</button>
-        <button type="button" class="pageguide-goal-step-steer-go">Run</button>
-      </div>
-    </div>` : ''}
+    ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">Restore here</button>' : ''}
   `;
 
   preview.addEventListener('click', async (e) => {
@@ -237,30 +256,12 @@ async function showGoalStepPreview(step, anchor) {
     }
     // Let the collapsible "Before action" toggle natively; don't open the inspector.
     if (target.closest('.pageguide-goal-step-before')) return;
-    // Toggle the inline steer prompt.
     if (target.closest('.pageguide-goal-step-steer')) {
-      const box = preview.querySelector('.pageguide-goal-step-steerbox');
-      if (box) {
-        const show = box.style.display === 'none';
-        box.style.display = show ? '' : 'none';
-        if (show) { const ta = box.querySelector('textarea'); if (ta) ta.focus(); }
-      }
-      return;
-    }
-    if (target.closest('.pageguide-goal-step-steer-cancel')) {
-      const box = preview.querySelector('.pageguide-goal-step-steerbox');
-      if (box) box.style.display = 'none';
-      return;
-    }
-    if (target.closest('.pageguide-goal-step-steer-go')) {
-      const ta = preview.querySelector('.pageguide-goal-step-steer-input');
-      const goal = ta ? ta.value.trim() : '';
-      if (!goal) { if (ta) ta.focus(); return; }
-      const goBtn = target.closest('button');
-      if (goBtn) goBtn.disabled = true;
-      guideStopped = false; // a steer is a deliberate user action — re-arm running-state messages
+      const restoreBtn = target.closest('button');
+      if (restoreBtn) restoreBtn.disabled = true;
+      guideStopped = false;
       if (meta && typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
-        await RewindTimeline.steerFromStep(meta, goal);
+        await RewindTimeline.steerFromStep(meta, '');
       }
       hideGoalStepPreview();
       return;
@@ -277,9 +278,7 @@ async function showGoalStepPreview(step, anchor) {
     }
 
     // Clicks inside the steer box (e.g. the textarea) should not open the inspector.
-    if (target.closest('.pageguide-goal-step-steerbox')) return;
-
-    // Default: open the in-panel inspector (snapshot + "Steer from here"), which steers THIS
+    // Default: open the in-panel inspector (snapshot + Restore here), which restores THIS
     // working tab and still offers "Open detailed view ↗" for the full-page view.
     if (meta && typeof RewindTimeline !== 'undefined') {
       hideGoalStepPreview();
@@ -361,6 +360,145 @@ function renderGoalDots(current, total) {
   }
 }
 
+const CONF_CHART_SPECS = {
+  full: { label: 'Full (G·loop·progress)', color: '#7857ff' },
+  reduced: { label: 'No-progress (G·loop)', color: '#ff8a3d' },
+  noloop: { label: 'No-loop (G·progress)', color: '#1bbf9c' }
+};
+let confChartVisibleVersions = { full: true, reduced: true, noloop: true };
+
+function _normalizeChartVisible(next, changedKey) {
+  const clean = {
+    full: next?.full !== false,
+    reduced: next?.reduced !== false,
+    noloop: next?.noloop !== false
+  };
+  if (!clean.full && !clean.reduced && !clean.noloop) clean[changedKey || 'full'] = true;
+  return clean;
+}
+
+function _confidenceChartRows(records) {
+  if (typeof gv2ComputeConfidence !== 'function') return [];
+  return (Array.isArray(records) ? records : [])
+    .slice()
+    .sort((a, b) => Number(a.step) - Number(b.step))
+    .map(r => {
+      if (r.grounded == null && r.loop == null && r.progress == null) return null;
+      const signals = { grounded: r.grounded, loop: r.loop, progress: r.progress };
+      const full = gv2ComputeConfidence(signals, 'full').confidence;
+      const reduced = gv2ComputeConfidence(signals, 'reduced').confidence;
+      const noloop = gv2ComputeConfidence(signals, 'noloop').confidence;
+      return (full != null || reduced != null || noloop != null) ? { step: r.step, full, reduced, noloop } : null;
+    })
+    .filter(Boolean);
+}
+
+function _confChartFilterHtml() {
+  return `<div class="pageguide-conf-chart-filters" role="group" aria-label="Confidence chart versions">
+    ${Object.keys(CONF_CHART_SPECS).map(key => `
+      <button type="button" class="pageguide-conf-chart-filter${confChartVisibleVersions[key] ? ' active' : ''}" data-chart-version="${key}" aria-pressed="${confChartVisibleVersions[key] ? 'true' : 'false'}">
+        <i style="background:${CONF_CHART_SPECS[key].color}"></i>${escapeHtml(CONF_CHART_SPECS[key].label)}
+      </button>`).join('')}
+  </div>`;
+}
+
+function _buildConfChartSvg(data, visible = confChartVisibleVersions) {
+  visible = _normalizeChartVisible(visible);
+  const keys = Object.keys(CONF_CHART_SPECS).filter(k => visible[k]);
+  const W = 300, H = 130, padL = 26, padR = 10, padT = 12, padB = 22;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const n = data.length;
+  const xAt = (i) => n <= 1 ? padL + innerW / 2 : padL + (i / (n - 1)) * innerW;
+  const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, Number(v) || 0))) * innerH;
+  const validFor = (key) => data.filter(d => d[key] != null);
+  const line = (key) => {
+    const pts = data.map((d, i) => d[key] == null ? null : `${xAt(i).toFixed(1)},${yAt(d[key]).toFixed(1)}`).filter(Boolean);
+    return pts.length ? `<polyline data-version="${key}" points="${pts.join(' ')}" fill="none" stroke="${CONF_CHART_SPECS[key].color}" stroke-width="1.8"/>` : '';
+  };
+  const dots = (key) => validFor(key).map(d => {
+    const i = data.indexOf(d);
+    return `<circle data-version="${key}" cx="${xAt(i).toFixed(1)}" cy="${yAt(d[key]).toFixed(1)}" r="2.4" fill="${CONF_CHART_SPECS[key].color}"/>`;
+  }).join('');
+  const grid = [0, 0.5, 1].map(v => {
+    const y = yAt(v).toFixed(1);
+    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(128,128,128,.25)" stroke-width="1"/>`
+      + `<text x="${padL - 4}" y="${(yAt(v) + 3).toFixed(1)}" text-anchor="end" font-size="8" fill="currentColor" opacity=".55">${Math.round(v * 100)}</text>`;
+  }).join('');
+  const xlabels = data.map((d, i) => `<text x="${xAt(i).toFixed(1)}" y="${H - 7}" text-anchor="middle" font-size="8" fill="currentColor" opacity=".55">${escapeHtml(String(d.step))}</text>`).join('');
+  return `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Confidence comparison chart">
+      ${grid}
+      ${keys.map(line).join('')}
+      ${keys.map(dots).join('')}
+      ${xlabels}
+    </svg>
+    <div class="pageguide-conf-chart-legend">
+      ${keys.map(k => `<span><i style="background:${CONF_CHART_SPECS[k].color}"></i>${escapeHtml(CONF_CHART_SPECS[k].label)}</span>`).join('')}
+    </div>`;
+}
+
+async function _refreshConfChartFromStore() {
+  if (!visibleJourneySessionId || typeof rewindGetIndex !== 'function') return;
+  try {
+    let idx = null;
+    if (typeof rewindVerifyScreenshots === 'function') idx = await rewindVerifyScreenshots(visibleJourneySessionId);
+    else idx = await rewindGetIndex(visibleJourneySessionId);
+    if (idx && Array.isArray(idx.steps)) {
+      currentGuideRecords = idx.steps.filter(m => !(m.isInitial || Number(m.step) === 0)).map(m => Object.assign({}, m, { sessionId: visibleJourneySessionId }));
+      currentGuideInitial = idx.steps.find(m => m.isInitial || Number(m.step) === 0) || currentGuideInitial;
+    }
+  } catch (e) {}
+}
+
+function _renderConfChartBody() {
+  const body = document.getElementById('pageguide-conf-chart-body');
+  if (!body) return;
+  const data = _confidenceChartRows(currentGuideRecords);
+  if (!data.length) {
+    body.innerHTML = '<div class="pageguide-conf-chart-empty">No steps with confidence signals yet.</div>';
+    return;
+  }
+  body.innerHTML = _buildConfChartSvg(data, confChartVisibleVersions);
+}
+
+// Debug-only chart: collapsed by default and rendered lazily when opened.
+function renderConfChart() {
+  const box = document.getElementById('pageguide-conf-chart');
+  if (!box) return;
+  if (!window.__pgDebugEnabled) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const data = _confidenceChartRows(currentGuideRecords);
+  if (!data.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const wasOpen = !!box.querySelector('#pageguide-conf-chart-wrap')?.open;
+  box.innerHTML = `
+    <details id="pageguide-conf-chart-wrap" ${wasOpen ? 'open' : ''}>
+      <summary class="pageguide-conf-chart-summary">📈 Confidence chart</summary>
+      <div class="pageguide-conf-chart-title">Confidence by step — Full vs No-progress vs No-loop</div>
+      <div class="pageguide-conf-chart-actions">
+        <button type="button" class="pageguide-conf-chart-refresh" id="pageguide-conf-chart-refresh">Refresh chart</button>
+      </div>
+      ${_confChartFilterHtml()}
+      <div id="pageguide-conf-chart-body"></div>
+    </details>`;
+  const wrap = box.querySelector('#pageguide-conf-chart-wrap');
+  const drawIfOpen = () => { if (wrap.open) _renderConfChartBody(); };
+  wrap.addEventListener('toggle', drawIfOpen);
+  box.querySelector('#pageguide-conf-chart-refresh')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!window.confirm('Refresh the confidence chart from the latest saved step data?')) return;
+    await _refreshConfChartFromStore();
+    _renderConfChartBody();
+  });
+  box.querySelectorAll('[data-chart-version]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.chartVersion;
+      confChartVisibleVersions = _normalizeChartVisible({ ...confChartVisibleVersions, [key]: !confChartVisibleVersions[key] }, key);
+      renderConfChart();
+    });
+  });
+  if (wasOpen) _renderConfChartBody();
+  box.style.display = '';
+}
+
 function renderGoalCard({ prompt, route, title, step, total } = {}) {
   const card = document.getElementById('pageguide-goal');
   if (!card) return;
@@ -409,6 +547,7 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
     if (stepText) stepText.textContent = `Step ${safeStep} of ${totalSteps}`;
     if (fill) fill.style.width = `${Math.round((safeStep / totalSteps) * 100)}%`;
     renderGoalDots(safeStep, totalSteps);
+    renderConfChart();
   } else if (progress) {
     progress.style.display = 'none';
   }
@@ -435,6 +574,7 @@ function pruneGuideAfter(step) {
 if (typeof window !== 'undefined') window.pruneGuideAfter = pruneGuideAfter;
 
 function clearGoalAndStepPanel() {
+  guidePaused = false;
   currentGoal = null;
   currentGuidePlan = [];
   currentGuideTitle = '';
@@ -450,18 +590,22 @@ function clearGoalAndStepPanel() {
   const goal = document.getElementById('pageguide-goal');
   const stepPanel = document.getElementById('pageguide-step-panel');
   const exportBtn = document.getElementById('pageguide-export-pdf');
+  const cardExportBtn = document.getElementById('pageguide-card-export-pdf');
   if (goal) goal.style.display = 'none';
   if (stepPanel) {
     stepPanel.style.display = 'none';
     stepPanel.innerHTML = '';
   }
   if (exportBtn) exportBtn.disabled = true;
+  if (cardExportBtn) cardExportBtn.disabled = true;
   refreshGuideOnlyActions();
 }
 
 function setExportEnabled(on) {
   const btn = document.getElementById('pageguide-export-pdf');
   if (btn) btn.disabled = !on;
+  const cardBtn = document.getElementById('pageguide-card-export-pdf');
+  if (cardBtn) cardBtn.disabled = !on;
   refreshGuideOnlyActions();
 }
 
@@ -486,6 +630,19 @@ function refreshGuideOnlyActions() {
   document.querySelectorAll('.pageguide-guide-only-action').forEach(el => {
     el.style.display = hasGuide ? '' : 'none';
   });
+  updateGuidePauseButton();
+}
+
+function updateGuidePauseButton() {
+  const btn = document.getElementById('pageguide-guide-pause');
+  if (!btn) return;
+  const show = !!(guideActive || guidePaused);
+  btn.style.display = show ? '' : 'none';
+  btn.classList.toggle('is-resume', !!guidePaused);
+  btn.textContent = guidePaused ? 'Resume' : 'Pause';
+  btn.title = guidePaused ? 'Resume guide' : 'Pause guide';
+  btn.setAttribute('aria-label', guidePaused ? 'Resume guide' : 'Pause guide');
+  btn.disabled = false;
 }
 
 // Initialize
@@ -568,7 +725,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-send').addEventListener('click', () => {
     if (panelRunning) stopRun(); else sendMessage();
   });
+  document.getElementById('pageguide-guide-pause')?.addEventListener('click', () => {
+    if (guidePaused) resumeGuideFromPanel();
+    else pauseGuide('Guide paused. Resume when you are ready.');
+  });
   initGuideModeToggle();
+  initConfidenceFormulaToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -601,6 +763,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('pageguide-export-pdf')?.addEventListener('click', () => {
     hideMoreMenu();
+    exportJourneyPdf();
+  });
+  document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => {
     exportJourneyPdf();
   });
   setExportEnabled(false);
@@ -696,6 +861,51 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.tabs.onRemoved.addListener((tabId) => {
     _tabSessions.delete(tabId);
     _hiddenTabChips.delete(tabId);
+  });
+
+  // Debug prompt button listener
+  const debugPromptBtn = document.getElementById('pageguide-debug-prompt-btn');
+  if (debugPromptBtn) {
+    debugPromptBtn.addEventListener('click', async () => {
+      try {
+        const local = await chrome.storage.local.get(['debugPrompts', 'lastDebugPrompt']);
+        const livePrompts = Array.isArray(local.debugPrompts) ? local.debugPrompts : [];
+        if (livePrompts.length === 0 && local.lastDebugPrompt) {
+          livePrompts.push(local.lastDebugPrompt);
+        }
+
+        let savedSessions = [];
+        if (typeof rewindGetSessions === 'function') {
+          try {
+            savedSessions = await rewindGetSessions();
+          } catch (e) {
+            console.warn('Failed to fetch saved sessions:', e);
+          }
+        }
+
+        if (livePrompts.length > 0 || savedSessions.length > 0) {
+          const defaultSessionId = visibleJourneySessionId || (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.getSessionId === 'function' ? RewindTimeline.getSessionId() : null);
+          openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId);
+        } else {
+          alert('No prompt has been sent or saved in this session yet.');
+        }
+      } catch (e) {
+        console.error('Failed to load debug prompts:', e);
+      }
+    });
+  }
+
+  // Load debugEnabled setting initially
+  try {
+    const settings = await chrome.storage.sync.get(['debugEnabled']);
+    updateDebugButtonVisibility(settings.debugEnabled === true);
+  } catch (e) {}
+
+  // Listen for sync storage changes to update debug button visibility
+  chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace === 'sync' && 'debugEnabled' in changes) {
+      updateDebugButtonVisibility(changes.debugEnabled.newValue === true);
+    }
   });
 });
 
@@ -1107,6 +1317,40 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
   chatMessages.push({ content, type, timestamp: Date.now(), context });
 }
 
+function isGuideParseError(text) {
+  return /Could not parse step JSON/i.test(String(text || ''));
+}
+
+function addGuideRetryMessage(errorText) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+  hideTyping();
+  container.querySelector('.pageguide-guide-retry-card')?.remove();
+  const card = document.createElement('div');
+  card.className = 'pageguide-guide-retry-card';
+  card.innerHTML = `
+    <div class="pageguide-guide-retry-title">Guide step could not be parsed</div>
+    <div class="pageguide-guide-retry-body">${escapeHtml(errorText || 'The agent returned an invalid step response.')}</div>
+    <button type="button" class="pageguide-step-next-btn pageguide-guide-retry-btn">Try again</button>`;
+  card.querySelector('.pageguide-guide-retry-btn')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    showTyping();
+    try {
+      const res = await sendToContentScript({ action: 'retryGuideStep' });
+      if (!res || res.success === false) throw new Error(res?.error || 'Could not retry guide step');
+      card.remove();
+    } catch (err) {
+      hideTyping();
+      btn.disabled = false;
+      addMessage(`Could not retry the guide step: ${err.message}`, 'system');
+    }
+  });
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
+}
+
 /**
  * Append a small chat message with a "View journey" button that re-displays a past guide's
  * task-panel journey (dots + snapshots) so its context isn't lost as new prompts come in.
@@ -1143,15 +1387,34 @@ function _steerActionLabel(e) {
   switch (e.kind) {
     case 'note':           return e.value || '';
     case 'localStorage':
-    case 'sessionStorage': return `Restore saved setting${e.key ? ` “${e.key}”` : ''}`;
-    case 'scroll':         return 'Restore scroll position';
-    case 'form':           return `Refill ${e.sel || 'a field'}`;
+    case 'sessionStorage': return `Restored saved setting${e.key ? ` "${e.key}"` : ''}`;
+    case 'scroll':         return 'Restored scroll position';
+    case 'form':           return `Refilled ${e.sel || 'a field'}`;
     case 'replay': {
-      const verb = ({ type: 'Type into', select: 'Select', check: 'Toggle', toggle: 'Toggle' })[e.action] || 'Click';
-      return `${verb} “${t}”`;
+      const verb = ({ type: 'Typed into', select: 'Selected', check: 'Toggled', toggle: 'Toggled' })[e.action] || 'Clicked';
+      return `${verb} "${t}"`;
     }
     default:               return e.kind;
   }
+}
+
+function _steerActionIcon(e) {
+  if (!e || e.ok === false) return '!';
+  if (e.kind === 'scroll') return '↕';
+  if (e.kind === 'form') return 'T';
+  if (e.kind === 'replay') return '↗';
+  return '•';
+}
+
+function _steerDisplayLog(log) {
+  return (Array.isArray(log) ? log : []).filter(e => {
+    if (!e) return false;
+    if ((e.kind === 'localStorage' || e.kind === 'sessionStorage') && e.ok !== false) return false;
+    const label = _steerActionLabel(e).trim().toLowerCase();
+    if (!label) return false;
+    if (label === 'restored saved page settings' || label === 'restore saved page settings') return false;
+    return true;
+  });
 }
 
 function _steerTechnicalLabel(e) {
@@ -1196,25 +1459,17 @@ function addSteerRestoreCard(message) {
   // Replace any stale card from a previous steer (also how retry/fix re-render in place).
   container.querySelector('.pageguide-steer-restore')?.remove();
 
-  const log = Array.isArray(message.log) ? message.log : [];
+  const log = _steerDisplayLog(message.log);
 
-  // Clean checklist: one line per action, action first, failed ones flagged in red. No raw
-  // selectors/keys cluttering the primary line — the goal is a quick, calm inspection.
   const lines = log.length
-    ? log.map((e, i) => {
+    ? log.map((e) => {
         const ok = e.ok !== false;
         return `<li class="pageguide-steer-restore-item${ok ? '' : ' failed'}">
-          <label><input type="checkbox" class="pageguide-steer-restore-check" data-idx="${i}" ${ok ? 'checked' : ''}>
-            <span class="pageguide-steer-restore-action">${escapeHtml(_steerActionLabel(e))}</span></label>
+          <span class="pageguide-steer-restore-icon" aria-hidden="true">${escapeHtml(_steerActionIcon(e))}</span>
+          <span class="pageguide-steer-restore-action">${escapeHtml(_steerActionLabel(e))}</span>
         </li>`;
       }).join('')
-    : '<li class="pageguide-steer-restore-empty">No state changes were needed.</li>';
-  const technicalDetails = log.length
-    ? `<details class="pageguide-steer-restore-details">
-         <summary>Technical details</summary>
-         <ul>${log.map(e => `<li>${escapeHtml(_steerTechnicalLabel(e))}</li>`).join('')}</ul>
-       </details>`
-    : '';
+    : '<li class="pageguide-steer-restore-empty">No page actions were needed.</li>';
 
   const stepLabel = escapeHtml(String(message.redoStep != null ? message.redoStep : message.fromStep));
   // The recorded "before step N" screenshot — the exact target state we're restoring to.
@@ -1233,42 +1488,21 @@ function addSteerRestoreCard(message) {
   const errHtml = message.error
     ? `<div class="pageguide-steer-restore-error">${escapeHtml(message.error)}</div>`
     : '';
-  const retryBtn = message.canRetry === false
-    ? ''
-    : '<button type="button" class="pageguide-step-next-btn pageguide-steer-restore-retry">↻ Retry restore</button>';
-  const canCompare = !!(message.redoBeforeShot && message.restoreShot);
-  const compareBtn = `<button type="button" class="pageguide-step-next-btn pageguide-steer-restore-compare" ${canCompare ? '' : 'disabled'} title="${canCompare ? 'Compare the saved and restored screenshots' : 'Need both saved and current screenshots to compare.'}">Compare state</button>`;
-  const branchBtn = message.branchLabel
-    ? `<button type="button" class="pageguide-step-next-btn pageguide-steer-restore-journey">${escapeHtml(message.branchLabel)}</button>`
-    : '';
-
   const card = document.createElement('div');
   card.className = 'pageguide-step-card pageguide-steer-restore';
   card.innerHTML = `
     <div class="pageguide-guide-step pageguide-steer-restore-hdr">
       <span class="pageguide-step-badge">Restored</span>
-      <span class="pageguide-step-text">Review the restored state before step ${stepLabel}, then continue to redo it.</span>
+      <span class="pageguide-step-text">Review the restored state before step ${stepLabel}.</span>
       ${snapBtn}
     </div>
     ${targetImg}
     ${message.url ? `<div class="pageguide-step-meta">🔗 ${escapeHtml(message.url)}</div>` : ''}
     <ul class="pageguide-steer-restore-log">${lines}</ul>
-    ${technicalDetails}
     ${errHtml}
-    <div class="pageguide-steer-compare-result" style="display:none"></div>
     <div class="pageguide-step-btn-row">
-      <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-confirm">✓ Looks right — continue</button>
-      ${branchBtn}
-      ${compareBtn}
-      ${retryBtn}
-      <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-fix">✗ Not restored — tell agent</button>
-      <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-stop">⏹ Stop</button>
-    </div>
-    <div class="pageguide-steer-restore-fixbox" style="display:none">
-      <textarea class="pageguide-steer-restore-fix-input" rows="2" placeholder="What didn't restore correctly? (e.g. the menu dropdown isn't open)"></textarea>
-      <div class="pageguide-steer-restore-fix-row">
-        <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-fix-send">Send to agent</button>
-      </div>
+      <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-confirm">Confirm</button>
+      <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-manual">Do it yourself</button>
     </div>`;
 
   // Re-enable the card's controls and surface an inline error when the content script can't be
@@ -1300,71 +1534,18 @@ function addSteerRestoreCard(message) {
     e.stopPropagation();
     openMemoryShotLightbox(message.redoBeforeShot, `Before action — saved state before step ${stepLabel}`);
   });
-  card.querySelector('.pageguide-steer-restore-compare')?.addEventListener('click', async (e) => {
+  card.querySelector('.pageguide-steer-restore-manual')?.addEventListener('click', async (e) => {
     e.stopPropagation();
     const btn = e.currentTarget;
-    if (!btn || btn.disabled) return;
-    const resultEl = card.querySelector('.pageguide-steer-compare-result');
     btn.disabled = true;
-    const oldText = btn.textContent;
-    btn.textContent = 'Comparing...';
-    if (resultEl) {
-      resultEl.style.display = '';
-      resultEl.innerHTML = '<div class="pageguide-steer-compare-card loading">Comparing saved and restored screenshots...</div>';
-    }
     try {
-      const res = await sendToContentScript({ action: 'compareSteerRestoreState' });
-      if (!res || res.success === false) throw new Error(res?.error || 'Could not compare screenshots');
-      if (resultEl) resultEl.innerHTML = renderRestoreComparison(res.comparison || {});
+      const res = await sendToContentScript({ action: 'manualRestoreHere' });
+      if (!res || res.success === false) throw new Error(res?.error || 'unavailable');
     } catch (err) {
-      if (resultEl) {
-        resultEl.innerHTML = `<div class="pageguide-steer-compare-card needs-review">⚠ ${escapeHtml(err.message || 'Could not compare screenshots.')}</div>`;
-      }
+      recover('Could not unlock manual restore. Try again.');
     } finally {
       btn.disabled = false;
-      btn.textContent = oldText;
     }
-  });
-  card.querySelector('.pageguide-steer-restore-retry')?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-    showTyping();
-    try {
-      const res = await sendToContentScript({ action: 'retrySteerRestore' });
-      if (res && res.success === false) throw new Error(res.error || 'unavailable');
-      // On success the content script re-sends steerRestoreReady, which re-renders this card.
-    } catch (err) {
-      recover('⚠ Couldn’t reach the page to retry. Try again.');
-    }
-  });
-  card.querySelector('.pageguide-steer-restore-fix')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const box = card.querySelector('.pageguide-steer-restore-fixbox');
-    if (!box) return;
-    const show = box.style.display === 'none';
-    box.style.display = show ? '' : 'none';
-    if (show) { const ta = box.querySelector('textarea'); if (ta) ta.focus(); }
-  });
-  card.querySelector('.pageguide-steer-restore-fix-send')?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const ta = card.querySelector('.pageguide-steer-restore-fix-input');
-    const note = ta ? ta.value.trim() : '';
-    if (!note) { if (ta) ta.focus(); return; }
-    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-    showTyping();
-    try {
-      const res = await sendToContentScript({ action: 'fixSteerRestore', note });
-      if (res && res.success === false) throw new Error(res.error || 'unavailable');
-      // The agent takes over from here (it re-grounds on the live page); drop the restore card.
-      card.remove();
-    } catch (err) {
-      recover('⚠ Couldn’t reach the page. Try again.');
-    }
-  });
-  card.querySelector('.pageguide-steer-restore-stop')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    stopGuide();
-    card.remove();
   });
 
   container.appendChild(card);
@@ -1444,11 +1625,13 @@ async function showStoredJourney(sessionId) {
   const lastStep = currentGuideRecords.length ? currentGuideRecords[currentGuideRecords.length - 1].step : 0;
   currentGuideStep = lastStep;
   guideActive = false; // recalled journey is a past, read-only view
+  guidePaused = false;
   visibleJourneySessionId = sessionId;
   visibleJourneyTitle = currentGuideTitle;
   visibleJourneyRecalled = true;
   renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
   _setJourneyRecalledMode(true);
+  updateGuidePauseButton();
 }
 if (typeof window !== 'undefined') window.showStoredJourney = showStoredJourney;
 
@@ -1744,8 +1927,11 @@ async function showBranchTree(keepZoom = false) {
       const card = document.createElement('div');
       card.className = 'pg-tree-hovercard pageguide-goal-step-preview';
 
-      const beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
-      const regionShot = rec?.regionShot || null;
+      const PLACEHOLDER_SHOT = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      let beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
+      if (beforeShot === PLACEHOLDER_SHOT) beforeShot = null;
+      let regionShot = rec?.regionShot || null;
+      if (regionShot === PLACEHOLDER_SHOT) regionShot = null;
       const topShot = regionShot || beforeShot;
       const imgHtml = topShot 
         ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>` 
@@ -1779,55 +1965,26 @@ async function showBranchTree(keepZoom = false) {
         ${beforeHtml}
         ${node.meta.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(node.meta.durationMs)}</div>` : ''}
         <button type="button" class="pageguide-goal-step-inspect">Inspect more</button>
-        ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">⤳ Steer from here</button>' : ''}
-        ${allowSteer ? `<div class="pageguide-goal-step-steerbox" style="display:none">
-          <textarea class="pageguide-goal-step-steer-input" rows="2" placeholder="What should the agent do differently?"></textarea>
-          <div class="pageguide-goal-step-steer-row">
-            <button type="button" class="pageguide-goal-step-steer-cancel">Cancel</button>
-            <button type="button" class="pageguide-goal-step-steer-go">Run</button>
-          </div>
-        </div>` : ''}
+        ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">Restore here</button>' : ''}
       `;
 
       if (allowSteer) {
         const steerBtn = card.querySelector('.pageguide-goal-step-steer');
-        const steerBox = card.querySelector('.pageguide-goal-step-steerbox');
-        const cancelBtn = card.querySelector('.pageguide-goal-step-steer-cancel');
-        const runBtn = card.querySelector('.pageguide-goal-step-steer-go');
-        const ta = card.querySelector('.pageguide-goal-step-steer-input');
 
-        steerBtn.addEventListener('click', (e) => {
+        steerBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          _hovercardPinned = true;
-          steerBox.style.display = 'block';
-          steerBtn.style.display = 'none';
-          if (ta) ta.focus();
-        });
-
-        cancelBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          steerBox.style.display = 'none';
-          steerBtn.style.display = 'block';
-        });
-
-        runBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const newGoal = ta ? ta.value.trim() : '';
-          if (!newGoal) { if (ta) ta.focus(); return; }
-          runBtn.disabled = true;
-          runBtn.textContent = 'Running...';
+          steerBtn.disabled = true;
           
           if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
             const ok = await RewindTimeline.steerFromStep({
               sessionId: node.sessionId,
               step: node.stepNum,
               url: node.meta.url
-            }, newGoal);
+            }, '');
             if (ok) {
               _hideBranchTreeHover(true);
             } else {
-              runBtn.disabled = false;
-              runBtn.textContent = 'Run';
+              steerBtn.disabled = false;
             }
           }
         });
@@ -1848,8 +2005,7 @@ async function showBranchTree(keepZoom = false) {
         const target = e.target;
         if (target.closest('button') || 
             target.closest('textarea') || 
-            target.closest('a') ||
-            target.closest('.pageguide-goal-step-steerbox')) {
+            target.closest('a')) {
           return;
         }
         if (target.closest('.pageguide-memory-shot-trigger')) {
@@ -2061,6 +2217,56 @@ function initGuideModeToggle() {
   });
 }
 
+// ===== Confidence Formula Toggle (Full / No-progress / No-loop) =====
+// Full:        C = grounded × (1 − λ_L·loop) × (1 + λ_P·progress).
+// No-progress: C = grounded × (1 − λ_L·loop)              (drops progress).
+// No-loop:     C = grounded × (1 + λ_P·progress)          (drops loop penalty).
+// Stored in chrome.storage.local so the content script (guidev2.js) reads the same value.
+const GUIDE_CONF_FORMULA_KEY = 'guideConfidenceFormula';
+const GUIDE_CONF_FORMULAS = {
+  full:    { label: 'Full',        title: 'Full: confidence = grounding × loop penalty × progress.' },
+  reduced: { label: 'No-progress', title: 'No-progress: confidence = grounding × loop penalty (no progress term).' },
+  noloop:  { label: 'No-loop',     title: 'No-loop: confidence = grounding × progress (no loop penalty).' }
+};
+
+function _normalizeConfFormula(v) {
+  return (v === 'reduced' || v === 'noloop') ? v : 'full';
+}
+
+function _renderConfFormula(btn, formula) {
+  formula = _normalizeConfFormula(formula);
+  const spec = GUIDE_CONF_FORMULAS[formula];
+  btn.innerHTML = `${UI_ICONS.gauge}Confidence: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-conf-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.formula === formula);
+  });
+}
+
+function initConfidenceFormulaToggle() {
+  const btn = document.getElementById('pageguide-conf-toggle');
+  const menu = document.getElementById('pageguide-conf-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_CONF_FORMULA_KEY)
+    .then(r => _renderConfFormula(btn, _normalizeConfFormula(r[GUIDE_CONF_FORMULA_KEY])))
+    .catch(() => _renderConfFormula(btn, 'full'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const formula = _normalizeConfFormula(option.dataset.formula);
+    try { await chrome.storage.local.set({ [GUIDE_CONF_FORMULA_KEY]: formula }); } catch (e) {}
+    _renderConfFormula(btn, formula);
+    menu.style.display = 'none';
+  });
+}
+
 function hideMoreMenu() {
   const menu = document.getElementById('pageguide-more-menu');
   if (menu) menu.style.display = 'none';
@@ -2090,10 +2296,13 @@ function initPanelMenus() {
       const pop = document.getElementById('pageguide-info-pop');
       if (pop) pop.style.display = 'none';
     }
-    if (!e.target.closest('.pageguide-mode-wrap')) {
-      const menu = document.getElementById('pageguide-mode-menu');
-      if (menu) menu.style.display = 'none';
-    }
+    // Close any open mode/confidence dropdown whose wrap the click landed outside of.
+    document.querySelectorAll('.pageguide-mode-wrap').forEach(wrap => {
+      if (!wrap.contains(e.target)) {
+        const menu = wrap.querySelector('.pageguide-mode-menu');
+        if (menu) menu.style.display = 'none';
+      }
+    });
   });
 }
 
@@ -2129,6 +2338,59 @@ function withGuideNextTimeout(promise, timeoutMs = 30000) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function addGuidePausedMessage(reason = '') {
+  document.querySelector('.pageguide-guide-resume-card')?.remove();
+  if (reason) {
+    const container = document.getElementById('pageguide-messages');
+    const duplicate = container
+      ? Array.from(container.querySelectorAll('.pageguide-message.system')).some(el => el.textContent.trim() === reason)
+      : false;
+    if (!duplicate) addMessage(reason, 'system');
+  }
+  guidePaused = true;
+  guideActive = false;
+  updateGuidePauseButton();
+}
+
+async function resumeGuideFromPanel() {
+  const btn = document.getElementById('pageguide-guide-pause');
+  if (btn) btn.disabled = true;
+  showTyping();
+  try {
+    const res = await sendToContentScript({ action: 'resumeGuide' });
+    if (!res || res.success === false) throw new Error(res?.error || 'Could not resume guide');
+    guidePaused = false;
+    guideActive = true;
+    updateGuidePauseButton();
+  } catch (err) {
+    hideTyping();
+    if (/Guide not active/i.test(String(err.message || ''))) {
+      guidePaused = false;
+      guideActive = false;
+      updateGuidePauseButton();
+    } else if (btn) {
+      btn.disabled = false;
+    }
+    addMessage(`Could not resume the guide: ${err.message}`, 'system');
+  }
+}
+
+async function pauseGuide(message = 'Guide paused.') {
+  const btn = document.getElementById('pageguide-guide-pause');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await sendToContentScript({ action: 'pauseGuide', reason: message });
+    if (!res || res.success === false) throw new Error(res?.error || 'Guide not active');
+    guidePaused = true;
+    guideActive = false;
+    hideTyping();
+    updateGuidePauseButton();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    addMessage(`Could not pause the guide: ${e.message}`, 'system');
+  }
+}
+
 /**
  * Add a guide step message
  */
@@ -2137,7 +2399,9 @@ function addGuideStep(result) {
   if (!panel) return;
 
   guideActive = !result.isLastStep;
+  guidePaused = false;
   hideTyping();
+  updateGuidePauseButton();
   _setJourneyRecalledMode(false); // a live step replaces any recalled read-only view
 
   // Timeline is concrete-step indexed (one dot per step taken), so track the concrete step.
@@ -2150,12 +2414,15 @@ function addGuideStep(result) {
     total: currentGuidePlan.length || result.totalSteps || undefined
   });
 
+  if (result.autoMode && !result.isLastStep) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+
   const stepBadge = result.isLastStep ? '✅' : `Step ${result.step}`;
   const targetRow = result.targetText
     ? `<div class="pageguide-step-meta-row"><span>Target</span><b>${escapeHtml(result.targetText)}</b></div>`
-    : '';
-  const nextRow = result.nextStepHint && !result.isLastStep
-    ? `<div class="pageguide-step-meta-row"><span>Next</span><b>${escapeHtml(result.nextStepHint)}</b></div>`
     : '';
   const warning = renderStepWarning(result.step);
 
@@ -2168,7 +2435,6 @@ function addGuideStep(result) {
       </div>
       <div class="pageguide-step-meta">
         ${targetRow}
-        ${nextRow}
       </div>
       ${warning}
       <div class="pageguide-step-btn-row"></div>
@@ -2188,13 +2454,13 @@ function addGuideStep(result) {
   if (!result.isLastStep) {
     const btnRow = panel.querySelector('.pageguide-step-btn-row');
 
-    const stopHereBtn = document.createElement('button');
-    stopHereBtn.className = 'pageguide-step-stop-btn';
-    stopHereBtn.textContent = '⏹ Stop here';
-    stopHereBtn.title = 'Stop the guide at this step';
-    stopHereBtn.addEventListener('click', (e) => {
+    const pauseBtn = document.createElement('button');
+    pauseBtn.className = 'pageguide-step-stop-btn';
+    pauseBtn.textContent = 'Pause';
+    pauseBtn.title = 'Pause the guide at this step';
+    pauseBtn.addEventListener('click', (e) => {
       e.stopPropagation(); // don't trigger scroll-to-highlight
-      stopGuide(`✅ Stopped after step ${result.step}. Ask me again whenever you need more help.`);
+      pauseGuide(`Paused after step ${result.step}. Resume when you want the agent to continue.`);
     });
 
     // Manual mode: every non-final step gets a Next button, so the user can do
@@ -2206,7 +2472,7 @@ function addGuideStep(result) {
     nextBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       nextBtn.disabled = true;
-      stopHereBtn.disabled = true;
+      pauseBtn.disabled = true;
       showTyping();
       try {
         const response = await withGuideNextTimeout(
@@ -2218,7 +2484,7 @@ function addGuideStep(result) {
       } catch (err) {
         hideTyping();
         if (nextBtn.isConnected) nextBtn.disabled = false;
-        if (stopHereBtn.isConnected) stopHereBtn.disabled = false;
+        if (pauseBtn.isConnected) pauseBtn.disabled = false;
         if (!String(err.message || '').startsWith('Stopped after 15 steps')) {
           addMessage(`Could not continue the guide: ${err.message}. Try Next again, or stop here.`, 'system');
         }
@@ -2226,7 +2492,7 @@ function addGuideStep(result) {
     });
     btnRow.appendChild(nextBtn);
 
-    if (btnRow) btnRow.appendChild(stopHereBtn);
+    if (btnRow) btnRow.appendChild(pauseBtn);
   } else {
     const row = panel.querySelector('.pageguide-step-btn-row');
     if (row) row.remove();
@@ -2327,8 +2593,10 @@ function showTyping() {
  */
 async function stopGuide(message = '⏹ Guide stopped.') {
   guideActive = false;
+  guidePaused = false;
   guideStopped = true; // suppress any late running-state messages from an in-flight content script
   hideTyping();
+  updateGuidePauseButton();
   // Set the Stop tombstone + clear the resume fallback BEFORE messaging the content script, so
   // Stop is authoritative even if the content script is already gone (mid-navigation): the next
   // page load reads the tombstone and refuses to resume. Keys match guidev2.js (_GV2_STOP_KEY /
@@ -3034,7 +3302,11 @@ async function sendMessage() {
         chrome.runtime.sendMessage({
           action: 'callLLM',
           systemPrompt,
-          messages
+          messages,
+          metadata: {
+            mode: 'ask_panel_knowledge',
+            url: currentTab?.url || ''
+          }
         }, (res) => {
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
           else resolve(res);
@@ -3090,7 +3362,11 @@ async function sendMessage() {
         chrome.runtime.sendMessage({
           action: 'callLLM',
           systemPrompt: systemPrompt,
-          messages: messages
+          messages: messages,
+          metadata: {
+            mode: 'ask_panel_restricted',
+            url: currentTab?.url || ''
+          }
         }, (res) => {
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
           else resolve(res);
@@ -3140,11 +3416,10 @@ async function sendMessage() {
       const debugLines = [];
       
       // Routing decision
-      if (result.routedTo) {
+      if (result.routedTo && result.routedTo !== 'guide') {
         const confidence = Math.round((result.routeConfidence || 0) * 100);
         const handlerEmoji = {
           'ask': '💬',
-          'guide': '📋',
           'protection': '🛡️',
           'image_ask': '🖼️',
           'pdf_ask': '📄'
@@ -3226,7 +3501,9 @@ async function sendMessage() {
         addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
       }
     } else {
-      addMessage(`❌ ${result?.error || 'Unknown error'}`, 'error');
+      const errText = result?.error || 'Unknown error';
+      if (isGuideParseError(errText)) addGuideRetryMessage(`Could not parse step JSON. ${errText}`);
+      else addMessage(`❌ ${errText}`, 'error');
       // Remove failed query from history
       conversationHistory.pop();
     }
@@ -3245,7 +3522,8 @@ async function sendMessage() {
         msg.includes('No active tab')) {
       addMessage('⚠️ This extension cannot run on this page.\n\nPlease navigate to a regular website (not `chrome://` or extension pages) and try again.', 'error');
     } else {
-      addMessage(`❌ ${msg || 'Unknown error'}`, 'error');
+      if (isGuideParseError(msg)) addGuideRetryMessage(`Could not parse step JSON. ${msg}`);
+      else addMessage(`❌ ${msg || 'Unknown error'}`, 'error');
     }
     // Remove failed query from history
     conversationHistory.pop();
@@ -3313,7 +3591,11 @@ ${pdfTextContent}`;
     const response = await chrome.runtime.sendMessage({
       action: 'callLLM',
       messages: messages,
-      systemPrompt: systemPrompt
+      systemPrompt: systemPrompt,
+      metadata: {
+        mode: 'ask_panel_pdf',
+        url: pdfContext?.pdfUrl || ''
+      }
     });
     
     if (response.error) {
@@ -3420,13 +3702,20 @@ async function resetChat(showMessage = true) {
   if (_resettingChat) return;
   _resettingChat = true;
   guideActive = false;
+  guidePaused = false;
 
   // Rewind (Slice 1): clear the step timeline (content 'reset' clears the store).
   if (typeof RewindTimeline !== 'undefined') RewindTimeline.clear();
   clearGoalAndStepPanel();
+  updateGuidePauseButton();
 
   // Discard any saved session for this tab so switching away+back starts fresh
   _tabSessions.delete(currentTabId);
+
+  // Clear the debug prompts list
+  try {
+    chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
+  } catch (e) {}
 
   // Clear guide state in SW directly (doesn't depend on content script being available)
   try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
@@ -3547,12 +3836,12 @@ async function exportJourneyPdf() {
         <h2>Step ${escapeHtml(rec.step)}</h2>
         <p class="instruction">${escapeHtml(rec.instruction || '')}</p>
         ${rec.target?.text ? `<p><strong>Target:</strong> ${escapeHtml(rec.target.text)}</p>` : ''}
-        ${rec.nextStepHint ? `<p><strong>Next:</strong> ${escapeHtml(rec.nextStepHint)}</p>` : ''}
         ${bits.length ? `<p class="meta">${bits.join(' · ')}</p>` : ''}
         ${(() => {
-          const shot = typeof rewindResolveScreenshot === 'function'
+          let shot = typeof rewindResolveScreenshot === 'function'
             ? rewindResolveScreenshot(rec)
             : (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter);
+          if (shot === 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7') shot = null;
           return shot ? `<img src="data:image/jpeg;base64,${shot}" alt="Step ${escapeHtml(rec.step)} screenshot">` : '';
         })()}
       </section>`;
@@ -3807,6 +4096,11 @@ function handleContentMessage(message, sender, sendResponse) {
   if (message.action === 'guideStep') {
     hideTyping();
     addGuideStep(message.result);
+  } else if (message.action === 'guidePaused') {
+    if (!guideActive && !guidePaused) return;
+    guideStopped = false;
+    hideTyping();
+    addGuidePausedMessage(message.reason);
   } else if (message.action === 'guideStepRecord') {
     if (message.meta && (message.meta.isInitial || Number(message.meta.step) === 0)) {
       // Initial-state node (step 0): tracked separately so it never inflates the step/dot count,
@@ -3893,7 +4187,11 @@ function handleContentMessage(message, sender, sendResponse) {
   } else if (message.action === 'hideTyping') {
     hideTyping();
   } else if (message.action === 'addMessage') {
-    addMessage(message.content, message.type, message.clickable);
+    if (isGuideParseError(message.content)) {
+      addGuideRetryMessage(message.content);
+    } else {
+      addMessage(message.content, message.type, message.clickable);
+    }
   } else if (message.action === 'closePanel') {
     window.close();
   } else if (message.action === 'selectedText') {
@@ -3939,3 +4237,308 @@ window.addEventListener('beforeunload', () => {
     // Extension context might be invalidated
   }
 });
+
+function closeDebugPromptLightbox() {
+  document.getElementById('pageguide-debug-prompt-lightbox')?.remove();
+}
+
+function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
+  closeDebugPromptLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-debug-prompt-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox'; // reuse overlay styles for background blurring
+
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog" role="dialog" aria-modal="true" style="padding: 16px; overflow: auto; display: flex; flex-direction: column; height: 85vh; width: 90vw; max-width: 680px; box-sizing: border-box;">
+      <div class="pageguide-memory-shot-head" style="margin-bottom: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;">
+        <span style="font-size: 15px; font-weight: 800; color: var(--pg-text);">🐞 Debug Agent Prompt History</span>
+        <button type="button" class="pageguide-memory-shot-close" id="pageguide-debug-prompt-close" aria-label="Close prompt viewer" style="font-size: 20px; border: 0; background: transparent; cursor: pointer; color: var(--pg-muted);">×</button>
+      </div>
+      <div style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="pageguide-debug-session-select" style="font-size: 12px; font-weight: bold; color: var(--pg-text); white-space: nowrap; width: 85px;">Select Session:</label>
+          <select id="pageguide-debug-session-select" style="flex: 1; padding: 6px; border-radius: 6px; background: var(--pg-bg); color: var(--pg-text); border: 1px solid var(--pg-border); outline: none; font-size: 11px; font-family: sans-serif;">
+          </select>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="pageguide-debug-step-select" style="font-size: 12px; font-weight: bold; color: var(--pg-text); white-space: nowrap; width: 85px;">Select Step:</label>
+          <select id="pageguide-debug-step-select" style="flex: 1; padding: 6px; border-radius: 6px; background: var(--pg-bg); color: var(--pg-text); border: 1px solid var(--pg-border); outline: none; font-size: 11px; font-family: sans-serif;">
+          </select>
+        </div>
+      </div>
+      <div id="pageguide-debug-prompt-content" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; font-family: monospace; font-size: 11px;">
+      </div>
+    </div>`;
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.id === 'pageguide-debug-prompt-close' || e.target.closest('#pageguide-debug-prompt-close')) {
+      closeDebugPromptLightbox();
+    }
+  });
+
+  document.body.appendChild(overlay);
+
+  const sessionSelect = document.getElementById('pageguide-debug-session-select');
+  const stepSelect = document.getElementById('pageguide-debug-step-select');
+  const contentDiv = document.getElementById('pageguide-debug-prompt-content');
+
+  // Populate Sessions Selector
+  const sortedSaved = savedSessions.slice().sort((a, b) => b.startedAt - a.startedAt);
+
+  if (livePrompts.length > 0) {
+    const opt = document.createElement('option');
+    opt.value = 'live';
+    opt.textContent = `🟢 Active Chat Session (${livePrompts.length} steps)`;
+    sessionSelect.appendChild(opt);
+  }
+
+  sortedSaved.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.sessionId;
+    const timeStr = new Date(s.startedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const goalLabel = s.goal ? ` (${s.goal.substring(0, 30)}...)` : '';
+    opt.textContent = `💾 Saved Journey - ${timeStr}${goalLabel}`;
+    sessionSelect.appendChild(opt);
+  });
+
+  // Pre-select based on defaultSessionId or default to live/first
+  if (defaultSessionId) {
+    const optToSelect = Array.from(sessionSelect.options).find(o => o.value === defaultSessionId);
+    if (optToSelect) {
+      optToSelect.selected = true;
+    } else if (livePrompts.length > 0) {
+      sessionSelect.selectedIndex = 0;
+    }
+  } else {
+    sessionSelect.selectedIndex = 0;
+  }
+
+  let currentLoadedSteps = [];
+
+  async function handleSessionChange() {
+    const sid = sessionSelect.value;
+    stepSelect.innerHTML = '';
+    contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">Loading step list...</div>';
+
+    if (sid === 'live') {
+      currentLoadedSteps = livePrompts.map((p, idx) => ({
+        type: 'live',
+        index: idx,
+        data: p
+      }));
+      populateStepDropdown(currentLoadedSteps);
+    } else {
+      try {
+        if (typeof rewindGetIndex === 'function') {
+          const idx = await rewindGetIndex(sid);
+          if (idx && idx.steps && idx.steps.length > 0) {
+            currentLoadedSteps = idx.steps.map(s => ({
+              type: 'saved',
+              sessionId: sid,
+              stepNum: s.step,
+              planStep: s.planStep,
+              instruction: s.instruction || s.action || '',
+              action: s.action,
+              timestamp: s.timestamp
+            }));
+            populateStepDropdown(currentLoadedSteps);
+          } else {
+            currentLoadedSteps = [];
+            stepSelect.innerHTML = '<option value="">(No steps found)</option>';
+            contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">No steps recorded for this session.</div>';
+          }
+        } else {
+          throw new Error('rewindGetIndex is not available');
+        }
+      } catch (err) {
+        console.error('Failed to load session index:', err);
+        contentDiv.innerHTML = `<div style="padding: 12px; color: #d32f2f;">Error: ${err.message}</div>`;
+      }
+    }
+  }
+
+  function populateStepDropdown(stepsList) {
+    stepSelect.innerHTML = '';
+    stepsList.forEach((s, idx) => {
+      const opt = document.createElement('option');
+      opt.value = idx;
+      
+      let label = '';
+      if (s.type === 'live') {
+        const timeStr = new Date(s.data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const stepNum = s.data.metadata?.step !== undefined ? ` (Step ${s.data.metadata.step})` : '';
+        const modeLabel = s.data.metadata?.mode ? `[${s.data.metadata.mode}]` : '';
+        const actionLabel = s.data.action === 'callLLMWithImages' ? '📸' : '🤖';
+        const previewText = s.data.userPrompt ? s.data.userPrompt.substring(0, 40).replace(/\s+/g, ' ') + '...' : '(empty)';
+        label = `${actionLabel} ${timeStr} ${modeLabel}${stepNum} - ${previewText}`;
+      } else {
+        const timeStr = new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const stepNum = `Step ${s.stepNum}`;
+        const previewText = s.instruction ? s.instruction.substring(0, 40).replace(/\s+/g, ' ') + '...' : '(empty)';
+        label = `🤖 ${timeStr} ${stepNum} - ${previewText}`;
+      }
+
+      opt.textContent = label;
+      stepSelect.appendChild(opt);
+    });
+
+    stepSelect.selectedIndex = stepsList.length - 1;
+    handleStepChange();
+  }
+
+  async function handleStepChange() {
+    const idx = stepSelect.value;
+    if (idx === '' || !currentLoadedSteps[idx]) {
+      contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">No step selected.</div>';
+      return;
+    }
+
+    const stepInfo = currentLoadedSteps[idx];
+    contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">Loading step prompt details...</div>';
+
+    if (stepInfo.type === 'live') {
+      renderPromptDetails(stepInfo.data);
+    } else {
+      try {
+        if (typeof rewindGetRecord === 'function') {
+          const rec = await rewindGetRecord(stepInfo.sessionId, stepInfo.stepNum);
+          if (rec) {
+            const promptData = {
+              timestamp: rec.timestamp || stepInfo.timestamp,
+              action: rec.action ? 'callLLM' : 'unknown',
+              systemPrompt: rec.systemPrompt || '',
+              userPrompt: rec.userPrompt || rec.instruction || '',
+              messages: rec.messages || [
+                { role: 'user', content: rec.userPrompt || rec.instruction || '' }
+              ],
+              imageBase64: rec.screenshotBefore || rec.screenshot || null,
+              metadata: {
+                mode: rec.mode || 'guide',
+                step: rec.step,
+                url: rec.url
+              }
+            };
+            renderPromptDetails(promptData);
+          } else {
+            contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">Record not found in database.</div>';
+          }
+        } else {
+          throw new Error('rewindGetRecord is not available');
+        }
+      } catch (err) {
+        console.error('Failed to load step record:', err);
+        contentDiv.innerHTML = `<div style="padding: 12px; color: #d32f2f;">Error loading record: ${err.message}</div>`;
+      }
+    }
+  }
+
+  function renderPromptDetails(p) {
+    let html = '';
+
+    // Step Info/Metadata Block
+    const timeStr = new Date(p.timestamp).toLocaleString();
+    html += `
+      <div style="background: var(--pg-bg); border: 1px solid var(--pg-border); padding: 8px; border-radius: 8px; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; line-height: 1.4;">
+        <span style="font-weight: 700; color: var(--pg-muted);">Time:</span>
+        <span style="color: var(--pg-text);">${timeStr}</span>
+        <span style="font-weight: 700; color: var(--pg-muted);">Mode:</span>
+        <span style="color: var(--pg-text); font-weight: bold;">${p.metadata?.mode || 'unknown'}</span>
+        ${p.metadata?.step !== undefined ? `<span style="font-weight: 700; color: var(--pg-muted);">Step:</span><span style="color: var(--pg-text);">${p.metadata.step}</span>` : ''}
+        <span style="font-weight: 700; color: var(--pg-muted);">Action:</span>
+        <span style="color: var(--pg-text);">${p.action}</span>
+        <span style="font-weight: 700; color: var(--pg-muted);">URL:</span>
+        <span style="color: var(--pg-text); word-break: break-all;"><a href="${escapeHtml(p.metadata?.url || '')}" target="_blank" style="color: var(--pg-accent); text-decoration: none;">${escapeHtml(p.metadata?.url || 'N/A')}</a></span>
+      </div>
+    `;
+
+    // System Prompt Block
+    html += `
+      <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+        <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">System Prompt</summary>
+        <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin-top: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.systemPrompt || '(none)')}</pre>
+      </details>
+    `;
+
+    // Complete Messages History Block
+    let messagesHtml = '';
+    if (Array.isArray(p.messages)) {
+      p.messages.forEach((m, idx) => {
+        const roleColor = m.role === 'user' ? 'var(--pg-accent)' : m.role === 'system' ? '#d32f2f' : '#388e3c';
+        messagesHtml += `
+          <div style="border-bottom: 1px solid var(--pg-border); padding: 8px 0; margin-bottom: 8px;">
+            <div style="font-weight: bold; color: ${roleColor}; margin-bottom: 4px; text-transform: uppercase;">[${m.role}] ${idx + 1}</div>
+            <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 6px; border-radius: 4px; margin: 0; color: var(--pg-text); max-height: 25vh; overflow-y: auto;">${escapeHtml(m.content || '(empty)')}</pre>
+          </div>
+        `;
+      });
+    }
+    html += `
+      <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+        <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Message List Context (${p.messages?.length || 0} turns)</summary>
+        <div style="margin-top: 6px; max-height: 40vh; overflow-y: auto;">
+          ${messagesHtml || '<div style="padding: 4px; color: var(--pg-muted);">(no messages)</div>'}
+        </div>
+      </details>
+    `;
+
+    // Images / Media Block
+    let imagesList = [];
+    if (p.imageBase64) {
+      const isPlaceholder = p.imageBase64 === 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      if (!isPlaceholder) {
+        imagesList.push({ base64: p.imageBase64, label: 'Single viewport screenshot' });
+      }
+    }
+    if (Array.isArray(p.images)) {
+      p.images.forEach(img => {
+        if (img.base64) {
+          imagesList.push({ base64: img.base64, label: img.label || 'Image attachment' });
+        }
+      });
+    }
+
+    if (imagesList.length > 0) {
+      let imgHtml = '';
+      imagesList.forEach(img => {
+        const src = img.base64.startsWith('data:') ? img.base64 : `data:image/jpeg;base64,${img.base64}`;
+        imgHtml += `
+          <div style="border: 1px solid var(--pg-border); border-radius: 6px; padding: 6px; background: var(--pg-bg); display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+            <span style="font-weight: bold; color: var(--pg-text); margin-bottom: 2px;">${escapeHtml(img.label)}</span>
+            <img src="${src}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${src}')" title="Click to view full size" />
+          </div>
+        `;
+      });
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Attached Screenshots/Images (${imagesList.length})</summary>
+          <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 8px;">
+            ${imgHtml}
+          </div>
+        </details>
+      `;
+    }
+
+    contentDiv.innerHTML = html;
+  }
+
+  sessionSelect.addEventListener('change', handleSessionChange);
+  stepSelect.addEventListener('change', handleStepChange);
+
+  // Trigger initial populate
+  handleSessionChange();
+}
+
+function updateDebugButtonVisibility(enabled) {
+  // Publish a global flag so other in-panel modules (e.g. the rewind inspector) can show
+  // debug-only details like the confidence breakdown without re-reading storage.
+  window.__pgDebugEnabled = !!enabled;
+  const btn = document.getElementById('pageguide-debug-prompt-btn');
+  if (btn) {
+    btn.style.display = enabled ? 'inline-flex' : 'none';
+  }
+  // The confidence-formula toggle is a debug/research control — only surface it in debug mode.
+  const confWrap = document.querySelector('.pageguide-conf-wrap');
+  if (confWrap) {
+    confWrap.style.display = enabled ? '' : 'none';
+  }
+}

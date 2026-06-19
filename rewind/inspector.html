@@ -164,6 +164,14 @@
         <button class="tab" id="tab-after" data-view="after"><span class="ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/><path d="M3 12h12"/><path d="M21 5v14"/></svg></span><span class="tab-label">After action</span></button>
       </div>
       <div class="view" id="view"></div>
+      <details id="prompt-system-wrap" style="display:none">
+        <summary>System prompt sent to AI</summary>
+        <pre id="prompt-system"></pre>
+      </details>
+      <details id="prompt-user-wrap" style="display:none">
+        <summary>User/Page prompt sent to AI</summary>
+        <pre id="prompt-user"></pre>
+      </details>
       <details id="raw-wrap" style="display:none">
         <summary>Raw agent response</summary>
         <pre id="raw"></pre>

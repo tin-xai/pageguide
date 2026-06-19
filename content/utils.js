@@ -831,7 +831,7 @@ function gv2SetFieldValue(el, text) {
 
 /**
  * Capture the page's restorable state for the rewind/resume feature: web storage, scroll
- * position, and visible form-field values. Lets a later "Steer from here" on a fresh load
+ * position, and visible form-field values. Lets a later restore on a fresh load
  * rebuild the page's condition much closer to how it was when the step ran — without keeping
  * a live tab around. All reads are best-effort (cross-origin / disabled storage throws);
  * password values are intentionally excluded (privacy, mirrors gv2SerializeDom).
@@ -1108,6 +1108,42 @@ function gv2ConfidenceTier(confidence) {
   return confidence >= 0.7 ? 'high' : 'med';
 }
 
+// Weights for the decomposed confidence formula. Tunable here (not exposed in the UI).
+const GV2_LAMBDA_L = 0.8;   // loop penalty weight
+const GV2_LAMBDA_P = 0.3;   // progress reward/penalty weight
+
+/**
+ * Combine the three LLM-assessed signals into a single confidence score. Three formula versions:
+ *   full:    C = clip(G · (1 − λ_L·L) · (1 + λ_P·P), 0, 1)   (all three signals)
+ *   reduced: C = clip(G · (1 − λ_L·L), 0, 1)                 (no progress term)
+ *   noloop:  C = clip(G · (1 + λ_P·P), 0, 1)                 (no loop term)
+ *
+ * Pure (no DOM/storage) so it is unit-testable. Inputs are clamped to their valid ranges:
+ * G (grounded) ∈ [0,1], L (loop) ∈ [0,1], P (progress) ∈ [-1,1]. When grounded is missing
+ * (not a finite number) the score is null so callers can fall back to legacy confidence.
+ *
+ * @param {{grounded:number, loop:number, progress:number}} parts - raw LLM component scores
+ * @param {'full'|'reduced'|'noloop'} [formula='full'] - which formula version to apply
+ * @param {{lambdaL?:number, lambdaP?:number}} [weights] - optional weight overrides
+ * @returns {{confidence:number|null, grounded:number|null, loop:number, progress:number, formula:string}}
+ */
+function gv2ComputeConfidence(parts, formula = 'full', weights) {
+  const clip01 = v => Math.max(0, Math.min(1, v));
+  const num = (v, lo, hi, dflt) => (typeof v === 'number' && isFinite(v)) ? Math.max(lo, Math.min(hi, v)) : dflt;
+  const G = num(parts?.grounded, 0, 1, null);
+  const L = num(parts?.loop, 0, 1, 0);
+  const P = num(parts?.progress, -1, 1, 0);
+  const lamL = (weights && typeof weights.lambdaL === 'number') ? weights.lambdaL : GV2_LAMBDA_L;
+  const lamP = (weights && typeof weights.lambdaP === 'number') ? weights.lambdaP : GV2_LAMBDA_P;
+  if (G == null) return { confidence: null, grounded: null, loop: L, progress: P, formula };
+  const useLoop = formula !== 'noloop';        // every version except 'noloop' applies the loop penalty
+  const useProgress = formula !== 'reduced';   // every version except 'reduced' applies the progress term
+  let c = G;
+  if (useLoop) c = c * (1 - lamL * L);
+  if (useProgress) c = c * (1 + lamP * P);
+  return { confidence: clip01(c), grounded: G, loop: L, progress: P, formula };
+}
+
 /**
  * Compute the source-crop rectangle (in IMAGE pixels) for cropping a viewport screenshot down to
  * an element's region. `captureVisibleTab` returns an image at devicePixelRatio scale while
@@ -1142,10 +1178,14 @@ function gv2CropRect(rect, dpr, imgW, imgH, pad) {
 
 if (typeof window !== 'undefined') {
   window.gv2ConfidenceTier = gv2ConfidenceTier;
+  window.gv2ComputeConfidence = gv2ComputeConfidence;
   window.gv2CropRect = gv2CropRect;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2ConfidenceTier = gv2ConfidenceTier;
+  module.exports.gv2ComputeConfidence = gv2ComputeConfidence;
+  module.exports.GV2_LAMBDA_L = GV2_LAMBDA_L;
+  module.exports.GV2_LAMBDA_P = GV2_LAMBDA_P;
   module.exports.gv2CropRect = gv2CropRect;
 }
 
@@ -1174,19 +1214,19 @@ function gv2ExtractJsonObject(content) {
   };
 
   // Fix 1: Missing colon and quotes after key, e.g. "thought The user wants..."
-  json = json.replace(/("(?:thought|instruction|nextStepHint|riskReason))(\s+[\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|nextStepHint|confidence|risk|riskReason)"\s*:)/g, (match, key, val, next) => {
+  json = json.replace(/("(?:thought|instruction|riskReason))(\s+[\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, key, val, next) => {
     return `${key}": "${escapeJsonVal(val)}` + next;
   });
 
   // Fix 2: Missing quotes on value, e.g. "thought": The user wants..."
-  json = json.replace(/("(?:thought|instruction|nextStepHint|riskReason)"\s*:\s*)([a-zA-Z][\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|nextStepHint|confidence|risk|riskReason)"\s*:)/g, (match, keyCol, val, next) => {
+  json = json.replace(/("(?:thought|instruction|riskReason)"\s*:\s*)([a-zA-Z][\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, keyCol, val, next) => {
     return `${keyCol}"${escapeJsonVal(val)}` + next;
   });
 
   try { return JSON.parse(json); } catch (e) {
     try {
       // Fix 3: Escape unescaped double quotes in middle of double-quoted text fields
-      let fixedJson = json.replace(/("(?:thought|instruction|nextStepHint|riskReason)"\s*:\s*")([\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|nextStepHint|confidence|risk|riskReason)"\s*:)/g, (match, prefix, val, suffix) => {
+      let fixedJson = json.replace(/("(?:thought|instruction|riskReason)"\s*:\s*")([\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, prefix, val, suffix) => {
         const escapedVal = val.replace(/(?<!\\)"/g, '\\"');
         return prefix + escapedVal + suffix;
       });

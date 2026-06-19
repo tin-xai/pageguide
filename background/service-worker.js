@@ -185,6 +185,24 @@ chrome.tabs.onCreated.addListener((tab) => {
   }
 });
 
+// Append a debug prompt history entry, capping at 50 to avoid quota storage issues
+async function appendDebugPrompt(promptData) {
+  try {
+    const result = await chrome.storage.local.get('debugPrompts');
+    const list = Array.isArray(result.debugPrompts) ? result.debugPrompts : [];
+    list.push(promptData);
+    if (list.length > 50) {
+      list.shift(); // remove oldest entries
+    }
+    await chrome.storage.local.set({
+      debugPrompts: list,
+      lastDebugPrompt: promptData
+    });
+  } catch (e) {
+    console.error('[SW debug] Failed to append debug prompt:', e);
+  }
+}
+
 // ===== Message Handler =====
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'panelClosed') {
@@ -200,12 +218,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'callLLM') {
+    const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
+    appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'callLLM',
+      systemPrompt: request.systemPrompt || '',
+      userPrompt: userPrompt,
+      messages: request.messages || [],
+      imageBase64: request.imageBase64 || null,
+      metadata: request.metadata || {}
+    }).catch(() => {});
+
     callLLM(request.messages, request.systemPrompt, request.imageBase64)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
   if (request.action === 'callLLMWithImages') {
+    const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
+    appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'callLLMWithImages',
+      systemPrompt: request.systemPrompt || '',
+      userPrompt: userPrompt,
+      messages: request.messages || [],
+      images: request.images || null,
+      metadata: request.metadata || {}
+    }).catch(() => {});
+
     callLLMWithImages(request.messages, request.systemPrompt, request.images)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
@@ -276,6 +316,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'guidanceV2_clearState') {
     _gv2State = null;
     _gv2TabId = null;
+    chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
     sendResponse({ success: true });
     return false;
   }

@@ -527,6 +527,24 @@ body.light-mode .pageguide-history-load-btn:hover {
   border: 1px solid rgba(255, 100, 100, 0.2);
 }
 
+.pageguide-guide-retry-card {
+  align-self: stretch;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 82, 106, 0.28);
+  background: rgba(255, 82, 106, 0.08);
+}
+.pageguide-guide-retry-title {
+  font: 800 13px/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--pg-text, #252b3f);
+  margin-bottom: 5px;
+}
+.pageguide-guide-retry-body {
+  font: 500 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--pg-muted, #7b8498);
+  margin-bottom: 10px;
+}
+
 .pageguide-message.action {
   align-self: center;
   background: linear-gradient(135deg, rgba(255, 200, 0, 0.15), rgba(255, 150, 0, 0.15));
@@ -1263,43 +1281,6 @@ body.light-mode .pageguide-history-load-btn:hover {
   background: var(--pg-danger, #ff526a);
 }
 
-/* Inline "Branch & run" prompt revealed by the Steer button in the preview card. */
-.pageguide-goal-step-steerbox {
-  margin-top: 8px;
-}
-.pageguide-goal-step-steerbox textarea.pageguide-goal-step-steer-input {
-  width: 100%;
-  box-sizing: border-box;
-  resize: vertical;
-  border: 1px solid #e5e7f0;
-  border-radius: 8px;
-  padding: 7px 8px;
-  font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--pg-text, #252b3f);
-  background: #fbfbff;
-}
-.pageguide-goal-step-steer-row {
-  display: flex;
-  gap: 6px;
-}
-.pageguide-goal-step-preview button.pageguide-goal-step-steer-cancel {
-  flex: 0 0 auto;
-  width: auto;
-  padding: 0 12px;
-  background: #f1f2f7;
-  color: #4d566c;
-}
-.pageguide-goal-step-preview button.pageguide-goal-step-steer-go {
-  flex: 1 1 auto;
-  width: auto;
-  background: var(--pg-accent, #7857ff);
-  color: #fff;
-}
-.pageguide-goal-step-preview button.pageguide-goal-step-steer-go[disabled] {
-  opacity: .55;
-  cursor: default;
-}
-
 /* Guide Mode Toggle (Manual vs Auto) */
 .pageguide-mode-btn {
   background: rgba(255, 255, 255, 0.08);
@@ -1381,6 +1362,29 @@ body.light-mode .pageguide-history-load-btn:hover {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+}
+
+.pageguide-guide-pause-btn {
+  border: 1px solid rgba(120, 87, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(120, 87, 255, 0.12);
+  color: var(--pg-text, #252b3f);
+  height: 32px;
+  padding: 0 12px;
+  font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pageguide-guide-pause-btn:hover {
+  background: rgba(120, 87, 255, 0.18);
+}
+.pageguide-guide-pause-btn.is-resume {
+  border-color: rgba(34, 197, 94, 0.42);
+  background: rgba(34, 197, 94, 0.13);
+}
+.pageguide-guide-pause-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 /* Running state: the send button becomes a red square Stop control. */
@@ -2124,21 +2128,34 @@ body.light-mode .pageguide-history-overlay {
   margin-top: 10px;
 }
 
-/* Steer restore confirmation card: the list of state changes the agent re-applied. */
+.pageguide-guide-resume-card {
+  margin: 10px 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 87, 255, 0.22);
+  background: rgba(120, 87, 255, 0.08);
+}
+.pageguide-guide-resume-text {
+  font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--pg-text);
+  margin-bottom: 8px;
+}
+
+/* Restore confirmation card: the list of state changes the agent re-applied. */
 .pageguide-steer-restore-log {
   margin: 10px 0;
-  padding: 8px 10px 8px 12px;
+  padding: 8px 10px;
   list-style: none;
   max-height: 160px;
   overflow: auto;
   border-radius: 8px;
   background: rgba(45, 212, 191, 0.08);
   border: 1px solid rgba(20, 184, 166, 0.3);
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 600 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .pageguide-steer-restore-log li {
   word-break: break-word;
-  padding: 1px 0;
+  padding: 3px 0;
 }
 .pageguide-steer-restore-log .pageguide-steer-restore-empty {
   opacity: 0.6;
@@ -2150,22 +2167,30 @@ body.light-mode .pageguide-history-overlay {
   opacity: 0.85;
 }
 
-/* Checklist item: one clean line per action — advisory checkbox + the action up front. */
+/* Clean action item: one icon plus the action applied. */
 .pageguide-steer-restore-log .pageguide-steer-restore-item {
-  padding: 2px 0;
-}
-.pageguide-steer-restore-log .pageguide-steer-restore-item label {
   display: flex;
   align-items: center;
-  gap: 7px;
-  cursor: pointer;
+  gap: 8px;
 }
-.pageguide-steer-restore-check {
-  margin: 0;
+.pageguide-steer-restore-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.16);
+  font: 800 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .pageguide-steer-restore-action { flex: 1; }
 .pageguide-steer-restore-item.failed .pageguide-steer-restore-action { color: #ff8585; }
+.pageguide-steer-restore-item.failed .pageguide-steer-restore-icon {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.15);
+}
 .pageguide-steer-restore-details {
   margin: -2px 0 8px;
   font-size: 11px;
@@ -2825,6 +2850,100 @@ body {
 .pageguide-goal-step-conf.conf-high { color: #34d399; }
 .pageguide-goal-step-conf.conf-med { color: #fbbf24; }
 
+/* Debug-only: both confidence formula versions on the step preview card. */
+.pageguide-goal-step-dual {
+  font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--pg-muted, #9aa1b2);
+  margin: 2px 0 4px;
+}
+.pageguide-goal-step-dual b { color: var(--pg-text, inherit); }
+
+/* Debug-only: double-line confidence chart (Full vs No-progress) in the goal card. */
+.pageguide-conf-chart {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 9px;
+  background: var(--pg-hover, rgba(128, 128, 128, 0.1));
+  border: 1px solid var(--pg-border, rgba(128, 128, 128, 0.25));
+  color: var(--pg-text, inherit);
+}
+.pageguide-conf-chart-title {
+  font: 700 10px/1.3 sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+.pageguide-conf-chart-summary {
+  cursor: pointer;
+  font: 700 11px/1.4 sans-serif;
+  color: var(--pg-text, inherit);
+}
+.pageguide-conf-chart-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 6px 0;
+}
+.pageguide-conf-chart-refresh {
+  border: 0;
+  border-radius: 999px;
+  background: var(--pg-hover, rgba(128,128,128,.14));
+  color: var(--pg-muted, inherit);
+  cursor: pointer;
+  font: 700 10px/1.2 sans-serif;
+  padding: 5px 9px;
+}
+.pageguide-conf-chart-refresh:hover { color: var(--pg-accent); }
+.pageguide-conf-chart-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+.pageguide-conf-chart-filter {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--pg-muted, inherit);
+  cursor: pointer;
+  font: 700 10px/1.2 sans-serif;
+  opacity: .62;
+  padding: 4px 7px;
+}
+.pageguide-conf-chart-filter.active {
+  background: var(--pg-hover, rgba(128,128,128,.14));
+  color: var(--pg-text, inherit);
+  opacity: 1;
+}
+.pageguide-conf-chart-filter i {
+  display: inline-block;
+  width: 11px;
+  height: 3px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.pageguide-conf-chart-empty {
+  color: var(--pg-muted, inherit);
+  font: 600 11px/1.4 sans-serif;
+  padding: 10px 2px;
+}
+.pageguide-conf-chart-legend {
+  display: flex;
+  gap: 14px;
+  font: 600 10px/1.3 sans-serif;
+  opacity: 0.75;
+  margin-top: 4px;
+}
+.pageguide-conf-chart-legend i {
+  display: inline-block;
+  width: 11px;
+  height: 3px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
 /* URL shown as a compact "link" hyperlink. */
 .pageguide-goal-step-link {
   display: inline-block;
@@ -3201,6 +3320,16 @@ body {
 
 .pageguide-mode-wrap {
   display: block;
+  margin-right: auto;
+}
+
+/* With two adjacent toggles (mode + confidence), group them on the left: the mode toggle
+   sits next to the confidence toggle, and only the confidence toggle keeps the auto margin
+   that pushes the "more" button to the right. */
+.pageguide-input-actions > .pageguide-mode-wrap:not(.pageguide-conf-wrap) {
+  margin-right: 7px;
+}
+.pageguide-mode-wrap.pageguide-conf-wrap {
   margin-right: auto;
 }
 
@@ -3840,6 +3969,26 @@ body:not(.light-mode) .pageguide-send-btn {
   margin-left: auto;
   display: none;
   align-items: center;
+}
+
+.pageguide-card-export-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 !important;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-color: transparent;
+  background: transparent;
+  color: var(--pg-muted, #71788c);
+  cursor: pointer;
+}
+
+.pageguide-card-export-btn:hover {
+  background: var(--pg-hover, rgba(120,87,255,.10));
+  color: var(--pg-accent, #7857ff);
 }
 
 .pageguide-menu-wrap {
@@ -4686,4 +4835,3 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   margin-left: auto !important;
   grid-column: auto !important;
 }
-

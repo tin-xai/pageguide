@@ -74,8 +74,6 @@
 #${INSPECTOR_ID} .rw-steer-input{width:100%;box-sizing:border-box;resize:vertical;background:var(--pg-bg,#15151f);color:inherit;border:1px solid var(--pg-border,rgba(255,255,255,.18));border-radius:7px;padding:8px;font:400 12px/1.4 -apple-system,sans-serif}
 #${INSPECTOR_ID} .rw-steer-note{font:400 10px/1.4 sans-serif;opacity:.6;margin:6px 0 8px}
 #${INSPECTOR_ID} .rw-steer-actions{display:flex;justify-content:flex-end;gap:8px}
-#${INSPECTOR_ID} .rw-steer-go{background:#7c5cff;color:#fff}
-#${INSPECTOR_ID} .rw-steer-go[disabled]{opacity:.5;cursor:default}
 #${INSPECTOR_ID} details{margin-top:10px;font:400 11px/1.5 monospace}
 #${INSPECTOR_ID} pre{white-space:pre-wrap;word-break:break-word;background:#0004;padding:8px;border-radius:6px;overflow:auto;max-height:240px}`;
     document.head.appendChild(style);
@@ -213,6 +211,22 @@
       badgesHtml += `<span class="rw-ins-badge ${cls}">● ${label}</span>`;
     }
 
+    // Debug-only: show how confidence is composed from the three LLM signals (grounded G,
+    // loop L, progress P) and ALL THREE formula versions side by side, so they can be compared
+    // without re-running (computed from the stored signals).
+    let debugConfHtml = '';
+    if (global.__pgDebugEnabled && typeof global.gv2ComputeConfidence === 'function'
+        && (rec.grounded != null || rec.loop != null || rec.progress != null)) {
+      const f = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '—';
+      const pct = (c) => (c != null) ? Math.round(c * 100) + '%' : '—';
+      const parts = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
+      const cFull = global.gv2ComputeConfidence(parts, 'full').confidence;
+      const cReduced = global.gv2ComputeConfidence(parts, 'reduced').confidence;
+      const cNoLoop = global.gv2ComputeConfidence(parts, 'noloop').confidence;
+      const active = rec.confidenceFormula === 'reduced' ? 'No-progress' : (rec.confidenceFormula === 'noloop' ? 'No-loop' : 'Full');
+      debugConfHtml = `<div class="rw-debug-conf" style="margin-top:6px;font:400 11px/1.6 monospace;opacity:.85">🐞 G=${f(rec.grounded)} · L=${f(rec.loop)} · P=${f(rec.progress)}<br>Full (G·loop·progress): <b>${pct(cFull)}</b><br>No-progress (G·loop): <b>${pct(cReduced)}</b><br>No-loop (G·progress): <b>${pct(cNoLoop)}</b><br><span style="opacity:.6">Active formula: ${active}</span></div>`;
+    }
+
     const durationText = rec.durationMs != null ? 'Duration: ' + _fmtDuration(rec.durationMs) : '';
     const costText = _fmtCost(rec.cost) ? 'Cost: ' + _fmtCost(rec.cost) : '';
     const extraMeta = [durationText, costText].filter(Boolean).join('  ·  ');
@@ -225,33 +239,26 @@
       <div class="rw-ins-hdr">
         <button class="rw-ins-btn" data-rw="back">← Back</button>
         <span class="rw-ins-title">Step ${_escape(rec.step)}</span>
-        <button class="rw-ins-btn" data-rw="steer" title="Branch off from this step with a new instruction">⤳ Steer from here</button>
+        <button class="rw-ins-btn" data-rw="steer" title="Restore the page to this step">Restore here</button>
         <button class="rw-ins-btn" data-rw="fullpage" title="Open in a new tab">Open detailed view ↗</button>
       </div>
       <div class="rw-ins-body">
         <div class="rw-why">
           <div><strong>What:</strong> ${_escape(rec.instruction)}</div>
           ${rec.target?.text ? `<div><strong>Element:</strong> ${_escape(rec.target.text)}</div>` : ''}
-          ${rec.nextStepHint ? `<div><strong>Next:</strong> ${_escape(rec.nextStepHint)}</div>` : ''}
           <div style="margin-top:8px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;">
             ${badgesHtml}
             ${extraMeta ? `<span style="opacity:.6; font-size:11px; margin-left:4px;">${_escape(extraMeta)}</span>` : ''}
           </div>
-        </div>
-        <div class="rw-steer" style="display:none">
-          <div class="rw-steer-hdr">⤳ Steer from step ${_escape(rec.step)}</div>
-          <textarea class="rw-steer-input" rows="3" placeholder="What should the agent do differently from here?"></textarea>
-          <div class="rw-steer-note">This re-runs from this step on a fresh load and discards the steps after it.</div>
-          <div class="rw-steer-actions">
-            <button class="rw-ins-btn" data-rw="steer-cancel">Cancel</button>
-            <button class="rw-ins-btn rw-steer-go" data-rw="steer-run">Run</button>
-          </div>
+          ${debugConfHtml}
         </div>
         <div class="rw-tabs">
           <button class="rw-ins-btn ${hasShot ? 'active' : ''}" data-rw="tab" data-view="shot" ${hasShot ? '' : 'disabled'}>📷 Screenshot</button>
           <button class="rw-ins-btn ${!hasShot && hasSnap ? 'active' : ''}" data-rw="tab" data-view="snap" ${hasSnap ? '' : 'disabled'}>🧩 Page snapshot</button>
         </div>
         <div class="rw-view"></div>
+        ${rec.systemPrompt ? `<details><summary>System prompt sent to AI</summary><pre>${_escape(rec.systemPrompt)}</pre></details>` : ''}
+        ${rec.userPrompt ? `<details><summary>User/Page prompt sent to AI</summary><pre>${_escape(rec.userPrompt)}</pre></details>` : ''}
         ${rec.rawLlmJson ? `<details><summary>Raw agent response</summary><pre>${_escape(rec.rawLlmJson)}</pre></details>` : ''}
       </div>`;
     document.body.appendChild(wrap);
@@ -270,7 +277,6 @@
     }
     renderView(hasShot ? 'shot' : 'snap');
 
-    const steerBox = wrap.querySelector('.rw-steer');
     wrap.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-rw]');
       if (!btn) return;
@@ -283,15 +289,10 @@
         btn.classList.add('active');
         renderView(btn.getAttribute('data-view'));
       } else if (kind === 'steer') {
-        if (steerBox) {
-          const showing = steerBox.style.display !== 'none';
-          steerBox.style.display = showing ? 'none' : '';
-          if (!showing) { const ta = steerBox.querySelector('.rw-steer-input'); if (ta) ta.focus(); }
-        }
-      } else if (kind === 'steer-cancel') {
-        if (steerBox) steerBox.style.display = 'none';
-      } else if (kind === 'steer-run') {
-        await _runSteer(wrap, rec, meta, btn);
+        btn.disabled = true;
+        const ok = await steerFromStep({ sessionId: rec.sessionId || meta.sessionId, step: rec.step, url: rec.url || meta.url }, '');
+        if (ok) wrap.remove();
+        else btn.disabled = false;
       }
     });
   }
@@ -303,7 +304,7 @@
   // by the in-panel inspector and the goal-dot preview card. Returns true on success.
   async function steerFromStep(meta, newGoal) {
     newGoal = (newGoal || '').trim();
-    if (!meta || !newGoal) return false;
+    if (!meta) return false;
     const sessionId = meta.sessionId || _sessionId;
     const redoStep = Number(meta.step);
     if (!sessionId || !Number.isFinite(redoStep)) return false;
@@ -351,7 +352,7 @@
       try {
         chrome.runtime.sendMessage({
           action: 'addMessage',
-          content: `↩ Rewinding to before step ${redoStep} and redoing it — applying: “${newGoal}”`,
+          content: `Restoring the page to before step ${redoStep}.`,
           type: 'info'
         });
       } catch (e) {}
@@ -373,9 +374,11 @@
         } else if (typeof global.addJourneyRecallMessage === 'function') {
           global.addJourneyRecallMessage(branchSessionId, branchTitle, branchLabel);
         }
-        if (typeof global.showStoredJourney === 'function') await global.showStoredJourney(branchSessionId);
-        if (typeof global.showBranchTree === 'function') {
-          global.showBranchTree();
+        if (newGoal) {
+          if (typeof global.showStoredJourney === 'function') await global.showStoredJourney(branchSessionId);
+          if (typeof global.showBranchTree === 'function') {
+            global.showBranchTree();
+          }
         }
       } catch (e) {}
       return true;
@@ -568,5 +571,9 @@
     _sessionId = null;
   }
 
-  global.RewindTimeline = { addStep, clear, setPlan, markVerify, openStep: _openInspector, openFullPageStep: _openFullPageInspector, steerFromStep, dropStepsAfter };
+  function getSessionId() {
+    return _sessionId;
+  }
+
+  global.RewindTimeline = { addStep, clear, setPlan, markVerify, openStep: _openInspector, openFullPageStep: _openFullPageInspector, steerFromStep, dropStepsAfter, getSessionId };
 })(typeof window !== 'undefined' ? window : globalThis);

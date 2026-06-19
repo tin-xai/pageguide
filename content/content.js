@@ -80,6 +80,24 @@ async function handleMessage(request) {
       else if (window._guidev2) window._guidev2.active = false;
       return { success: true };
 
+    case 'pauseGuide':
+      if (typeof gv2PauseGuide === 'function') {
+        return await gv2PauseGuide(request.reason);
+      }
+      return { success: false, error: 'Guide not active' };
+
+    case 'resumeGuide':
+      if (typeof gv2ResumeGuide === 'function') {
+        return await gv2ResumeGuide();
+      }
+      return { success: false, error: 'Guide not active' };
+
+    case 'retryGuideStep':
+      if (typeof gv2RetryGuideStep === 'function') {
+        return await gv2RetryGuideStep();
+      }
+      return { success: false, error: 'Guide not active' };
+
     case 'nextGuideStep':
       if (typeof gv2NextStep === 'function') {
         return await gv2NextStep({ source: request.source || 'message' });
@@ -87,13 +105,19 @@ async function handleMessage(request) {
       return { success: false, error: 'Guide not active' };
 
     case 'gv2SteerNow':
-      // Same-page "Steer from here": fork + re-run on the live DOM without reloading
+      // Same-page restore: fork + re-run on the live DOM without reloading
       // (reloading a heavy SPA like Google Slides loses state and can prompt "leave site?").
       console.log('🤖 gv2SteerNow received', request.payload);
       if (typeof gv2SteerNow === 'function' && request.payload) {
         return await gv2SteerNow(request.payload); // progress also streams via messages
       }
       return { success: false, error: 'Steer not available' };
+
+    case 'manualRestoreHere':
+      if (typeof gv2ManualRestoreHere === 'function') {
+        return await gv2ManualRestoreHere();
+      }
+      return { success: false, error: 'Restore review not available' };
 
     case 'confirmSteerRestore':
       // User confirmed (in the side panel) that the restored state looks right — let the

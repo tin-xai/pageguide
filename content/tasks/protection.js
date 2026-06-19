@@ -79,7 +79,11 @@ async function _flushAutoHideQueue() {
       messages: [{
         role: 'user',
         content: `USER REQUEST: "${state.query}"\n\nNEW CONTENT TO CHECK:\n${indexLines.join('\n')}`
-      }]
+      }],
+      metadata: {
+        mode: 'protection_auto',
+        url: window.location.href
+      }
     });
 
     if (!response?.content) return;
@@ -180,7 +184,11 @@ async function handleProtectionQuery(query) {
       messages: [{
         role: 'user',
         content: `USER REQUEST: "${query}"\n\nPAGE: ${document.title}\n\n${visibleText}\n\nINDEXED ELEMENTS:\n${pageIndex.indexText}`
-      }]
+      }],
+      metadata: {
+        mode: 'protection_manual',
+        url: window.location.href
+      }
     });
     
     if (response?.error) {

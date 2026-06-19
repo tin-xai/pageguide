@@ -60,13 +60,26 @@
         <div class="pageguide-goal-title-row">
           <div class="pageguide-goal-title" id="pageguide-goal-title"></div>
           <span class="pageguide-goal-caret">⌄</span>
-          <div class="pageguide-guide-card-actions" id="pageguide-guide-card-actions"></div>
+          <div class="pageguide-guide-card-actions" id="pageguide-guide-card-actions">
+            <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-export-pdf" title="Export the guide journey as a PDF">
+              <span class="pageguide-inline-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v12"/>
+                  <path d="m7 10 5 5 5-5"/>
+                  <path d="M5 21h14"/>
+                </svg>
+              </span>
+            </button>
+          </div>
         </div>
         <div class="pageguide-goal-progress" id="pageguide-goal-progress" style="display:none;">
           <span class="pageguide-goal-steptext" id="pageguide-goal-steptext"></span>
           <div class="pageguide-goal-dots" id="pageguide-goal-dots"></div>
           <div class="pageguide-goal-bar"><div class="pageguide-goal-bar-fill" id="pageguide-goal-bar-fill"></div></div>
         </div>
+
+        <!-- Debug-only: double-line chart comparing the two confidence formulas across steps. -->
+        <div class="pageguide-conf-chart" id="pageguide-conf-chart" style="display:none;"></div>
 
       </div>
     </div>
@@ -152,6 +165,23 @@
             </div>
           </div>
 
+          <!-- Confidence-score formula selector: Full (grounded·loop·progress) vs Reduced (no progress).
+               Hidden by default; only shown in debug mode (see updateDebugButtonVisibility). -->
+          <div class="pageguide-mode-wrap pageguide-conf-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-conf-toggle" title="Choose how step confidence is scored"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a4 4 0 1 0-4-4"/><path d="M12 14v-4"/><path d="M3 21a9 9 0 0 1 18 0"/></svg></span>Confidence: Full ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-conf-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-formula="full">
+                <span class="pageguide-mode-opt-text"><b>Full (grounded · loop · progress)</b><small>Confidence = grounding × loop penalty × progress. Uses all three signals.</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-formula="reduced">
+                <span class="pageguide-mode-opt-text"><b>No-progress (grounded · loop)</b><small>Confidence = grounding × loop penalty. Ignores the progress signal.</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-formula="noloop">
+                <span class="pageguide-mode-opt-text"><b>No-loop (grounded · progress)</b><small>Confidence = grounding × progress. Ignores the loop signal.</small></span>
+              </button>
+            </div>
+          </div>
+
           <div class="pageguide-menu-wrap" id="pageguide-more-wrap">
             <button class="pageguide-quick-btn pageguide-more-btn" id="pageguide-more-btn" title="More">⋯</button>
             <div class="pageguide-menu" id="pageguide-more-menu" style="display:none;">
@@ -162,6 +192,8 @@
             </div>
           </div>
 
+          <button type="button" class="pageguide-quick-btn" id="pageguide-debug-prompt-btn" title="View last prompt sent to agent" style="display:none;">🐞 Prompt</button>
+          <button type="button" class="pageguide-guide-pause-btn" id="pageguide-guide-pause" title="Pause guide" aria-label="Pause guide" style="display:none;">Pause</button>
           <button class="pageguide-send-btn" id="pageguide-send">➤</button>
         </div>
       </div>

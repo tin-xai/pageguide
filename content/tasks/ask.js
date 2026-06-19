@@ -199,7 +199,12 @@ async function handleAskWithVision(query) {
       action: 'callLLM',
       systemPrompt: '',
       messages: [{ role: 'user', content: prompt }],
-      imageBase64: screenshot
+      imageBase64: screenshot,
+      metadata: {
+        mode: 'ask_step',
+        step: step,
+        url: window.location.href
+      }
     });
     
     if (response?.error) {
@@ -392,7 +397,11 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
   const response = await safeSendMessage({
     action: 'callLLM',
     systemPrompt: systemPrompt,
-    messages: messages
+    messages: messages,
+    metadata: {
+      mode: 'ask_chat',
+      url: window.location.href
+    }
   });
   
   if (response?.error) {

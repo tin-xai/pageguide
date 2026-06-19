@@ -491,6 +491,27 @@
         </label>
       </div>
     </div>
+    
+    <!-- Debugging Settings Section -->
+    <div class="section">
+      <h2>🛠️ Debugging Settings</h2>
+      <div class="form-group" id="debugCodeGroup">
+        <label for="debugCode">Enter Debug Code</label>
+        <input type="text" id="debugCode" placeholder="Enter code to unlock debugging...">
+      </div>
+      <div class="toggle-group" id="debugToggleGroup" style="display: none;">
+        <label class="toggle-label">
+          <div class="toggle-info">
+            <span class="toggle-title">Enable Debug Mode</span>
+            <span class="toggle-desc">When enabled, a special debug button appears in the side panel to view full agent prompts.</span>
+          </div>
+          <div class="toggle-switch">
+            <input type="checkbox" id="debugEnabled">
+            <span class="toggle-slider"></span>
+          </div>
+        </label>
+      </div>
+    </div>
 
     <button class="secondary" id="saveBtn" style="width: 100%;">💾 Save Vision & SoM Preferences</button>
     <div class="status" id="status"></div>

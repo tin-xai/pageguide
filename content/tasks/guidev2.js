@@ -29,16 +29,22 @@ Return JSON only:
   "action": "click" | "type" | "done",
   "typeText": "text to type (only when action=type)",
   "isLastStep": false,
-  "nextStepHint": "What will happen after this step",
-  "confidence": 0.0,
+  "grounded": 0.0,
+  "loop": 0.0,
+  "progress": 0.0,
   "risk": "low" | "high",
-  "riskReason": "short reason for the risk level"
+  "riskReason": "short reason for the risk level",
+  "confirmation": "needed" | "no need"
 }
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
-"confidence": 0.0–1.0 — how sure you are that THIS step and the chosen element are correct for the user's goal on the current page. Be honest: use a low value (< 0.5) when the target is ambiguous, not clearly visible, or you are guessing.
+CONFIDENCE COMPONENTS — judge these three independently; the extension combines them into a final score:
+"grounded": 0.0–1.0 — how strongly the chosen element and the visible PAGE INDEX evidence support the predicted action. High when the element clearly matches what the action needs; low when the target is ambiguous, not clearly visible, or you are guessing.
+"loop": 0.0–1.0 — looking at COMPLETED STEPS, how much is this step repeating an already-observed state or action? 0.0 = brand-new progress; 1.0 = you are clearly stuck repeating the same state/action cycle.
+"progress": -1.0–1.0 — compared with the previous step's state, does this step move CLOSER to the user's goal? Positive = progress, 0 = no meaningful change, negative = regression (moving away from the goal).
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
+"confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
 
 RULES:
 1. ONE step at a time — never list multiple things to do
@@ -140,7 +146,7 @@ function gv2ShowAutoOverlay() {
     });
     const btn = document.createElement('button');
     btn.className = 'gv2-take';
-    btn.innerHTML = '<span class="gv2-pause" aria-hidden="true">Ⅱ</span><span>Take over task</span>';
+    btn.innerHTML = '<span class="gv2-pause" aria-hidden="true">Ⅱ</span><span>Pause task</span>';
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -167,9 +173,9 @@ function gv2HideAutoOverlay() {
   }
 }
 
-// ===== STEER RESTORE OVERLAY =====
+// ===== RESTORE OVERLAY =====
 // A teal tint (distinct from auto-mode's yellow) signals the agent is rebuilding the page's
-// recorded state during a "Steer from here". Two phases:
+// recorded state during a restore. Two phases:
 //   'restoring' — blocking tint + spinner while actions are applied;
 //   'review'    — click-through tint + banner asking the user to confirm in the side panel.
 
@@ -335,6 +341,10 @@ function _gv2IsStopped() {
   return _guidev2Stopped || !g || g.active === false;
 }
 
+function _gv2IsPaused() {
+  return !!(window._guidev2 && window._guidev2.paused);
+}
+
 function _gv2HidePanelTyping() {
   try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
 }
@@ -417,6 +427,8 @@ async function gv2SaveFallback(extra = {}) {
         tutorialReason: s.tutorialReason,
         currentPlanStep: s.currentPlanStep,
         autoMode: s.autoMode,
+        paused: !!s.paused,
+        lowConfidenceCount: s.lowConfidenceCount || 0,
         lastActionStepNumber: s._lastActionStepNumber || null,
         activeStepNumber: s._activeStepNumber || null,
         lastUrl: window.location.href,
@@ -480,7 +492,7 @@ function _gv2ConnectToSW() {
   }
 }
 
-// Set once a Rewind "Steer from here" handoff has been consumed on this page load, so the
+// Set once a Rewind restore handoff has been consumed on this page load, so the
 // normal navigation-resume paths don't also fire and fight the forked session.
 let _gv2SteerHandled = false;
 
@@ -488,7 +500,7 @@ async function _gv2HandleSwMessage(msg) {
   if (msg.type !== 'swState') return;
   if (_gv2SteerHandled) return; // a steer fork owns this page
 
-  if (msg.state?.active && msg.state?.pendingResume) {
+  if (msg.state?.active && msg.state?.pendingResume && !msg.state?.paused) {
     // SW has live guidance state AND it's expecting navigation → resume
     await _gv2ResumeFromState(msg.state);
   } else {
@@ -501,12 +513,12 @@ async function _gv2HandleSwMessage(msg) {
 async function _gv2CheckSessionStorageFallback() {
   if (_gv2SteerHandled) return;
   const saved = await gv2LoadFallback();
-  if (saved?.active && saved?.pendingResume) {
+  if (saved?.active && saved?.pendingResume && !saved?.paused) {
     await _gv2ResumeFromState(saved);
   }
 }
 
-// Bootstrap on each page load: a pending "Steer from here" handoff takes precedence over
+// Bootstrap on each page load: a pending restore handoff takes precedence over
 // the normal resume; otherwise connect to the SW for ordinary resume.
 async function _gv2Bootstrap() {
   try {
@@ -602,6 +614,8 @@ async function _gv2ResumeFromState(state) {
     tutorialReason: state.tutorialReason || null,
     currentPlanStep: state.currentPlanStep || 1,
     autoMode: state.autoMode === true,
+    paused: false,
+    lowConfidenceCount: state.lowConfidenceCount || 0,
     _lastActionStepNumber: state.lastActionStepNumber || state.activeStepNumber || (state.previousSteps || []).length || null,
     _activeStepNumber: state.activeStepNumber || null
   };
@@ -633,7 +647,21 @@ async function _gv2ResumeFromState(state) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
     } else {
       try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
-      if (result?.error) {
+      const errText = String(result?.error || '');
+      const pausedErr = /Guide paused/i.test(errText);
+      if (pausedErr) {
+        if (window._guidev2) {
+          window._guidev2.active = true;
+          window._guidev2.paused = true;
+          await _gv2SetState(false);
+        }
+        try {
+          chrome.runtime.sendMessage({
+            action: 'guidePaused',
+            reason: 'Guide paused. Resume when you are ready.'
+          });
+        } catch (e) {}
+      } else if (result?.error) {
         try {
           chrome.runtime.sendMessage({
             action: 'addMessage',
@@ -642,8 +670,14 @@ async function _gv2ResumeFromState(state) {
           });
         } catch (e) {}
       }
-      window._guidev2.active = false;
-      _gv2ClearState();
+      if (pausedErr) {
+        // Pausing can race an in-flight resume/generate path. Preserve the guide so Resume works.
+      } else if (!/Could not parse step JSON/i.test(errText)) {
+        window._guidev2.active = false;
+        _gv2ClearState();
+      } else {
+        await _gv2SetState(false);
+      }
     }
   } catch (e) {
     console.error('[guidev2] Resume error:', e);
@@ -665,7 +699,7 @@ async function gv2SteerNow(payload) {
 }
 
 /**
- * Resume a forked ("Steer from here") session: rebuild the earlier steps' transient state and
+ * Resume a restored session: rebuild the earlier steps' transient state and
  * re-decide the branch step with the user's new instruction. previousSteps holds steps
  * 1…fromStep−1, so the next generated step is `fromStep` itself.
  *
@@ -722,7 +756,9 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
         if (idx && idx.goal) goal = idx.goal;
       }
     } catch (e) {}
-    const question = `${goal}\nUSER REDIRECTION — redo step ${redoStep} differently: ${payload.newGoal || ''}`.trim();
+    const question = payload.newGoal
+      ? `${goal}\nUSER REDIRECTION — redo step ${redoStep} differently: ${payload.newGoal || ''}`.trim()
+      : String(goal || '').trim();
 
     const captureEnabled = await _gv2IsCaptureEnabled();
     const autoMode = await _gv2IsAutoMode();
@@ -740,6 +776,8 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       sessionId: payload.sessionId,
       captureEnabled,
       autoMode,
+      paused: false,
+      lowConfidenceCount: 0,
       currentPlanStep: fromStep + 1,
       _lastActionStepNumber: fromStep || null,
       _activeStepNumber: fromStep + 1,
@@ -787,8 +825,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       }
     } catch (e) {}
 
-    // Stash the full restore context so the panel's "Retry restore" / "Tell agent" buttons can
-    // re-run against the same anchor without re-deriving everything.
+    // Stash the full restore context so panel confirmation can continue from the same anchor.
     const ctx = {
       sessionId: payload.sessionId,
       fromStep, redoStep,
@@ -869,8 +906,7 @@ if (typeof window !== 'undefined') window.gv2ConfirmSteerRestore = gv2ConfirmSte
 /**
  * Perform the actual page restore for a steer branch: settle, re-apply the recorded page
  * condition (web storage + scroll + forms) and replay transient UI actions. Pushes a per-item
- * entry into `log`. Shared by the initial resume and the "Retry restore" handler so both apply
- * the exact same restore. Respects the Stop tombstone (bails early).
+ * entry into `log`. Respects the Stop tombstone (bails early).
  */
 async function _gv2PerformRestore(kept, branchRec, payload, fromStep, inPlace, log) {
   if (inPlace) {
@@ -970,7 +1006,12 @@ async function gv2CompareSteerRestoreState() {
     images: [
       { base64: beforeShot, label: 'Saved state before the step' },
       { base64: restoreShot, label: 'Current page after restore' }
-    ]
+    ],
+    metadata: {
+      mode: 'guide_restore_check',
+      step: (g && g.currentPlanStep) || 0,
+      url: window.location.href
+    }
   });
   if (response?.error) return { success: false, error: response.error };
   const comparison = (typeof gv2ParseRestoreComparison === 'function')
@@ -1193,7 +1234,9 @@ async function _gv2SetState(pendingResume) {
     lastActionStepNumber: s._lastActionStepNumber || null,
     activeStepNumber: s._activeStepNumber || null,
     // Mode: carry Manual/Auto across navigations.
-    autoMode: s.autoMode
+    autoMode: s.autoMode,
+    paused: !!s.paused,
+    lowConfidenceCount: s.lowConfidenceCount || 0
   };
 
   // Primary: tell service worker (survives page navigation if SW stays alive)
@@ -1206,6 +1249,8 @@ async function _gv2SetState(pendingResume) {
   // Fallback: session storage (survives SW restart)
   await gv2SaveFallback({
     pendingResume,
+    paused: !!s.paused,
+    lowConfidenceCount: s.lowConfidenceCount || 0,
     lastActionStepNumber: s._lastActionStepNumber || null,
     activeStepNumber: s._activeStepNumber || null
   });
@@ -1254,6 +1299,20 @@ async function _gv2IsAutoMode() {
     return r[_GV2_AUTOMODE_PREF_KEY] === true; // default false (manual)
   } catch (e) {
     return false;
+  }
+}
+
+// Confidence formula preference: 'full' (grounded·loop·progress) or 'reduced' (grounded·loop, no progress).
+// Applies in both manual and auto modes; the score computation is mode-independent.
+const _GV2_CONF_FORMULA_KEY = 'guideConfidenceFormula';
+
+async function _gv2ConfidenceFormula() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_CONF_FORMULA_KEY);
+    const v = r[_GV2_CONF_FORMULA_KEY];
+    return (v === 'reduced' || v === 'noloop') ? v : 'full'; // default full
+  } catch (e) {
+    return 'full';
   }
 }
 
@@ -1399,6 +1458,13 @@ async function gv2CaptureStepRecord(data) {
     }
   }
 
+  if (!beforeShot) {
+    // If still no screenshot, use a 1x1 transparent placeholder so the step is not void,
+    // ensuring the record is stored and shown in the timeline/Inspector.
+    beforeShot = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    console.log(`📸 No screenshot could be captured/found for step ${stepNum}. Using placeholder.`);
+  }
+
   // VERIFICATION: a step with no screenshot is void — skip it entirely (don't announce a dot,
   // don't store a record), so the timeline and the stored journey only contain valid steps.
   if (!beforeShot) {
@@ -1422,6 +1488,11 @@ async function gv2CaptureStepRecord(data) {
         title: document.title || '',
         timestamp: Date.now(),
         confidence: data.confidence != null ? data.confidence : null,
+        grounded: data.grounded != null ? data.grounded : null,
+        loop: data.loop != null ? data.loop : null,
+        progress: data.progress != null ? data.progress : null,
+        confidenceFormula: data.confidenceFormula || null,
+        confirmation: data.confirmation || null,
         hasShot: true
       }
     });
@@ -1432,7 +1503,7 @@ async function gv2CaptureStepRecord(data) {
     try { if (typeof gv2SerializeDom === 'function') domSnapshot = gv2SerializeDom(); }
     catch (e) { console.warn('[guidev2] DOM snapshot failed:', e); }
 
-    // Restorable state (web storage + scroll + form values) so a later "Steer from here"
+    // Restorable state (web storage + scroll + form values) so a later restore
     // on a fresh load can rebuild the page condition without keeping a live tab around.
     let restore = null;
     try { if (typeof gv2CaptureRestoreState === 'function') restore = gv2CaptureRestoreState(); }
@@ -1454,9 +1525,13 @@ async function gv2CaptureStepRecord(data) {
       action: data.action || null,
       typeText: data.typeText != null ? data.typeText : null,
       isLastStep: !!data.isLastStep,
-      nextStepHint: data.nextStepHint || '',
       target: data.target || null,
       confidence: data.confidence != null ? data.confidence : null,
+      grounded: data.grounded != null ? data.grounded : null,
+      loop: data.loop != null ? data.loop : null,
+      progress: data.progress != null ? data.progress : null,
+      confidenceFormula: data.confidenceFormula || null,
+      confirmation: data.confirmation || null,
       durationMs: Date.now() - startedAt,
       // BEFORE-action screenshot (carried from the previous step's after-shot). The timeline shows
       // this. `screenshot` mirrors it for back-compat. The AFTER-action shot is added later by
@@ -1469,7 +1544,9 @@ async function gv2CaptureStepRecord(data) {
       regionShot: region.regionShot,
       regionDom: region.regionDom,
       tutorialMatch: data.tutorialMatch || null,
-      rawLlmJson: data.rawLlmJson || ''
+      rawLlmJson: data.rawLlmJson || '',
+      systemPrompt: data.systemPrompt || '',
+      userPrompt: data.userPrompt || ''
     };
 
     await rewindPutRecord(record);
@@ -1563,7 +1640,7 @@ async function gv2CaptureInitialState() {
       instruction: 'Initial state', action: null, isInitial: true,
       isLastStep: false, target: null, confidence: null, durationMs: 0,
       screenshot: screenshot || null, screenshotBefore: screenshot || null,
-      domSnapshot, restore, rawLlmJson: ''
+      domSnapshot, restore, rawLlmJson: '', systemPrompt: '', userPrompt: ''
     };
     await rewindPutRecord(record);
 
@@ -1609,6 +1686,8 @@ async function _handleStepByStepGuideV2(question) {
     sessionId,
     captureEnabled,
     autoMode,
+    paused: false,
+    lowConfidenceCount: 0,
     currentPlanStep: 1
   };
 
@@ -1633,6 +1712,12 @@ async function _handleStepByStepGuideV2(question) {
 async function gv2GenerateNextStep() {
   const g = window._guidev2;
   if (_gv2IsStopped()) return null;
+  if (_gv2IsPaused()) {
+    _gv2HideIndicator();
+    gv2HideAutoOverlay();
+    _gv2HidePanelTyping();
+    return { success: false, progressed: false, error: 'Guide paused' };
+  }
 
   const capResult = _gv2CheckStepCap(g);
   if (capResult) return capResult;
@@ -1651,6 +1736,7 @@ async function gv2GenerateNextStep() {
   let pageIndex;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (_gv2IsStopped()) return null;
+    if (_gv2IsPaused()) return { success: false, progressed: false, error: 'Guide paused' };
     pageIndex = createPageIndex(5000, true);
     if (pageIndex.count > 5) break;
     console.log('[guidev2] Sparse DOM (', pageIndex.count, 'el), retrying...');
@@ -1681,13 +1767,8 @@ Use these as a reference guide but map each step to the actual elements visible 
 `;
   }
 
-  try {
-    const response = await safeSendMessage({
-      action: 'callLLM',
-      systemPrompt: GUIDE_V2_PROMPT,
-      messages: [{
-        role: 'user',
-        content: `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
+  const systemPrompt = GUIDE_V2_PROMPT;
+  const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
 
 === PAGE INDEX ===
@@ -1702,11 +1783,26 @@ Step ${stepNumber}
 === COMPLETED STEPS ===
 ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
 
-Provide the next step as JSON.`
-      }]
+Provide the next step as JSON.`;
+
+  try {
+
+    const response = await safeSendMessage({
+      action: 'callLLM',
+      systemPrompt: systemPrompt,
+      messages: [{
+        role: 'user',
+        content: userPrompt
+      }],
+      metadata: {
+        mode: 'guide',
+        step: stepNumber,
+        url: window.location.href
+      }
     });
 
     if (_gv2IsStopped()) return null;
+    if (_gv2IsPaused()) return { success: false, progressed: false, error: 'Guide paused' };
 
     if (response?.error) {
       console.warn('[guidev2] LLM error:', response.error);
@@ -1714,7 +1810,7 @@ Provide the next step as JSON.`
       return { success: false, error: response.error };
     }
     if (response?.content) {
-      const result = await gv2ProcessResponse(response.content);
+      const result = await gv2ProcessResponse(response.content, systemPrompt, userPrompt);
       if (_guidev2Stopped) return null;
       // On step 1 only, attach tutorial match info so the panel can show it in Details
       if (result?.success && g.tutorialRef && stepNumber === 1) {
@@ -1802,23 +1898,32 @@ function gv2FindElementByText(searchText) {
 /**
  * Parse LLM JSON, apply highlight, schedule the appropriate action.
  */
-async function gv2ProcessResponse(content) {
+async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
   const g = window._guidev2;
   try {
     if (_gv2IsStopped()) return null;
+    if (_gv2IsPaused()) return { success: false, progressed: false, error: 'Guide paused' };
     const step = (typeof gv2ExtractJsonObject === 'function')
       ? gv2ExtractJsonObject(content)
       : JSON.parse(content);
     if (!step) throw new Error('Could not parse step JSON');
+    if (!step.instruction) throw new Error('LLM response JSON is missing instruction field');
     console.log('[guidev2] Parsed step:', step);
 
     if (Number(step.step) > GV2_MAX_STEPS) {
       return _gv2StopForMaxSteps(g);
     }
 
-    // Plan (Slice 2): normalize confidence to 0..1 and advance the plan pointer.
-    const confidence = (typeof step.confidence === 'number' && isFinite(step.confidence))
-      ? Math.max(0, Math.min(1, step.confidence)) : null;
+    // Confidence: combine the LLM's grounded/loop/progress signals via the selected formula
+    // (full = G·(1−λ_L·L)·(1+λ_P·P), reduced = G·(1−λ_L·L)). Falls back to the legacy
+    // self-reported confidence when the model didn't emit a grounded score.
+    const formula = await _gv2ConfidenceFormula();
+    const conf = (typeof gv2ComputeConfidence === 'function')
+      ? gv2ComputeConfidence({ grounded: step.grounded, loop: step.loop, progress: step.progress }, formula)
+      : { confidence: null, grounded: null, loop: null, progress: null, formula };
+    const confidence = conf.confidence != null ? conf.confidence
+      : ((typeof step.confidence === 'number' && isFinite(step.confidence))
+          ? Math.max(0, Math.min(1, step.confidence)) : null);
     if (typeof step.planStep === 'number' && step.planStep >= 1) {
       g.currentPlanStep = step.planStep;
     }
@@ -1883,14 +1988,23 @@ async function gv2ProcessResponse(content) {
     // Remember the live step so the panel "Next →" (manual mode) can perform it and advance.
     g._currentStep = { action, typeText: step.typeText, value: step.value, instruction: step.instruction, highRisk: isHighRisk };
 
+    // Pause conditions: 3 low-confidence actions, high risk (JSON), or confirmation needed (JSON)
+    const isHighRiskJson = step.risk === 'high';
+    const needsConfirmation = step.confirmation === 'needed';
+    if (confidence !== null && confidence < 0.7) {
+      g.lowConfidenceCount = (g.lowConfidenceCount || 0) + 1;
+    }
+    const willPause = (g.lowConfidenceCount >= 3) || isHighRiskJson || needsConfirmation;
+
     // Gate 1 (Risk) + hand-back override: the agent auto-performs only in Auto mode, for
-    // low-risk actions, and not when a prior gate handed control back for this step.
+    // low-risk actions, and not when a prior gate handed control back for this step or we need to pause.
     const forcedManual = !!g._forceManualNextStep;
     g._forceManualNextStep = false;
-    const autoPerform = g.autoMode && !isHighRisk && !forcedManual;
+    const autoPerform = g.autoMode && !isHighRisk && !forcedManual && !willPause;
+    let pauseAfterCaptureMessage = '';
 
     if (isLast || action === 'done') {
-      _gv2ClearState();
+      // Clear state after capture runs at end of function
     } else if (action === 'type') {
       await _gv2SetState(false);
       if (autoPerform) {
@@ -1900,25 +2014,27 @@ async function gv2ProcessResponse(content) {
           if (!_gv2IsStopped()) _gv2AutoType(step);
         }, 200);
       } else {
-        // Manual / handed-back: highlight the field; the user types and presses Next.
-        _gv2SetupClickListener();
-        if (g.autoMode && isHighRisk) {
-          gv2HideAutoOverlay();
+        if (willPause) {
+          if (needsConfirmation) {
+            pauseAfterCaptureMessage = 'Confirmation needed. Please verify and press Resume.';
+          } else if (isHighRiskJson) {
+            pauseAfterCaptureMessage = 'This step is high risk. Please perform it yourself, then press Resume.';
+          } else {
+            pauseAfterCaptureMessage = 'Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.';
+          }
+        } else if (g.autoMode && isHighRisk) {
           const reason = step.riskReason ? ` (${step.riskReason})` : '';
-          try {
-            chrome.runtime.sendMessage({
-              action: 'addMessage',
-              content: `🖐 This field looks sensitive${reason} — please type it yourself, then press Next.`,
-              type: 'info'
-            });
-          } catch (e) {}
+          pauseAfterCaptureMessage = `This field looks sensitive${reason}. Type it yourself, then press Resume.`;
+        } else {
+          // Manual / handed-back: highlight the field; the user types and presses Next.
+          _gv2SetupClickListener();
         }
       }
     } else {
       // click — save state with pendingResume=true BEFORE wiring the listener so there's no
       // race with fast navigation.
       await _gv2SetState(true);
-      _gv2SetupClickListener();
+      if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
       if (autoPerform) {
         console.log('[guidev2] Auto mode: auto-performing low-risk click step', step.step);
         _gv2ClearActionTimers();
@@ -1926,17 +2042,20 @@ async function gv2ProcessResponse(content) {
           g._autoClickTimer = null;
           if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
         }, 900);
-      } else if (g.autoMode && isHighRisk) {
-        // High-risk click in auto mode → hand control back for this one.
-        gv2HideAutoOverlay();
-        const reason = step.riskReason ? ` (${step.riskReason})` : '';
-        try {
-          chrome.runtime.sendMessage({
-            action: 'addMessage',
-            content: `🖐 This step looks sensitive${reason} — I'll let you do this one. Click the highlighted element when ready.`,
-            type: 'info'
-          });
-        } catch (e) {}
+      } else {
+        if (willPause) {
+          if (needsConfirmation) {
+            pauseAfterCaptureMessage = 'Confirmation needed. Please verify and press Resume.';
+          } else if (isHighRiskJson) {
+            pauseAfterCaptureMessage = 'This step is high risk. Please perform it yourself, then press Resume.';
+          } else {
+            pauseAfterCaptureMessage = 'Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.';
+          }
+        } else if (g.autoMode && isHighRisk) {
+          // High-risk click in auto mode → hand control back for this one.
+          const reason = step.riskReason ? ` (${step.riskReason})` : '';
+          pauseAfterCaptureMessage = `This step looks sensitive${reason}. Do it yourself, then press Resume.`;
+        }
       }
     }
 
@@ -1944,17 +2063,23 @@ async function gv2ProcessResponse(content) {
 
     // Rewind (Slice 1): capture this step (screenshot + DOM snapshot + reasoning).
     // Fire-and-forget so it never delays showing the step to the user.
-    gv2CaptureStepRecord({
+    await gv2CaptureStepRecord({
       step: step.step,
       planStep: step.step,
       confidence,
+      grounded: conf.grounded,
+      loop: conf.loop,
+      progress: conf.progress,
+      confidenceFormula: conf.formula,
+      confirmation: step.confirmation || null,
       instruction: step.instruction,
       action,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,
       isLastStep: isLast,
-      nextStepHint: step.nextStepHint,
       target: { text: step.element?.text || null, llmIndex: step.element?.index ?? null },
       rawLlmJson: content,
+      systemPrompt,
+      userPrompt,
       tutorialMatch: (step.step === 1 && g.tutorialRef) ? {
         task: g.tutorialRef.task,
         website: g.tutorialRef.website,
@@ -1963,29 +2088,46 @@ async function gv2ProcessResponse(content) {
       } : null
     });
 
+    if (pauseAfterCaptureMessage && !isLast && action !== 'done') {
+      await gv2PauseGuide(pauseAfterCaptureMessage);
+    }
+
+    if (isLast || action === 'done') {
+      _gv2ClearState();
+    }
+
     return {
       success: true,
       answer: step.instruction,
       step: step.step,
       isLastStep: isLast,
-      nextStepHint: step.nextStepHint,
       targetText: step.element?.text || null,
       action,
       confidence,
       planStep: step.step,
       highlightCount,
       hasHighlights: highlightCount > 0,
+      autoMode: !!g.autoMode,
       isGuide: true
     };
 
   } catch (e) {
     console.error('[guidev2] Parse error:', e);
     _gv2HideIndicator();
-    _gv2ClearState();
     if (typeof cleanupSom === 'function') cleanupSom();
-    return { success: true, answer: content, isGuide: false };
+    return { success: false, error: e.message || 'Could not parse step JSON' };
   }
 }
+
+async function gv2RetryGuideStep() {
+  const g = window._guidev2;
+  if (!g || !g.active) return { success: false, error: 'Guide not active' };
+  g.paused = false;
+  g.lowConfidenceCount = 0;
+  await _gv2SetState(false);
+  return _gv2GenerateAndDispatch();
+}
+if (typeof window !== 'undefined') window.gv2RetryGuideStep = gv2RetryGuideStep;
 
 // ===== CLICK LISTENER =====
 
@@ -2289,6 +2431,10 @@ window.gv2NextStep = async function (options = {}) {
     _gv2HidePanelTyping();
     return { success: false, progressed: false, error: 'Guide stopped' };
   }
+  if (_gv2IsPaused()) {
+    _gv2HidePanelTyping();
+    return { success: false, progressed: false, error: 'Guide paused' };
+  }
 
   if (!_guidev2WaitingForClick) {
     if (g?.active && cur) {
@@ -2389,6 +2535,85 @@ window.gv2NextStep = async function (options = {}) {
   return continueGuide();
 };
 
+// ===== PAUSE / RESUME GUIDE =====
+
+async function gv2PauseGuide(reason = '') {
+  const g = window._guidev2;
+  if (!g || !g.active) return { success: false, error: 'Guide not active' };
+  g.paused = true;
+  _gv2ClearActionTimers();
+  _gv2RemoveClickListeners();
+  _guidev2WaitingForClick = false;
+  _guidev2Resuming = false;
+  _gv2HideIndicator();
+  gv2HideAutoOverlay();
+  await _gv2SetState(false);
+  try {
+    chrome.runtime.sendMessage({
+      action: 'guidePaused',
+      reason: reason || 'Guide paused. Resume when you are ready for the agent to continue.'
+    });
+  } catch (e) {}
+  _gv2HidePanelTyping();
+  return { success: true, paused: true };
+}
+if (typeof window !== 'undefined') window.gv2PauseGuide = gv2PauseGuide;
+
+async function _gv2HydrateResumeState() {
+  const live = window._guidev2;
+  if (live && live.active) return live;
+  const saved = await gv2LoadFallback();
+  if (!saved?.active) return null;
+  window._guidev2 = {
+    active: true,
+    question: saved.question,
+    previousSteps: saved.previousSteps || [],
+    sessionId: saved.sessionId,
+    captureEnabled: saved.captureEnabled,
+    tutorialRef: saved.tutorialRef || null,
+    tutorialReason: saved.tutorialReason || null,
+    currentPlanStep: saved.currentPlanStep || 1,
+    autoMode: saved.autoMode === true,
+    paused: !!saved.paused,
+    lowConfidenceCount: saved.lowConfidenceCount || 0,
+    _lastActionStepNumber: saved.lastActionStepNumber || saved.activeStepNumber || (saved.previousSteps || []).length || null,
+    _activeStepNumber: saved.activeStepNumber || null
+  };
+  return window._guidev2;
+}
+
+async function gv2ResumeGuide() {
+  const g = await _gv2HydrateResumeState();
+  if (!g || !g.active) return { success: false, error: 'Guide not active' };
+  if (_guidev2Resuming) return { success: false, error: 'Guide is already continuing' };
+  _guidev2Stopped = false;
+  await _gv2ClearStopMark();
+  g.paused = false;
+  g.lowConfidenceCount = 0;
+  await _gv2SetState(false);
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+  await new Promise(r => setTimeout(r, 250));
+  await gv2WaitForDomStable(5000, 500);
+  try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) {}
+  return _gv2GenerateAndDispatch();
+}
+if (typeof window !== 'undefined') window.gv2ResumeGuide = gv2ResumeGuide;
+
+async function gv2ManualRestoreHere() {
+  const g = window._guidev2;
+  if (!g || !g._awaitingRestoreConfirm) return { success: false, error: 'No restore review is active.' };
+  try { gv2ShowRestoreOverlay('review', 'Restore manually, then confirm in the panel'); } catch (e) {}
+  try {
+    chrome.runtime.sendMessage({
+      action: 'addMessage',
+      content: 'You can restore the page yourself now. Press Confirm when the page matches the saved step.',
+      type: 'info'
+    });
+  } catch (e) {}
+  return { success: true };
+}
+if (typeof window !== 'undefined') window.gv2ManualRestoreHere = gv2ManualRestoreHere;
+
 // ===== STOP GUIDE =====
 
 /**
@@ -2457,24 +2682,7 @@ async function _gv2GenerateAndDispatch() {
 // pending auto-action, switches the session to Manual, and leaves the current
 // highlighted step for the user to click themselves.
 window.gv2TakeControl = async function () {
-  const g = window._guidev2;
-  gv2HideAutoOverlay();
-  if (!g || !g.active) return;
-
-  // Cancel any scheduled auto action before handing control back.
-  _gv2ClearActionTimers();
-
-  // Switch this session to Manual and persist so the panel toggle reflects it.
-  g.autoMode = false;
-  try { await chrome.storage.local.set({ [_GV2_AUTOMODE_PREF_KEY]: false }); } catch (e) {}
-
-  try {
-    chrome.runtime.sendMessage({
-      action: 'addMessage',
-      content: '🖐 You have control. Click the highlighted step yourself; I\'ll continue guiding.',
-      type: 'info'
-    });
-  } catch (e) {}
+  return gv2PauseGuide('You have control. Press Resume when you want the agent to continue.');
 };
 
 // ===== ROUTER INTEGRATION =====

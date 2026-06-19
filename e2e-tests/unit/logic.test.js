@@ -600,6 +600,92 @@ describe('gv2ConfidenceTier (content/utils.js)', () => {
   });
 });
 
+describe('gv2ComputeConfidence (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  // Defaults: λ_L = 0.8, λ_P = 0.3
+  test('full vs reduced are identical when progress = 0', () => {
+    const parts = { grounded: 0.9, loop: 0.2, progress: 0 };
+    const full = window.gv2ComputeConfidence(parts, 'full');
+    const reduced = window.gv2ComputeConfidence(parts, 'reduced');
+    expect(full.confidence).toBeCloseTo(reduced.confidence, 6);
+    // 0.9 * (1 - 0.8*0.2) = 0.9 * 0.84 = 0.756
+    expect(full.confidence).toBeCloseTo(0.756, 6);
+  });
+
+  test('full differs from reduced when progress ≠ 0', () => {
+    const parts = { grounded: 0.8, loop: 0.1, progress: 0.5 };
+    const full = window.gv2ComputeConfidence(parts, 'full');
+    const reduced = window.gv2ComputeConfidence(parts, 'reduced');
+    expect(full.confidence).not.toBeCloseTo(reduced.confidence, 6);
+    // reduced: 0.8 * (1 - 0.8*0.1) = 0.8 * 0.92 = 0.736
+    expect(reduced.confidence).toBeCloseTo(0.736, 6);
+    // full: 0.736 * (1 + 0.3*0.5) = 0.736 * 1.15 = 0.8464
+    expect(full.confidence).toBeCloseTo(0.8464, 6);
+  });
+
+  test('positive progress raises full above reduced; negative lowers it', () => {
+    const base = { grounded: 0.7, loop: 0.0 };
+    const pos = window.gv2ComputeConfidence({ ...base, progress: 0.8 }, 'full');
+    const neg = window.gv2ComputeConfidence({ ...base, progress: -0.8 }, 'full');
+    const reduced = window.gv2ComputeConfidence({ ...base, progress: -0.8 }, 'reduced');
+    expect(pos.confidence).toBeGreaterThan(reduced.confidence);
+    expect(neg.confidence).toBeLessThan(reduced.confidence);
+  });
+
+  test('loop = 1 applies full penalty: confidence ≈ 0.2·G', () => {
+    const r = window.gv2ComputeConfidence({ grounded: 0.9, loop: 1, progress: 0 }, 'full');
+    // 0.9 * (1 - 0.8*1) = 0.9 * 0.2 = 0.18
+    expect(r.confidence).toBeCloseTo(0.18, 6);
+  });
+
+  test('noloop formula keeps grounding + progress and ignores loop entirely', () => {
+    // 0.8 * (1 + 0.3*0.5) = 0.8 * 1.15 = 0.92 — independent of loop.
+    const a = window.gv2ComputeConfidence({ grounded: 0.8, loop: 0.9, progress: 0.5 }, 'noloop');
+    const b = window.gv2ComputeConfidence({ grounded: 0.8, loop: 0.1, progress: 0.5 }, 'noloop');
+    expect(a.confidence).toBeCloseTo(0.92, 6);
+    expect(b.confidence).toBeCloseTo(0.92, 6); // loop has no effect in noloop
+  });
+
+  test('the three formulas differ when loop and progress are both nonzero', () => {
+    const parts = { grounded: 0.9, loop: 0.5, progress: 0.5 };
+    const full = window.gv2ComputeConfidence(parts, 'full').confidence;       // 0.9*0.6*1.15 = 0.621
+    const reduced = window.gv2ComputeConfidence(parts, 'reduced').confidence; // 0.9*0.6      = 0.54
+    const noloop = window.gv2ComputeConfidence(parts, 'noloop').confidence;   // 0.9*1.15 = 1.035 → clip 1
+    expect(full).toBeCloseTo(0.621, 6);
+    expect(reduced).toBeCloseTo(0.54, 6);
+    expect(noloop).toBe(1);
+  });
+
+  test('output is clipped to [0,1]', () => {
+    const hi = window.gv2ComputeConfidence({ grounded: 1, loop: 0, progress: 1 }, 'full');
+    expect(hi.confidence).toBe(1); // 1 * 1 * 1.3 = 1.3 → clipped to 1
+    const lo = window.gv2ComputeConfidence({ grounded: 0, loop: 0, progress: 0 }, 'full');
+    expect(lo.confidence).toBe(0);
+  });
+
+  test('missing grounded → confidence null (caller falls back to legacy)', () => {
+    const r = window.gv2ComputeConfidence({ loop: 0.5, progress: 0.5 }, 'full');
+    expect(r.confidence).toBeNull();
+    expect(r.grounded).toBeNull();
+  });
+
+  test('out-of-range inputs are clamped (G,L→[0,1], P→[-1,1])', () => {
+    const r = window.gv2ComputeConfidence({ grounded: 5, loop: -3, progress: 9 }, 'full');
+    // G→1, L→0, P→1 : 1 * (1-0) * (1+0.3) = 1.3 → clip 1
+    expect(r.confidence).toBe(1);
+    expect(r.grounded).toBe(1);
+    expect(r.loop).toBe(0);
+    expect(r.progress).toBe(1);
+  });
+
+  test('weight overrides are respected', () => {
+    const r = window.gv2ComputeConfidence({ grounded: 1, loop: 0.5, progress: 0 }, 'reduced', { lambdaL: 0.4 });
+    // 1 * (1 - 0.4*0.5) = 0.8
+    expect(r.confidence).toBeCloseTo(0.8, 6);
+  });
+});
+
 describe('gv2CropRect (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
 
@@ -1130,5 +1216,150 @@ describe('_gv2VerifyResumeMatch (content/tasks/guidev2.js)', () => {
   test('is permissive when there is no landing URL to compare', () => {
     document.body.innerHTML = '<button>Continue</button>';
     expect(window._gv2VerifyResumeMatch(null, null)).toBe(true);
+  });
+});
+
+describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js)', () => {
+  function getPauseMessage() {
+    const call = window.chrome.runtime.sendMessage.mock.calls.find(
+      c => c[0] && c[0].action === 'guidePaused'
+    );
+    return call ? call[0].reason : '';
+  }
+
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        sendMessage: jest.fn()
+      },
+      storage: {
+        session: {
+          get: jest.fn(async () => ({})),
+          set: jest.fn(async () => {}),
+          remove: jest.fn(async () => {})
+        }
+      }
+    };
+    window.getPageBackground = () => ({ isDark: false });
+    window.gv2FindElementByText = () => null;
+    window.applyIndexedHighlight = () => 0;
+    window.cleanupSom = () => {};
+    window.clearHighlights = () => {};
+    window.rewindPutRecord = jest.fn(async () => {});
+    window.captureScreenshot = jest.fn(async () => 'PLACEHOLDER');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    window._guidev2 = {
+      active: true,
+      question: 'Test Goal',
+      previousSteps: [],
+      autoMode: true,
+      paused: false,
+      lowConfidenceCount: 0
+    };
+  });
+
+  test('consecutive low confidence steps pause after 3 occurrences', async () => {
+    const originalCompute = window.gv2ComputeConfidence;
+    window.gv2ComputeConfidence = () => ({ confidence: 0.5, grounded: 0.5, loop: 0.0, progress: 0.0, formula: 'full' });
+
+    try {
+      const stepJson1 = JSON.stringify({
+        step: 1,
+        thought: 'First low confidence step',
+        instruction: 'Do step 1',
+        element: { index: 1, text: 'Button' },
+        action: 'click'
+      });
+      await window.gv2ProcessResponse(stepJson1);
+      expect(window._guidev2.lowConfidenceCount).toBe(1);
+      expect(window._guidev2.paused).toBe(false);
+      expect(getPauseMessage()).toBe('');
+
+      const stepJson2 = JSON.stringify({
+        step: 2,
+        thought: 'Second low confidence step',
+        instruction: 'Do step 2',
+        element: { index: 2, text: 'Button 2' },
+        action: 'click'
+      });
+      await window.gv2ProcessResponse(stepJson2);
+      expect(window._guidev2.lowConfidenceCount).toBe(2);
+      expect(window._guidev2.paused).toBe(false);
+      expect(getPauseMessage()).toBe('');
+
+      const stepJson3 = JSON.stringify({
+        step: 3,
+        thought: 'Third low confidence step',
+        instruction: 'Do step 3',
+        element: { index: 3, text: 'Button 3' },
+        action: 'click'
+      });
+      await window.gv2ProcessResponse(stepJson3);
+      expect(window._guidev2.lowConfidenceCount).toBe(3);
+      expect(window._guidev2.paused).toBe(true);
+      expect(getPauseMessage()).toBe('Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.');
+    } finally {
+      window.gv2ComputeConfidence = originalCompute;
+    }
+  });
+
+  test('high risk json action pauses immediately', async () => {
+    const stepJson = JSON.stringify({
+      step: 1,
+      thought: 'High risk task',
+      instruction: 'Enter bank password',
+      element: { index: 1, text: 'Password input' },
+      action: 'type',
+      typeText: 'secret',
+      risk: 'high'
+    });
+
+    await window.gv2ProcessResponse(stepJson);
+    expect(window._guidev2.paused).toBe(true);
+    expect(getPauseMessage()).toBe('This step is high risk. Please perform it yourself, then press Resume.');
+  });
+
+  test('confirmation needed pauses immediately', async () => {
+    const stepJson = JSON.stringify({
+      step: 1,
+      thought: 'Needs confirmation',
+      instruction: 'Submit application',
+      element: { index: 2, text: 'Submit' },
+      action: 'click',
+      confirmation: 'needed'
+    });
+
+    await window.gv2ProcessResponse(stepJson);
+    expect(window._guidev2.paused).toBe(true);
+    expect(getPauseMessage()).toBe('Confirmation needed. Please verify and press Resume.');
+  });
+
+  test('resuming guide resets lowConfidenceCount to 0', async () => {
+    window._guidev2.lowConfidenceCount = 2;
+    window._guidev2.paused = true;
+    window.safeSendMessage = jest.fn(async () => ({}));
+    
+    // Ignore internal errors or missing implementation details from _gv2GenerateAndDispatch
+    try {
+      await window.gv2ResumeGuide();
+    } catch (e) {}
+    
+    expect(window._guidev2.lowConfidenceCount).toBe(0);
+  });
+
+  test('retrying guide step resets lowConfidenceCount to 0', async () => {
+    window._guidev2.lowConfidenceCount = 2;
+    window._guidev2.paused = true;
+    window.safeSendMessage = jest.fn(async () => ({}));
+    
+    try {
+      await window.gv2RetryGuideStep();
+    } catch (e) {}
+    
+    expect(window._guidev2.lowConfidenceCount).toBe(0);
   });
 });
