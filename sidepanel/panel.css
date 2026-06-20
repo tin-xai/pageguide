@@ -2738,7 +2738,7 @@ body {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 0 8px;
+  padding: 4px 8px;
 }
 
 .pageguide-goal-dots::before {
@@ -3458,7 +3458,7 @@ body.light-mode .pageguide-chat-messages {
 }
 
 .pageguide-goal-dots {
-  padding: 0 6px;
+  padding: 4px 6px;
 }
 
 .pageguide-goal-dots::before {

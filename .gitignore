@@ -40,3 +40,10 @@ scripts/
 password/
 
 .venv-eval/
+
+# Flask evaluation saved trajectories
+eval_server/saved_trajectories/
+
+eval.bash
+
+eval_server/

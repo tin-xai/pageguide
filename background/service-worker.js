@@ -252,7 +252,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'captureScreenshot') {
-    captureScreenshot(request.tabId)
+    const targetTabId = request.tabId || sender.tab?.id;
+    const targetWindowId = sender.tab?.windowId;
+    captureScreenshot(targetTabId, targetWindowId)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -400,18 +402,19 @@ const _CAPTURE_MIN_GAP_MS = 650;
 let _captureChain = Promise.resolve();
 let _lastCaptureTs = 0;
 
-function captureScreenshot(tabId) {
-  const run = _captureChain.then(() => _doCaptureScreenshot(tabId));
+function captureScreenshot(tabId, windowId) {
+  const run = _captureChain.then(() => _doCaptureScreenshot(tabId, windowId));
   // Keep the chain alive regardless of individual success/failure.
   _captureChain = run.then(() => {}, () => {});
   return run;
 }
 
-async function _doCaptureScreenshot(tabId) {
+async function _doCaptureScreenshot(tabId, windowId) {
   try {
     if (!tabId) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       tabId = tab?.id;
+      if (!windowId) windowId = tab?.windowId;
     }
     if (!tabId) return { error: 'No active tab found' };
 
@@ -421,7 +424,7 @@ async function _doCaptureScreenshot(tabId) {
       await new Promise(r => setTimeout(r, _CAPTURE_MIN_GAP_MS - since));
     }
 
-    const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 80 });
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId || null, { format: 'jpeg', quality: 80 });
     _lastCaptureTs = Date.now();
     const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
     console.log('📸 Screenshot captured, size:', Math.round(base64.length / 1024), 'KB');

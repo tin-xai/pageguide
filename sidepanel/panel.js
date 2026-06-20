@@ -598,6 +598,8 @@ function clearGoalAndStepPanel() {
   }
   if (exportBtn) exportBtn.disabled = true;
   if (cardExportBtn) cardExportBtn.disabled = true;
+  const cardSaveBtn = document.getElementById('pageguide-card-save-trajectory');
+  if (cardSaveBtn) cardSaveBtn.disabled = true;
   refreshGuideOnlyActions();
 }
 
@@ -606,6 +608,8 @@ function setExportEnabled(on) {
   if (btn) btn.disabled = !on;
   const cardBtn = document.getElementById('pageguide-card-export-pdf');
   if (cardBtn) cardBtn.disabled = !on;
+  const saveBtn = document.getElementById('pageguide-card-save-trajectory');
+  if (saveBtn) saveBtn.disabled = !on;
   refreshGuideOnlyActions();
 }
 
@@ -768,6 +772,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => {
     exportJourneyPdf();
+  });
+  document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => {
+    saveTrajectoryToRepo();
   });
   setExportEnabled(false);
   try {
@@ -3925,6 +3932,79 @@ async function exportJourneyPdf() {
   win.document.open();
   win.document.write(html);
   win.document.close();
+}
+
+/**
+ * Save the current guide trajectory to local Flask server.
+ */
+async function saveTrajectoryToRepo() {
+  let index = null;
+  try {
+    if (typeof rewindGetIndex === 'function') index = await rewindGetIndex();
+    if (index?.sessionId && typeof rewindVerifyScreenshots === 'function') index = await rewindVerifyScreenshots(index.sessionId);
+  } catch (e) {}
+
+  if (!index?.steps?.length) {
+    addMessage('ℹ️ No guide journey to save yet.', 'system');
+    return;
+  }
+
+  addMessage('Saving trajectory to current repository...', 'system');
+
+  const records = [];
+  for (const meta of index.steps) {
+    let rec = null;
+    try {
+      if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(index.sessionId, meta.step);
+    } catch (e) {}
+    if (rec) records.push(rec);
+  }
+
+  const settings = await chrome.storage.sync.get(['provider', 'geminiModel', 'openrouterModel']);
+  const provider = settings.provider || 'gemini';
+  let modelStr = '';
+  if (provider === 'gemini') {
+    modelStr = settings.geminiModel || 'gemini-2.5-flash';
+  } else if (provider === 'openrouter') {
+    modelStr = settings.openrouterModel || 'google/gemini-2.5-flash';
+  } else {
+    modelStr = 'unknown';
+  }
+  const llmSource = `${provider.charAt(0).toUpperCase() + provider.slice(1)} - ${modelStr}`;
+
+  const localSettings = await chrome.storage.local.get(['guideConfidenceSource']);
+  const confSourceVal = localSettings.guideConfidenceSource || 'llm';
+  const confSource = confSourceVal === 'mechanical' ? 'No-LLM' : 'LLM Report';
+
+  const payload = {
+    sessionId: index.sessionId,
+    goal: index.goal || currentGoal?.prompt || '',
+    startedAt: index.startedAt || Date.now(),
+    steps: records,
+    llm_source: llmSource,
+    conf_source: confSource
+  };
+
+  try {
+    const response = await fetch('http://localhost:5000/api/save_trajectory', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      addMessage(`💾 Trajectory saved successfully to the repository! File: ${data.filename}`, 'system');
+    } else {
+      const errText = await response.text();
+      addMessage(`❌ Flask server error: ${errText}`, 'error');
+    }
+  } catch (err) {
+    console.error('Error saving trajectory:', err);
+    addMessage('❌ Could not connect to the local Flask server. Please make sure the Flask server is running on port 5000 (`python eval_server/app.py`).', 'error');
+  }
 }
 
 // ---------------------------------------------------------------------------
