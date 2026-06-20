@@ -731,6 +731,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   initGuideModeToggle();
   initConfidenceFormulaToggle();
+  initConfidenceSourceToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -2263,6 +2264,51 @@ function initConfidenceFormulaToggle() {
     const formula = _normalizeConfFormula(option.dataset.formula);
     try { await chrome.storage.local.set({ [GUIDE_CONF_FORMULA_KEY]: formula }); } catch (e) {}
     _renderConfFormula(btn, formula);
+    menu.style.display = 'none';
+  });
+}
+
+// Confidence SOURCE toggle (debug-only): which score drives the timeline tier / pause / red highlight.
+const GUIDE_CONF_SOURCE_KEY = 'guideConfidenceSource';
+const GUIDE_CONF_SOURCES = {
+  llm:        { label: 'LLM',    title: 'Confidence from the model\'s self-reported grounded/loop/progress.' },
+  mechanical: { label: 'No-LLM', title: 'Rule-based confidence: SoM grounding × loop penalty (no model self-grading).' }
+};
+
+function _normalizeConfSource(v) {
+  return v === 'mechanical' ? 'mechanical' : 'llm';
+}
+
+function _renderConfSource(btn, source) {
+  source = _normalizeConfSource(source);
+  const spec = GUIDE_CONF_SOURCES[source];
+  btn.innerHTML = `${UI_ICONS.gauge}Source: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-confsrc-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.source === source);
+  });
+}
+
+function initConfidenceSourceToggle() {
+  const btn = document.getElementById('pageguide-confsrc-toggle');
+  const menu = document.getElementById('pageguide-confsrc-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_CONF_SOURCE_KEY)
+    .then(r => _renderConfSource(btn, _normalizeConfSource(r[GUIDE_CONF_SOURCE_KEY])))
+    .catch(() => _renderConfSource(btn, 'llm'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const source = _normalizeConfSource(option.dataset.source);
+    try { await chrome.storage.local.set({ [GUIDE_CONF_SOURCE_KEY]: source }); } catch (e) {}
+    _renderConfSource(btn, source);
     menu.style.display = 'none';
   });
 }
@@ -4536,9 +4582,14 @@ function updateDebugButtonVisibility(enabled) {
   if (btn) {
     btn.style.display = enabled ? 'inline-flex' : 'none';
   }
-  // The confidence-formula toggle is a debug/research control — only surface it in debug mode.
+  // The confidence-formula and confidence-source toggles are debug/research controls —
+  // only surface them in debug mode.
   const confWrap = document.querySelector('.pageguide-conf-wrap');
   if (confWrap) {
     confWrap.style.display = enabled ? '' : 'none';
+  }
+  const confSrcWrap = document.querySelector('.pageguide-confsrc-wrap');
+  if (confSrcWrap) {
+    confSrcWrap.style.display = enabled ? '' : 'none';
   }
 }

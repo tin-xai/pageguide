@@ -686,6 +686,94 @@ describe('gv2ComputeConfidence (content/utils.js)', () => {
   });
 });
 
+describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  describe('gv2GroundingScore', () => {
+    test('exact SoM index resolved → 1.0', () => {
+      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: true, textFound: false })).toBe(1.0);
+      // indexValid wins even if text also matched
+      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: true, textFound: true })).toBe(1.0);
+    });
+    test('index failed but text fallback found → 0.7', () => {
+      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: false, textFound: true })).toBe(0.7);
+    });
+    test('nothing resolved → 0.0', () => {
+      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: false, textFound: false })).toBe(0.0);
+    });
+    test('no element target → null (excluded step)', () => {
+      expect(window.gv2GroundingScore({ hasTarget: false, indexValid: true, textFound: true })).toBeNull();
+      expect(window.gv2GroundingScore(null)).toBeNull();
+    });
+  });
+
+  describe('gv2LoopScore', () => {
+    test('first occurrence of an element → 0', () => {
+      expect(window.gv2LoopScore([], 'a')).toBe(0);
+      expect(window.gv2LoopScore(['b', 'c'], 'a')).toBe(0);
+    });
+    test('repeated element → fraction of prior matches over t', () => {
+      // two prior "a", current "a": t = priorKeys.length + 1 = 3 → 2/3
+      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBeCloseTo(2 / 3, 6);
+      // one prior "a" among others, current "a": t = 4 → 1/4
+      expect(window.gv2LoopScore(['a', 'b', 'c'], 'a')).toBeCloseTo(1 / 4, 6);
+    });
+    test('explicit denominator t is respected and result clipped to [0,1]', () => {
+      expect(window.gv2LoopScore(['a', 'a'], 'a', 2)).toBe(1); // 2/2
+      expect(window.gv2LoopScore(['a', 'a', 'a'], 'a', 2)).toBe(1); // 3/2 → clip 1
+    });
+    test('no current key → null (excluded step)', () => {
+      expect(window.gv2LoopScore(['a'], '')).toBeNull();
+      expect(window.gv2LoopScore(['a'], null)).toBeNull();
+    });
+  });
+
+  describe('gv2ComputeMechanicalConfidence', () => {
+    test('C_t = G × (1 − λ_L·L_t), default λ_L = 0.5', () => {
+      // G=1.0, no prior → L=0 → 1.0
+      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(1.0, 6);
+      // G=0.7 (text fallback), L=0 → 0.7
+      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: false, textFound: true, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(0.7, 6);
+    });
+    test('loop penalty lowers confidence: G=1.0, one prior repeat (L=0.5, λ=0.5) → 0.75', () => {
+      // priorKeys ['a'], currentKey 'a' → t = priorKeys.length+1 = 2 → L = 1/2;
+      // C = 1.0 * (1 - 0.5*0.5) = 0.75
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' });
+      expect(r.loop).toBeCloseTo(0.5, 6);
+      expect(r.confidence).toBeCloseTo(0.75, 6);
+    });
+    test('grounding zero → confidence 0 (hard floor)', () => {
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: false, textFound: false, priorKeys: ['a', 'a'], currentKey: 'a' });
+      expect(r.grounding).toBe(0);
+      expect(r.confidence).toBe(0);
+    });
+    test('no target → null confidence (excluded)', () => {
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: false, priorKeys: [], currentKey: '' });
+      expect(r.confidence).toBeNull();
+      expect(r.grounding).toBeNull();
+      expect(r.loop).toBeNull();
+    });
+    test('λ_L override is respected', () => {
+      // G=1.0, prior ['a'] current 'a' → L=0.5; λ=1.0 → 1.0*(1-1.0*0.5)=0.5
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' }, { lambdaL: 1.0 });
+      expect(r.confidence).toBeCloseTo(0.5, 6);
+    });
+  });
+
+  describe('gv2ElementKey', () => {
+    test('uses element.text, normalized (lowercased, collapsed whitespace)', () => {
+      expect(window.gv2ElementKey({ element: { text: '  Sign  In ' }, instruction: 'x' })).toBe('sign in');
+    });
+    test('falls back to instruction when no element text', () => {
+      expect(window.gv2ElementKey({ instruction: 'Click Save' })).toBe('click save');
+    });
+    test('returns empty string when neither present', () => {
+      expect(window.gv2ElementKey({})).toBe('');
+      expect(window.gv2ElementKey(null)).toBe('');
+    });
+  });
+});
+
 describe('gv2CropRect (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
 

@@ -429,6 +429,7 @@ async function gv2SaveFallback(extra = {}) {
         autoMode: s.autoMode,
         paused: !!s.paused,
         lowConfidenceCount: s.lowConfidenceCount || 0,
+        mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
         lastActionStepNumber: s._lastActionStepNumber || null,
         activeStepNumber: s._activeStepNumber || null,
         lastUrl: window.location.href,
@@ -616,6 +617,7 @@ async function _gv2ResumeFromState(state) {
     autoMode: state.autoMode === true,
     paused: false,
     lowConfidenceCount: state.lowConfidenceCount || 0,
+    _mechKeys: Array.isArray(state.mechKeys) ? state.mechKeys : [],
     _lastActionStepNumber: state.lastActionStepNumber || state.activeStepNumber || (state.previousSteps || []).length || null,
     _activeStepNumber: state.activeStepNumber || null
   };
@@ -778,6 +780,12 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       autoMode,
       paused: false,
       lowConfidenceCount: 0,
+      // Seed the loop-detection key list from the kept (target-bearing) steps so L_t keeps
+      // counting correctly after a rewind/steer.
+      _mechKeys: kept
+        .filter(r => r.target?.text)
+        .map(r => (typeof gv2ElementKey === 'function' ? gv2ElementKey({ element: { text: r.target.text } }) : ''))
+        .filter(Boolean),
       currentPlanStep: fromStep + 1,
       _lastActionStepNumber: fromStep || null,
       _activeStepNumber: fromStep + 1,
@@ -1236,7 +1244,9 @@ async function _gv2SetState(pendingResume) {
     // Mode: carry Manual/Auto across navigations.
     autoMode: s.autoMode,
     paused: !!s.paused,
-    lowConfidenceCount: s.lowConfidenceCount || 0
+    lowConfidenceCount: s.lowConfidenceCount || 0,
+    // Mechanical confidence: carry the loop-detection key list across navigations.
+    mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : []
   };
 
   // Primary: tell service worker (survives page navigation if SW stays alive)
@@ -1313,6 +1323,20 @@ async function _gv2ConfidenceFormula() {
     return (v === 'reduced' || v === 'noloop') ? v : 'full'; // default full
   } catch (e) {
     return 'full';
+  }
+}
+
+// Confidence SOURCE toggle: 'llm' = self-reported grounded/loop/progress (default, original
+// behavior), 'mechanical' = rule-based grounding × loop computed from execution signals (no LLM).
+// Decides which score becomes the active `confidence` that drives the tier/pause/red-highlight logic.
+const _GV2_CONF_SOURCE_KEY = 'guideConfidenceSource';
+
+async function _gv2ConfidenceSource() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_CONF_SOURCE_KEY);
+    return r[_GV2_CONF_SOURCE_KEY] === 'mechanical' ? 'mechanical' : 'llm'; // default llm
+  } catch (e) {
+    return 'llm';
   }
 }
 
@@ -1492,6 +1516,10 @@ async function gv2CaptureStepRecord(data) {
         loop: data.loop != null ? data.loop : null,
         progress: data.progress != null ? data.progress : null,
         confidenceFormula: data.confidenceFormula || null,
+        mechConfidence: data.mechConfidence != null ? data.mechConfidence : null,
+        mechGrounding: data.mechGrounding != null ? data.mechGrounding : null,
+        mechLoop: data.mechLoop != null ? data.mechLoop : null,
+        confidenceSource: data.confidenceSource || null,
         confirmation: data.confirmation || null,
         hasShot: true
       }
@@ -1531,6 +1559,10 @@ async function gv2CaptureStepRecord(data) {
       loop: data.loop != null ? data.loop : null,
       progress: data.progress != null ? data.progress : null,
       confidenceFormula: data.confidenceFormula || null,
+      mechConfidence: data.mechConfidence != null ? data.mechConfidence : null,
+      mechGrounding: data.mechGrounding != null ? data.mechGrounding : null,
+      mechLoop: data.mechLoop != null ? data.mechLoop : null,
+      confidenceSource: data.confidenceSource || null,
       confirmation: data.confirmation || null,
       durationMs: Date.now() - startedAt,
       // BEFORE-action screenshot (carried from the previous step's after-shot). The timeline shows
@@ -1688,6 +1720,7 @@ async function _handleStepByStepGuideV2(question) {
     autoMode,
     paused: false,
     lowConfidenceCount: 0,
+    _mechKeys: [],
     currentPlanStep: 1
   };
 
@@ -1914,16 +1947,39 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       return _gv2StopForMaxSteps(g);
     }
 
-    // Confidence: combine the LLM's grounded/loop/progress signals via the selected formula
-    // (full = G·(1−λ_L·L)·(1+λ_P·P), reduced = G·(1−λ_L·L)). Falls back to the legacy
-    // self-reported confidence when the model didn't emit a grounded score.
+    // LLM self-reported confidence: combine the model's grounded/loop/progress signals via the
+    // selected formula (full = G·(1−λ_L·L)·(1+λ_P·P), reduced = G·(1−λ_L·L)). Falls back to the
+    // legacy self-reported confidence when the model didn't emit a grounded score.
     const formula = await _gv2ConfidenceFormula();
     const conf = (typeof gv2ComputeConfidence === 'function')
       ? gv2ComputeConfidence({ grounded: step.grounded, loop: step.loop, progress: step.progress }, formula)
       : { confidence: null, grounded: null, loop: null, progress: null, formula };
-    const confidence = conf.confidence != null ? conf.confidence
+    const llmConfidence = conf.confidence != null ? conf.confidence
       : ((typeof step.confidence === 'number' && isFinite(step.confidence))
           ? Math.max(0, Math.min(1, step.confidence)) : null);
+
+    // Mechanical ("no-LLM") confidence: rule-based grounding × loop penalty, from execution
+    // signals only. Resolve the element up front so we know whether the LLM's exact index was
+    // valid (G=1.0), only the text fallback matched (G=0.7), or nothing resolved (G=0.0). The
+    // loop score counts prior target-bearing steps that targeted the same element.
+    const hasTarget = !!(step.element?.index != null || step.element?.text);
+    const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
+    const indexValid = step.element?.index != null
+      && typeof getIndexedElement === 'function'
+      && !!getIndexedElement(step.element.index);
+    const currentKey = (typeof gv2ElementKey === 'function') ? gv2ElementKey(step) : '';
+    const priorKeys = Array.isArray(g._mechKeys) ? g._mechKeys : (g._mechKeys = []);
+    const mech = (typeof gv2ComputeMechanicalConfidence === 'function')
+      ? gv2ComputeMechanicalConfidence({ hasTarget, indexValid, textFound: textMatchIdx !== null, priorKeys, currentKey })
+      : { confidence: null, grounding: null, loop: null };
+    // Record this step's element key for future loop detection (target-bearing steps only).
+    if (hasTarget && currentKey) priorKeys.push(currentKey);
+
+    // The ACTIVE confidence — what drives the timeline tier, the 3-strikes pause, and the red
+    // highlight — is chosen by the source toggle: 'mechanical' uses the rule-based score, otherwise
+    // the LLM self-report (default). Both are stored on the record regardless (side-by-side).
+    const confSource = await _gv2ConfidenceSource();
+    const confidence = (confSource === 'mechanical') ? mech.confidence : llmConfidence;
     if (typeof step.planStep === 'number' && step.planStep >= 1) {
       g.currentPlanStep = step.planStep;
     }
@@ -1947,7 +2003,6 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
             ? getRandomHighlightStyle(pageBg.isDark)
             : { color: '#2ed573', animation: 'pulse' });
 
-      const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
       const idxToUse = textMatchIdx !== null ? textMatchIdx : step.element.index;
 
       if (textMatchIdx !== null && textMatchIdx !== step.element.index) {
@@ -2071,6 +2126,11 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       loop: conf.loop,
       progress: conf.progress,
       confidenceFormula: conf.formula,
+      // Mechanical ("no-LLM") confidence stored side-by-side with the LLM self-report.
+      mechConfidence: mech.confidence,
+      mechGrounding: mech.grounding,
+      mechLoop: mech.loop,
+      confidenceSource: confSource,
       confirmation: step.confirmation || null,
       instruction: step.instruction,
       action,

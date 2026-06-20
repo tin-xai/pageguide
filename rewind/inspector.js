@@ -141,21 +141,32 @@
   function confidenceBreakdown(rec) {
     const fmt = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '—';
     const pct = (c) => (c != null) ? Math.round(c * 100) + '%' : '—';
-    if (rec.grounded == null && rec.loop == null && rec.progress == null) return '';
-    const parts = [
-      `<span class="pill">G: ${fmt(rec.grounded)}</span>`,
-      `<span class="pill">L: ${fmt(rec.loop)}</span>`,
-      `<span class="pill">P: ${fmt(rec.progress)}</span>`
-    ];
-    if (typeof gv2ComputeConfidence === 'function') {
-      const signals = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
-      const cFull = gv2ComputeConfidence(signals, 'full').confidence;
-      const cReduced = gv2ComputeConfidence(signals, 'reduced').confidence;
-      const cNoLoop = gv2ComputeConfidence(signals, 'noloop').confidence;
-      const active = rec.confidenceFormula || 'full';
-      parts.push(`<span class="pill ${active === 'full' ? 'ok' : ''}">Full: ${pct(cFull)}</span>`);
-      parts.push(`<span class="pill ${active === 'reduced' ? 'ok' : ''}">No-progress: ${pct(cReduced)}</span>`);
-      parts.push(`<span class="pill ${active === 'noloop' ? 'ok' : ''}">No-loop: ${pct(cNoLoop)}</span>`);
+    const hasLlm = !(rec.grounded == null && rec.loop == null && rec.progress == null);
+    const hasMech = rec.mechConfidence != null || rec.mechGrounding != null || rec.mechLoop != null;
+    if (!hasLlm && !hasMech) return '';
+    const parts = [];
+    if (hasLlm) {
+      const llmActive = rec.confidenceSource !== 'mechanical';
+      parts.push(`<span class="pill">G: ${fmt(rec.grounded)}</span>`);
+      parts.push(`<span class="pill">L: ${fmt(rec.loop)}</span>`);
+      parts.push(`<span class="pill">P: ${fmt(rec.progress)}</span>`);
+      if (typeof gv2ComputeConfidence === 'function') {
+        const signals = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
+        const cFull = gv2ComputeConfidence(signals, 'full').confidence;
+        const cReduced = gv2ComputeConfidence(signals, 'reduced').confidence;
+        const cNoLoop = gv2ComputeConfidence(signals, 'noloop').confidence;
+        const active = rec.confidenceFormula || 'full';
+        parts.push(`<span class="pill ${llmActive && active === 'full' ? 'ok' : ''}">Full: ${pct(cFull)}</span>`);
+        parts.push(`<span class="pill ${llmActive && active === 'reduced' ? 'ok' : ''}">No-progress: ${pct(cReduced)}</span>`);
+        parts.push(`<span class="pill ${llmActive && active === 'noloop' ? 'ok' : ''}">No-loop: ${pct(cNoLoop)}</span>`);
+      }
+    }
+    // Mechanical ("no-LLM") confidence: rule-based grounding × loop, side by side with the LLM score.
+    if (hasMech) {
+      const mechActive = rec.confidenceSource === 'mechanical';
+      parts.push(`<span class="pill">Mech G: ${fmt(rec.mechGrounding)}</span>`);
+      parts.push(`<span class="pill">Mech L: ${fmt(rec.mechLoop)}</span>`);
+      parts.push(`<span class="pill ${mechActive ? 'ok' : ''}">No-LLM: ${pct(rec.mechConfidence)}</span>`);
     }
     return parts.join('');
   }

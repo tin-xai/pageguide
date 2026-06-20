@@ -34,3 +34,9 @@ CODEX.md
 
 # Scripts
 scripts/
+
+.env
+
+password/
+
+.venv-eval/

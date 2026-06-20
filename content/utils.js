@@ -1144,6 +1144,89 @@ function gv2ComputeConfidence(parts, formula = 'full', weights) {
   return { confidence: clip01(c), grounded: G, loop: L, progress: P, formula };
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Mechanical ("no-LLM") step confidence
+//
+// An alternative to the LLM self-reported confidence above. Instead of asking the
+// model to grade its own action, we derive confidence purely from execution signals
+// that target the two failure modes mechanical signals can actually detect — element
+// MISGROUNDING and action LOOPING:
+//
+//   C_t = clip( G_grounding × (1 − λ_L × L_t),  0, 1 )
+//
+//   G_grounding ∈ {0, 0.7, 1.0}  rule-based from SoM resolution (no LLM)
+//   L_t         ∈ [0, 1]         fraction of prior target-bearing steps with the same element key
+//   λ_L                          loop penalty weight (default 0.5)
+//
+// Steps with no element target (e.g. a `done` step) are EXCLUDED: grounding is null,
+// confidence is null, and they are omitted from the loop denominator. Pure (no DOM /
+// storage) so they're unit-testable.
+// ───────────────────────────────────────────────────────────────────────────
+
+const GV2_GROUNDING_LAMBDA_L = 0.5; // loop penalty weight for the mechanical formula
+
+/**
+ * Rule-based grounding score from SoM resolution. Measures whether the LLM's chosen
+ * element actually resolved on the page — not which path was ultimately clicked.
+ *
+ * @param {{hasTarget:boolean, indexValid:boolean, textFound:boolean}} parts
+ * @returns {number|null} 1.0 (exact index resolved), 0.7 (text fallback only),
+ *   0.0 (nothing resolved), or null when the step has no element target (excluded).
+ */
+function gv2GroundingScore(parts) {
+  if (!parts || !parts.hasTarget) return null;
+  if (parts.indexValid) return 1.0;
+  if (parts.textFound) return 0.7;
+  return 0.0;
+}
+
+/**
+ * Loop score for the current step: the fraction of prior target-bearing steps that
+ * targeted the same element. L_t = |{j < t : key_j == key_t}| / t.
+ *
+ * @param {string[]} priorKeys - element keys of prior target-bearing steps (in order)
+ * @param {string} currentKey  - element key of the current step
+ * @param {number} [t] - denominator (position among target-bearing steps); defaults to priorKeys.length+1
+ * @returns {number|null} loop fraction in [0,1], or null when there is no current key (excluded step)
+ */
+function gv2LoopScore(priorKeys, currentKey, t) {
+  if (!currentKey) return null;
+  const prior = Array.isArray(priorKeys) ? priorKeys : [];
+  const denom = (typeof t === 'number' && t > 0) ? t : (prior.length + 1);
+  const matches = prior.filter(k => k === currentKey).length;
+  return Math.max(0, Math.min(1, matches / denom));
+}
+
+/**
+ * Combine the mechanical grounding + loop signals into a single confidence score.
+ * Returns null (excluded step) when grounding is null.
+ *
+ * @param {{hasTarget:boolean, indexValid:boolean, textFound:boolean, priorKeys:string[], currentKey:string}} parts
+ * @param {{lambdaL?:number}} [weights]
+ * @returns {{confidence:number|null, grounding:number|null, loop:number|null}}
+ */
+function gv2ComputeMechanicalConfidence(parts, weights) {
+  const clip01 = v => Math.max(0, Math.min(1, v));
+  const lamL = (weights && typeof weights.lambdaL === 'number') ? weights.lambdaL : GV2_GROUNDING_LAMBDA_L;
+  const grounding = gv2GroundingScore(parts);
+  if (grounding == null) return { confidence: null, grounding: null, loop: null };
+  const loop = gv2LoopScore(parts?.priorKeys, parts?.currentKey) ?? 0;
+  return { confidence: clip01(grounding * (1 - lamL * loop)), grounding, loop };
+}
+
+/**
+ * Derive the loop "element key" for a step: a normalized identifier for the element it
+ * targets. Falls back to the instruction text when no element text is present. Returns
+ * '' for steps with no usable key (treated as excluded by the loop score).
+ *
+ * @param {{element?:{text?:string}, instruction?:string}} step
+ * @returns {string} normalized key, or '' when none
+ */
+function gv2ElementKey(step) {
+  const raw = (step && (step.element?.text || step.instruction)) || '';
+  return String(raw).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 /**
  * Compute the source-crop rectangle (in IMAGE pixels) for cropping a viewport screenshot down to
  * an element's region. `captureVisibleTab` returns an image at devicePixelRatio scale while
@@ -1179,13 +1262,22 @@ function gv2CropRect(rect, dpr, imgW, imgH, pad) {
 if (typeof window !== 'undefined') {
   window.gv2ConfidenceTier = gv2ConfidenceTier;
   window.gv2ComputeConfidence = gv2ComputeConfidence;
+  window.gv2GroundingScore = gv2GroundingScore;
+  window.gv2LoopScore = gv2LoopScore;
+  window.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
+  window.gv2ElementKey = gv2ElementKey;
   window.gv2CropRect = gv2CropRect;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2ConfidenceTier = gv2ConfidenceTier;
   module.exports.gv2ComputeConfidence = gv2ComputeConfidence;
+  module.exports.gv2GroundingScore = gv2GroundingScore;
+  module.exports.gv2LoopScore = gv2LoopScore;
+  module.exports.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
+  module.exports.gv2ElementKey = gv2ElementKey;
   module.exports.GV2_LAMBDA_L = GV2_LAMBDA_L;
   module.exports.GV2_LAMBDA_P = GV2_LAMBDA_P;
+  module.exports.GV2_GROUNDING_LAMBDA_L = GV2_GROUNDING_LAMBDA_L;
   module.exports.gv2CropRect = gv2CropRect;
 }
 
