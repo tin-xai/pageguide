@@ -1,0 +1,26 @@
+{
+  "run_id": "run-02029b7babc1",
+  "created_at": "2026-06-20T18:17:04+00:00",
+  "status": "completed",
+  "task_ids": [
+    "csv-6b9e9fc7a45f",
+    "csv-a44f3e32fe14",
+    "csv-21ea58ce2261"
+  ],
+  "started_at": "2026-06-20T18:17:04+00:00",
+  "completed_at": "2026-06-20T18:18:24+00:00",
+  "error": null,
+  "task_set": "no_login",
+  "csv_path": "/Users/tht0021/Documents/pageguide/data-guide/Copy of GuideTaskData - guide_task_no_log_in.csv",
+  "max_steps": 2,
+  "task_model": "google/gemini-2.5-flash-lite",
+  "judge_model": "google/gemini-2.5-flash-lite",
+  "task_total": 3,
+  "completed_tasks": 3,
+  "progress": "3/3",
+  "current_step": 2,
+  "current_phase": "executing steps",
+  "current_task": "csv-21ea58ce2261",
+  "current_task_name": "Search for 5 star activities in Las Vegas",
+  "task_index": 3
+}

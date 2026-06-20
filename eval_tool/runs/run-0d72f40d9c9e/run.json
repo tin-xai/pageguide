@@ -1,0 +1,23 @@
+{
+  "run_id": "run-0d72f40d9c9e",
+  "created_at": "2026-06-20T16:30:13+00:00",
+  "status": "failed",
+  "task_ids": [
+    "csv-bf7e0f85a8fb",
+    "csv-7e0406e521fa"
+  ],
+  "started_at": "2026-06-20T16:30:13+00:00",
+  "completed_at": "2026-06-20T16:30:44+00:00",
+  "error": "Page.evaluate: Target page, context or browser has been closed",
+  "task_set": "no_login",
+  "csv_path": "/Users/tht0021/Documents/pageguide/data-guide/Copy of GuideTaskData - guide_task_no_log_in.csv",
+  "max_steps": 5,
+  "task_total": 2,
+  "completed_tasks": 0,
+  "progress": "1/2",
+  "current_step": 4,
+  "current_phase": "executing steps",
+  "current_task": "csv-bf7e0f85a8fb",
+  "current_task_name": "Search for Los Angele from June 19 to June 30 for 2 adults",
+  "task_index": 1
+}

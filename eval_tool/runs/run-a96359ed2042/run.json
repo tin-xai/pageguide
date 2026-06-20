@@ -1,0 +1,19 @@
+{
+  "run_id": "run-a96359ed2042",
+  "created_at": "2026-06-20T01:23:39+00:00",
+  "status": "completed",
+  "task_ids": [
+    "csv-3d8ddf44345a"
+  ],
+  "started_at": "2026-06-20T01:23:39+00:00",
+  "completed_at": "2026-06-20T01:24:01+00:00",
+  "error": null,
+  "current_task": "csv-3d8ddf44345a",
+  "current_task_name": "Book a 4 star hotel in Austin",
+  "task_index": 1,
+  "task_total": 1,
+  "progress": "1/1",
+  "current_step": 0,
+  "current_phase": "loading page",
+  "completed_tasks": 1
+}

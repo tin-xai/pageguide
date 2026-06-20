@@ -1,0 +1,526 @@
+{% extends "base.html" %}
+{% block title %}{{ run.run_id }}{% endblock %}
+{% block nav %}
+  <a href="#calibration">Charts</a>
+  <a href="{{ url_for('phase3', run_id=run.run_id) }}">Phase 3</a>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <div>
+      <p class="eyebrow">Run {{ run.run_id }}</p>
+      <h1>{{ run.status|title }}</h1>
+      <p class="muted">Created {{ run.created_at }}{% if run.progress %} · Progress {{ run.progress }}{% endif %}</p>
+      <div class="model-strip">
+        <span>Task model: <strong>{{ run.task_model or "google/gemini-2.5-flash-lite" }}</strong></span>
+        <span>Judge model: <strong>{{ run.judge_model or "google/gemini-2.5-flash-lite" }}</strong></span>
+      </div>
+    </div>
+    <div class="actions">
+      {% if running %}
+        <form method="post" action="{{ url_for('stop_eval_run', run_id=run.run_id) }}">
+          <button type="submit" class="danger">Stop Run</button>
+        </form>
+        <span class="status live">Running</span>
+      {% else %}
+        <form method="post" action="{{ url_for('judge_phase3', run_id=run.run_id) }}">
+          <input type="hidden" name="force" value="1">
+          <button type="submit" class="secondary">Rejudge Progress With GT</button>
+        </form>
+        {% if not run.gt_of %}
+          <form method="post" action="{{ url_for('rerun_with_gt', run_id=run.run_id) }}">
+            <button type="submit" class="secondary">Run with ground truth (Plot B)</button>
+          </form>
+        {% endif %}
+        <span class="status">{{ run.status }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% if run.gt_of %}
+    <p class="muted">Ground-truth re-run of <a href="{{ url_for('run_detail', run_id=run.gt_of) }}">{{ run.gt_of }}</a>.
+      <a href="{{ url_for('run_detail', run_id=run.gt_of, compare=run.run_id) }}#calibration">View Plot B (GT vs no-GT)</a></p>
+  {% endif %}
+  {% if run.error %}<p class="alert">{{ run.error }}</p>{% endif %}
+  {% if run.warning %}<p class="alert">{{ run.warning }}</p>{% endif %}
+  {% if running %}<meta http-equiv="refresh" content="3">{% endif %}
+</section>
+
+{% if running %}
+<section class="card live-progress">
+  <div class="card-head">
+    <div>
+      <p class="eyebrow">Live progress · auto-refreshing every 3s</p>
+      <h2>
+        Task {{ run.task_index or 1 }} of {{ run.task_total or (run.task_ids|length) or summary.total or '?' }}{% if run.current_task_name %}: {{ run.current_task_name }}{% endif %}
+      </h2>
+      <p class="muted">
+        Step {{ run.current_step or 0 }} / {{ run.max_steps or 15 }}
+        {% if run.current_phase %} · {{ run.current_phase }}{% endif %}
+      </p>
+    </div>
+    <div class="actions"><span class="spinner" aria-hidden="true"></span></div>
+  </div>
+  {% set t_total = run.task_total or (run.task_ids|length) or summary.total or 0 %}
+  {% set t_done = run.completed_tasks or summary.total or 0 %}
+  <div class="bar-track"><div class="bar ok-bg" style="width: {{ ((t_done / t_total * 100) if t_total else 0)|round(1) }}%"></div></div>
+  <p class="muted">{{ t_done }} of {{ t_total }} tasks finished. This page updates automatically; results appear below as each task completes.</p>
+</section>
+{% endif %}
+
+<section class="stats">
+  {% set stats_total = run.task_total or (run.task_ids|length) or summary.total %}
+  <div class="stat"><span>Total Tasks</span><strong>{{ stats_total }}</strong></div>
+  <div class="stat ok"><strong>{{ summary.success }}</strong><span>Success</span></div>
+  <div class="stat bad"><strong>{{ summary.failed }}</strong><span>Fail</span></div>
+  <div class="stat"><strong>{{ "%.1f"|format(summary.success_rate) }}%</strong><span>Success Rate</span></div>
+</section>
+
+<section class="card">
+  <details open>
+    <summary class="section-summary">Mean by Step Across Tasks</summary>
+    <p class="muted">Aggregate scores are averaged by step number across tasks in this run. Step N only includes tasks that recorded a Step N.</p>
+    <canvas id="aggregate-chart" height="110"></canvas>
+  </details>
+</section>
+
+<section class="card">
+  <details>
+    <summary class="section-summary">Per Task Charts</summary>
+    <p class="muted">Each chart shows one task's stored confidence trajectory with the same formulas as the aggregate chart.</p>
+    <div class="chart-grid">
+      {% for task_chart in payload.tasks %}
+        <article class="chart-card">
+          <h3>{{ task_chart.task or task_chart.task_id }}</h3>
+          <p class="muted">{{ "Success" if task_chart.success else "Failed" }} · {{ task_chart.points|length }} recorded steps</p>
+          {% if task_chart.points %}
+            <canvas id="task-chart-{{ loop.index }}" height="160"></canvas>
+          {% else %}
+            <div class="empty-chart">No PageGuide steps were recorded for this task.</div>
+          {% endif %}
+        </article>
+      {% else %}
+        <p class="muted">No task charts are available yet.</p>
+      {% endfor %}
+    </div>
+  </details>
+</section>
+
+<section class="card" id="calibration">
+  <div class="card-head">
+    <div>
+      <p class="eyebrow">Confidence calibration</p>
+      <h2>Confidence Score &amp; Calibration</h2>
+      <p class="muted">New-spec score (rule-based grounding + embedding progress, &lambda;<sub>L</sub>=0.5)
+        vs the current LLM-based score. Accuracy labels use the human override when set
+        (per task), otherwise the LLM judge.</p>
+    </div>
+    <div class="actions">
+      <button type="button" id="download-charts" class="secondary">Download charts (.zip)</button>
+    </div>
+  </div>
+
+  <h3>Plot A — Components of the new-spec score</h3>
+  <p class="muted">Mean confidence by step across all tasks: Full vs No-Loop vs No-Progress.
+    Overlapping lines mean that component adds little signal.</p>
+  <canvas id="plotA" data-filename="plotA_spec_variants.png" height="110"></canvas>
+
+  <h3>Plot D — New-spec vs LLM-based (Full)</h3>
+  <p class="muted">Mean Full confidence by step: new spec vs current LLM-based score.
+    Diverging lines mean the new spec changes the score meaningfully.</p>
+  <canvas id="plotD" data-filename="plotD_full_llm_vs_spec.png" height="110"></canvas>
+
+  <h3>Plot C — ECE of new-spec Full
+    <span class="chip">ECE {{ "%.3f"|format(ece.spec_full.ece) if ece.spec_full.ece is not none else "—" }}</span></h3>
+  <p class="muted">Reliability of the new-spec Full score vs task accuracy
+    ({{ ece.spec_full.n }} tasks; {{ ece.spec_full.excluded_bot_detection }} bot-detection failures excluded).</p>
+  <canvas id="plotC" data-filename="plotC_ece_spec_full.png" height="110"></canvas>
+
+  <h3>Plot E — ECE of LLM-based Full
+    <span class="chip">ECE {{ "%.3f"|format(ece.full.ece) if ece.full.ece is not none else "—" }}</span></h3>
+  <p class="muted">Reliability of the current LLM-based Full score vs task accuracy
+    ({{ ece.full.n }} tasks). Lower ECE than Plot C means it tracks accuracy better.</p>
+  <canvas id="plotE" data-filename="plotE_ece_full.png" height="110"></canvas>
+
+  {% if compare %}
+    <h3>Plot B — Ground truth in the guide prompt (LLM-based Full)</h3>
+    <p class="muted">Mean LLM-based Full confidence by step: with GT injected
+      ({{ compare.other_id }}) vs without GT ({{ compare.this_id }}).</p>
+    <canvas id="plotB" data-filename="plotB_llm_full_gt_vs_nogt.png" height="110"></canvas>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Error Breakdown</h2>
+  {% set max_count = [summary.success] + (summary.categories.values()|list) %}
+  {% if summary.total %}
+    <div class="breakdown">
+      <div class="breakdown-row">
+        <span>Success</span>
+        <div class="bar-track"><div class="bar ok-bg" style="width: {{ (summary.success / summary.total * 100)|round(1) }}%"></div></div>
+        <b>{{ summary.success }}</b>
+      </div>
+      {% for category, count in summary.categories.items() %}
+        <div class="breakdown-row">
+          <span>{{ category }}</span>
+          <div class="bar-track"><div class="bar bad-bg" style="width: {{ (count / summary.total * 100)|round(1) }}%"></div></div>
+          <b>{{ count }}</b>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">No task results have been written yet.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  {% set filters = filter_options|default({"levels": [], "errors": []}) %}
+  <div class="filters">
+    <label>Filter:
+      <select id="status-filter">
+        <option value="all">All Status</option>
+        <option value="success">Success</option>
+        <option value="failed">Failed</option>
+      </select>
+    </label>
+    <label>Level:
+      <select id="level-filter">
+        <option value="all">All Levels</option>
+        {% for option in filters.levels %}
+          <option value="{{ option.value }}">{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Error:
+      <select id="error-filter">
+        <option value="all">All Errors</option>
+        {% for option in filters.errors %}
+          <option value="{{ option.value }}">{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <input id="task-search" type="search" placeholder="Search tasks...">
+  </div>
+</section>
+
+<section class="task-results">
+  <div class="result-list" id="result-list">
+    {% for result in results %}
+      {% set is_success = result.judge.success %}
+      {% set error_label = result.judge.failureCategory or result.terminal_reason or "UNKNOWN FAILURE" %}
+      <details class="task-card"
+        data-status="{{ 'success' if is_success else 'failed' }}"
+        data-level="{{ (result.task.level or '')|lower }}"
+        data-error="{{ (error_label or '')|lower }}"
+        data-search="{{ (result.task.name ~ ' ' ~ result.task.task ~ ' ' ~ result.task.website_url)|lower }}">
+        <summary>
+          <span class="task-title">
+            <small>{{ result.task_id }}</small>
+            <strong>{{ result.task.task }}</strong>
+            <em>{{ result.task.website_url }}</em>
+          </span>
+          <span class="task-badges">
+            {% if result.task.level %}<span class="chip">{{ result.task.level }}</span>{% endif %}
+            {% if result.diagnostics and result.diagnostics.task_model %}<span class="chip">Task model: {{ result.diagnostics.task_model }}</span>{% endif %}
+            <span class="chip">{{ result.terminal_reason }}</span>
+            <span class="judge {% if is_success %}ok{% else %}bad{% endif %}">
+              {% if is_success %}Success{% else %}{{ error_label }}{% endif %}
+            </span>
+            <span class="chip">{{ pct(result.judge.confidence) }}</span>
+          </span>
+        </summary>
+
+        <div class="task-detail">
+          <p>{{ result.judge.reason }}</p>
+          <div class="actions">
+            <a class="button-link" href="{{ url_for('task_detail', run_id=run.run_id, task_id=result.task_id) }}">Open Full Inspector</a>
+          </div>
+
+          {% set non_initial_steps = result.steps|rejectattr("isInitial")|list %}
+          {% if not non_initial_steps %}
+            <div class="diagnostic-box">
+              <strong>No PageGuide steps were recorded.</strong>
+              <p>{{ result.diagnostics.zero_step_explanation if result.diagnostics and result.diagnostics.zero_step_explanation else "The evaluator only has the final screenshot because rewind did not capture any action steps." }}</p>
+              {% if result.diagnostics %}
+                <dl>
+                  <div><dt>Last phase</dt><dd>{{ result.diagnostics.phase or "—" }}</dd></div>
+                  <div><dt>Content script</dt><dd>{{ "ready" if result.diagnostics.content_script_ready else "not confirmed" }}</dd></div>
+                  <div><dt>Guide start</dt><dd>{{ "sent" if result.diagnostics.guide_start_sent else "not sent" }}</dd></div>
+                  <div><dt>Debug prompts</dt><dd>{{ result.diagnostics.debug_prompt_count or 0 }}</dd></div>
+                  <div><dt>Final URL</dt><dd>{{ result.diagnostics.final_url or "—" }}</dd></div>
+                </dl>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          <h3>Step Confidence</h3>
+          <div class="table-wrap">
+            <table class="confidence-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Action</th>
+                  <th>Instruction</th>
+                  <th>G</th>
+                  <th>Loop</th>
+                  <th>Progress</th>
+                  <th>Full</th>
+                  <th>No-progress</th>
+                  <th>No-loop</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for step in non_initial_steps %}
+                  <tr>
+                    <td>{{ step.step }}</td>
+                    <td><span class="mini-pill">{{ step.action or "state" }}</span></td>
+                    <td>{{ step.instruction or "Captured state" }}</td>
+                    <td>{{ fmt(step.grounded) }}</td>
+                    <td>{{ fmt(step.loop) }}</td>
+                    <td>{{ fmt(step.progress) }}</td>
+                    <td><span class="score">{{ pct(step.confidence_versions.full) }}</span></td>
+                    <td><span class="score">{{ pct(step.confidence_versions.reduced) }}</span></td>
+                    <td><span class="score">{{ pct(step.confidence_versions.noloop) }}</span></td>
+                  </tr>
+                {% else %}
+                  <tr><td colspan="9" class="empty-cell">No recorded action steps.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Screenshots</h3>
+          <div class="step-shot-list compact">
+            {% for step in result.steps %}
+              {% if step.screenshotBefore or step.screenshotAfter or step.regionShot %}
+                <article class="step-shot-row">
+                  <div class="step-shot-head">
+                    <strong>{% if step.isInitial %}Initial State{% else %}Step {{ step.step }}{% endif %}</strong>
+                    <span>{{ step.action or "state" }}</span>
+                  </div>
+                  <div class="step-shot-grid">
+                    <figure class="{% if not step.screenshotBefore %}empty{% endif %}">
+                      <figcaption>Before</figcaption>
+                      {% if step.screenshotBefore %}
+                        <img src="{{ url_for('artifacts', path=step.screenshotBefore) }}" alt="Step {{ step.step }} before">
+                      {% else %}
+                        <div class="shot-placeholder">No capture</div>
+                      {% endif %}
+                    </figure>
+                    <figure class="{% if not step.screenshotAfter %}empty{% endif %}">
+                      <figcaption>After</figcaption>
+                      {% if step.screenshotAfter %}
+                        <img src="{{ url_for('artifacts', path=step.screenshotAfter) }}" alt="Step {{ step.step }} after">
+                      {% else %}
+                        <div class="shot-placeholder">No capture</div>
+                      {% endif %}
+                    </figure>
+                    <figure class="{% if not step.regionShot %}empty{% endif %}">
+                      <figcaption>Target</figcaption>
+                      {% if step.regionShot %}
+                        <img src="{{ url_for('artifacts', path=step.regionShot) }}" alt="Step {{ step.step }} target">
+                      {% else %}
+                        <div class="shot-placeholder">No target</div>
+                      {% endif %}
+                    </figure>
+                  </div>
+                </article>
+              {% endif %}
+            {% endfor %}
+            {% if result.final_screenshot %}
+              <article class="step-shot-row final-shot-row">
+                <div class="step-shot-head">
+                  <strong>Final State</strong>
+                  <span>{{ result.terminal_reason }}</span>
+                </div>
+                <figure>
+                  <figcaption>Final</figcaption>
+                  <img src="{{ url_for('artifacts', path=result.final_screenshot) }}" alt="Final screenshot">
+                </figure>
+              </article>
+            {% endif %}
+          </div>
+        </div>
+      </details>
+    {% else %}
+      <p class="muted">No task results have been written yet.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const payload = {{ payload|tojson }};
+const colors = { full: '#7c3aed', reduced: '#0891b2', noloop: '#f59e0b', full_ground_truth: '#22c55e' };
+const labels = { full: 'Full', reduced: 'No-progress', noloop: 'No-loop', full_ground_truth: 'Full + GT' };
+function dataset(formula, rows) {
+  return {
+    label: labels[formula] || formula,
+    data: rows.map(row => row[formula] == null ? null : Math.round(row[formula] * 100)),
+    borderColor: colors[formula] || '#94a3b8',
+    backgroundColor: colors[formula] || '#94a3b8',
+    tension: 0.25
+  };
+}
+if (document.getElementById('aggregate-chart')) {
+  new Chart(document.getElementById('aggregate-chart'), {
+    type: 'line',
+    data: {
+      labels: payload.aggregate.map(row => `Step ${row.step}`),
+      datasets: payload.formulas.map(formula => dataset(formula, payload.aggregate))
+    },
+    options: {
+      responsive: true,
+      scales: { y: { min: 0, max: 100, title: { display: true, text: 'Confidence %' } } }
+    }
+  });
+}
+payload.tasks.forEach((task, index) => {
+  const el = document.getElementById(`task-chart-${index + 1}`);
+  if (!el || !task.points || !task.points.length) return;
+  new Chart(el, {
+    type: 'line',
+    data: {
+      labels: task.points.map(row => `Step ${row.step}`),
+      datasets: payload.formulas.map(formula => dataset(formula, task.points))
+    },
+    options: {
+      responsive: true,
+      scales: { y: { min: 0, max: 100, title: { display: true, text: 'Confidence %' } } }
+    }
+  });
+});
+
+const statusFilter = document.getElementById('status-filter');
+const levelFilter = document.getElementById('level-filter');
+const errorFilter = document.getElementById('error-filter');
+const searchInput = document.getElementById('task-search');
+const cards = Array.from(document.querySelectorAll('.task-card'));
+function applyFilters() {
+  if (!statusFilter || !levelFilter || !errorFilter || !searchInput) return;
+  const status = statusFilter.value;
+  const level = levelFilter.value;
+  const error = errorFilter.value;
+  const query = searchInput.value.trim().toLowerCase();
+  cards.forEach(card => {
+    const okStatus = status === 'all' || card.dataset.status === status;
+    const okLevel = level === 'all' || card.dataset.level === level;
+    const okError = error === 'all' || card.dataset.error === error;
+    const okSearch = !query || card.dataset.search.includes(query);
+    card.hidden = !(okStatus && okLevel && okError && okSearch);
+  });
+}
+[statusFilter, levelFilter, errorFilter, searchInput].filter(Boolean).forEach(el => el.addEventListener('input', applyFilters));
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+const calAggregate = {{ cal_aggregate|tojson }};
+const calEce = {{ ece|tojson }};
+const calCompare = {{ compare|tojson }};
+
+const CAL_COLORS = {
+  spec_full: '#7c3aed', spec_noloop: '#f59e0b', spec_noprogress: '#0891b2',
+  full: '#ef4444', with_gt: '#22c55e', no_gt: '#ef4444',
+};
+const CAL_LABELS = {
+  spec_full: 'Full', spec_noloop: 'No-Loop', spec_noprogress: 'No-Progress', full: 'LLM-based Full',
+};
+
+function calLineDataset(formula, rows, labelOverride) {
+  return {
+    label: labelOverride || CAL_LABELS[formula] || formula,
+    data: rows.map(row => row[formula] == null ? null : Math.round(row[formula] * 100)),
+    borderColor: CAL_COLORS[formula] || '#94a3b8',
+    backgroundColor: CAL_COLORS[formula] || '#94a3b8',
+    spanGaps: true,
+    tension: 0.25,
+  };
+}
+
+function calRenderLine(canvasId, rows, formulas, overrides) {
+  const el = document.getElementById(canvasId);
+  if (!el) return;
+  new Chart(el, {
+    type: 'line',
+    data: {
+      labels: rows.map(row => `Step ${row.step}`),
+      datasets: formulas.map(f => calLineDataset(f, rows, overrides && overrides[f])),
+    },
+    options: {
+      responsive: true, animation: false,
+      scales: { y: { min: 0, max: 100, title: { display: true, text: 'Confidence %' } } },
+    },
+  });
+}
+
+function calRenderReliability(canvasId, data) {
+  const el = document.getElementById(canvasId);
+  if (!el || !data) return;
+  const bins = data.bins || [];
+  new Chart(el, {
+    type: 'bar',
+    data: {
+      labels: bins.map(b => `${Math.round(b.lo * 100)}–${Math.round(b.hi * 100)}%`),
+      datasets: [
+        { type: 'bar', label: 'Accuracy', backgroundColor: '#7c3aed',
+          data: bins.map(b => b.accuracy == null ? null : Math.round(b.accuracy * 100)) },
+        { type: 'line', label: 'Mean confidence', borderColor: '#ef4444', backgroundColor: '#ef4444', spanGaps: true,
+          data: bins.map(b => b.avg_confidence == null ? null : Math.round(b.avg_confidence * 100)) },
+        { type: 'line', label: 'Perfect calibration', borderColor: '#94a3b8', borderDash: [6, 4], pointRadius: 0,
+          data: bins.map(b => Math.round(b.mid * 100)) },
+      ],
+    },
+    options: {
+      responsive: true, animation: false,
+      plugins: { tooltip: { callbacks: { afterLabel: (ctx) => `n=${(bins[ctx.dataIndex] || {}).count || 0}` } } },
+      scales: {
+        y: { min: 0, max: 100, title: { display: true, text: 'Accuracy / Confidence %' } },
+        x: { title: { display: true, text: 'Confidence bin' } },
+      },
+    },
+  });
+}
+
+if (calAggregate) {
+  calRenderLine('plotA', calAggregate, ['spec_full', 'spec_noloop', 'spec_noprogress']);
+  calRenderLine('plotD', calAggregate, ['spec_full', 'full'],
+    { spec_full: 'New-spec Full', full: 'LLM-based Full' });
+}
+if (calEce) {
+  calRenderReliability('plotC', calEce.spec_full);
+  calRenderReliability('plotE', calEce.full);
+}
+if (calCompare) {
+  const steps = new Set();
+  calCompare.this.forEach(r => steps.add(r.step));
+  calCompare.other.forEach(r => steps.add(r.step));
+  const ordered = Array.from(steps).sort((a, b) => a - b);
+  const lookup = (rows) => Object.fromEntries(rows.map(r => [r.step, r.full]));
+  const noGt = lookup(calCompare.this);
+  const withGt = lookup(calCompare.other);
+  const rows = ordered.map(step => ({ step, no_gt: noGt[step], with_gt: withGt[step] }));
+  calRenderLine('plotB', rows, ['with_gt', 'no_gt'],
+    { with_gt: 'With ground truth', no_gt: 'Without ground truth' });
+}
+
+const downloadBtn = document.getElementById('download-charts');
+if (downloadBtn) {
+  downloadBtn.addEventListener('click', async () => {
+    const zip = new JSZip();
+    const canvases = Array.from(document.querySelectorAll('canvas[data-filename]'));
+    await Promise.all(canvases.map(canvas => new Promise(resolve => {
+      canvas.toBlob(blob => { if (blob) zip.file(canvas.dataset.filename, blob); resolve(); }, 'image/png');
+    })));
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'pageguide-charts-{{ run.run_id }}.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+}
+</script>
+{% endblock %}

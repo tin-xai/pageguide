@@ -686,6 +686,26 @@ describe('gv2ComputeConfidence (content/utils.js)', () => {
   });
 });
 
+describe('gv2GroundTruthSection (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('returns empty string when no reference steps are supplied', () => {
+    expect(window.gv2GroundTruthSection('')).toBe('');
+    expect(window.gv2GroundTruthSection('   ')).toBe('');
+    expect(window.gv2GroundTruthSection(null)).toBe('');
+    expect(window.gv2GroundTruthSection(undefined)).toBe('');
+  });
+
+  test('injects a GROUND TRUTH REFERENCE block containing the steps when supplied', () => {
+    const section = window.gv2GroundTruthSection('1. Open expedia.com\n2. Search Austin');
+    expect(section).toContain('=== GROUND TRUTH REFERENCE ===');
+    expect(section).toContain('1. Open expedia.com');
+    expect(section).toContain('2. Search Austin');
+    // Leading newline so it slots cleanly into the prompt between sections.
+    expect(section.startsWith('\n')).toBe(true);
+  });
+});
+
 describe('gv2CropRect (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
 
@@ -1336,6 +1356,51 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     await window.gv2ProcessResponse(stepJson);
     expect(window._guidev2.paused).toBe(true);
     expect(getPauseMessage()).toBe('Confirmation needed. Please verify and press Resume.');
+  });
+
+  test('evaluation mode disables low-confidence, high-risk, and confirmation pauses', async () => {
+    const originalCompute = window.gv2ComputeConfidence;
+    window.gv2ComputeConfidence = () => ({ confidence: 0.5, grounded: 0.5, loop: 0.0, progress: 0.0, formula: 'full' });
+    window._guidev2.evalMode = true;
+    window._guidev2.autoMode = false;
+
+    try {
+      for (let step = 1; step <= 3; step++) {
+        await window.gv2ProcessResponse(JSON.stringify({
+          step,
+          thought: 'Low confidence step',
+          instruction: `Do step ${step}`,
+          element: { index: step, text: `Button ${step}` },
+          action: 'click'
+        }));
+      }
+      expect(window._guidev2.lowConfidenceCount).toBe(3);
+      expect(window._guidev2.paused).toBe(false);
+
+      await window.gv2ProcessResponse(JSON.stringify({
+        step: 4,
+        thought: 'High risk task',
+        instruction: 'Enter bank password',
+        element: { index: 4, text: 'Password input' },
+        action: 'type',
+        typeText: 'secret',
+        risk: 'high'
+      }));
+      expect(window._guidev2.paused).toBe(false);
+
+      await window.gv2ProcessResponse(JSON.stringify({
+        step: 5,
+        thought: 'Needs confirmation',
+        instruction: 'Submit application',
+        element: { index: 5, text: 'Submit' },
+        action: 'click',
+        confirmation: 'needed'
+      }));
+      expect(window._guidev2.paused).toBe(false);
+      expect(getPauseMessage()).toBe('');
+    } finally {
+      window.gv2ComputeConfidence = originalCompute;
+    }
   });
 
   test('resuming guide resets lowConfidenceCount to 0', async () => {

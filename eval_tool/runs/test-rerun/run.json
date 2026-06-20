@@ -1,0 +1,11 @@
+{
+  "run_id": "test-rerun",
+  "created_at": "now",
+  "status": "queued",
+  "task_ids": [],
+  "task_set": "no_login",
+  "csv_path": "/Users/tht0021/Documents/pageguide/data-guide/Copy of GuideTaskData - guide_task_no_log_in.csv",
+  "max_steps": 15,
+  "task_model": "google/gemini-2.5-flash-lite",
+  "judge_model": "google/gemini-2.5-flash-lite"
+}

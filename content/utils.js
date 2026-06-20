@@ -1145,6 +1145,24 @@ function gv2ComputeConfidence(parts, formula = 'full', weights) {
 }
 
 /**
+ * Build the optional "GROUND TRUTH REFERENCE" block injected into the guide prompt.
+ * Eval-only: in normal use no reference steps are supplied and this returns ''. Pure
+ * (no DOM/storage) so it is unit-testable.
+ *
+ * @param {string} stepsText - reference steps for the task (semicolon/newline separated), or empty
+ * @returns {string} the prompt block (leading newline) when steps are present, else ''
+ */
+function gv2GroundTruthSection(stepsText) {
+  const steps = (typeof stepsText === 'string') ? stepsText.trim() : '';
+  if (!steps) return '';
+  return `\n=== GROUND TRUTH REFERENCE ===
+Reference steps for completing the user's goal:
+${steps}
+Use these as a reference for what progress toward the goal looks like, but map each step to the actual elements visible in the PAGE INDEX above.
+`;
+}
+
+/**
  * Compute the source-crop rectangle (in IMAGE pixels) for cropping a viewport screenshot down to
  * an element's region. `captureVisibleTab` returns an image at devicePixelRatio scale while
  * getBoundingClientRect is in CSS px, so we scale by dpr and clamp to the image bounds. Pure

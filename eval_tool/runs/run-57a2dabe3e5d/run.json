@@ -1,0 +1,27 @@
+{
+  "run_id": "run-57a2dabe3e5d",
+  "created_at": "2026-06-20T14:47:37+00:00",
+  "status": "completed",
+  "task_ids": [
+    "csv-6b9e9fc7a45f",
+    "csv-574f8729fe67",
+    "csv-a44f3e32fe14",
+    "csv-01b0e16dcbe8",
+    "csv-21ea58ce2261",
+    "csv-bf7e0f85a8fb",
+    "csv-6f0a8972c48a"
+  ],
+  "started_at": "2026-06-20T14:47:37+00:00",
+  "completed_at": "2026-06-20T14:50:51+00:00",
+  "error": null,
+  "task_set": "no_login",
+  "csv_path": "/Users/tht0021/Documents/pageguide/data-guide/Copy of GuideTaskData - guide_task_no_log_in.csv",
+  "task_total": 7,
+  "completed_tasks": 7,
+  "progress": "7/7",
+  "current_step": 9,
+  "current_phase": "executing steps",
+  "current_task": "csv-6f0a8972c48a",
+  "current_task_name": "Search for Pokemon and filter only XS",
+  "task_index": 7
+}

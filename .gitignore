@@ -1,10 +1,28 @@
 # API Keys - DO NOT COMMIT
 config.js
 keys.py
+.env
+.env.*
+*.env
+*.local
+*.secret
+*.secrets
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Eval account credentials - DO NOT COMMIT
+eval_tool/accounts.txt
+password/
+
 
 # Dependencies
 node_modules/
 e2e-tests/node_modules/
+.venv-eval/
 
 # Test Artifacts
 e2e-tests/playwright-report/

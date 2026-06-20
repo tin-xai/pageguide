@@ -1,0 +1,12 @@
+{
+  "run_id": "run-2b0f5b2ae597",
+  "created_at": "2026-06-20T01:19:01+00:00",
+  "status": "failed",
+  "task_ids": [
+    "11765c0e8e9743338ac28a7f6a76bef6",
+    "csv-25ed2bb68a0e"
+  ],
+  "started_at": "2026-06-20T01:19:01+00:00",
+  "completed_at": "2026-06-20T01:19:06+00:00",
+  "error": "Could not find PageGuide extension service worker (tried: cjepomejhcmbkjahgibjclcidbpbhemo: Error: Page.goto: net::ERR_BLOCKED_BY_CLIENT at chrome-extension://cjepomejhcmbkjahgibjclcidbpbhemo/sidepanel/panel.html)"
+}

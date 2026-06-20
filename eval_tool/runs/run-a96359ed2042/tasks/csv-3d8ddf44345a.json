@@ -1,0 +1,42 @@
+{
+  "task_id": "csv-3d8ddf44345a",
+  "task": {
+    "name": "Expedia",
+    "task_id": "csv-3d8ddf44345a",
+    "task": "Book a 4 star hotel in Austin",
+    "website_url": "https://www.expedia.com",
+    "ground_truth": "",
+    "reference_length": "",
+    "level": "",
+    "popularity": "",
+    "use_case": "",
+    "need_login": "",
+    "need_user_input": "",
+    "notes": "",
+    "reference_steps": "1. Open expedia.com 2. Type Austin 3. Click Search 4. Click 4 star in the filter 5. Click on sort by recommended 6. Sort by price low to high",
+    "success_criteria": "1. Open expedia.com 2. Type Austin 3. Click Search 4. Click 4 star in the filter 5. Click on sort by recommended 6. Sort by price low to high",
+    "required_test_inputs": "",
+    "allowed_stop_before_destructive_action": ""
+  },
+  "status": "completed",
+  "started_at": "2026-06-20T01:23:42+00:00",
+  "completed_at": "2026-06-20T01:24:00+00:00",
+  "terminal_reason": "FAILED TO EXECUTE ACTION",
+  "error": "Page.wait_for_function: Timeout 15000ms exceeded.",
+  "session_id": null,
+  "final_screenshot": "eval_tool/runs/run-a96359ed2042/screenshots/csv-3d8ddf44345a/final.png",
+  "judge": {
+    "success": false,
+    "failureCategory": "FAILED TO EXECUTE ACTION",
+    "reason": "The page is still on the initial search screen and has not progressed to filtering or sorting hotels.",
+    "confidence": 0.9,
+    "raw": {
+      "success": false,
+      "failureCategory": "FAILED TO EXECUTE ACTION",
+      "reason": "The page is still on the initial search screen and has not progressed to filtering or sorting hotels.",
+      "confidence": 0.9
+    }
+  },
+  "steps": [],
+  "debug_prompts": []
+}

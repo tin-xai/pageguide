@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}New Evaluation{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Guide Mode Benchmark</p>
+    <h1>Run a web evaluation</h1>
+    <p>Runs selected CSV tasks in auto/eval mode, records rewind timelines, and judges the final screenshot.</p>
+    <p class="muted">CSV: {{ csv_path.name }}</p>
+  </div>
+  <div class="task-set-toggle" aria-label="Task set">
+    {% for option in task_set_options %}
+      <a class="{% if option.id == task_set %}active{% endif %}" href="{{ url_for('index', task_set=option.id) }}">
+        {{ option.label }}
+      </a>
+    {% endfor %}
+  </div>
+</section>
+
+<form method="post" action="{{ url_for('create_eval_run') }}" class="card">
+  <input type="hidden" name="task_set" value="{{ task_set }}">
+  <div class="card-head">
+    <h2>Select Tasks</h2>
+    <div class="actions">
+      <button type="button" class="secondary" id="select-last-two">Select Last 2</button>
+      <button type="button" class="secondary" id="check-all-tasks">Check All Tasks</button>
+      <button type="submit">Start Evaluation</button>
+    </div>
+  </div>
+  <p class="muted">No Login is selected by default. Switch to Login when you want to run tasks that require account sessions.</p>
+  <div class="eval-settings">
+    <label>
+      Agent step cap
+      <input type="number" name="max_steps" value="{{ default_max_steps }}" min="1" max="100" step="1">
+    </label>
+    <label>
+      Task model
+      <select name="task_model">
+        {% for option in model_options %}
+          <option value="{{ option.id }}" {% if option.id == default_task_model %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Judge model
+      <select name="judge_model">
+        {% for option in model_options %}
+          <option value="{{ option.id }}" {% if option.id == default_judge_model %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <span class="muted">Default is 15. Increase it for longer tasks; lower it to catch loops sooner.</span>
+  </div>
+  <div class="task-grid">
+    {% for task in tasks %}
+      <label class="task-option">
+        <input type="checkbox" name="task_ids" value="{{ task.task_id }}" {% if task.task_id in selected %}checked{% endif %}>
+        <span>
+          <strong>{{ task.name }}</strong>
+          <small>{{ task.task }}</small>
+          <em>{% if task.need_login %}Login: {{ task.need_login }} · {% endif %}{{ task.level }} · {{ task.website_url }}</em>
+        </span>
+      </label>
+    {% endfor %}
+  </div>
+</form>
+
+<script>
+const taskBoxes = Array.from(document.querySelectorAll('input[name="task_ids"]'));
+document.getElementById('check-all-tasks')?.addEventListener('click', () => {
+  taskBoxes.forEach(box => { box.checked = true; });
+});
+document.getElementById('select-last-two')?.addEventListener('click', () => {
+  taskBoxes.forEach((box, index) => { box.checked = index >= taskBoxes.length - 2; });
+});
+</script>
+
+<section class="card">
+  <h2>Recent Runs</h2>
+  {% if runs %}
+    <div class="run-list">
+      {% for run in runs %}
+        <a href="{{ url_for('run_detail', run_id=run.run_id) }}">
+          <strong>{{ run.run_id }}</strong>
+          <span>{{ run.status }}</span>
+          <small>{{ run.created_at }}</small>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">No evaluation runs yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

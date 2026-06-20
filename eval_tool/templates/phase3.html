@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Phase 3 Progress{% endblock %}
+{% block nav %}
+  <a href="{{ url_for('run_detail', run_id=run.run_id) }}">Run Summary</a>
+  <a href="{{ url_for('run_detail', run_id=run.run_id) }}#calibration">Charts</a>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <div>
+      <p class="eyebrow">Phase 3</p>
+      <h1>Progress Self-Report vs Ground Truth</h1>
+      <p class="muted">Populate CSV `reference_steps` before running the ground-truth judge.</p>
+    </div>
+    <div class="actions">
+      <form method="post" action="{{ url_for('judge_phase3', run_id=run.run_id) }}">
+        <button type="submit">Judge Missing GT Progress</button>
+      </form>
+      <form method="post" action="{{ url_for('judge_phase3', run_id=run.run_id) }}">
+        <input type="hidden" name="force" value="1">
+        <button type="submit" class="secondary">Rejudge With Ground Truth</button>
+      </form>
+    </div>
+  </div>
+  <p class="muted">This asks the LLM one more time with the user goal, CSV ground-truth steps, and observed steps so far, then compares the original progress/full score against the ground-truth-attached score.</p>
+</section>
+
+<section class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Task</th>
+          <th>Step</th>
+          <th>Instruction</th>
+          <th>Self</th>
+          <th>Ground Truth</th>
+          <th>Deviation</th>
+          <th>Full</th>
+          <th>Full + GT</th>
+          <th>Full Δ</th>
+          <th>Reference</th>
+          <th>GT Judge Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.task }}</td>
+            <td>{{ row.step }}</td>
+            <td>{{ row.instruction }}</td>
+            <td>{{ fmt(row.progress_self) }}</td>
+            <td>{{ fmt(row.progress_ground_truth) }}</td>
+            <td>{{ fmt(row.deviation) }}</td>
+            <td>{{ pct(row.full_self) }}</td>
+            <td>{{ pct(row.full_ground_truth) }}</td>
+            <td>{{ fmt(row.full_deviation) }}</td>
+            <td>{% if row.reference_available %}Available{% else %}Missing{% endif %}</td>
+            <td>{{ row.ground_truth_reason }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="11">No step data captured yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

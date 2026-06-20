@@ -1,0 +1,42 @@
+{
+  "task_id": "csv-a44f3e32fe14",
+  "task": {
+    "name": "Booking.com",
+    "task_id": "csv-a44f3e32fe14",
+    "task": "Find Attractions in New York in June 19",
+    "website_url": "https://www.booking.com",
+    "ground_truth": "",
+    "reference_length": "",
+    "level": "",
+    "popularity": "",
+    "use_case": "",
+    "need_login": "",
+    "need_user_input": "",
+    "notes": "",
+    "reference_steps": "1. Open Booking.com\n2. Click on \"Attraction\" Button\n3. Type New York\n4. Click on Dates\n5. Choose June 19\n6. Click Search button",
+    "success_criteria": "1. Open Booking.com\n2. Click on \"Attraction\" Button\n3. Type New York\n4. Click on Dates\n5. Choose June 19\n6. Click Search button",
+    "required_test_inputs": "",
+    "allowed_stop_before_destructive_action": ""
+  },
+  "status": "completed",
+  "started_at": "2026-06-20T14:42:45+00:00",
+  "completed_at": "2026-06-20T14:42:50+00:00",
+  "terminal_reason": "done",
+  "error": null,
+  "session_id": "gv2-mqmfx8z1-n49uwl",
+  "final_screenshot": "eval_tool/runs/run-41b5b9862b75/screenshots/csv-a44f3e32fe14/final.png",
+  "judge": {
+    "success": false,
+    "failureCategory": "FAILED TO EXECUTE ACTION",
+    "reason": "The page is not in the requested final state with attractions in New York for June 19.",
+    "confidence": 0.9,
+    "raw": {
+      "success": false,
+      "failureCategory": "FAILED TO EXECUTE ACTION",
+      "reason": "The page is not in the requested final state with attractions in New York for June 19.",
+      "confidence": 0.9
+    }
+  },
+  "steps": [],
+  "debug_prompts": []
+}

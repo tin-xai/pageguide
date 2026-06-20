@@ -1,0 +1,20 @@
+{
+  "run_id": "run-08ca3eb4e8b3",
+  "created_at": "2026-06-20T01:22:11+00:00",
+  "status": "completed",
+  "task_ids": [
+    "11765c0e8e9743338ac28a7f6a76bef6",
+    "csv-25ed2bb68a0e"
+  ],
+  "started_at": "2026-06-20T01:22:11+00:00",
+  "completed_at": "2026-06-20T01:22:53+00:00",
+  "error": null,
+  "current_task": "csv-25ed2bb68a0e",
+  "current_task_name": "Change language setting to Spanish",
+  "task_index": 2,
+  "task_total": 2,
+  "progress": "2/2",
+  "current_step": 0,
+  "current_phase": "loading page",
+  "completed_tasks": 2
+}

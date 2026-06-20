@@ -1,0 +1,33 @@
+{
+  "run_id": "run-434cbdff4881",
+  "created_at": "2026-06-20T16:46:19+00:00",
+  "status": "failed",
+  "task_ids": [
+    "csv-6b9e9fc7a45f",
+    "csv-574f8729fe67",
+    "csv-0a0689721ad0",
+    "csv-a44f3e32fe14",
+    "csv-01b0e16dcbe8",
+    "csv-23daed448cf3",
+    "csv-21ea58ce2261",
+    "csv-bf7e0f85a8fb",
+    "csv-7e0406e521fa",
+    "csv-16aa8d108ccc",
+    "csv-7ba9d8dc3ec1",
+    "csv-8cc84f3feff2"
+  ],
+  "started_at": "2026-06-20T16:46:19+00:00",
+  "completed_at": "2026-06-20T16:48:17+00:00",
+  "error": "Judge LLM request failed: HTTP Error 402: Payment Required",
+  "task_set": "no_login",
+  "csv_path": "/Users/tht0021/Documents/pageguide/data-guide/Copy of GuideTaskData - guide_task_no_log_in.csv",
+  "max_steps": 3,
+  "task_total": 12,
+  "completed_tasks": 5,
+  "progress": "6/12",
+  "current_step": 3,
+  "current_phase": "executing steps",
+  "current_task": "csv-23daed448cf3",
+  "current_task_name": "Search for Whole Eggs and filter by \"All Prime\"",
+  "task_index": 6
+}

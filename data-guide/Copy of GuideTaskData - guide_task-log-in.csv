@@ -1,0 +1,29 @@
+name,task_id,task,website_url,ground truth,reference_length,level,popularity,use case,need login,need user input ,notes,ground truth steps
+Google Cloud,18b40baae8a54353aa1780af360c2d94,How do I create a new project?,https://cloud.google.com/,https://cloud.google.com/resource-manager/docs/creating-managing-projects,6,Medium,high,Learning & Skill Transfer (Onboarding),yes,Yes,Agent supplies a placeholder project name (free).,"1. Go to the Manage resources page in the Google Cloud console.
+The remaining steps appear in the Google Cloud console.; 
+2. On the Select organization drop-down list at the top of the page, select the organization resource in which you want to create a project. If you are a free trial user, skip this step, as this list does not appear.;
+3. Click Create Project.
+4. In the New Project window that appears, enter a project name and select a billing account as applicable. A project name can contain only letters, numbers, single quotes, hyphens, spaces, or exclamation points, and must be between 4 and 30 characters.;
+5. Enter the parent organization or folder resource in the Location box. That resource will be the hierarchical parent of the new project. If No organization is an option, you can select it to create your new project as the top level of its own resource hierarchy.;
+6. When you're finished entering new project details, click Create."
+Google Drive,c3009f86c17a41e4ad3a5cec0f876f2d,How do I upload files or folders?,https://drive.google.com/,https://support.google.com/drive/answer/2424368,3,Easy,high,Learning & Skill Transfer (Onboarding),yes,Yes,Requires actual files from the user's device.,"1. On your computer, go to drive.google.com.; 
+2. At the top left, click New and then File Upload or Folder Upload.; 
+3. Choose the file or folder you want to upload."
+Google Drive,23c7577b88dd4b6bb2098089d04b9ef6,How do I create a folder?,https://drive.google.com/,https://support.google.com/drive/answer/2375091,4,Easy,high,Learning & Skill Transfer (Onboarding),yes,Yes,Agent supplies a placeholder folder name.,"1. On your computer, go to drive.google.com.; 
+2. On the left, click New and then Folder.; 
+3. Enter a name for the folder.;
+5. Click Create."
+Gmail,b2c9f331f0a9496da771f927ca51c1e0,How do I turn on vacation responder?,https://mail.google.com/,https://support.google.com/mail/answer/25922,7,Medium,high,Learning & Skill Transfer (Onboarding),yes,Yes,Requires the auto-reply message text (and usually start/end dates). Placeholder text. ,"1. On your computer, open Gmail.; 2. At the top right, click Settings Settings and then See all settings.; 3. Under the “General” tab, go to the ""Vacation responder"" section.; 4. Select Vacation responder on.; 5. Fill in the date range, subject, and message., Optional: To send the reply to your contacts only, under the message, check the box.; 6. At the bottom of the page, click Save Changes."
+Gmail,5609a15d80df4edcb30ce6340b08199f,How do I block an email address?,https://mail.google.com/,https://support.google.com/mail/answer/8151,3,Easy,high,Learning & Skill Transfer (Onboarding),yes,Yes,Requires a specific email address to block.,"1. On your computer, open Gmail.; 2. Open the message from the sender.; 3. At the top right, next to “Reply ,” click More More and then Block ""{sender}."""
+Gmail,f743109350564b8ca32a29e57f735d0a,How do I set up email forwarding in Gmail?,https://mail.google.com/,https://support.google.com/mail/answer/10957?hl=en,14,Hard,high,Learning & Skill Transfer (Onboarding),yes,Yes,Requires a forwarding destination address plus verification at that inbox.,"1. On your computer, open Gmail.; 2. Sign in to the account where you want to forward messages from; 3.  In the top right, click Settings Settings and then See all settings.; 4. Click the Forwarding and POP/IMAP or Forwarding tab.; 5. In the ""Forwarding"" section, click Add a forwarding address.; 6. Enter the email address you want to forward messages to.; 7. Click Next and then Proceed and then OK.; 8. A verification message is sent to the forwarding email address.; 9. In the other email account, click the verification link in the message.
+; 10. Return to the ""Settings"" page in Gmail.
+; 11. Refresh your browser.
+; 12. Click the Forwarding and POP/IMAP or Forwarding tab.
+; 13. In the ""Forwarding"" section, select Forward a copy of incoming mail to.
+; 14. Choose what you want to happen with the Gmail copy of your emails.
+; 15. It’s recommended you select Keep Gmail's copy in the Inbox.
+; 16. At the bottom of the page, click Save Changes."
+Expedia,,Book a 4 star hotel in Austin,https://www.expedia.com,,,,,,,,,1. Open expedia.com 2. Type Austin 3. Click Search 4. Click 4 star in the filter 5. Click on sort by recommended 6. Sort by price low to high
+Gmail,11765c0e8e9743338ac28a7f6a76bef6,How do I create a signature?,https://mail.google.com/,https://support.google.com/mail/answer/8395,4,Easy,high,Learning & Skill Transfer (Onboarding),yes,Yes,Requires the signature content (the user's name/title/contact info). Placeholder signature. ,"1. Open Gmail.; 2. At the top right, click Settings  and then See all settings.; 3. In the ""Signature"" section, add your signature text in the box. If you want, you can format your message by adding an image or changing the text style., Tip: Your image also counts toward the character limit. If you get an error, try to resize the image.; 4. At the bottom of the page, click Save Changes.
+"
+Quora ,,Change language setting to Spanish,https://www.quora.com/,,,,,,,,,1. Open quora.com; 2. Click on Languages button; 3. Choose the appropriate language 

@@ -332,9 +332,16 @@ let _guidev2WaitingForClick = false;
 // Flag set when the user explicitly stops the guide
 let _guidev2Stopped = false;
 
-// Hard safety cap for concrete Guide v2 steps. If we need step 16, we stop
-// instead of asking the model to continue drifting.
+// Hard safety cap for concrete Guide v2 steps. Normal PageGuide defaults to 15;
+// evaluator runs may set guideEvalMaxSteps while guideEvalMode is active.
 const GV2_MAX_STEPS = 15;
+const _GV2_EVAL_MAX_STEPS_KEY = 'guideEvalMaxSteps';
+
+function _gv2MaxSteps(g = window._guidev2) {
+  const configured = g?.evalMode ? Number(g.maxSteps) : GV2_MAX_STEPS;
+  if (!Number.isFinite(configured)) return GV2_MAX_STEPS;
+  return Math.max(1, Math.min(100, Math.floor(configured)));
+}
 
 function _gv2IsStopped() {
   const g = window._guidev2;
@@ -386,9 +393,10 @@ function _gv2StopInternal() {
 }
 
 function _gv2MaxStepMessage(g = window._guidev2) {
+  const maxSteps = _gv2MaxSteps(g);
   return g?.autoMode
-    ? `Stopped after ${GV2_MAX_STEPS} steps to avoid an autonomous loop or drifting from the plan.`
-    : `Stopped after ${GV2_MAX_STEPS} steps to avoid looping or drifting from the plan.`;
+    ? `Stopped after ${maxSteps} steps to avoid an autonomous loop or drifting from the plan.`
+    : `Stopped after ${maxSteps} steps to avoid looping or drifting from the plan.`;
 }
 
 function _gv2StopForMaxSteps(g = window._guidev2) {
@@ -407,7 +415,7 @@ function _gv2StopForMaxSteps(g = window._guidev2) {
 
 function _gv2CheckStepCap(g = window._guidev2) {
   const completedSteps = Array.isArray(g?.previousSteps) ? g.previousSteps.length : 0;
-  if (completedSteps + 1 > GV2_MAX_STEPS) return _gv2StopForMaxSteps(g);
+  if (completedSteps + 1 > _gv2MaxSteps(g)) return _gv2StopForMaxSteps(g);
   return null;
 }
 
@@ -423,6 +431,7 @@ async function gv2SaveFallback(extra = {}) {
         previousSteps: s.previousSteps,
         sessionId: s.sessionId,
         captureEnabled: s.captureEnabled,
+        evalMode: !!s.evalMode,
         tutorialRef: s.tutorialRef,
         tutorialReason: s.tutorialReason,
         currentPlanStep: s.currentPlanStep,
@@ -610,6 +619,8 @@ async function _gv2ResumeFromState(state) {
     previousSteps: state.previousSteps || [],
     sessionId: state.sessionId,
     captureEnabled: state.captureEnabled,
+    evalMode: state.evalMode === true,
+    maxSteps: state.maxSteps || GV2_MAX_STEPS,
     tutorialRef: state.tutorialRef || null,
     tutorialReason: state.tutorialReason || null,
     currentPlanStep: state.currentPlanStep || 1,
@@ -762,6 +773,8 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
 
     const captureEnabled = await _gv2IsCaptureEnabled();
     const autoMode = await _gv2IsAutoMode();
+    const evalMode = await _gv2IsEvalMode();
+    const maxSteps = await _gv2EvalMaxSteps();
     // Tutorial lookup is best-effort — never let it block or break the steer.
     let match = null;
     try { match = await _gv2FindTutorial(question, window.location.href); } catch (e) { console.warn('[guidev2] steer tutorial lookup failed:', e); }
@@ -775,6 +788,8 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       tutorialReason: match?.reason || null,
       sessionId: payload.sessionId,
       captureEnabled,
+      evalMode,
+      maxSteps,
       autoMode,
       paused: false,
       lowConfidenceCount: 0,
@@ -1228,6 +1243,8 @@ async function _gv2SetState(pendingResume) {
     // Rewind (Slice 1): carry capture session across navigations.
     sessionId: s.sessionId,
     captureEnabled: s.captureEnabled,
+    evalMode: !!s.evalMode,
+    maxSteps: s.maxSteps || GV2_MAX_STEPS,
     tutorialRef: s.tutorialRef,
     tutorialReason: s.tutorialReason,
     currentPlanStep: s.currentPlanStep,
@@ -1251,6 +1268,7 @@ async function _gv2SetState(pendingResume) {
     pendingResume,
     paused: !!s.paused,
     lowConfidenceCount: s.lowConfidenceCount || 0,
+    maxSteps: s.maxSteps || GV2_MAX_STEPS,
     lastActionStepNumber: s._lastActionStepNumber || null,
     activeStepNumber: s._activeStepNumber || null
   });
@@ -1292,11 +1310,21 @@ async function _gv2IsCaptureEnabled() {
 //       back to the user for sensitive/high-risk ones.
 
 const _GV2_AUTOMODE_PREF_KEY = 'guideAutoMode';
+const _GV2_EVALMODE_PREF_KEY = 'guideEvalMode';
 
 async function _gv2IsAutoMode() {
   try {
     const r = await chrome.storage.local.get(_GV2_AUTOMODE_PREF_KEY);
     return r[_GV2_AUTOMODE_PREF_KEY] === true; // default false (manual)
+  } catch (e) {
+    return false;
+  }
+}
+
+async function _gv2IsEvalMode() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_EVALMODE_PREF_KEY);
+    return r[_GV2_EVALMODE_PREF_KEY] === true;
   } catch (e) {
     return false;
   }
@@ -1316,6 +1344,30 @@ async function _gv2ConfidenceFormula() {
   }
 }
 
+async function _gv2EvalMaxSteps() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_EVAL_MAX_STEPS_KEY);
+    return _gv2MaxSteps({ evalMode: true, maxSteps: r[_GV2_EVAL_MAX_STEPS_KEY] });
+  } catch (e) {
+    return GV2_MAX_STEPS;
+  }
+}
+
+// Eval-only: when the evaluation harness sets guideGroundTruthSteps, those reference
+// steps are injected into the guide prompt. This is opt-in (the key is never set in
+// normal use) and lets us measure whether the LLM-returned progress shifts under GT.
+const _GV2_GROUND_TRUTH_KEY = 'guideGroundTruthSteps';
+
+async function _gv2GroundTruthSteps() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_GROUND_TRUTH_KEY);
+    const v = r[_GV2_GROUND_TRUTH_KEY];
+    return (typeof v === 'string' && v.trim()) ? v.trim() : '';
+  } catch (e) {
+    return '';
+  }
+}
+
 // Keep the live session's mode in sync when the user toggles it mid-session.
 try {
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -1328,6 +1380,9 @@ try {
         if (typeof gv2HideAutoOverlay === 'function') gv2HideAutoOverlay();
       }
     }
+    if (area === 'local' && changes[_GV2_EVALMODE_PREF_KEY] && window._guidev2) {
+      window._guidev2.evalMode = changes[_GV2_EVALMODE_PREF_KEY].newValue === true;
+    }
   });
 } catch (e) { /* storage events unavailable */ }
 
@@ -1337,6 +1392,7 @@ try {
 function _gv2ShouldAutoExecute(step) {
   const g = window._guidev2;
   if (!g || !g.autoMode) return false;
+  if (g.evalMode) return true;
   const risk = (typeof gv2AssessRisk === 'function') ? gv2AssessRisk(step) : 'low';
   return risk === 'low';
 }
@@ -1676,6 +1732,8 @@ async function _handleStepByStepGuideV2(question) {
   const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   const captureEnabled = await _gv2IsCaptureEnabled();
   const autoMode = await _gv2IsAutoMode();
+  const evalMode = await _gv2IsEvalMode();
+  const maxSteps = await _gv2EvalMaxSteps();
 
   window._guidev2 = {
     active: true,
@@ -1685,6 +1743,8 @@ async function _handleStepByStepGuideV2(question) {
     tutorialReason: match?.reason || null,
     sessionId,
     captureEnabled,
+    evalMode,
+    maxSteps,
     autoMode,
     paused: false,
     lowConfidenceCount: 0,
@@ -1767,6 +1827,9 @@ Use these as a reference guide but map each step to the actual elements visible 
 `;
   }
 
+  // Eval-only ground-truth reference (opt-in; empty string in normal use).
+  const groundTruthSection = gv2GroundTruthSection(await _gv2GroundTruthSteps());
+
   const systemPrompt = GUIDE_V2_PROMPT;
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
@@ -1776,7 +1839,7 @@ ${pageIndex.indexText}
 
 === USER GOAL ===
 ${g.question}
-${tutorialSection}
+${tutorialSection}${groundTruthSection}
 === CURRENT STEP ===
 Step ${stepNumber}
 
@@ -1910,7 +1973,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     if (!step.instruction) throw new Error('LLM response JSON is missing instruction field');
     console.log('[guidev2] Parsed step:', step);
 
-    if (Number(step.step) > GV2_MAX_STEPS) {
+    if (Number(step.step) > _gv2MaxSteps(g)) {
       return _gv2StopForMaxSteps(g);
     }
 
@@ -1988,19 +2051,22 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Remember the live step so the panel "Next →" (manual mode) can perform it and advance.
     g._currentStep = { action, typeText: step.typeText, value: step.value, instruction: step.instruction, highRisk: isHighRisk };
 
-    // Pause conditions: 3 low-confidence actions, high risk (JSON), or confirmation needed (JSON)
+    const evalMode = !!g.evalMode;
+    // Pause conditions: 3 low-confidence actions, high risk (JSON), or confirmation needed (JSON).
+    // Evaluation mode disables these hand-backs so benchmark runs can proceed unattended;
+    // the 15-step cap remains enforced by _gv2CheckStepCap().
     const isHighRiskJson = step.risk === 'high';
     const needsConfirmation = step.confirmation === 'needed';
     if (confidence !== null && confidence < 0.7) {
       g.lowConfidenceCount = (g.lowConfidenceCount || 0) + 1;
     }
-    const willPause = (g.lowConfidenceCount >= 3) || isHighRiskJson || needsConfirmation;
+    const willPause = !evalMode && ((g.lowConfidenceCount >= 3) || isHighRiskJson || needsConfirmation);
 
     // Gate 1 (Risk) + hand-back override: the agent auto-performs only in Auto mode, for
     // low-risk actions, and not when a prior gate handed control back for this step or we need to pause.
     const forcedManual = !!g._forceManualNextStep;
     g._forceManualNextStep = false;
-    const autoPerform = g.autoMode && !isHighRisk && !forcedManual && !willPause;
+    const autoPerform = g.autoMode && (evalMode || !isHighRisk) && !forcedManual && !willPause;
     let pauseAfterCaptureMessage = '';
 
     if (isLast || action === 'done') {
@@ -2022,7 +2088,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
           } else {
             pauseAfterCaptureMessage = 'Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.';
           }
-        } else if (g.autoMode && isHighRisk) {
+        } else if (!evalMode && g.autoMode && isHighRisk) {
           const reason = step.riskReason ? ` (${step.riskReason})` : '';
           pauseAfterCaptureMessage = `This field looks sensitive${reason}. Type it yourself, then press Resume.`;
         } else {
@@ -2034,7 +2100,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       // click — save state with pendingResume=true BEFORE wiring the listener so there's no
       // race with fast navigation.
       await _gv2SetState(true);
-      if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
+      if (!willPause && !(!evalMode && g.autoMode && isHighRisk)) _gv2SetupClickListener();
       if (autoPerform) {
         console.log('[guidev2] Auto mode: auto-performing low-risk click step', step.step);
         _gv2ClearActionTimers();
@@ -2051,7 +2117,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
           } else {
             pauseAfterCaptureMessage = 'Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.';
           }
-        } else if (g.autoMode && isHighRisk) {
+        } else if (!evalMode && g.autoMode && isHighRisk) {
           // High-risk click in auto mode → hand control back for this one.
           const reason = step.riskReason ? ` (${step.riskReason})` : '';
           pauseAfterCaptureMessage = `This step looks sensitive${reason}. Do it yourself, then press Resume.`;
@@ -2108,6 +2174,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       highlightCount,
       hasHighlights: highlightCount > 0,
       autoMode: !!g.autoMode,
+      evalMode,
       isGuide: true
     };
 
@@ -2570,6 +2637,8 @@ async function _gv2HydrateResumeState() {
     previousSteps: saved.previousSteps || [],
     sessionId: saved.sessionId,
     captureEnabled: saved.captureEnabled,
+    evalMode: saved.evalMode === true,
+    maxSteps: saved.maxSteps || GV2_MAX_STEPS,
     tutorialRef: saved.tutorialRef || null,
     tutorialReason: saved.tutorialReason || null,
     currentPlanStep: saved.currentPlanStep || 1,

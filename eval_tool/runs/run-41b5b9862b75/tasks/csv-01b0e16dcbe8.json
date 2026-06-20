@@ -1,0 +1,42 @@
+{
+  "task_id": "csv-01b0e16dcbe8",
+  "task": {
+    "name": "Amazon.com",
+    "task_id": "csv-01b0e16dcbe8",
+    "task": "Add an orange to a cart",
+    "website_url": "https://www.amazon.com",
+    "ground_truth": "",
+    "reference_length": "",
+    "level": "",
+    "popularity": "",
+    "use_case": "",
+    "need_login": "",
+    "need_user_input": "",
+    "notes": "",
+    "reference_steps": "1. Go to amazon.com\n2. Type orange in the search bar\n3. Click search\n4. Click \"Add to cart\" button",
+    "success_criteria": "1. Go to amazon.com\n2. Type orange in the search bar\n3. Click search\n4. Click \"Add to cart\" button",
+    "required_test_inputs": "",
+    "allowed_stop_before_destructive_action": ""
+  },
+  "status": "completed",
+  "started_at": "2026-06-20T14:42:50+00:00",
+  "completed_at": "2026-06-20T14:43:39+00:00",
+  "terminal_reason": "NO INTERACTIVE ELEMENTS",
+  "error": null,
+  "session_id": null,
+  "final_screenshot": "eval_tool/runs/run-41b5b9862b75/screenshots/csv-01b0e16dcbe8/final.png",
+  "judge": {
+    "success": false,
+    "failureCategory": "FAILED TO EXECUTE ACTION",
+    "reason": "The page is still on the homepage and the search for 'orange' has not been executed.",
+    "confidence": 0.9,
+    "raw": {
+      "success": false,
+      "failureCategory": "FAILED TO EXECUTE ACTION",
+      "reason": "The page is still on the homepage and the search for 'orange' has not been executed.",
+      "confidence": 0.9
+    }
+  },
+  "steps": [],
+  "debug_prompts": []
+}

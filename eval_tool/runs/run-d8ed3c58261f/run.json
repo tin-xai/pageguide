@@ -1,0 +1,22 @@
+{
+  "run_id": "run-d8ed3c58261f",
+  "created_at": "2026-06-20T14:15:40+00:00",
+  "status": "completed",
+  "task_ids": [
+    "csv-6b9e9fc7a45f",
+    "csv-574f8729fe67"
+  ],
+  "started_at": "2026-06-20T14:15:40+00:00",
+  "completed_at": "2026-06-20T14:16:46+00:00",
+  "error": null,
+  "task_set": "no_login",
+  "csv_path": "/Users/tht0021/Documents/pageguide/data-guide/Copy of GuideTaskData - guide_task_no_log_in.csv",
+  "task_total": 2,
+  "completed_tasks": 2,
+  "progress": "2/2",
+  "current_step": 11,
+  "current_phase": "executing steps",
+  "current_task": "csv-574f8729fe67",
+  "current_task_name": "Book a cruise going to Alaska, departing between jun 19 to 20, for duration of 3 - 9 nights",
+  "task_index": 2
+}
