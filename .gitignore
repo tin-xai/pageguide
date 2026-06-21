@@ -48,6 +48,6 @@ eval.bash
 
 eval_server/
 
-eval_tool/*
+eval_tool/
 
 data-guide/
