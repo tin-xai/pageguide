@@ -47,3 +47,7 @@ eval_server/saved_trajectories/
 eval.bash
 
 eval_server/
+
+eval_tool/*
+
+data-guide/
