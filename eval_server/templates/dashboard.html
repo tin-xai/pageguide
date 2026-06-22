@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PageGuide Trajectory Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: rgba(255, 255, 255, 0.85);
+      --card-border: rgba(15, 23, 42, 0.08);
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --accent: #7c3aed;
+      --accent-gradient: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%);
+      --success: #10b981;
+      --failure: #ef4444;
+      --warning: #f59e0b;
+      --pending: #2563eb;
+      --shadow: 0 15px 35px rgba(15, 23, 42, 0.08);
+      
+      --badge-success-bg: rgba(16, 185, 129, 0.1);
+      --badge-success-text: #047857;
+      --badge-success-border: rgba(16, 185, 129, 0.25);
+      --badge-failed-bg: rgba(239, 68, 68, 0.1);
+      --badge-failed-text: #b91c1c;
+      --badge-failed-border: rgba(239, 68, 68, 0.25);
+      --badge-pending-bg: rgba(59, 130, 246, 0.1);
+      --badge-pending-text: #1d4ed8;
+      --badge-pending-border: rgba(59, 130, 246, 0.25);
+      
+      --input-bg: #ffffff;
+      --input-text: #0f172a;
+      --task-card-bg: rgba(15, 23, 42, 0.04);
+      --task-url-bg: rgba(15, 23, 42, 0.06);
+      --task-url-text: #475569;
+      --error-tag-text: #b91c1c;
+
+      --badge-warning-bg: rgba(245, 158, 11, 0.1);
+      --badge-warning-text: #b45309;
+      --badge-warning-border: rgba(245, 158, 11, 0.25);
+      
+      --badge-purple-bg: rgba(124, 58, 237, 0.1);
+      --badge-purple-text: #6d28d9;
+      --badge-purple-border: rgba(124, 58, 237, 0.25);
+      
+      --badge-green-bg: rgba(16, 185, 129, 0.1);
+      --badge-green-text: #047857;
+      --badge-green-border: rgba(16, 185, 129, 0.25);
+      
+      --badge-neutral-bg: rgba(15, 23, 42, 0.06);
+      --badge-neutral-text: #475569;
+      --badge-neutral-border: rgba(15, 23, 42, 0.1);
+      
+      --chart-bg: rgba(15, 23, 42, 0.02);
+      --chart-grid: rgba(15, 23, 42, 0.08);
+    }
+
+    [data-theme="dark"] {
+      --bg: #09090e;
+      --card-bg: rgba(20, 20, 31, 0.65);
+      --card-border: rgba(255, 255, 255, 0.07);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #8b5cf6;
+      --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+      --success: #10b981;
+      --failure: #ef4444;
+      --warning: #f59e0b;
+      --pending: #3b82f6;
+      --shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+      
+      --badge-success-bg: rgba(16, 185, 129, 0.15);
+      --badge-success-text: #34d399;
+      --badge-success-border: rgba(16, 185, 129, 0.3);
+      --badge-failed-bg: rgba(239, 68, 68, 0.15);
+      --badge-failed-text: #f87171;
+      --badge-failed-border: rgba(239, 68, 68, 0.3);
+      --badge-pending-bg: rgba(59, 130, 246, 0.15);
+      --badge-pending-text: #60a5fa;
+      --badge-pending-border: rgba(59, 130, 246, 0.3);
+      
+      --input-bg: rgba(255, 255, 255, 0.05);
+      --input-text: #f3f4f6;
+      --task-card-bg: rgba(255, 255, 255, 0.05);
+      --task-url-bg: rgba(255, 255, 255, 0.1);
+      --task-url-text: #cbd5e1;
+      --error-tag-text: #fca5a5;
+
+      --badge-warning-bg: rgba(245, 158, 11, 0.15);
+      --badge-warning-text: #fbbf24;
+      --badge-warning-border: rgba(245, 158, 11, 0.3);
+      
+      --badge-purple-bg: rgba(139, 92, 246, 0.15);
+      --badge-purple-text: #c4b5ff;
+      --badge-purple-border: rgba(139, 92, 246, 0.3);
+      
+      --badge-green-bg: rgba(16, 185, 129, 0.15);
+      --badge-green-text: #34d399;
+      --badge-green-border: rgba(16, 185, 129, 0.3);
+      
+      --badge-neutral-bg: rgba(255, 255, 255, 0.1);
+      --badge-neutral-text: #cbd5e1;
+      --badge-neutral-border: rgba(255, 255, 255, 0.15);
+      
+      --chart-bg: rgba(0, 0, 0, 0.2);
+      --chart-grid: rgba(255, 255, 255, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 10% 10%, rgba(124, 58, 237, 0.06) 0px, transparent 50%),
+        radial-gradient(at 90% 90%, rgba(37, 99, 235, 0.04) 0px, transparent 50%);
+      background-attachment: fixed;
+      color: var(--text);
+      line-height: 1.5;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      font-size: 32px;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    h1 span {
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4px;
+      height: 100%;
+      background: var(--accent);
+    }
+
+    .stat-card.success-card::before { background: var(--success); }
+    .stat-card.failed-card::before { background: var(--failure); }
+    .stat-card.pending-card::before { background: var(--pending); }
+
+    .stat-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 36px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+
+    .stat-sub {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Error breakdown card */
+    .error-breakdown {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 40px;
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+    }
+
+    .error-breakdown h3 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .error-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .error-chip {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.15);
+      color: #b91c1c;
+      padding: 6px 12px;
+      border-radius: 99px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .error-chip .count {
+      background: var(--failure);
+      color: #fff;
+      padding: 2px 6px;
+      border-radius: 99px;
+      font-size: 11px;
+    }
+
+    /* Trajectories Section */
+    .table-container {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+    }
+
+    .table-hdr {
+      padding: 24px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .table-hdr h2 {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    td {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--card-border);
+      font-size: 14px;
+      vertical-align: middle;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: rgba(15, 23, 42, 0.02);
+    }
+
+    .goal-cell {
+      max-width: 400px;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .goal-text {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .timestamp-cell {
+      white-space: nowrap;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .steps-cell {
+      font-weight: 600;
+      text-align: center;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .badge.success {
+      background: var(--badge-success-bg);
+      color: var(--badge-success-text);
+      border: 1px solid var(--badge-success-border);
+    }
+
+    .badge.failed {
+      background: var(--badge-failed-bg);
+      color: var(--badge-failed-text);
+      border: 1px solid var(--badge-failed-border);
+    }
+
+    .badge.pending {
+      background: var(--badge-pending-bg);
+      color: var(--badge-pending-text);
+      border: 1px solid var(--badge-pending-border);
+    }
+
+    .badge.warning {
+      background: var(--badge-warning-bg);
+      color: var(--badge-warning-text);
+      border: 1px solid var(--badge-warning-border);
+    }
+    
+    .badge.purple {
+      background: var(--badge-purple-bg);
+      color: var(--badge-purple-text);
+      border: 1px solid var(--badge-purple-border);
+    }
+    
+    .badge.green {
+      background: var(--badge-green-bg);
+      color: var(--badge-green-text);
+      border: 1px solid var(--badge-green-border);
+    }
+    
+    .badge.neutral {
+      background: var(--badge-neutral-bg);
+      color: var(--badge-neutral-text);
+      border: 1px solid var(--badge-neutral-border);
+    }
+
+    .error-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: 250px;
+    }
+
+    .error-tag {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.15);
+      color: var(--error-tag-text);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: var(--accent-gradient);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(139, 92, 246, 0.4);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .empty-state {
+      padding: 60px 40px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    .empty-state h3 {
+      font-size: 18px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    @media (max-width: 768px) {
+      body {
+        padding: 20px 10px;
+      }
+      header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+      }
+      table, thead, tbody, th, td, tr {
+        display: block;
+      }
+      th {
+        display: none;
+      }
+      tr {
+        border-bottom: 1px solid var(--card-border);
+        padding: 20px 0;
+      }
+      td {
+        border-bottom: none;
+        padding: 6px 24px;
+      }
+      .goal-cell {
+        max-width: none;
+        font-size: 16px;
+        margin-bottom: 8px;
+      }
+      .timestamp-cell, .steps-cell, .status-cell, .source-cell, .errors-cell, .action-cell {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .timestamp-cell::before { content: 'Date'; font-weight: bold; color: var(--text-muted); }
+      .steps-cell::before { content: 'Steps'; font-weight: bold; color: var(--text-muted); }
+      .status-cell::before { content: 'Status'; font-weight: bold; color: var(--text-muted); }
+      .source-cell::before { content: 'Conf. Source'; font-weight: bold; color: var(--text-muted); }
+      .errors-cell::before { content: 'Error Types'; font-weight: bold; color: var(--text-muted); }
+      .action-cell::before { content: 'Action'; font-weight: bold; color: var(--text-muted); }
+    }
+  </style>
+  <script>
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo-container">
+        <span class="logo-icon">🎯</span>
+        <h1>PageGuide <span>Trajectory Saver</span></h1>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button id="theme-toggle" class="btn" style="background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.2); color: var(--text); padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; box-shadow: none; font-family: inherit;">
+          🌓 Toggle Theme
+        </button>
+        <span style="font-size: 14px; font-weight: 500; color: var(--text-muted);">Evaluation Mode</span>
+        <a href="http://127.0.0.1:5050/" class="btn" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: var(--accent); box-shadow: none; padding: 6px 12px; border-radius: 8px; font-family: inherit;">Legacy Evaluation</a>
+      </div>
+    </header>
+
+    <!-- Stats summary -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total Saved runs</div>
+        <div class="stat-value">{{ stats.total }}</div>
+        <div class="stat-sub">recorded in repo</div>
+      </div>
+      <div class="stat-card success-card">
+        <div class="stat-label">Success Rate</div>
+        <div class="stat-value">{{ stats.success_rate }}%</div>
+        <div class="stat-sub">{{ stats.success }} out of {{ stats.total }} passed</div>
+      </div>
+      <div class="stat-card failed-card">
+        <div class="stat-label">Failed Tasks</div>
+        <div class="stat-value">{{ stats.failed }}</div>
+        <div class="stat-sub">marked as failed</div>
+      </div>
+      <div class="stat-card pending-card">
+        <div class="stat-label">Pending Review</div>
+        <div class="stat-value">{{ stats.pending }}</div>
+        <div class="stat-sub">need manual evaluation</div>
+      </div>
+    </section>
+
+    <!-- Error breakdown summary -->
+    {% if stats.error_stats %}
+    <section class="error-breakdown">
+      <h3>⚠️ Error Frequency Breakdown</h3>
+      <div class="error-chips">
+        {% for err, count in stats.error_stats.items() %}
+        <div class="error-chip">
+          <span>{{ err }}</span>
+          <span class="count">{{ count }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- Mean Confidence Chart -->
+    <section class="error-breakdown" style="margin-bottom: 40px; padding: 24px;">
+      <div style="display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;">
+        
+        <div style="flex: 1; min-width: 300px;">
+          <!-- Chart Header & Filters -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 1.2em;">📈</span> Mean Confidence Trend
+            </h3>
+            
+            <select onchange="window.location.href='/?chart_run_id=' + this.value + (window.location.search.includes('tab=automatic') ? '&tab=automatic' : '')" style="padding: 4px 8px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-size: 0.9em; max-width: 250px;">
+              <option value="" {% if not chart_run_id %}selected{% endif %}>Real Testing</option>
+              {% for run in auto_runs %}
+                <option value="{{ run.run_id }}" {% if chart_run_id == run.run_id %}selected{% endif %}>Auto Run: {{ run.run_id }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div style="display: flex; gap: 12px; margin-bottom: 12px; font-size: 0.85em; flex-wrap: wrap;">
+          <div style="display: flex; gap: 8px;">
+            <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
+            <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">Only Progress</button>
+            <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
+            <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid #ef4444;">Only Grounding</button>
+          </div>
+          <div style="display: flex; gap: 12px;">
+            <select id="status-filter" onchange="drawMeanGraph()" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 13px;">
+              <option value="all">All Statuses</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+            </select>
+            <select id="source-filter" onchange="drawMeanGraph()" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 13px;">
+              <option value="all">All Sources</option>
+              <option value="LLM Report">LLM Report</option>
+              <option value="No-LLM">No-LLM</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="conf-svg-container" style="position: relative; width: 100%; height: 250px; overflow: visible; background: var(--chart-bg); border-radius: 8px; border: 1px solid var(--card-border);">
+        <svg id="conf-svg" style="width: 100%; height: 100%; overflow: visible;"></svg>
+      </div>
+    </section>
+
+    <div class="main-tabs" style="display: flex; gap: 12px; margin-bottom: 24px;">
+      <button onclick="switchMainTab('manual')" id="main-tab-manual" style="padding: 12px 24px; border-radius: 12px; font-weight: 700; cursor: pointer; background: var(--accent); color: white; border: none;">Real Testing (Manual)</button>
+      <button onclick="switchMainTab('auto')" id="main-tab-auto" style="padding: 12px 24px; border-radius: 12px; font-weight: 600; cursor: pointer; background: var(--card-bg); color: var(--text-muted); border: 1px solid var(--card-border);">Automatic Batch Runs</button>
+      <button onclick="switchMainTab('starred')" id="main-tab-starred" style="padding: 12px 24px; border-radius: 12px; font-weight: 600; cursor: pointer; background: var(--card-bg); color: var(--text-muted); border: 1px solid var(--card-border);">⭐ Star Tasks</button>
+    </div>
+
+    <!-- Trajectories list -->
+    <section class="table-container" id="view-manual">
+      <div class="table-hdr">
+        <h2>Saved Trajectories</h2>
+      </div>
+      
+      {% if trajectories %}
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th>Date / Time</th>
+            <th>Goal Description</th>
+            <th style="text-align: center;">Steps</th>
+            <th>Status</th>
+            <th>Conf. Source</th>
+            <th>Loop Detected</th>
+            <th>Logged Errors</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for traj in trajectories %}
+          <tr>
+            <td class="timestamp-cell">
+              {{ traj.date_str }}
+            </td>
+            <td class="goal-cell">
+              <div class="goal-text" title="{{ traj.goal }}">{{ traj.goal }}</div>
+            </td>
+            <td class="steps-cell">
+              {{ traj.step_count }}
+            </td>
+            <td class="status-cell">
+              {% if traj.status == 'success' %}
+                <span class="badge success">Success</span>
+              {% elif traj.status == 'failed' %}
+                <span class="badge failed">Failed</span>
+              {% else %}
+                <span class="badge pending">Pending</span>
+              {% endif %}
+            </td>
+            <td class="source-cell">
+              {% if traj.conf_source == 'No-LLM' %}
+                <span class="badge green">No-LLM</span>
+              {% else %}
+                <span class="badge purple">LLM Report</span>
+              {% endif %}
+            </td>
+            <td class="loop-cell">
+              {% if traj.has_loop %}
+                <span class="badge warning">Yes</span>
+              {% else %}
+                <span style="color: var(--text-muted);">No</span>
+              {% endif %}
+            </td>
+            <td class="errors-cell">
+              <div class="error-tags">
+                {% if traj.error_types %}
+                  {% for err in traj.error_types %}
+                    <span class="error-tag">{{ err }}</span>
+                  {% endfor %}
+                {% else %}
+                  <span style="color: var(--text-muted); font-style: italic; font-size: 12px;">—</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="action-cell">
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <a href="/trajectory/{{ traj.sessionId }}" class="btn">
+                  <span>Inspect</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M5 12h14M12 5l7 7-7 7"/>
+                  </svg>
+                </a>
+                <form method="post" action="/trajectory/{{ traj.sessionId }}/delete" onsubmit="return confirm('Delete this saved trajectory permanently?');" style="margin: 0;">
+                  <button type="submit" class="btn" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); box-shadow: none;" title="Delete trajectory">🗑</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state">
+        <div class="empty-icon">📂</div>
+        <h3>No saved trajectories yet</h3>
+        <p>Run a guide in the PageGuide extension and click the 💾 Save button to record trajectories here.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <!-- Automatic Runs View -->
+    <section id="view-auto" style="display: none;">
+      <!-- Launcher Form -->
+      <form method="post" action="/runs" class="table-container" style="margin-bottom: 40px;">
+        <input type="hidden" name="task_set" value="{{ task_set }}">
+        <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center;">
+          <h2>Launch New Automated Run</h2>
+          <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <input type="number" id="random-n-input" min="1" placeholder="N" title="Number of tasks to randomly select"
+                style="padding: 8px 10px; border-radius: 8px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 72px;">
+              <button type="button" onclick="randomSelectTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">🎲 Random N</button>
+            </div>
+            <button type="button" onclick="selectAllTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">Select All</button>
+            <button type="button" onclick="deselectAllTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">Deselect All</button>
+            <button type="submit" style="padding: 8px 24px; border-radius: 8px; background: var(--success); color: white; border: none; font-weight: bold; cursor: pointer; font-family: inherit;">▶️ Start Evaluation</button>
+          </div>
+        </div>
+        <div style="padding: 24px;">
+          <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px;">
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
+              Dataset: 
+              <select onchange="window.location.href='/?tab=automatic&task_set=' + this.value" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                {% for opt in task_set_options %}
+                  <option value="{{ opt.id }}" {% if opt.id == task_set %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
+              Agent Step Cap:
+              <input type="number" name="max_steps" value="{{ default_max_steps }}" min="1" max="50" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
+            </label>
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
+              Concurrent Workers:
+              <input type="number" name="workers" value="4" min="1" max="10" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
+            </label>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; max-height: 400px; overflow-y: auto; padding-right: 10px;">
+            {% for task in available_tasks %}
+              <label style="display: flex; align-items: flex-start; gap: 12px; padding: 16px; background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 12px; cursor: pointer; transition: background 0.2s;">
+                <input type="checkbox" name="task_ids" value="{{ task.task_id }}" style="margin-top: 4px;" checked>
+                <div>
+                  <strong style="display: block; margin-bottom: 4px; color: var(--text);">{{ task.name }}</strong>
+                  <small style="color: var(--text-muted); display: block; margin-bottom: 8px; line-height: 1.3;">{{ task.task }}</small>
+                  <span style="font-size: 11px; padding: 2px 6px; background: var(--task-url-bg); border-radius: 4px; color: var(--task-url-text); font-family: monospace;">{{ task.website_url }}</span>
+                </div>
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+      </form>
+
+      <!-- Auto Runs List -->
+      <div class="table-container">
+        <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center;">
+          <h2>Automated Batch Runs</h2>
+          {% if auto_runs %}
+          <button type="submit" form="runs-delete-form" id="delete-selected-btn" disabled
+            style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-family: inherit; font-size: 13px; cursor: pointer; opacity: 0.5;">
+            🗑 Delete Selected (<span id="delete-selected-count">0</span>)
+          </button>
+          {% endif %}
+        </div>
+        {% if auto_runs %}
+        <form method="post" action="/runs/delete" id="runs-delete-form"
+          onsubmit="return confirm('Delete the selected run(s) and all their task results permanently?');">
+        <table style="width: 100%;">
+          <thead>
+            <tr>
+              <th style="width: 32px;"><input type="checkbox" id="runs-select-all" onclick="toggleAllRuns(this)" title="Select all"></th>
+              <th>Run ID</th>
+              <th>Status</th>
+              <th>Date</th>
+              <th>Dataset</th>
+              <th>Duration</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in auto_runs %}
+            <tr>
+              <td><input type="checkbox" class="run-select" name="run_ids" value="{{ run.run_id }}" onchange="updateDeleteSelected()"></td>
+              <td><strong style="font-family: monospace; color: var(--accent);">{{ run.run_id }}</strong></td>
+              <td>
+                {% if run.status == 'completed' %}
+                  <span class="badge success">Completed</span>
+                {% elif run.status == 'running' %}
+                  <span class="badge pending">Running</span>
+                {% else %}
+                  <span class="badge failed">{{ run.status }}</span>
+                {% endif %}
+              </td>
+              <td style="color: var(--text-muted);">{{ run.created_at }}</td>
+              <td>{{ run.task_set }}</td>
+              <td style="color: var(--text-muted);">{% if run.duration %}{{ run.duration }}{% else %}<span style="opacity: 0.5;">—</span>{% endif %}</td>
+              <td>
+                <a href="/runs/{{ run.run_id }}" class="btn">View Results</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </form>
+        {% else %}
+        <div class="empty-state">
+          <div class="empty-icon">🤖</div>
+          <h3>No automated runs yet</h3>
+          <p>Select tasks above and hit "Start Evaluation" to trigger an automated batch run using Playwright.</p>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <!-- Starred Tasks View -->
+    <section class="table-container" id="view-starred" style="display: none;">
+      <div class="table-hdr">
+        <h2>⭐ Starred Tasks</h2>
+      </div>
+      {% if starred_tasks %}
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th>Task / Goal</th>
+            <th>Run</th>
+            <th>Reason</th>
+            <th>Starred At</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for task in starred_tasks %}
+          <tr>
+            <td><div class="goal-text" title="{{ task.goal }}">{{ task.goal }}</div></td>
+            <td>
+              {% if task.run_id %}
+                <a href="/runs/{{ task.run_id }}" style="font-family: monospace; color: var(--accent); text-decoration: none;">{{ task.run_id }}</a>
+              {% else %}
+                <span style="color: var(--text-muted);">Manual</span>
+              {% endif %}
+            </td>
+            <td><div style="max-width: 360px; color: var(--text-muted); white-space: normal;">{{ task.reason or '—' }}</div></td>
+            <td style="color: var(--text-muted); white-space: nowrap;">{{ task.starredAt[:19] if task.starredAt else '—' }}</td>
+            <td class="action-cell">
+              <a href="/trajectory/{{ task.sessionId }}" class="btn">
+                <span>Inspect</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M5 12h14M12 5l7 7-7 7"/>
+                </svg>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state">
+        <div class="empty-icon">⭐</div>
+        <h3>No starred tasks yet</h3>
+        <p>Open a trajectory and use the "Star this Task" card to bookmark tasks worth examining.</p>
+      </div>
+      {% endif %}
+    </section>
+  </div>
+
+  <script>
+    function selectAllTasks() {
+      document.querySelectorAll('input[name="task_ids"]').forEach(el => el.checked = true);
+    }
+    
+    function deselectAllTasks() {
+      document.querySelectorAll('input[name="task_ids"]').forEach(el => el.checked = false);
+    }
+
+    function randomSelectTasks() {
+      const boxes = Array.from(document.querySelectorAll('input[name="task_ids"]'));
+      const total = boxes.length;
+      let n = parseInt(document.getElementById('random-n-input').value, 10);
+      if (!Number.isInteger(n) || n < 1) {
+        alert('Enter a number of tasks to select (N ≥ 1).');
+        return;
+      }
+      if (n > total) n = total;
+      // Deselect all, then pick n distinct random boxes (Fisher-Yates shuffle).
+      boxes.forEach(el => el.checked = false);
+      for (let i = boxes.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [boxes[i], boxes[j]] = [boxes[j], boxes[i]];
+      }
+      boxes.slice(0, n).forEach(el => el.checked = true);
+    }
+
+    function toggleAllRuns(master) {
+      document.querySelectorAll('.run-select').forEach(el => el.checked = master.checked);
+      updateDeleteSelected();
+    }
+
+    function updateDeleteSelected() {
+      const checked = document.querySelectorAll('.run-select:checked').length;
+      const total = document.querySelectorAll('.run-select').length;
+      const btn = document.getElementById('delete-selected-btn');
+      const count = document.getElementById('delete-selected-count');
+      if (count) count.textContent = checked;
+      if (btn) {
+        btn.disabled = checked === 0;
+        btn.style.opacity = checked === 0 ? '0.5' : '1';
+        btn.style.cursor = checked === 0 ? 'not-allowed' : 'pointer';
+      }
+      const master = document.getElementById('runs-select-all');
+      if (master) master.checked = total > 0 && checked === total;
+    }
+    
+    function switchMainTab(tab) {
+      const tabs = {
+        manual: { view: 'view-manual', btn: 'main-tab-manual' },
+        auto: { view: 'view-auto', btn: 'main-tab-auto' },
+        starred: { view: 'view-starred', btn: 'main-tab-starred' }
+      };
+      Object.keys(tabs).forEach(key => {
+        const isActive = key === tab;
+        document.getElementById(tabs[key].view).style.display = isActive ? 'block' : 'none';
+        const btn = document.getElementById(tabs[key].btn);
+        btn.style.background = isActive ? 'var(--accent)' : 'var(--card-bg)';
+        btn.style.color = isActive ? 'white' : 'var(--text-muted)';
+        btn.style.border = isActive ? 'none' : '1px solid var(--card-border)';
+      });
+    }
+    
+    // Auto-switch tab if url query param matches
+    if (window.location.search.includes('tab=automatic')) {
+      switchMainTab('auto');
+    } else if (window.location.search.includes('tab=starred')) {
+      switchMainTab('starred');
+    }
+
+    const trajectoriesData = {{ chart_trajectories | tojson }};
+    
+    let activeConfLines = {
+      full: true,
+      progress: true,
+      loop: true,
+      grounding: true
+    };
+
+    function toggleConfLine(lineName) {
+      activeConfLines[lineName] = !activeConfLines[lineName];
+      const btn = document.getElementById(`btn-conf-${lineName}`);
+      if (activeConfLines[lineName]) {
+        btn.classList.add('active');
+        btn.style.opacity = '1';
+      } else {
+        btn.classList.remove('active');
+        btn.style.opacity = '0.5';
+      }
+      drawMeanGraph();
+    }
+
+    function drawMeanGraph() {
+      const svg = document.getElementById('conf-svg');
+      if (!svg) return;
+      
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 250;
+      const padding = { top: 20, right: 30, bottom: 40, left: 50 };
+      
+      const innerWidth = width - padding.left - padding.right;
+      const innerHeight = height - padding.top - padding.bottom;
+      
+      // Clear SVG
+      svg.innerHTML = '';
+      
+      // Filters
+      const statusFilt = document.getElementById('status-filter').value;
+      const sourceFilt = document.getElementById('source-filter').value;
+      
+      const filteredTrajs = trajectoriesData.filter(t => {
+        if (statusFilt !== 'all' && t.status !== statusFilt) return false;
+        if (sourceFilt !== 'all' && t.conf_source !== sourceFilt) return false;
+        return true;
+      });
+      
+      if (filteredTrajs.length === 0) {
+        svg.innerHTML = '<text x="50%" y="50%" fill="var(--text-muted)" text-anchor="middle">No data for selected filters</text>';
+        return;
+      }
+      
+      // Aggregate data per step index
+      let maxStepIdx = 0;
+      filteredTrajs.forEach(t => {
+        if (t.steps && t.steps.length > maxStepIdx) {
+          maxStepIdx = t.steps.length;
+        }
+      });
+      
+      if (maxStepIdx === 0) return;
+      
+      const stepMeans = [];
+      for (let i = 0; i < maxStepIdx; i++) {
+        let fullSum = 0, fullCount = 0;
+        let progSum = 0, progCount = 0;
+        let loopSum = 0, loopCount = 0;
+        let groundSum = 0, groundCount = 0;
+        
+        filteredTrajs.forEach(t => {
+          if (!t.steps || !t.steps[i]) return;
+          const step = t.steps[i];
+          
+          const actionType = step.action ? step.action.split('(')[0] : 'unknown';
+          if (['scroll_down', 'scroll_up', 'scroll'].includes(actionType)) {
+             return; // Omit scroll steps
+          }
+          
+          const c = (step.confidence !== undefined && step.confidence !== null) ? step.confidence : 0;
+          const g = (step.grounded !== undefined && step.grounded !== null) ? step.grounded : 1;
+          const p = (step.progress !== undefined && step.progress !== null) ? step.progress : 1;
+          const l = (step.loop !== undefined && step.loop !== null) ? step.loop : 0; // Notice L=0 means no loop penalty
+          
+          // Formula: C_t = clip(G * (1 - 0.5 * L), 0, 1) -> If confSource is No-LLM, maybe we just use the raw metrics?
+          // Let's compute mean of the raw metrics
+          fullSum += Math.max(0, Math.min(1, g * (1 - 0.5 * l))); fullCount++;
+          progSum += p; progCount++;
+          loopSum += l; loopCount++;
+          groundSum += g; groundCount++;
+        });
+        
+        stepMeans.push({
+          idx: i,
+          full: fullCount > 0 ? fullSum / fullCount : null,
+          progress: progCount > 0 ? progSum / progCount : null,
+          loop: loopCount > 0 ? loopSum / loopCount : null,
+          grounding: groundCount > 0 ? groundSum / groundCount : null
+        });
+      }
+      
+      const xStep = maxStepIdx > 1 ? innerWidth / (maxStepIdx - 1) : innerWidth;
+      
+      // Determine dynamic Y bounds based on active lines
+      let minY = 0;
+      let maxY = 1;
+      stepMeans.forEach(sm => {
+        if (activeConfLines.full && sm.full !== null) { minY = Math.min(minY, sm.full); maxY = Math.max(maxY, sm.full); }
+        if (activeConfLines.progress && sm.progress !== null) { minY = Math.min(minY, sm.progress); maxY = Math.max(maxY, sm.progress); }
+        if (activeConfLines.loop && sm.loop !== null) { minY = Math.min(minY, sm.loop); maxY = Math.max(maxY, sm.loop); }
+        if (activeConfLines.grounding && sm.grounding !== null) { minY = Math.min(minY, sm.grounding); maxY = Math.max(maxY, sm.grounding); }
+      });
+      minY = Math.floor(minY * 5) / 5;
+      maxY = Math.ceil(maxY * 5) / 5;
+      if (minY > 0) minY = 0;
+      if (maxY < 1) maxY = 1;
+      
+      const yRange = maxY - minY;
+      
+      // Y axis
+      const numTicks = 5;
+      for (let i = 0; i <= numTicks; i++) {
+        const fraction = i / numTicks;
+        const val = minY + fraction * yRange;
+        const y = padding.top + innerHeight * (1 - fraction);
+        
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", padding.left);
+        line.setAttribute("y1", y);
+        line.setAttribute("x2", width - padding.right);
+        line.setAttribute("y2", y);
+        line.setAttribute("stroke", "var(--chart-grid)");
+        line.setAttribute("stroke-dasharray", "4 4");
+        svg.appendChild(line);
+        
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", padding.left - 10);
+        text.setAttribute("y", y + 4);
+        text.setAttribute("fill", "var(--text-muted)");
+        text.setAttribute("font-size", "11px");
+        text.setAttribute("text-anchor", "end");
+        text.textContent = Math.round(val * 100) + "%";
+        svg.appendChild(text);
+      }
+      
+      // X axis labels
+      for (let i = 0; i < maxStepIdx; i++) {
+        const x = padding.left + i * xStep;
+        if (maxStepIdx <= 20 || i % Math.ceil(maxStepIdx/10) === 0) {
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", x);
+          text.setAttribute("y", height - 10);
+          text.setAttribute("fill", "var(--text-muted)");
+          text.setAttribute("font-size", "11px");
+          text.setAttribute("text-anchor", "middle");
+          text.textContent = i;
+          svg.appendChild(text);
+        }
+      }
+      
+      const drawLine = (key, color) => {
+        let pathD = "";
+        stepMeans.forEach((sm, i) => {
+          const val = sm[key];
+          if (val === null) return;
+          const x = padding.left + (i * xStep);
+          const fraction = (val - minY) / yRange;
+          const y = padding.top + innerHeight * (1 - fraction);
+          if (pathD === "") pathD = `M ${x} ${y}`;
+          else pathD += ` L ${x} ${y}`;
+        });
+        
+        if (pathD) {
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", pathD);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke", color);
+          path.setAttribute("stroke-width", "3");
+          path.style.transition = "d 0.3s ease";
+          svg.appendChild(path);
+          
+          stepMeans.forEach((sm, i) => {
+            const val = sm[key];
+            if (val === null) return;
+            const x = padding.left + (i * xStep);
+            const fraction = (val - minY) / yRange;
+            const y = padding.top + innerHeight * (1 - fraction);
+            
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", x);
+            circle.setAttribute("cy", y);
+            circle.setAttribute("r", "5");
+            circle.setAttribute("fill", color);
+            circle.setAttribute("stroke", "var(--bg)");
+            circle.setAttribute("stroke-width", "2");
+            
+            // Hover tooltip inside SVG using basic <title>
+            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            title.textContent = `Step ${i}: ${Math.round(val*100)}%`;
+            circle.appendChild(title);
+            
+            svg.appendChild(circle);
+          });
+        }
+      };
+      
+      if (activeConfLines.full) drawLine("full", "#7857ff");
+      if (activeConfLines.progress) drawLine("progress", "#ff8a3d");
+      if (activeConfLines.loop) drawLine("loop", "#1bbf9c");
+      if (activeConfLines.grounding) drawLine("grounding", "#ef4444");
+    }
+
+    // Handle window resize
+    window.addEventListener('resize', drawMeanGraph);
+    
+    // Initial draw
+    document.addEventListener('DOMContentLoaded', drawMeanGraph);
+
+    // Auto-reload if an automated run is running
+    {% if auto_runs and auto_runs|selectattr("status", "equalto", "running")|list|length > 0 %}
+    setTimeout(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', 'automatic');
+      window.location.href = url.toString();
+    }, 3000);
+    {% endif %}
+
+    // Theme Toggle Handler
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+      themeToggle.addEventListener('click', () => {
+        let theme = document.documentElement.getAttribute('data-theme');
+        if (theme === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'light');
+          localStorage.setItem('theme', 'light');
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          localStorage.setItem('theme', 'dark');
+        }
+      });
+    }
+  </script>
+</body>
+</html>

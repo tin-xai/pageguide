@@ -1,0 +1,21 @@
+# PageGuide eval account credentials.
+# Copy this file to eval_tool/accounts.txt and fill in real values.
+# accounts.txt is gitignored so your credentials are never committed.
+#
+# One account per line. Fields are separated by "|":
+#   name | login_url | username | password [ | user_selector | pass_selector | submit_selector ]
+#
+# The three selectors are optional; omit them to use sensible defaults
+# (input[type=email]/text for username, input[type=password], button[type=submit]).
+# Lines starting with "#" and blank lines are ignored.
+#
+# Examples (replace with your real sites/credentials):
+
+# Simple single-form login, default selectors:
+# example-site | https://example.com/login | myuser@example.com | s3cr3t
+
+# Two-step login (username, Next, then password) still works with defaults:
+# tradingview | https://www.tradingview.com/accounts/signin/ | myuser@example.com | s3cr3t
+
+# Custom selectors when the defaults don't match the page:
+# scratch | https://scratch.mit.edu/login | myuser | s3cr3t | #login-username | #login-password | button.button

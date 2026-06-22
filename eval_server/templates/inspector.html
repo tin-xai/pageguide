@@ -1,0 +1,2170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PageGuide Trajectory Inspector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: rgba(255, 255, 255, 0.85);
+      --card-border: rgba(15, 23, 42, 0.08);
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --accent: #7c3aed;
+      --accent-gradient: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%);
+      --success: #10b981;
+      --failure: #ef4444;
+      --warning: #f59e0b;
+      --pending: #2563eb;
+      --shadow: 0 15px 35px rgba(15, 23, 42, 0.08);
+      
+      --badge-success-bg: rgba(16, 185, 129, 0.1);
+      --badge-success-text: #047857;
+      --badge-success-border: rgba(16, 185, 129, 0.25);
+      --badge-failed-bg: rgba(239, 68, 68, 0.1);
+      --badge-failed-text: #b91c1c;
+      --badge-failed-border: rgba(239, 68, 68, 0.25);
+      --badge-pending-bg: rgba(59, 130, 246, 0.1);
+      --badge-pending-text: #1d4ed8;
+      --badge-pending-border: rgba(59, 130, 246, 0.25);
+      
+      --input-bg: #ffffff;
+      --input-text: #0f172a;
+      --task-card-bg: rgba(15, 23, 42, 0.04);
+      --task-url-bg: rgba(15, 23, 42, 0.06);
+      --task-url-text: #475569;
+      --error-tag-text: #b91c1c;
+
+      --badge-warning-bg: rgba(245, 158, 11, 0.1);
+      --badge-warning-text: #b45309;
+      --badge-warning-border: rgba(245, 158, 11, 0.25);
+      
+      --badge-purple-bg: rgba(124, 58, 237, 0.1);
+      --badge-purple-text: #6d28d9;
+      --badge-purple-border: rgba(124, 58, 237, 0.25);
+      
+      --badge-green-bg: rgba(16, 185, 129, 0.1);
+      --badge-green-text: #047857;
+      --badge-green-border: rgba(16, 185, 129, 0.25);
+      
+      --badge-neutral-bg: rgba(15, 23, 42, 0.06);
+      --badge-neutral-text: #475569;
+      --badge-neutral-border: rgba(15, 23, 42, 0.1);
+      
+      --chart-bg: rgba(15, 23, 42, 0.02);
+      --chart-grid: rgba(15, 23, 42, 0.08);
+    }
+
+    [data-theme="dark"] {
+      --bg: #09090e;
+      --card-bg: rgba(20, 20, 31, 0.65);
+      --card-border: rgba(255, 255, 255, 0.07);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #8b5cf6;
+      --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+      --success: #10b981;
+      --failure: #ef4444;
+      --warning: #f59e0b;
+      --pending: #3b82f6;
+      --shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+      
+      --badge-success-bg: rgba(16, 185, 129, 0.15);
+      --badge-success-text: #34d399;
+      --badge-success-border: rgba(16, 185, 129, 0.3);
+      --badge-failed-bg: rgba(239, 68, 68, 0.15);
+      --badge-failed-text: #f87171;
+      --badge-failed-border: rgba(239, 68, 68, 0.3);
+      --badge-pending-bg: rgba(59, 130, 246, 0.15);
+      --badge-pending-text: #60a5fa;
+      --badge-pending-border: rgba(59, 130, 246, 0.3);
+      
+      --input-bg: rgba(255, 255, 255, 0.05);
+      --input-text: #f3f4f6;
+      --task-card-bg: rgba(255, 255, 255, 0.05);
+      --task-url-bg: rgba(255, 255, 255, 0.1);
+      --task-url-text: #cbd5e1;
+      --error-tag-text: #fca5a5;
+
+      --badge-warning-bg: rgba(245, 158, 11, 0.15);
+      --badge-warning-text: #fbbf24;
+      --badge-warning-border: rgba(245, 158, 11, 0.3);
+      
+      --badge-purple-bg: rgba(139, 92, 246, 0.15);
+      --badge-purple-text: #c4b5ff;
+      --badge-purple-border: rgba(139, 92, 246, 0.3);
+      
+      --badge-green-bg: rgba(16, 185, 129, 0.15);
+      --badge-green-text: #34d399;
+      --badge-green-border: rgba(16, 185, 129, 0.3);
+      
+      --badge-neutral-bg: rgba(255, 255, 255, 0.1);
+      --badge-neutral-text: #cbd5e1;
+      --badge-neutral-border: rgba(255, 255, 255, 0.15);
+      
+      --chart-bg: rgba(0, 0, 0, 0.2);
+      --chart-grid: rgba(255, 255, 255, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 10% 10%, rgba(124, 58, 237, 0.06) 0px, transparent 50%),
+        radial-gradient(at 90% 90%, rgba(37, 99, 235, 0.04) 0px, transparent 50%);
+      background-attachment: fixed;
+      color: var(--text);
+      line-height: 1.5;
+      padding: 30px 20px;
+    }
+
+    .container {
+      max-width: 1300px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 20px;
+    }
+
+    .back-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    h1 span {
+      color: var(--text-muted);
+      font-size: 18px;
+      font-weight: 500;
+    }
+
+    .goal-banner {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .goal-banner b {
+      color: var(--accent);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .goal-prompt {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    /* Grid Layout */
+    .inspector-grid {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 24px;
+      align-items: start;
+    }
+
+    /* Left Timeline */
+    .timeline-container {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+      max-height: 80vh;
+      overflow-y: auto;
+      position: sticky;
+      top: 20px;
+    }
+
+    .timeline-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .timeline-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .step-chip {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 10px;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      text-align: left;
+      color: var(--text-muted);
+      transition: all 0.2s ease;
+      width: 100%;
+    }
+
+    .step-chip:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+    }
+
+    .step-chip.active {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: rgba(139, 92, 246, 0.35);
+      color: var(--text);
+      box-shadow: 0 0 12px rgba(139, 92, 246, 0.1);
+    }
+
+    .step-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 99px;
+      background: #c5cad8;
+      box-shadow: 0 0 0 3px rgba(197, 202, 216, 0.1);
+    }
+
+    .step-chip.done .step-dot {
+      background: var(--success);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+    }
+
+    .step-chip.active .step-dot {
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.25);
+    }
+
+    .step-chip.loop-hot {
+      border-color: rgba(250, 204, 21, 0.45);
+    }
+
+    .step-chip.loop-hot .step-dot,
+    .step-chip.loop-hot.active .step-dot {
+      background: #facc15;
+      box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.22);
+    }
+
+    .step-label {
+      font-weight: 700;
+      font-size: 12px;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .step-text {
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 500;
+      opacity: 0.8;
+      display: block;
+    }
+
+    /* Right Main Panel */
+    .main-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* Evaluation Card */
+    .eval-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+      position: relative;
+    }
+
+    .eval-card h2 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-group {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .status-option {
+      flex: 1;
+      position: relative;
+    }
+
+    .status-option input {
+      position: absolute;
+      opacity: 0;
+      cursor: pointer;
+      height: 0;
+      width: 0;
+    }
+
+    .status-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 10px;
+      padding: 12px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      color: var(--text-muted);
+    }
+
+    .status-option input:checked ~ .status-btn.success-btn {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: var(--success);
+      color: #34d399;
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.1);
+    }
+
+    .status-option input:checked ~ .status-btn.failed-btn {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: var(--failure);
+      color: #fca5a5;
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.1);
+    }
+
+    .status-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .errors-container {
+      display: none;
+      margin-bottom: 20px;
+      background: rgba(239, 68, 68, 0.03);
+      border: 1px solid rgba(239, 68, 68, 0.1);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    .errors-container.visible {
+      display: block;
+    }
+
+    .errors-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #fca5a5;
+      margin-bottom: 12px;
+    }
+
+    .error-options {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    .error-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      color: var(--text-muted);
+    }
+
+    .error-label:hover {
+      color: var(--text);
+    }
+
+    .error-label input {
+      accent-color: var(--failure);
+    }
+
+    .custom-error-input {
+      margin-top: 10px;
+      grid-column: 1 / -1;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .custom-error-input.visible {
+      display: flex;
+    }
+
+    .custom-error-input label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .input-text {
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: var(--input-text);
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .input-text:focus {
+      border-color: var(--accent);
+    }
+
+    .notes-container {
+      margin-bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .notes-container label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    textarea.input-text {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .save-eval-btn {
+      background: var(--accent-gradient);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .save-eval-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    }
+
+    /* Detail View Card */
+    .detail-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .detail-head {
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 16px;
+    }
+
+    .step-badge {
+      background: var(--accent-gradient);
+      color: #fff;
+      font-weight: 700;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 99px;
+      text-transform: uppercase;
+    }
+
+    .step-instruction {
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .meta-item {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    .meta-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .meta-value {
+      font-size: 13px;
+      font-weight: 600;
+      word-break: break-all;
+    }
+
+    /* View Tabs */
+    .view-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 10px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tab-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .tab-btn.active {
+      color: #fff;
+      background: var(--accent);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    .image-container {
+      position: relative;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #000;
+      aspect-ratio: 16 / 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: zoom-in;
+    }
+
+    .image-container img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+    .image-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      font-size: 12px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .dom-container iframe {
+      width: 100%;
+      height: 500px;
+      background: #fff;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+    }
+
+    .dom-code {
+      margin: 0;
+      max-height: 500px;
+      overflow: auto;
+      padding: 16px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      text-align: left;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .dom-note {
+      margin: 0 0 10px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .empty-tab {
+      padding: 40px;
+      text-align: center;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    /* Collapsible Details */
+    details {
+      margin-top: 16px;
+      background: rgba(255, 255, 255, 0.01);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    summary {
+      padding: 14px 16px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      outline: none;
+      user-select: none;
+      color: var(--text-muted);
+    }
+
+    summary:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    pre {
+      padding: 16px;
+      background: rgba(0, 0, 0, 0.4);
+      border-top: 1px solid var(--card-border);
+      font-family: monospace;
+      font-size: 12px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #a7f3d0;
+    }
+
+    /* Lightbox Modal */
+    .lightbox {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(5, 5, 10, 0.96);
+      backdrop-filter: blur(10px);
+      z-index: 2000;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+    }
+
+    .lightbox.visible {
+      display: flex;
+    }
+
+    .lightbox-close {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      font-size: 24px;
+      width: 48px;
+      height: 48px;
+      border-radius: 99px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .lightbox-close:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .lightbox-content-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 90%;
+      height: 80%;
+    }
+
+    .lightbox-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+    }
+
+    .lightbox-nav {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #fff;
+      width: 60px;
+      height: 60px;
+      border-radius: 99px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      transition: all 0.2s;
+      user-select: none;
+    }
+
+    .lightbox-nav:hover {
+      background: var(--accent);
+      border-color: transparent;
+      box-shadow: 0 0 15px rgba(139, 92, 246, 0.4);
+    }
+
+    .lightbox-nav.prev {
+      left: 10px;
+    }
+
+    .lightbox-nav.next {
+      right: 10px;
+    }
+
+    .lightbox-caption {
+      margin-top: 20px;
+      text-align: center;
+      max-width: 700px;
+    }
+
+    .lightbox-caption-step {
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      font-size: 13px;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+
+    .lightbox-caption-text {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .lightbox-meta-wrap {
+      display: flex;
+      justify-content: center;
+      margin-top: 10px;
+    }
+
+    .lightbox-meta {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 6px;
+      max-width: min(900px, calc(100vw - 48px));
+    }
+
+    .lightbox-meta.is-hidden {
+      display: none;
+    }
+
+    .lightbox-meta span {
+      max-width: min(360px, 100%);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      border: 1px solid rgba(139, 92, 246, 0.26);
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: rgba(139, 92, 246, 0.12);
+      color: #ddd6fe;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .lightbox-meta b {
+      color: #fff;
+    }
+
+    .lightbox-meta-toggle {
+      position: absolute;
+      top: 24px;
+      left: 235px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      cursor: pointer;
+      font: 700 12px/1 'Outfit', sans-serif;
+    }
+
+    .lightbox-meta-toggle:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .lightbox-view-dots {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 16px;
+      margin-bottom: 8px;
+    }
+    .view-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.3);
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .view-dot:hover {
+      background: rgba(255, 255, 255, 0.6);
+    }
+    .view-dot.active {
+      background: var(--accent);
+      border-color: rgba(255, 255, 255, 0.8);
+      box-shadow: 0 0 10px var(--accent);
+    }
+
+    .lightbox-mode-indicator {
+      position: absolute;
+      top: 24px;
+      left: 24px;
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      color: #c4b5ff;
+      padding: 6px 14px;
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-weight: 600;
+      font-size: 14px;
+      display: none;
+    }
+
+    .alert.success {
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .alert.error {
+      background: rgba(239, 68, 68, 0.12);
+      color: #fca5a5;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    @media (max-width: 900px) {
+      .inspector-grid {
+        grid-template-columns: 1fr;
+      }
+      .timeline-container {
+        position: relative;
+        top: 0;
+        max-height: 250px;
+      }
+      .timeline-steps {
+        flex-direction: row;
+        overflow-x: auto;
+        padding-bottom: 8px;
+      }
+      .step-chip {
+        flex: 0 0 160px;
+      }
+      .lightbox-nav {
+        width: 48px;
+        height: 48px;
+        font-size: 18px;
+      }
+    }
+
+    /* Confidence Breakdown Table */
+    .confidence-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+    .confidence-table th {
+      color: var(--text-muted);
+      font-weight: 600;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--card-border);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .confidence-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      vertical-align: middle;
+    }
+    .confidence-table tr:hover td {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .badge.success { background: var(--badge-success-bg); color: var(--badge-success-text); border: 1px solid var(--badge-success-border); }
+    .badge.failed { background: var(--badge-failed-bg); color: var(--badge-failed-text); border: 1px solid var(--badge-failed-border); }
+    .badge.pending { background: var(--badge-pending-bg); color: var(--badge-pending-text); border: 1px solid var(--badge-pending-border); }
+    .badge.warning { background: var(--badge-warning-bg); color: var(--badge-warning-text); border: 1px solid var(--badge-warning-border); }
+    .badge.purple { background: var(--badge-purple-bg); color: var(--badge-purple-text); border: 1px solid var(--badge-purple-border); }
+    .badge.green { background: var(--badge-green-bg); color: var(--badge-green-text); border: 1px solid var(--badge-green-border); }
+    .badge.neutral { background: var(--badge-neutral-bg); color: var(--badge-neutral-text); border: 1px solid var(--badge-neutral-border); }
+    .confidence-table .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .metric-col-hidden {
+      display: none;
+    }
+    .metric-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 14px;
+    }
+    .metric-toggle-btn {
+      border: 1px solid var(--card-border);
+      background: var(--badge-neutral-bg);
+      color: var(--text-muted);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .metric-toggle-btn.active {
+      background: rgba(124, 58, 237, 0.14);
+      color: var(--accent);
+      border-color: rgba(124, 58, 237, 0.35);
+    }
+    .loop-step-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #facc15;
+      box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.22);
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+  </style>
+  <script>
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  </script>
+</head>
+<body>
+  <div class="container">
+    <a href="{% if run_id %}/runs/{{ run_id }}{% else %}/{% endif %}" class="back-link"{% if not run_id %} onclick="if (window.history.length > 1) { history.back(); return false; }"{% endif %}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M19 12H5M12 19l-7-7 7-7"/>
+      </svg>
+      {% if run_id %}Back to Run{% else %}Back{% endif %}
+    </a>
+    
+    <header>
+      <div>
+        <h1>Trajectory Inspector</h1>
+        <span style="font-size: 13px; font-weight: 500; color: var(--text-muted);">Session: {{ trajectory.sessionId }} · Run Date: {{ trajectory.date_str }}</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button id="theme-toggle" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.2); color: var(--text); padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; font-family: inherit;">
+          🌓 Toggle Theme
+        </button>
+        <span class="step-badge" style="background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--card-border);">{{ trajectory.steps|length }} Steps</span>
+      </div>
+    </header>
+
+    <section class="goal-banner">
+      <b>🎯 Task Goal</b>
+      <div class="goal-prompt">{{ trajectory.goal }}</div>
+    </section>
+
+    <!-- Success/Failure Notification Banner -->
+    <div id="eval-alert" class="alert"></div>
+
+    <div class="inspector-grid">
+      <!-- Left sidebar: timeline of steps -->
+      <aside class="timeline-container">
+        <div class="timeline-title">Steps timeline</div>
+        <div class="timeline-steps">
+          {% for step in trajectory.steps %}
+          {% set step_loop_u = step.computed_loop_updated if step.computed_loop_updated is defined and step.computed_loop_updated is not none else 0.0 %}
+          <button type="button" class="step-chip done {% if step_loop_u >= 0.5 %}loop-hot{% endif %} {% if loop.first %}active{% endif %}" data-step-id="{{ step.step }}" onclick="selectStep({{ step.step }})" {% if step_loop_u >= 0.5 %}title="L_t_u >= 0.5"{% endif %}>
+            <span class="step-dot"></span>
+            <div style="min-width: 0;">
+              <span class="step-label">Step {{ step.step }}</span>
+              <span class="step-text">{{ step.instruction or 'Initial State' }}</span>
+            </div>
+          </button>
+          {% endfor %}
+        </div>
+      </aside>
+
+      <!-- Right detail panel -->
+      <main class="main-panel">
+
+        <!-- Star / Bookmark Card -->
+        <section class="eval-card">
+          <h2>⭐ Star this Task</h2>
+          <p style="font-size: 13px; color: var(--text-muted); margin: 4px 0 16px;">Bookmark trajectories worth revisiting (e.g. a clear loop the loop component captures well). Starred tasks appear under the "Star Tasks" tab on the dashboard.</p>
+          <div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;">
+            <button type="button" id="star-toggle-btn" onclick="toggleStar()" class="save-eval-btn" style="white-space: nowrap;"
+              data-starred="{{ 'true' if (star and star.starred) else 'false' }}">
+              <span id="star-toggle-label">☆ Star</span>
+            </button>
+            <div style="flex: 1; min-width: 240px;">
+              <textarea id="star-reason" class="input-text" placeholder="Why is this task worth examining? (e.g. loop component captures the repeated click nicely)">{{ star.reason if star else '' }}</textarea>
+            </div>
+          </div>
+          <button type="button" onclick="saveStar()" class="save-eval-btn" style="margin-top: 12px;">Save Star</button>
+        </section>
+
+        <!-- Evaluation Panel Card -->
+        <section class="eval-card">
+          <h2>📝 Evaluate Trajectory</h2>
+          <form id="evaluation-form" onsubmit="saveEvaluation(event)">
+            <div style="margin-bottom: 24px; display: flex; gap: 16px;">
+              <div style="flex: 1;">
+                <label style="font-size: 14px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 8px;">LLM Source (Model/Provider)</label>
+                <input type="text" id="llm-source-input" name="llm_source" value="{{ trajectory.llm_source | default('Unknown', true) }}" style="width: 100%; max-width: 400px; padding: 12px; border-radius: 8px; background: var(--input-bg); border: 1px solid var(--card-border); color: var(--input-text); font-family: inherit; font-size: 14px;" placeholder="e.g. OpenRouter - gemini-2.5-flash-lite">
+              </div>
+              <div style="flex: 1; max-width: 200px;">
+                <label style="font-size: 14px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 8px;">Confidence Source</label>
+                <select id="conf-source-input" name="conf_source" style="width: 100%; padding: 12px; border-radius: 8px; background: var(--input-bg); border: 1px solid var(--card-border); color: var(--input-text); font-family: inherit; font-size: 14px;">
+                  <option value="LLM Report" {% if trajectory.conf_source == 'LLM Report' %}selected{% endif %}>LLM Report</option>
+                  <option value="No-LLM" {% if trajectory.conf_source == 'No-LLM' %}selected{% endif %}>No-LLM</option>
+                </select>
+              </div>
+            </div>
+            <div class="status-group">
+              <label class="status-option">
+                <input type="radio" name="status" value="success" onclick="toggleErrorPanel(false)" {% if trajectory.evaluation and trajectory.evaluation.status == 'success' %}checked{% endif %}>
+                <div class="status-btn success-btn">✅ Success</div>
+              </label>
+              <label class="status-option">
+                <input type="radio" name="status" value="failed" onclick="toggleErrorPanel(true)" {% if trajectory.evaluation and trajectory.evaluation.status == 'failed' %}checked{% endif %}>
+                <div class="status-btn failed-btn">❌ Failed</div>
+              </label>
+            </div>
+
+            <!-- Error Types Selection (shown when Failed is selected) -->
+            <div id="errors-panel" class="errors-container {% if trajectory.evaluation and trajectory.evaluation.status == 'failed' %}visible{% endif %}">
+              <div class="errors-title">Select Error Types:</div>
+              <div class="error-options">
+                <label class="error-label">
+                  <input type="checkbox" name="error_type" value="Navigation Error" {% if trajectory.evaluation and 'Navigation Error' in trajectory.evaluation.error_types %}checked{% endif %}>
+                  <span>Navigation Error</span>
+                </label>
+                <label class="error-label">
+                  <input type="checkbox" name="error_type" value="Action Execution Error" {% if trajectory.evaluation and 'Action Execution Error' in trajectory.evaluation.error_types %}checked{% endif %}>
+                  <span>Action Execution Error</span>
+                </label>
+                <label class="error-label">
+                  <input type="checkbox" name="error_type" value="Hallucination / Selector Error" {% if trajectory.evaluation and 'Hallucination / Selector Error' in trajectory.evaluation.error_types %}checked{% endif %}>
+                  <span>Hallucination / Selector Error</span>
+                </label>
+                <label class="error-label">
+                  <input type="checkbox" name="error_type" value="Infinite Loop / Repetition" {% if trajectory.evaluation and 'Infinite Loop / Repetition' in trajectory.evaluation.error_types %}checked{% endif %}>
+                  <span>Infinite Loop / Repetition</span>
+                </label>
+                <label class="error-label">
+                  <input type="checkbox" name="error_type" value="Stuck / No Progress" {% if trajectory.evaluation and 'Stuck / No Progress' in trajectory.evaluation.error_types %}checked{% endif %}>
+                  <span>Stuck / No Progress</span>
+                </label>
+                <label class="error-label">
+                  <input type="checkbox" name="error_type" value="LLM Parse Error" {% if trajectory.evaluation and 'LLM Parse Error' in trajectory.evaluation.error_types %}checked{% endif %}>
+                  <span>LLM Parse Error</span>
+                </label>
+                <label class="error-label">
+                  <input type="checkbox" name="error_type" value="Other" id="error-other-chk" onchange="toggleCustomErrorInput(this.checked)" {% if trajectory.evaluation and trajectory.evaluation.error_types|select('equalto', 'Other')|list|length > 0 or trajectory.evaluation and trajectory.evaluation.error_types|reject('in', ['Navigation Error', 'Action Execution Error', 'Hallucination / Selector Error', 'Infinite Loop / Repetition', 'Stuck / No Progress', 'LLM Parse Error', 'Other'])|list|length > 0 %}checked{% endif %}>
+                  <span>Other / Custom</span>
+                </label>
+                
+                <!-- Custom error input field -->
+                {% set custom_val = '' %}
+                {% if trajectory.evaluation %}
+                  {% for et in trajectory.evaluation.error_types %}
+                    {% if et not in ['Navigation Error', 'Action Execution Error', 'Hallucination / Selector Error', 'Infinite Loop / Repetition', 'Stuck / No Progress', 'LLM Parse Error', 'Other'] %}
+                      {% set custom_val = et %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+                <div id="custom-error-wrap" class="custom-error-input {% if custom_val %}visible{% endif %}">
+                  <label for="custom-error">Describe Custom Error:</label>
+                  <input type="text" id="custom-error" class="input-text" placeholder="e.g., Clicked advertisement instead of article" value="{{ custom_val }}">
+                </div>
+              </div>
+            </div>
+
+            <div class="notes-container">
+              <label for="eval-notes">Evaluation Notes / Comments:</label>
+              <textarea id="eval-notes" class="input-text" placeholder="Describe why this run succeeded/failed, what the agent struggled with, etc...">{{ trajectory.evaluation.notes if trajectory.evaluation else '' }}</textarea>
+            </div>
+
+            <button type="submit" class="save-eval-btn">Save Evaluation</button>
+          </form>
+        </section>
+
+        <!-- Confidence Score Trend Card -->
+        <section class="eval-card" id="conf-graph-section">
+          <h2>📈 Confidence Score Trend</h2>
+          <div style="display:flex; gap:10px; margin-bottom:16px;">
+            <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
+            <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">Only Goal Relevance</button>
+            <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
+            <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid #ef4444;">Only Grounding</button>
+          </div>
+          <div id="conf-svg-container" style="position: relative; width: 100%; height: 200px; overflow: visible; background: var(--chart-bg); border-radius: 8px; border: 1px solid var(--card-border);">
+            <svg id="conf-svg" style="width: 100%; height: 100%; overflow: visible;"></svg>
+          </div>
+        </section>
+
+        <!-- Step Confidence Breakdown Table -->
+        <details class="eval-card" open style="cursor: default;">
+          <summary style="font-size: 18px; font-weight: 600; cursor: pointer; outline: none; margin-bottom: 8px;">
+            📊 Step Confidence Breakdown
+          </summary>
+          <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px; margin-top: 8px;">
+            <div style="margin-bottom: 12px;">
+              Step Confidence (C_t = clip(G_grounding × (1 - 0.5 × L_t_u), 0, 1)) <br/>
+              <span style="opacity: 0.8;">Scroll steps (scroll_down, scroll_up) are excluded — they return None and are omitted from aggregations.</span>
+            </div>
+            
+            <details style="background: var(--badge-neutral-bg); border: 1px solid var(--badge-neutral-border); border-radius: 8px; padding: 10px 14px;">
+              <summary style="cursor: pointer; font-weight: 600; outline: none; user-select: none; color: var(--text);">ℹ️ How are these metrics calculated?</summary>
+              <div style="margin-top: 12px; line-height: 1.6; font-size: 13px; color: var(--text-muted);">
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">G_ground (Grounding Score):</strong> Rule-based, no-LLM score for whether the agent targeted a real element: 1.0 when an element index is present, 0.7 when only matching by text, 0.0 when no target (— for done/scroll). This is what feeds C_t. <em>(Currently checks that an index is present, not yet that it resolves in the page snapshot.)</em></div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">LLM grounded:</strong> The model's own self-reported grounding (0–1), shown alongside for comparison. <em>Not</em> used in C_t.</div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">L_t (Old Loop Penalty):</strong> Computed post-hoc from the trace — the fraction of <em>all</em> previous actions with the same <em>element/action text</em> (element text, falling back to the instruction), regardless of action type.</div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">L_t_u (Updated Loop Penalty):</strong> Same denominator as L_t, but a match requires the same normalized <em>action type</em> and the same <em>element/action text</em>. For example, click Search and type Search are no longer treated as the same loop.</div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Goal Relevance:</strong> How relevant the step is to the goal — cosine similarity between an embedding of the step instruction and an embedding of the <em>predicted final goal state</em> (text-embedding-ada-002). This measures relevance, not real progress. Shown for insight; not factored into C_t. Blank when no embedding is available.</div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Progress:</strong> The agent's own <em>LLM-self-reported</em> progress for the step (range −1 to 1). A separate signal from Goal Relevance. Shown for insight; not factored into C_t.</div>
+                <div><strong style="color: var(--text);">C_t (Step Confidence):</strong> clip(G_ground × (1 − 0.5 × L_t_u), 0, 1). Goal Relevance and Progress are informational and not part of this formula.</div>
+              </div>
+            </details>
+          </div>
+          <div class="metric-controls" aria-label="Optional confidence columns">
+            <button type="button" class="metric-toggle-btn" data-metric-column="lt" onclick="toggleMetricColumn('lt', this)">Show L_t</button>
+            <button type="button" class="metric-toggle-btn" data-metric-column="llm" onclick="toggleMetricColumn('llm', this)">Show LLM grounded</button>
+          </div>
+          <div style="overflow-x: auto;">
+            <table class="confidence-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Type</th>
+                  <th>Instruction</th>
+                  <th>G_ground</th>
+                  <th class="metric-col-llm metric-col-hidden">LLM grounded</th>
+                  <th class="metric-col-lt metric-col-hidden">L_t</th>
+                  <th>L_t_u</th>
+                  <th>Goal Relevance</th>
+                  <th>Progress</th>
+                  <th>C_t</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for step in trajectory.steps %}
+                {% set action_type = step.action.split('(')[0] if step.action else 'unknown' %}
+                {% set is_scroll = action_type in ['scroll_down', 'scroll_up', 'scroll'] %}
+                {% set loop_val = step.computed_loop_updated if step.computed_loop_updated is defined and step.computed_loop_updated is not none else 0.0 %}
+                {% set old_loop_val = step.computed_loop if step.computed_loop is defined and step.computed_loop is not none else 0.0 %}
+                {% set loop_disagrees = old_loop_val != loop_val %}
+                {% set is_high_loop = loop_val >= 0.5 and not is_scroll %}
+                <tr onclick="selectStep({{ step.step }})" style="cursor: pointer; {% if is_high_loop %}background: rgba(250, 204, 21, 0.1);{% endif %}">
+                  <td style="color: var(--text-muted);">
+                    {% if is_high_loop %}<span class="loop-step-indicator" title="L_t_u >= 0.5"></span>{% endif %}{{ step.step }}
+                  </td>
+                  <td>
+                    <span class="badge purple">
+                      {{ action_type }}
+                    </span>
+                  </td>
+                  <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ step.instruction or 'Initial State' }}">{{ step.instruction or 'Initial State' }}</td>
+                  <td>
+                    {% if is_scroll %}
+                      <span class="badge neutral" style="font-style: italic;">scroll</span>
+                    {% elif step.rule_grounding is defined and step.rule_grounding is not none %}
+                      <span class="badge green">{{ "%.2f"|format(step.rule_grounding) }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-llm metric-col-hidden">
+                    {% if step.grounded is defined and step.grounded is not none %}
+                      <span style="color: var(--text-muted);">{{ "%.2f"|format(step.grounded) }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-lt metric-col-hidden">
+                    {% if is_scroll %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% elif step.computed_loop is defined and step.computed_loop is not none %}
+                      <span title="old loop key: {{ step.action_key }}">{{ "%.2f"|format(step.computed_loop) }}</span>
+                      {% if step.action_key %}<div style="font-size: 10px; color: var(--text-muted); max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="old loop key: {{ step.action_key }}">{{ step.action_key }}</div>{% endif %}
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if is_scroll %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% elif step.computed_loop_updated is defined and step.computed_loop_updated is not none %}
+                      <span title="updated loop key: {{ step.action_key_updated }}">{{ "%.2f"|format(step.computed_loop_updated) }}{% if loop_disagrees %} Δ{% endif %}</span>
+                      {% if step.action_key_updated %}<div style="font-size: 10px; color: var(--text-muted); max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="updated loop key: {{ step.action_key_updated }}">{{ step.action_key_updated }}</div>{% endif %}
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  {% set goal_rel = step.g_goal_relevance_score if step.g_goal_relevance_score is defined and step.g_goal_relevance_score is not none else step.g_progress_score %}
+                  <td>
+                    {% if is_scroll %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% elif goal_rel is defined and goal_rel is not none %}
+                      <span>{{ "%.2f"|format(goal_rel) }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if is_scroll %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% elif step.progress is defined and step.progress is not none %}
+                      <span>{{ "%.2f"|format(step.progress) }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if is_scroll or step.mech_confidence is not defined or step.mech_confidence is none %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% else %}
+                      {% set final_c = step.mech_confidence %}
+                      {% if final_c >= 0.8 %}
+                        <span class="badge success">{{ "%.3f"|format(final_c) }}</span>
+                      {% elif final_c >= 0.4 %}
+                        <span class="badge warning">{{ "%.3f"|format(final_c) }}</span>
+                      {% else %}
+                        <span class="badge failed">{{ "%.3f"|format(final_c) }}</span>
+                      {% endif %}
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+
+        <!-- Selected Step Detail View -->
+        <section class="detail-card">
+          <div class="detail-head">
+            <div>
+              <span class="step-badge" id="details-step-badge">Step 1</span>
+              <div class="step-instruction" id="details-step-instruction">Loading step...</div>
+            </div>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-item">
+              <div class="meta-label">Action</div>
+              <div class="meta-value" id="details-meta-action">—</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Confidence Score</div>
+              <div class="meta-value" id="details-meta-confidence">—</div>
+              <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;" id="details-meta-confidence-split"></div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Confidence Source</div>
+              <div class="meta-value" id="details-meta-confidence-source">—</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Duration</div>
+              <div class="meta-value" id="details-meta-duration">—</div>
+            </div>
+            <div class="meta-item" style="grid-column: span 2;">
+              <div class="meta-label">Target URL</div>
+              <div class="meta-value" id="details-meta-url">—</div>
+            </div>
+            <div class="meta-item" style="grid-column: span 2;">
+              <div class="meta-label">Target Element</div>
+              <div class="meta-value" id="details-meta-target">—</div>
+            </div>
+          </div>
+
+          <!-- Tabs View -->
+          <div class="view-tabs" style="flex-wrap: wrap;">
+            <button type="button" class="tab-btn active" id="btn-tab-before" onclick="switchTab('before')">📸 Before Action</button>
+            <button type="button" class="tab-btn" id="btn-tab-target" onclick="switchTab('target')">🎯 Target Region</button>
+            <button type="button" class="tab-btn" id="btn-tab-after" onclick="switchTab('after')">📸 After Action</button>
+            <button type="button" class="tab-btn" id="btn-tab-dom" onclick="switchTab('dom')">📄 DOM Before</button>
+            <button type="button" class="tab-btn" id="btn-tab-dom-target" onclick="switchTab('dom-target')">📄 DOM Target</button>
+          </div>
+
+          <!-- Tab Contents -->
+          <div id="tab-before" class="tab-content active">
+            <div class="image-container" onclick="openLightbox('before')">
+              <img id="img-before" src="" alt="Screenshot before action">
+              <div class="image-overlay">🔍 Click screenshot to expand</div>
+            </div>
+          </div>
+
+          <div id="tab-target" class="tab-content">
+            <div class="image-container" onclick="openLightbox('target')">
+              <img id="img-target" src="" alt="Screenshot of target region">
+              <div class="image-overlay">🔍 Click screenshot to expand</div>
+            </div>
+          </div>
+
+          <div id="tab-after" class="tab-content">
+            <div class="image-container" onclick="openLightbox('after')">
+              <img id="img-after" src="" alt="Screenshot after action">
+              <div class="image-overlay">🔍 Click screenshot to expand</div>
+            </div>
+          </div>
+
+          <div id="tab-dom" class="tab-content">
+            <div class="dom-container" id="dom-iframe-wrap">
+              <!-- Iframe will be injected here dynamically -->
+            </div>
+          </div>
+
+          <div id="tab-dom-target" class="tab-content">
+            <div class="dom-container" id="dom-target-iframe-wrap">
+            </div>
+          </div>
+
+          <!-- Collapsible Prompts & Agent output -->
+          <details>
+            <summary>System Prompt</summary>
+            <pre id="pre-system-prompt"></pre>
+          </details>
+          <details>
+            <summary>User Prompt / Context</summary>
+            <pre id="pre-user-prompt"></pre>
+          </details>
+          <details>
+            <summary>Raw Agent JSON Response</summary>
+            <pre id="pre-raw-llm"></pre>
+          </details>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Expanded Image Lightbox / Modal Carousel -->
+  <div class="lightbox" id="lightbox">
+    <div class="lightbox-mode-indicator" id="lightbox-mode-indicator">💡 Expanded Mode</div>
+    <button type="button" class="lightbox-meta-toggle" id="lightbox-meta-toggle" onclick="toggleLightboxMeta()" title="Hide or show task/action details">Hide info</button>
+    
+    <button type="button" class="lightbox-close" onclick="closeLightbox()" title="Close Lightbox (Esc)">✕</button>
+    
+    <div class="lightbox-content-wrapper">
+      <button type="button" class="lightbox-nav prev" onclick="navigateLightbox(-1)" title="Previous Step (Left / A)">◀</button>
+      <img id="lightbox-img" class="lightbox-img" src="" alt="Expanded View">
+      <button type="button" class="lightbox-nav next" onclick="navigateLightbox(1)" title="Next Step (Right / D)">▶</button>
+    </div>
+    
+    <div class="lightbox-caption">
+      <div class="lightbox-view-dots">
+        <button type="button" class="view-dot" id="dot-before" onclick="setLightboxView('before')" title="Before Action (Up/Down)"></button>
+        <button type="button" class="view-dot" id="dot-target" onclick="setLightboxView('target')" title="Target Region (Up/Down)"></button>
+        <button type="button" class="view-dot" id="dot-after" onclick="setLightboxView('after')" title="After Action (Up/Down)"></button>
+      </div>
+      <div class="lightbox-caption-step" id="lightbox-step-label">Step 1</div>
+      <div class="lightbox-caption-text" id="lightbox-step-instruction">Instruction...</div>
+      <div class="lightbox-meta-wrap">
+        <div class="lightbox-meta" id="lightbox-meta" aria-label="Step details"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trajectory data passed in from server -->
+  <script>
+    const trajectory = {{ trajectory|tojson }};
+    let currentStepId = null;
+    let currentActiveTab = 'before';
+    let currentLightboxStepIdx = 0;
+    let currentLightboxView = 'before';
+    const LIGHTBOX_META_PREF = 'pageguideEvalLightboxMetaVisible';
+
+    function resolveScreenshot(shot) {
+      if (!shot) return null;
+      if (shot.startsWith('data:')) {
+        return shot;
+      }
+      if (shot.includes('/') || shot.endsWith('.jpg') || shot.endsWith('.png') || shot.endsWith('.jpeg')) {
+        return `/artifacts/${shot}`;
+      }
+      return `data:image/jpeg;base64,${shot}`;
+    }
+
+    function init() {
+      setLightboxMetaVisible(lightboxMetaVisible());
+      if (trajectory.steps.length > 0) {
+        selectStep(trajectory.steps[0].step);
+      }
+    }
+
+    function toggleMetricColumn(column, button) {
+      const cells = document.querySelectorAll(`.metric-col-${column}`);
+      const shouldShow = cells.length > 0 && cells[0].classList.contains('metric-col-hidden');
+      cells.forEach(cell => cell.classList.toggle('metric-col-hidden', !shouldShow));
+      if (button) {
+        button.classList.toggle('active', shouldShow);
+        const label = column === 'lt' ? 'L_t' : 'LLM grounded';
+        button.textContent = `${shouldShow ? 'Hide' : 'Show'} ${label}`;
+        button.setAttribute('aria-pressed', shouldShow ? 'true' : 'false');
+      }
+    }
+
+    function getStepData(stepId) {
+      return trajectory.steps.find(s => s.step === stepId);
+    }
+
+    function targetTextOf(stepData) {
+      const target = stepData?.target;
+      if (!target) return '';
+      if (typeof target === 'string') return target;
+      return target.text || target.label || target.ariaLabel || target.description || '';
+    }
+
+    function lightboxMetaVisible() {
+      try {
+        return localStorage.getItem(LIGHTBOX_META_PREF) !== '0';
+      } catch (err) {
+        return true;
+      }
+    }
+
+    function setLightboxMetaVisible(visible) {
+      try {
+        localStorage.setItem(LIGHTBOX_META_PREF, visible ? '1' : '0');
+      } catch (err) {}
+      const meta = document.getElementById('lightbox-meta');
+      const toggle = document.getElementById('lightbox-meta-toggle');
+      if (meta) meta.classList.toggle('is-hidden', !visible);
+      if (toggle) {
+        toggle.textContent = visible ? 'Hide info' : 'Show info';
+        toggle.setAttribute('aria-pressed', visible ? 'false' : 'true');
+      }
+    }
+
+    function toggleLightboxMeta() {
+      setLightboxMetaVisible(!lightboxMetaVisible());
+    }
+
+    function renderLightboxMeta(stepData) {
+      const meta = document.getElementById('lightbox-meta');
+      if (!meta) return;
+      meta.innerHTML = '';
+      const taskName = trajectory.task?.name || trajectory.task?.task || trajectory.goal || '';
+      const items = [
+        ['Task', taskName],
+        ['Action', stepData?.action || 'N/A'],
+        ['Element', targetTextOf(stepData) || 'N/A']
+      ];
+      for (const [label, value] of items) {
+        if (!value) continue;
+        const chip = document.createElement('span');
+        chip.title = `${label}: ${value}`;
+        const strong = document.createElement('b');
+        strong.textContent = label + ' ';
+        chip.appendChild(strong);
+        chip.appendChild(document.createTextNode(value));
+        meta.appendChild(chip);
+      }
+      setLightboxMetaVisible(lightboxMetaVisible());
+    }
+
+    function selectStep(stepId) {
+      currentStepId = stepId;
+      const stepData = getStepData(stepId);
+      if (!stepData) return;
+
+      // Update timeline UI active state
+      document.querySelectorAll('.step-chip').forEach(chip => {
+        const id = parseInt(chip.getAttribute('data-step-id'), 10);
+        chip.classList.toggle('active', id === stepId);
+      });
+
+      // Update text details
+      document.getElementById('details-step-badge').textContent = `Step ${stepId}`;
+      document.getElementById('details-step-instruction').textContent = stepData.instruction || 'Initial State';
+      document.getElementById('details-meta-action').textContent = stepData.action || 'N/A';
+      
+      const conf = stepData.confidence;
+      const confLlm = stepData.confidenceScore; 
+      const confNoLlm = stepData.computedConfidence; 
+      const isNoLlm = stepData.isNoLlmConfidence; 
+
+      document.getElementById('details-meta-confidence').textContent = 
+        (conf !== undefined && conf !== null) ? `${Math.round(conf * 100)}%` : 'N/A';
+        
+      const sourceStr = isNoLlm ? 'No-LLM / Mechanical' : 'LLM Self-Report';
+      document.getElementById('details-meta-confidence-source').textContent = (conf !== undefined && conf !== null) ? sourceStr : 'N/A';
+      
+      const splitElem = document.getElementById('details-meta-confidence-split');
+      if (confLlm !== undefined && confNoLlm !== undefined) {
+        splitElem.textContent = `(LLM: ${Math.round(confLlm*100)}% · No-LLM: ${Math.round(confNoLlm*100)}%)`;
+      } else {
+        splitElem.textContent = '';
+      }
+        
+      const dur = stepData.durationMs;
+      document.getElementById('details-meta-duration').textContent = 
+        dur ? (dur < 1000 ? `${dur}ms` : `${(dur / 1000).toFixed(1)}s`) : 'N/A';
+        
+      const url = stepData.url;
+      if (url) {
+        document.getElementById('details-meta-url').innerHTML = `<a href="${url}" target="_blank" style="color: var(--accent); text-decoration: none;">${url}</a>`;
+      } else {
+        document.getElementById('details-meta-url').textContent = 'N/A';
+      }
+
+      const targetData = stepData.target;
+      const targetElem = document.getElementById('details-meta-target');
+      if (targetData) {
+        if (typeof targetData === 'object') {
+          const idx = targetData.llmIndex !== undefined ? targetData.llmIndex : 'N/A';
+          const txt = targetData.text || '';
+          targetElem.textContent = `Index ${idx} ${txt ? '(' + txt + ')' : ''}`;
+        } else {
+          targetElem.textContent = targetData;
+        }
+      } else {
+        targetElem.textContent = 'N/A';
+      }
+
+      // Update base64 screenshots
+      const shotBefore = stepData.screenshotBefore || stepData.screenshot || null;
+      const imgBefore = document.getElementById('img-before');
+      if (shotBefore) {
+        imgBefore.src = resolveScreenshot(shotBefore);
+        imgBefore.style.display = '';
+        document.getElementById('btn-tab-before').disabled = false;
+      } else {
+        imgBefore.src = '';
+        imgBefore.style.display = 'none';
+        document.getElementById('btn-tab-before').disabled = true;
+        if (currentActiveTab === 'before') switchTab('after');
+      }
+
+      const shotTarget = stepData.regionShot || null;
+      const imgTarget = document.getElementById('img-target');
+      if (shotTarget) {
+        imgTarget.src = resolveScreenshot(shotTarget);
+        imgTarget.style.display = '';
+        document.getElementById('btn-tab-target').disabled = false;
+      } else {
+        imgTarget.src = '';
+        imgTarget.style.display = 'none';
+        document.getElementById('btn-tab-target').disabled = true;
+        if (currentActiveTab === 'target') switchTab('before');
+      }
+
+      const shotAfter = stepData.screenshotAfter || null;
+      const imgAfter = document.getElementById('img-after');
+      if (shotAfter) {
+        imgAfter.src = resolveScreenshot(shotAfter);
+        imgAfter.style.display = '';
+        document.getElementById('btn-tab-after').disabled = false;
+      } else {
+        imgAfter.src = '';
+        imgAfter.style.display = 'none';
+        document.getElementById('btn-tab-after').disabled = true;
+        if (currentActiveTab === 'after') switchTab('before');
+      }
+
+      // Update DOM Snapshot HTML
+      const domContent = stepData.domSnapshot || null;
+      const iframeWrap = document.getElementById('dom-iframe-wrap');
+      if (domContent) {
+        iframeWrap.innerHTML = '<pre class="dom-code" id="dom-pre"></pre>';
+        document.getElementById('dom-pre').textContent = domContent;
+        document.getElementById('btn-tab-dom').disabled = false;
+      } else {
+        iframeWrap.innerHTML = '<div class="empty-tab">No DOM Snapshot available for this step.</div>';
+        document.getElementById('btn-tab-dom').disabled = true;
+        if (currentActiveTab === 'dom') switchTab('before');
+      }
+
+      // Update Target DOM Snapshot HTML
+      const domTargetContent = stepData.regionDom || null;
+      const iframeTargetWrap = document.getElementById('dom-target-iframe-wrap');
+      if (domTargetContent) {
+        iframeTargetWrap.innerHTML = '<p class="dom-note">Target crop is cut from the before-action viewport screenshot using the highlighted element bounds plus padding. DOM Target is the stored nearby container for that same element.</p><pre class="dom-code" id="dom-target-pre"></pre>';
+        document.getElementById('dom-target-pre').textContent = domTargetContent;
+        document.getElementById('btn-tab-dom-target').disabled = false;
+      } else {
+        iframeTargetWrap.innerHTML = '<div class="empty-tab">No Target DOM available.</div>';
+        document.getElementById('btn-tab-dom-target').disabled = true;
+        if (currentActiveTab === 'dom-target') switchTab('before');
+      }
+
+      // Prompts
+      document.getElementById('pre-system-prompt').textContent = stepData.systemPrompt || '(none)';
+      document.getElementById('pre-user-prompt').textContent = stepData.userPrompt || '(none)';
+      document.getElementById('pre-raw-llm').textContent = stepData.rawLlmJson || '(none)';
+
+      // Sync Lightbox index
+      const carouselIdx = trajectory.steps.findIndex(item => item.step === stepId);
+      if (carouselIdx >= 0) {
+        currentLightboxStepIdx = carouselIdx;
+      }
+      
+      // Update graph highlighting
+      drawConfidenceGraph();
+    }
+
+    function switchTab(tabName) {
+      currentActiveTab = tabName;
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.id === `btn-tab-${tabName}`);
+      });
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.toggle('active', content.id === `tab-${tabName}`);
+      });
+    }
+
+    // Evaluation Controls
+    function toggleErrorPanel(show) {
+      const panel = document.getElementById('errors-panel');
+      if (show) {
+        panel.classList.add('visible');
+      } else {
+        panel.classList.remove('visible');
+      }
+    }
+
+    function toggleCustomErrorInput(show) {
+      const wrap = document.getElementById('custom-error-wrap');
+      if (show) {
+        wrap.classList.add('visible');
+      } else {
+        wrap.classList.remove('visible');
+      }
+    }
+
+    async function saveEvaluation(e) {
+      e.preventDefault();
+      
+      const statusInput = document.querySelector('input[name="status"]:checked');
+      if (!statusInput) {
+        showAlert('Please select status (Success or Failed)', 'error');
+        return;
+      }
+      
+      const status = statusInput.value;
+      const errorTypes = [];
+      
+      if (status === 'failed') {
+        document.querySelectorAll('input[name="error_type"]:checked').forEach(chk => {
+          if (chk.value === 'Other') {
+            const customVal = document.getElementById('custom-error').value.trim();
+            if (customVal) {
+              errorTypes.push(customVal);
+            } else {
+              errorTypes.push('Other');
+            }
+          } else {
+            errorTypes.push(chk.value);
+          }
+        });
+      }
+      
+      const notes = document.getElementById('eval-notes').value.trim();
+      
+      const llmSource = document.getElementById('llm-source-input').value.trim();
+      const confSource = document.getElementById('conf-source-input').value;
+      
+      try {
+        const response = await fetch(`/api/evaluate_trajectory/${trajectory.sessionId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            status: status,
+            error_types: errorTypes,
+            notes: notes,
+            llm_source: llmSource,
+            conf_source: confSource
+          })
+        });
+        
+        if (response.ok) {
+          showAlert('Evaluation saved successfully!', 'success');
+          // Update trajectory state in-memory to prevent warning loss if saved again
+          if (!trajectory.evaluation) trajectory.evaluation = {};
+          trajectory.evaluation.status = status;
+          trajectory.evaluation.error_types = errorTypes;
+          trajectory.evaluation.notes = notes;
+          trajectory.llm_source = llmSource;
+          trajectory.conf_source = confSource;
+        } else {
+          const data = await response.json();
+          showAlert(`Error saving evaluation: ${data.error}`, 'error');
+        }
+      } catch (err) {
+        showAlert(`Network error: ${err.message}`, 'error');
+      }
+    }
+
+    let starState = (document.getElementById('star-toggle-btn')?.dataset.starred === 'true');
+
+    function renderStarButton() {
+      const btn = document.getElementById('star-toggle-btn');
+      const label = document.getElementById('star-toggle-label');
+      if (!btn || !label) return;
+      if (starState) {
+        label.textContent = '★ Starred';
+        btn.style.background = '';
+        btn.style.color = '';
+        btn.style.border = '';
+      } else {
+        label.textContent = '☆ Star';
+        btn.style.background = 'var(--card-bg)';
+        btn.style.color = 'var(--text)';
+        btn.style.border = '1px solid var(--card-border)';
+      }
+    }
+
+    function toggleStar() {
+      starState = !starState;
+      renderStarButton();
+    }
+
+    async function saveStar() {
+      const reason = document.getElementById('star-reason').value.trim();
+      try {
+        const response = await fetch(`/api/star_trajectory/${trajectory.sessionId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ starred: starState, reason: reason })
+        });
+        if (response.ok) {
+          showAlert(starState ? 'Task starred!' : 'Star removed.', 'success');
+          if (!trajectory.star) trajectory.star = {};
+          trajectory.star.starred = starState;
+          trajectory.star.reason = reason;
+        } else {
+          const data = await response.json();
+          showAlert(`Error saving star: ${data.error}`, 'error');
+        }
+      } catch (err) {
+        showAlert(`Network error: ${err.message}`, 'error');
+      }
+    }
+
+    renderStarButton();
+
+    function showAlert(msg, type) {
+      const alert = document.getElementById('eval-alert');
+      alert.textContent = msg;
+      alert.className = `alert ${type}`;
+      alert.style.display = 'block';
+      
+      // Auto-scroll to alert
+      alert.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      
+      setTimeout(() => {
+        alert.style.display = 'none';
+      }, 5000);
+    }
+
+    // Lightbox / Carousel Functions
+    function openLightbox(initialView = 'before') {
+      const lightbox = document.getElementById('lightbox');
+      lightbox.classList.add('visible');
+      currentLightboxView = initialView;
+      renderLightboxStep();
+      
+      // Attach keyboard listener
+      window.addEventListener('keydown', handleKeyNavigation);
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('visible');
+      window.removeEventListener('keydown', handleKeyNavigation);
+    }
+
+    function setLightboxView(view) {
+      currentLightboxView = view;
+      renderLightboxStep();
+    }
+
+    function renderLightboxStep() {
+      const currentItem = trajectory.steps[currentLightboxStepIdx];
+      if (!currentItem) return;
+
+      const img = document.getElementById('lightbox-img');
+      const label = document.getElementById('lightbox-step-label');
+      const instruction = document.getElementById('lightbox-step-instruction');
+      const modeIndicator = document.getElementById('lightbox-mode-indicator');
+
+      let shot = null;
+      if (currentLightboxView === 'before') {
+        shot = currentItem.screenshotBefore || currentItem.screenshot || null;
+        if (!shot && currentItem.step === 0) shot = currentItem.screenshotAfter || null;
+        modeIndicator.textContent = "💡 Expanded Mode — Before Action";
+      } else if (currentLightboxView === 'target') {
+        shot = currentItem.regionShot || null;
+        modeIndicator.textContent = "💡 Expanded Mode — Target Region";
+      } else if (currentLightboxView === 'after') {
+        shot = currentItem.screenshotAfter || null;
+        modeIndicator.textContent = "💡 Expanded Mode — After Action";
+      }
+
+      document.getElementById('dot-before').classList.toggle('active', currentLightboxView === 'before');
+      document.getElementById('dot-target').classList.toggle('active', currentLightboxView === 'target');
+      document.getElementById('dot-after').classList.toggle('active', currentLightboxView === 'after');
+
+      const viewLabel = currentLightboxView === 'before' ? 'Before Action' : (currentLightboxView === 'target' ? 'Target Region' : 'After Action');
+      label.textContent = `Step ${currentItem.step} (${viewLabel})`;
+      instruction.textContent = currentItem.instruction || 'Initial state';
+      renderLightboxMeta(currentItem);
+
+      if (shot) {
+        img.src = resolveScreenshot(shot);
+        img.style.display = '';
+      } else {
+        img.src = '';
+        img.style.display = 'none';
+        instruction.textContent = `${currentItem.instruction || 'Initial state'} (No screenshot available for this view)`;
+      }
+    }
+
+    function navigateLightbox(dir) {
+      currentLightboxStepIdx += dir;
+      if (currentLightboxStepIdx < 0) {
+        currentLightboxStepIdx = trajectory.steps.length - 1;
+      } else if (currentLightboxStepIdx >= trajectory.steps.length) {
+        currentLightboxStepIdx = 0;
+      }
+      renderLightboxStep();
+      
+      // Synchronize back to the main detail view so closing the lightbox lands on this step
+      const stepId = trajectory.steps[currentLightboxStepIdx].step;
+      selectStep(stepId);
+    }
+
+    function handleKeyNavigation(e) {
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+        navigateLightbox(1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+        navigateLightbox(-1);
+      } else if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+        const views = ['before', 'target', 'after'];
+        let idx = views.indexOf(currentLightboxView);
+        setLightboxView(views[(idx + 2) % 3]);
+      } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+        const views = ['before', 'target', 'after'];
+        let idx = views.indexOf(currentLightboxView);
+        setLightboxView(views[(idx + 1) % 3]);
+      } else if (e.key === 'Escape') {
+        closeLightbox();
+      }
+    }
+
+    // Goal relevance (embedding cosine sim), honoring the legacy field name.
+    function goalRelevanceOf(step) {
+      if (step.g_goal_relevance_score !== undefined && step.g_goal_relevance_score !== null) {
+        return step.g_goal_relevance_score;
+      }
+      if (step.g_progress_score !== undefined && step.g_progress_score !== null) {
+        return step.g_progress_score;
+      }
+      return 1;
+    }
+
+    // Confidence Graph Settings
+    let activeConfLines = {
+      full: true,
+      progress: true,
+      loop: true,
+      grounding: true
+    };
+    
+    function toggleConfLine(type) {
+      activeConfLines[type] = !activeConfLines[type];
+      const btn = document.getElementById(`btn-conf-${type}`);
+      if (activeConfLines[type]) {
+        btn.classList.add('active');
+        btn.style.opacity = '1';
+      } else {
+        btn.classList.remove('active');
+        btn.style.opacity = '0.5';
+      }
+      drawConfidenceGraph();
+    }
+    
+    function drawConfidenceGraph() {
+      const svg = document.getElementById('conf-svg');
+      if (!svg) return;
+      
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 200;
+      const padding = { top: 20, right: 30, bottom: 30, left: 40 };
+      
+      const innerWidth = width - padding.left - padding.right;
+      const innerHeight = height - padding.top - padding.bottom;
+      
+      // Clear SVG
+      svg.innerHTML = '';
+      
+      const steps = trajectory.steps;
+      if (!steps || steps.length === 0) return;
+      
+      const xStep = innerWidth / Math.max(1, steps.length - 1);
+
+      // Compute value bounds
+      let minVal = 0;
+      let maxVal = 1;
+      const allVals = [];
+      steps.forEach(step => {
+        const push = v => { if (v !== undefined && v !== null && isFinite(v)) allVals.push(v); };
+        if (activeConfLines.full) push(step.mech_confidence);
+        if (activeConfLines.progress) push(goalRelevanceOf(step));
+        if (activeConfLines.loop) push(step.computed_loop_updated);
+        if (activeConfLines.grounding) push(step.rule_grounding);
+      });
+      if (allVals.length > 0) {
+        minVal = Math.min(0, ...allVals);
+        maxVal = Math.max(1, ...allVals);
+      }
+      
+      // Round to nice boundaries (multiples of 0.2)
+      minVal = Math.floor(minVal * 5) / 5;
+      maxVal = Math.ceil(maxVal * 5) / 5;
+      const valRange = maxVal - minVal;
+
+      // Draw Y axis lines
+      const numTicks = 5;
+      for (let i = 0; i <= numTicks; i++) {
+        const currentVal = minVal + (valRange * i / numTicks);
+        const y = padding.top + innerHeight * (1 - (currentVal - minVal) / valRange);
+        
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", padding.left);
+        line.setAttribute("y1", y);
+        line.setAttribute("x2", width - padding.right);
+        line.setAttribute("y2", y);
+        line.setAttribute("stroke", "var(--chart-grid)");
+        line.setAttribute("stroke-dasharray", "4 4");
+        svg.appendChild(line);
+        
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", padding.left - 5);
+        text.setAttribute("y", y + 4);
+        text.setAttribute("fill", "var(--text-muted)");
+        text.setAttribute("font-size", "10px");
+        text.setAttribute("text-anchor", "end");
+        text.textContent = Math.round(currentVal * 100) + "%";
+        svg.appendChild(text);
+      }
+      
+      // Draw active step highlight
+      const activeIdx = steps.findIndex(s => s.step === currentStepId);
+      if (activeIdx >= 0) {
+        const x = padding.left + (activeIdx * xStep);
+        const hl = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        hl.setAttribute("x1", x);
+        hl.setAttribute("y1", padding.top);
+        hl.setAttribute("x2", x);
+        hl.setAttribute("y2", height - padding.bottom);
+        hl.setAttribute("stroke", "var(--text-muted)");
+        hl.setAttribute("stroke-width", "2");
+        hl.setAttribute("stroke-dasharray", "4 4");
+        svg.appendChild(hl);
+      }
+      
+      const drawLine = (dataFn, color) => {
+        let pathD = "";
+        let points = [];
+        
+        steps.forEach((step, i) => {
+          const val = dataFn(step);
+          if (val === undefined || val === null) return;
+          
+          const x = padding.left + (i * xStep);
+          const y = padding.top + innerHeight * (1 - (val - minVal) / valRange);
+          
+          if (pathD === "") {
+            pathD = `M ${x} ${y}`;
+          } else {
+            pathD += ` L ${x} ${y}`;
+          }
+          points.push({ x, y, stepId: step.step });
+        });
+        
+        if (pathD) {
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", pathD);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke", color);
+          path.setAttribute("stroke-width", "3");
+          svg.appendChild(path);
+          
+          points.forEach(pt => {
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", pt.x);
+            circle.setAttribute("cy", pt.y);
+            const isActive = pt.stepId === currentStepId;
+            circle.setAttribute("r", isActive ? "6" : "4");
+            circle.setAttribute("fill", color);
+            circle.setAttribute("stroke", "var(--bg)");
+            circle.setAttribute("stroke-width", "2");
+            circle.style.cursor = "pointer";
+            circle.onclick = () => selectStep(pt.stepId);
+            svg.appendChild(circle);
+          });
+        }
+      };
+      
+      // Each line plots its real metric (no products). Null/undefined points are skipped.
+      const metric = v => (v !== undefined && v !== null && isFinite(v)) ? v : null;
+      if (activeConfLines.full) {
+        drawLine(s => metric(s.mech_confidence), "#7857ff");        // Full = mechanical C_t
+      }
+      if (activeConfLines.progress) {
+        drawLine(s => metric(goalRelevanceOf(s)), "#ff8a3d");       // Goal relevance
+      }
+      if (activeConfLines.loop) {
+        drawLine(s => metric(s.computed_loop_updated), "#1bbf9c");  // L_t_u
+      }
+      if (activeConfLines.grounding) {
+        drawLine(s => metric(s.rule_grounding), "#ef4444");         // rule-based grounding
+      }
+      
+      // X axis labels
+      steps.forEach((step, i) => {
+        const x = padding.left + (i * xStep);
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", x);
+        text.setAttribute("y", height - 5);
+        text.setAttribute("fill", "var(--text-muted)");
+        text.setAttribute("font-size", "10px");
+        text.setAttribute("text-anchor", "middle");
+        text.textContent = step.step;
+        text.style.cursor = "pointer";
+        text.onclick = () => selectStep(step.step);
+        
+        if (step.step === currentStepId) {
+          text.setAttribute("fill", "var(--text)");
+          text.setAttribute("font-weight", "bold");
+        }
+        
+        svg.appendChild(text);
+      });
+    }
+
+    // Call drawConfidenceGraph on window resize to make it responsive
+    window.addEventListener('resize', drawConfidenceGraph);
+
+    // Initialize on page load
+    window.onload = () => {
+      init();
+      // Wait a tick for layout to compute sizes before drawing
+      setTimeout(drawConfidenceGraph, 100);
+      
+      const themeToggle = document.getElementById('theme-toggle');
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          let theme = document.documentElement.getAttribute('data-theme');
+          if (theme === 'dark') {
+            document.documentElement.setAttribute('data-theme', 'light');
+            localStorage.setItem('theme', 'light');
+          } else {
+            document.documentElement.setAttribute('data-theme', 'dark');
+            localStorage.setItem('theme', 'dark');
+          }
+        });
+      }
+    };
+  </script>
+</body>
+</html>

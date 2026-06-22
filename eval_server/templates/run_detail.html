@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Run {{ run.run_id }} - Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: rgba(255, 255, 255, 0.85);
+      --card-border: rgba(15, 23, 42, 0.08);
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --accent: #7c3aed;
+      --accent-gradient: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%);
+      --success: #10b981;
+      --failure: #ef4444;
+      --warning: #f59e0b;
+      --pending: #2563eb;
+      --shadow: 0 15px 35px rgba(15, 23, 42, 0.08);
+      
+      --badge-success-bg: rgba(16, 185, 129, 0.1);
+      --badge-success-text: #047857;
+      --badge-success-border: rgba(16, 185, 129, 0.25);
+      --badge-failed-bg: rgba(239, 68, 68, 0.1);
+      --badge-failed-text: #b91c1c;
+      --badge-failed-border: rgba(239, 68, 68, 0.25);
+      --badge-pending-bg: rgba(59, 130, 246, 0.1);
+      --badge-pending-text: #1d4ed8;
+      --badge-pending-border: rgba(59, 130, 246, 0.25);
+      
+      --input-bg: #ffffff;
+      --input-text: #0f172a;
+      --task-card-bg: rgba(15, 23, 42, 0.04);
+      --task-url-bg: rgba(15, 23, 42, 0.06);
+      --task-url-text: #475569;
+      --error-tag-text: #b91c1c;
+      
+      --badge-neutral-bg: rgba(15, 23, 42, 0.06);
+      --badge-neutral-text: #475569;
+      --badge-neutral-border: rgba(15, 23, 42, 0.1);
+      
+      --chart-bg: rgba(15, 23, 42, 0.02);
+      --chart-grid: rgba(15, 23, 42, 0.08);
+    }
+
+    [data-theme="dark"] {
+      --bg: #09090e;
+      --card-bg: rgba(20, 20, 31, 0.65);
+      --card-border: rgba(255, 255, 255, 0.07);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #8b5cf6;
+      --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+      --success: #10b981;
+      --failure: #ef4444;
+      --warning: #f59e0b;
+      --pending: #3b82f6;
+      --shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+      
+      --badge-success-bg: rgba(16, 185, 129, 0.15);
+      --badge-success-text: #34d399;
+      --badge-success-border: rgba(16, 185, 129, 0.3);
+      --badge-failed-bg: rgba(239, 68, 68, 0.15);
+      --badge-failed-text: #f87171;
+      --badge-failed-border: rgba(239, 68, 68, 0.3);
+      --badge-pending-bg: rgba(59, 130, 246, 0.15);
+      --badge-pending-text: #60a5fa;
+      --badge-pending-border: rgba(59, 130, 246, 0.3);
+      
+      --input-bg: rgba(255, 255, 255, 0.05);
+      --input-text: #f3f4f6;
+      --task-card-bg: rgba(255, 255, 255, 0.05);
+      --task-url-bg: rgba(255, 255, 255, 0.1);
+      --task-url-text: #cbd5e1;
+      --error-tag-text: #fca5a5;
+      
+      --badge-neutral-bg: rgba(255, 255, 255, 0.1);
+      --badge-neutral-text: #cbd5e1;
+      --badge-neutral-border: rgba(255, 255, 255, 0.15);
+      
+      --chart-bg: rgba(0, 0, 0, 0.2);
+      --chart-grid: rgba(255, 255, 255, 0.1);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Outfit', sans-serif;
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 10% 10%, rgba(124, 58, 237, 0.06) 0px, transparent 50%),
+        radial-gradient(at 90% 90%, rgba(37, 99, 235, 0.04) 0px, transparent 50%);
+      background-attachment: fixed;
+      color: var(--text);
+      line-height: 1.5;
+      padding: 40px 20px;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    header { margin-bottom: 40px; display: flex; justify-content: space-between; align-items: center; }
+    .logo-container { display: flex; align-items: center; gap: 12px; }
+    .logo-icon { font-size: 32px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    h1 { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
+    h1 span { background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .btn-back { padding: 8px 16px; border-radius: 8px; background: rgba(15,23,42,0.06); color: var(--text); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(15,23,42,0.08); }
+    .btn-back:hover { background: rgba(15,23,42,0.1); }
+    
+    .run-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+      margin-bottom: 40px;
+    }
+    .run-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
+    .badge { padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; display: inline-flex; align-items: center; gap: 4px; }
+    .badge.success {
+      background: var(--badge-success-bg);
+      color: var(--badge-success-text);
+      border: 1px solid var(--badge-success-border);
+    }
+    .badge.failed {
+      background: var(--badge-failed-bg);
+      color: var(--badge-failed-text);
+      border: 1px solid var(--badge-failed-border);
+    }
+    .badge.pending {
+      background: var(--badge-pending-bg);
+      color: var(--badge-pending-text);
+      border: 1px solid var(--badge-pending-border);
+    }
+    .badge.neutral {
+      background: var(--badge-neutral-bg);
+      color: var(--badge-neutral-text);
+      border: 1px solid var(--badge-neutral-border);
+    }
+    
+    .table-container { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 20px; overflow: hidden; backdrop-filter: blur(12px); box-shadow: var(--shadow); }
+    .table-hdr { padding: 24px; border-bottom: 1px solid var(--card-border); display: flex; justify-content: space-between; align-items: center; }
+    .table-hdr-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .metric-toggle-btn {
+      border: 1px solid var(--card-border);
+      background: var(--badge-neutral-bg);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 7px 11px;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .metric-toggle-btn.active {
+      background: rgba(124, 58, 237, 0.14);
+      color: var(--accent);
+      border-color: rgba(124, 58, 237, 0.35);
+    }
+    .metric-col-hidden { display: none; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { padding: 16px 24px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--card-border); }
+    td { padding: 20px 24px; border-bottom: 1px solid var(--card-border); vertical-align: middle; font-size: 14px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    
+    .btn { padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; background: var(--accent); color: white; white-space: nowrap; }
+    .star-row-btn { cursor: pointer; font-size: 22px; line-height: 1; padding: 2px 6px; border-radius: 6px; background: rgba(124, 58, 237, 0.10); border: 1px solid rgba(124, 58, 237, 0.35); color: var(--accent); transition: all 0.15s; }
+    .star-row-btn.is-starred { background: rgba(245, 179, 1, 0.15); border-color: #f5b301; color: #f5b301; }
+    .btn:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3); }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4px;
+      height: 100%;
+      background: var(--accent);
+    }
+    .stat-card.success-card::before { background: var(--success); }
+    .stat-card.failed-card::before { background: var(--failure); }
+    .stat-card.pending-card::before { background: var(--pending); }
+    .stat-card.warning-card::before { background: var(--warning); }
+    .stat-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .stat-value {
+      font-size: 36px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .stat-sub {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Error breakdown card */
+    .error-breakdown {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 40px;
+      backdrop-filter: blur(12px);
+      box-shadow: var(--shadow);
+    }
+    .error-breakdown h3 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .error-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .error-chip {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.15);
+      color: #b91c1c;
+      padding: 6px 12px;
+      border-radius: 99px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .error-chip .count {
+      background: var(--failure);
+      color: #fff;
+      padding: 2px 6px;
+      border-radius: 99px;
+      font-size: 11px;
+    }
+  </style>
+  <script>
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo-container">
+        <span class="logo-icon">🤖</span>
+        <h1>Automated <span>Run Results</span></h1>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px;">
+        <button id="theme-toggle" class="btn" style="background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.2); color: var(--text); padding: 8px 12px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; box-shadow: none; font-family: inherit;">
+          🌓 Toggle Theme
+        </button>
+        <a href="/?tab=automatic" class="btn-back">← Back to Dashboard</a>
+      </div>
+    </header>
+
+    <div class="run-card">
+      <div class="run-header">
+        <div>
+          <h2 style="font-family: monospace; color: var(--accent); margin-bottom: 8px; font-size: 24px;">{{ run.run_id }}</h2>
+          <p style="color: var(--text-muted);">Dataset: {{ run.task_set }}</p>
+          {% if timing.duration %}
+          <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;">
+            {% if timing.started_fmt %}
+            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px;">
+              <span style="font-size: 16px;">🟢</span>
+              <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Started</span><strong style="color: var(--text);">{{ timing.started_fmt }}</strong></span>
+            </div>
+            {% endif %}
+            {% if timing.completed_fmt %}
+            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px;">
+              <span style="font-size: 16px;">🏁</span>
+              <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Finished</span><strong style="color: var(--text);">{{ timing.completed_fmt }}</strong></span>
+            </div>
+            {% endif %}
+            {% if timing.duration %}
+            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.25); border-radius: 10px;">
+              <span style="font-size: 16px;">⏱️</span>
+              <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Duration</span><strong style="color: var(--accent);">{{ timing.duration }}</strong></span>
+            </div>
+            {% endif %}
+            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 10px;">
+              <span style="font-size: 16px;">⚠️</span>
+              <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Missing Any Step</span><strong style="color: var(--warning);">{{ stats.missing_any_step_tasks }}</strong></span>
+            </div>
+            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 10px;">
+              <span style="font-size: 16px;">2</span>
+              <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Missing Step 2</span><strong style="color: var(--warning);">{{ stats.missing_step_2_tasks }}</strong></span>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+        <div>
+          {% if run.status == 'completed' %}
+            <span class="badge success">Completed</span>
+          {% elif run.status == 'running' %}
+            <span class="badge pending">Running ({{ run.progress }})</span>
+            <form action="/runs/{{ run.run_id }}/stop" method="post" style="margin-top: 10px; display: inline-block;">
+              <button type="submit" class="btn" style="background: var(--failure);">Stop Run</button>
+            </form>
+          {% else %}
+            <span class="badge failed">{{ run.status }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% if run.error %}
+        <div style="padding: 16px; background: rgba(239, 68, 68, 0.1); border-left: 4px solid var(--failure); border-radius: 4px; margin-top: 16px; color: #fca5a5;">
+          <strong>Error:</strong> {{ run.error }}
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Stats summary -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Tasks Completed</div>
+        <div class="stat-value">{{ stats.completed }} / {{ stats.total }}</div>
+        <div class="stat-sub">finished execution</div>
+      </div>
+      <div class="stat-card success-card">
+        <div class="stat-label">Success Rate</div>
+        <div class="stat-value">{{ stats.success_rate }}%</div>
+        <div class="stat-sub">{{ stats.passed }} out of {{ stats.completed }} passed</div>
+      </div>
+      <div class="stat-card failed-card">
+        <div class="stat-label">Failed Tasks</div>
+        <div class="stat-value">{{ stats.failed }}</div>
+        <div class="stat-sub">marked as failed / runner error</div>
+      </div>
+      <div class="stat-card pending-card">
+        <div class="stat-label">Pending Review</div>
+        <div class="stat-value">{{ stats.pending }}</div>
+        <div class="stat-sub">need manual label / pending</div>
+      </div>
+      <div class="stat-card warning-card">
+        <div class="stat-label">Missing Any Step</div>
+        <div class="stat-value">{{ stats.missing_any_step_tasks }}</div>
+        <div class="stat-sub">tasks with gaps in recorded steps</div>
+      </div>
+      <div class="stat-card warning-card">
+        <div class="stat-label">Missing Step 2</div>
+        <div class="stat-value">{{ stats.missing_step_2_tasks }}</div>
+        <div class="stat-sub">tasks with action steps but no step 2</div>
+      </div>
+    </section>
+
+    <!-- Error breakdown summary -->
+    {% if stats.error_stats %}
+    <section class="error-breakdown">
+      <h3>⚠️ Error Frequency Breakdown</h3>
+      <div class="error-chips">
+        {% for err, count in stats.error_stats.items() %}
+        <div class="error-chip">
+          <span>{{ err }}</span>
+          <span class="count">{{ count }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- Mean Confidence Chart -->
+    <section class="error-breakdown" style="margin-bottom: 40px; padding: 24px;">
+      <div style="display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 300px;">
+          <!-- Chart Header & Filters -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 1.2em;">📈</span> Mean Confidence Trend
+            </h3>
+          </div>
+
+          <div style="display: flex; gap: 12px; margin-bottom: 12px; font-size: 0.85em; flex-wrap: wrap;">
+            <div style="display: flex; gap: 8px;">
+              <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
+              <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">Only Progress</button>
+              <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
+              <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid #ef4444;">Only Grounding</button>
+            </div>
+            <div style="display: flex; gap: 12px;">
+              <select id="status-filter" onchange="drawMeanGraph()" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 13px;">
+                <option value="all">All Statuses</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+              </select>
+              <select id="source-filter" onchange="drawMeanGraph()" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 13px;">
+                <option value="all">All Sources</option>
+                <option value="LLM Report">LLM Report</option>
+                <option value="No-LLM">No-LLM</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="conf-svg-container" style="position: relative; width: 100%; height: 250px; overflow: visible; background: var(--chart-bg); border-radius: 8px; border: 1px solid var(--card-border);">
+        <svg id="conf-svg" style="width: 100%; height: 100%; overflow: visible;"></svg>
+      </div>
+    </section>
+
+      <div class="table-container">
+        <div class="table-hdr">
+          <h2>Task Trajectories</h2>
+        <div class="table-hdr-actions">
+          <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('loops', this)" aria-pressed="false">Show Loops</button>
+          <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('missing', this)" aria-pressed="false">Show Missing Steps</button>
+          <span class="badge neutral">{{ results|length }} / {{ run.task_ids|length }} Tasks</span>
+        </div>
+      </div>
+      {% if results %}
+      <div style="overflow-x: auto;">
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th>Task Name</th>
+            <th>Task Description</th>
+            <th>Result Status</th>
+            <th>Reason</th>
+            <th>Steps</th>
+            <th class="metric-col-loops metric-col-hidden">Loops</th>
+            <th>Loops_u</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for res in results %}
+          <tr>
+            <td>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                {% if res.session_id %}
+                  <button type="button" class="star-row-btn {{ 'is-starred' if res.starred else '' }}" data-session="{{ res.session_id }}"
+                    data-starred="{{ 'true' if res.starred else 'false' }}"
+                    onclick="toggleStarRow(this)" title="{{ res.star_reason if (res.starred and res.star_reason) else 'Star this task' }}">{{ '★' if res.starred else '☆' }}</button>
+                {% endif %}
+                <strong>{{ res.task.name }}</strong>
+              </div>
+            </td>
+            <td>
+              <div style="max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted);" title="{{ res.task.task }}">
+                {{ res.task.task }}
+              </div>
+            </td>
+            <td>
+              {% if res.status == 'completed' %}
+                {% if res.judge and res.judge.success %}
+                  <span class="badge success">Passed</span>
+                {% elif res.judge and res.judge.success == false %}
+                  <span class="badge failed">Failed</span>
+                {% else %}
+                  <span class="badge pending">Needs Label</span>
+                {% endif %}
+              {% else %}
+                <span class="badge" style="background: rgba(255,255,255,0.1); color: var(--text-muted);">{{ res.status }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if res.terminal_reason %}
+                <span class="badge neutral" style="font-family: monospace; font-size: 11px;" title="{{ res.diagnostics.zero_step_explanation if res.diagnostics and res.diagnostics.zero_step_explanation else (res.error or '') }}">{{ res.terminal_reason }}</span>
+              {% endif %}
+              {% if res.judge and res.judge.failureCategory %}
+                <div style="margin-top: 4px; font-size: 11px; color: #ef4444;" title="{{ res.judge.reasoning if res.judge.reasoning else '' }}">{{ res.judge.failureCategory }}</div>
+              {% endif %}
+            </td>
+            <td>
+              {{ res.steps|length }}
+              {% if res.missing_steps_label %}
+                <div class="metric-col-missing metric-col-hidden" style="margin-top: 6px;">
+                  <span class="badge" style="background: rgba(245, 158, 11, 0.14); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.35);" title="{{ res.missing_steps_label }}">{{ res.missing_steps_label }}</span>
+                </div>
+              {% endif %}
+            </td>
+            <td class="metric-col-loops metric-col-hidden">
+              {% if res.loop_steps and res.loop_steps > 0 %}
+                <span class="badge" style="background: rgba(250, 204, 21, 0.18); color: #b45309; border: 1px solid rgba(250, 204, 21, 0.5);" title="{{ res.loop_steps }} step(s) with old text-only L_t > 0.5 (max {{ '%.2f'|format(res.max_loop) }})">🔁 {{ res.loop_steps }}</span>
+              {% else %}
+                <span style="color: var(--text-muted);">0</span>
+              {% endif %}
+              {% if res.loop_metric_disagrees %}
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);" title="Old and updated loop metrics disagree">Δ old {{ res.loop_steps }} / updated {{ res.loop_steps_updated }}</div>
+              {% endif %}
+            </td>
+            <td>
+              {% if res.loop_steps_updated and res.loop_steps_updated > 0 %}
+                <span class="badge" style="background: rgba(27, 191, 156, 0.16); color: #0f766e; border: 1px solid rgba(27, 191, 156, 0.45);" title="{{ res.loop_steps_updated }} step(s) with updated L_t_u > 0.5 (max {{ '%.2f'|format(res.max_loop_updated) }})">🔁 {{ res.loop_steps_updated }}</span>
+              {% else %}
+                <span style="color: var(--text-muted);">0</span>
+              {% endif %}
+              {% if res.loop_metric_disagrees %}
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);" title="Old and updated loop metrics disagree">max {{ '%.2f'|format(res.max_loop) }} → {{ '%.2f'|format(res.max_loop_updated) }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                {% if res.session_id %}
+                  <a href="/trajectory/{{ res.session_id }}" class="btn">Inspect Trajectory</a>
+                {% else %}
+                  <span class="badge neutral" title="{{ res.diagnostics.zero_step_explanation if res.diagnostics and res.diagnostics.zero_step_explanation else 'No PageGuide session was recorded — the task failed before any step (e.g. navigation/DNS error or block).' }}" style="font-style: italic; cursor: help;">No trajectory</span>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <div style="padding: 60px; text-align: center;">
+        <p style="color: var(--text-muted); margin-bottom: 16px; font-size: 16px;">Tasks are currently running or no tasks finished yet.</p>
+        {% if run.status == 'running' %}
+        <script>
+          setTimeout(() => window.location.reload(), 3000);
+        </script>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <script>
+    async function toggleStarRow(btn) {
+      const sessionId = btn.dataset.session;
+      const wasStarred = btn.dataset.starred === 'true';
+      const next = !wasStarred;
+      let reason = '';
+      if (next) {
+        reason = prompt('Why star this task? (optional)') || '';
+      }
+      try {
+        const resp = await fetch(`/api/star_trajectory/${sessionId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ starred: next, reason })
+        });
+        if (!resp.ok) { const d = await resp.json().catch(() => ({})); alert('Error: ' + (d.error || resp.status)); return; }
+        btn.dataset.starred = next ? 'true' : 'false';
+        btn.textContent = next ? '★' : '☆';
+        btn.classList.toggle('is-starred', next);
+        btn.title = next ? (reason || 'Starred') : 'Star this task';
+      } catch (e) {
+        alert('Network error: ' + e.message);
+      }
+    }
+
+    const trajectoriesData = {{ chart_trajectories | tojson }};
+
+    let activeConfLines = {
+      full: true,
+      progress: true,
+      loop: true,
+      grounding: true
+    };
+
+    function toggleConfLine(lineName) {
+      activeConfLines[lineName] = !activeConfLines[lineName];
+      const btn = document.getElementById(`btn-conf-${lineName}`);
+      if (activeConfLines[lineName]) {
+        btn.classList.add('active');
+        btn.style.opacity = '1';
+      } else {
+        btn.classList.remove('active');
+        btn.style.opacity = '0.5';
+      }
+      drawMeanGraph();
+    }
+
+    function drawMeanGraph() {
+      const svg = document.getElementById('conf-svg');
+      if (!svg) return;
+      
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 250;
+      const padding = { top: 20, right: 30, bottom: 40, left: 50 };
+      
+      const innerWidth = width - padding.left - padding.right;
+      const innerHeight = height - padding.top - padding.bottom;
+      
+      // Clear SVG
+      svg.innerHTML = '';
+      
+      // Filters
+      const statusFilt = document.getElementById('status-filter').value;
+      const sourceFilt = document.getElementById('source-filter').value;
+      
+      const filteredTrajs = trajectoriesData.filter(t => {
+        if (statusFilt !== 'all' && t.status !== statusFilt) return false;
+        if (sourceFilt !== 'all' && t.conf_source !== sourceFilt) return false;
+        return true;
+      });
+      
+      if (filteredTrajs.length === 0) {
+        svg.innerHTML = '<text x="50%" y="50%" fill="var(--text-muted)" text-anchor="middle">No data for selected filters</text>';
+        return;
+      }
+      
+      // Aggregate data per step index
+      let maxStepIdx = 0;
+      filteredTrajs.forEach(t => {
+        if (t.steps && t.steps.length > maxStepIdx) {
+          maxStepIdx = t.steps.length;
+        }
+      });
+      
+      if (maxStepIdx === 0) return;
+      
+      const stepMeans = [];
+      for (let i = 0; i < maxStepIdx; i++) {
+        let fullSum = 0, fullCount = 0;
+        let progSum = 0, progCount = 0;
+        let loopSum = 0, loopCount = 0;
+        let groundSum = 0, groundCount = 0;
+        
+        filteredTrajs.forEach(t => {
+          if (!t.steps || !t.steps[i]) return;
+          const step = t.steps[i];
+          
+          const actionType = step.action ? step.action.split('(')[0] : 'unknown';
+          if (['scroll_down', 'scroll_up', 'scroll'].includes(actionType)) {
+             return; // Omit scroll steps
+          }
+          
+          const c = (step.confidence !== undefined && step.confidence !== null) ? step.confidence : 0;
+          const g = (step.grounded !== undefined && step.grounded !== null) ? step.grounded : 1;
+          const p = (step.progress !== undefined && step.progress !== null) ? step.progress : 1;
+          const l = (step.loop !== undefined && step.loop !== null) ? step.loop : 0;
+          
+          fullSum += Math.max(0, Math.min(1, g * (1 - 0.5 * l))); fullCount++;
+          progSum += p; progCount++;
+          loopSum += l; loopCount++;
+          groundSum += g; groundCount++;
+        });
+        
+        stepMeans.push({
+          idx: i,
+          full: fullCount > 0 ? fullSum / fullCount : null,
+          progress: progCount > 0 ? progSum / progCount : null,
+          loop: loopCount > 0 ? loopSum / loopCount : null,
+          grounding: groundCount > 0 ? groundSum / groundCount : null
+        });
+      }
+      
+      const xStep = maxStepIdx > 1 ? innerWidth / (maxStepIdx - 1) : innerWidth;
+      
+      // Determine dynamic Y bounds based on active lines
+      let minY = 0;
+      let maxY = 1;
+      stepMeans.forEach(sm => {
+        if (activeConfLines.full && sm.full !== null) { minY = Math.min(minY, sm.full); maxY = Math.max(maxY, sm.full); }
+        if (activeConfLines.progress && sm.progress !== null) { minY = Math.min(minY, sm.progress); maxY = Math.max(maxY, sm.progress); }
+        if (activeConfLines.loop && sm.loop !== null) { minY = Math.min(minY, sm.loop); maxY = Math.max(maxY, sm.loop); }
+        if (activeConfLines.grounding && sm.grounding !== null) { minY = Math.min(minY, sm.grounding); maxY = Math.max(maxY, sm.grounding); }
+      });
+      minY = Math.floor(minY * 5) / 5;
+      maxY = Math.ceil(maxY * 5) / 5;
+      if (minY > 0) minY = 0;
+      if (maxY < 1) maxY = 1;
+      
+      const yRange = maxY - minY;
+      
+      // Y axis
+      const numTicks = 5;
+      for (let i = 0; i <= numTicks; i++) {
+        const fraction = i / numTicks;
+        const val = minY + fraction * yRange;
+        const y = padding.top + innerHeight * (1 - fraction);
+        
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", padding.left);
+        line.setAttribute("y1", y);
+        line.setAttribute("x2", width - padding.right);
+        line.setAttribute("y2", y);
+        line.setAttribute("stroke", "var(--chart-grid)");
+        line.setAttribute("stroke-dasharray", "4 4");
+        svg.appendChild(line);
+        
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", padding.left - 10);
+        text.setAttribute("y", y + 4);
+        text.setAttribute("fill", "var(--text-muted)");
+        text.setAttribute("font-size", "11px");
+        text.setAttribute("text-anchor", "end");
+        text.textContent = Math.round(val * 100) + "%";
+        svg.appendChild(text);
+      }
+      
+      // X axis labels
+      for (let i = 0; i < maxStepIdx; i++) {
+        const x = padding.left + i * xStep;
+        if (maxStepIdx <= 20 || i % Math.ceil(maxStepIdx/10) === 0) {
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", x);
+          text.setAttribute("y", height - 10);
+          text.setAttribute("fill", "var(--text-muted)");
+          text.setAttribute("font-size", "11px");
+          text.setAttribute("text-anchor", "middle");
+          text.textContent = i;
+          svg.appendChild(text);
+        }
+      }
+      
+      const drawLine = (key, color) => {
+        let pathD = "";
+        stepMeans.forEach((sm, i) => {
+          const val = sm[key];
+          if (val === null) return;
+          const x = padding.left + (i * xStep);
+          const fraction = (val - minY) / yRange;
+          const y = padding.top + innerHeight * (1 - fraction);
+          if (pathD === "") pathD = `M ${x} ${y}`;
+          else pathD += ` L ${x} ${y}`;
+        });
+        
+        if (pathD) {
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", pathD);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke", color);
+          path.setAttribute("stroke-width", "3");
+          svg.appendChild(path);
+          
+          stepMeans.forEach((sm, i) => {
+            const val = sm[key];
+            if (val === null) return;
+            const x = padding.left + (i * xStep);
+            const fraction = (val - minY) / yRange;
+            const y = padding.top + innerHeight * (1 - fraction);
+            
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", x);
+            circle.setAttribute("cy", y);
+            circle.setAttribute("r", "5");
+            circle.setAttribute("fill", color);
+            circle.setAttribute("stroke", "var(--bg)");
+            circle.setAttribute("stroke-width", "2");
+            
+            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            title.textContent = `Step ${i}: ${Math.round(val*100)}%`;
+            circle.appendChild(title);
+            
+            svg.appendChild(circle);
+          });
+        }
+      };
+      
+      if (activeConfLines.full) drawLine("full", "#7857ff");
+      if (activeConfLines.progress) drawLine("progress", "#ff8a3d");
+      if (activeConfLines.loop) drawLine("loop", "#1bbf9c");
+      if (activeConfLines.grounding) drawLine("grounding", "#ef4444");
+    }
+
+    window.addEventListener('resize', drawMeanGraph);
+    document.addEventListener('DOMContentLoaded', drawMeanGraph);
+
+    function toggleRunMetricColumn(column, button) {
+      const cells = document.querySelectorAll(`.metric-col-${column}`);
+      const shouldShow = cells.length > 0 && cells[0].classList.contains('metric-col-hidden');
+      cells.forEach(cell => cell.classList.toggle('metric-col-hidden', !shouldShow));
+      if (button) {
+        button.classList.toggle('active', shouldShow);
+        const label = column === 'loops' ? 'Loops' : (column === 'missing' ? 'Missing Steps' : column);
+        button.textContent = `${shouldShow ? 'Hide' : 'Show'} ${label}`;
+        button.setAttribute('aria-pressed', shouldShow ? 'true' : 'false');
+      }
+    }
+
+    // Active run auto-reload polling (Task 4)
+    {% if run.status == 'running' %}
+    setTimeout(() => window.location.reload(), 3000);
+    {% endif %}
+
+    // Theme Toggle Handler
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+      themeToggle.addEventListener('click', () => {
+        let theme = document.documentElement.getAttribute('data-theme');
+        if (theme === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'light');
+          localStorage.setItem('theme', 'light');
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          localStorage.setItem('theme', 'dark');
+        }
+      });
+    }
+  </script>
+</body>
+</html>

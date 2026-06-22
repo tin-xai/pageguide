@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PageGuide Eval{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">PageGuide Eval</a>
+    {% block nav %}{% endblock %}
+    <a href="http://127.0.0.1:5000/" style="margin-left: auto; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(139, 92, 246, .5); border-radius: 8px; padding: 6px 12px; color: #d8b4fe; background: rgba(139, 92, 246, .12); font-weight: 700; font-size: 13px;">Evaluation</a>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

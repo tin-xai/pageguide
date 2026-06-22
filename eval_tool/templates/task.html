@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}{{ result.task.name }}{% endblock %}
+{% block nav %}
+  <a href="{{ url_for('run_detail', run_id=run.run_id) }}">Run Summary</a>
+  <a href="{{ url_for('run_detail', run_id=run.run_id) }}#calibration">Charts</a>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <p class="eyebrow">{{ result.task.name }}</p>
+  <h1>{{ result.task.task }}</h1>
+  <p class="muted">{{ result.task.website_url }}</p>
+  <div class="chips">
+    <span class="chip {% if result.judge.success %}ok{% else %}bad{% endif %}">
+      {% if result.judge.success %}Success{% else %}{{ result.judge.failureCategory }}{% endif %}
+    </span>
+    <span class="chip">Judge confidence {{ (result.judge.confidence * 100)|round|int }}%</span>
+    <span class="chip">Terminal: {{ result.terminal_reason }}</span>
+    {% if result.human_success is not none %}
+      <span class="chip {% if result.human_success %}ok{% else %}bad{% endif %}">
+        Human: {{ "Success" if result.human_success else "Fail" }}
+      </span>
+    {% endif %}
+  </div>
+  <p>{{ result.judge.reason }}</p>
+
+  <div class="human-label">
+    <p class="muted">Correct the accuracy label if the judge got it wrong. This is used by the
+      ECE / reliability plots (the human label overrides the judge).</p>
+    <form method="post" action="{{ url_for('set_task_label', run_id=run.run_id, task_id=result.task_id) }}" class="actions">
+      <input type="hidden" name="next" value="{{ url_for('task_detail', run_id=run.run_id, task_id=result.task_id) }}">
+      <button type="submit" name="human_success" value="true" class="secondary">Mark Success</button>
+      <button type="submit" name="human_success" value="false" class="secondary">Mark Fail</button>
+      <button type="submit" name="human_success" value="clear">Clear override</button>
+    </form>
+  </div>
+  {% if result.final_screenshot %}
+    <h2>Final Screenshot</h2>
+    <img class="screenshot final" src="{{ url_for('artifacts', path=result.final_screenshot) }}" alt="Final screenshot">
+  {% endif %}
+  {% if result.error %}<p class="alert">{{ result.error }}</p>{% endif %}
+</section>
+
+<section class="timeline">
+  {% for step in result.steps %}
+    <article class="step-card">
+      <div class="step-head">
+        <div>
+          <p class="eyebrow">{% if step.isInitial %}Initial State{% else %}Step {{ step.step }}{% endif %}</p>
+          <h2>{{ step.instruction or "Captured state" }}</h2>
+        </div>
+        {% if step.confidence_versions %}
+          <div class="score-pills">
+            <span>Full {{ pct(step.confidence_versions.full) }}</span>
+            <span>No-progress {{ pct(step.confidence_versions.reduced) }}</span>
+            <span>No-loop {{ pct(step.confidence_versions.noloop) }}</span>
+          </div>
+        {% endif %}
+      </div>
+      <div class="step-meta">
+        <span>Action: {{ step.action or "none" }}</span>
+        <span>Grounded: {{ fmt(step.get('grounded')) }}</span>
+        <span>Loop: {{ fmt(step.get('loop')) }}</span>
+        <span>Progress: {{ fmt(step.get('progress')) }}</span>
+        {% if step.url %}<span>{{ step.url }}</span>{% endif %}
+      </div>
+      {% if step.screenshotBefore or step.screenshotAfter or step.regionShot %}
+        <div class="step-shot-grid">
+          <figure class="{% if not step.screenshotBefore %}empty{% endif %}">
+            <figcaption>Before</figcaption>
+            {% if step.screenshotBefore %}
+              <img class="screenshot" src="{{ url_for('artifacts', path=step.screenshotBefore) }}" alt="Before step {{ step.step }}">
+            {% else %}
+              <div class="shot-placeholder">No capture</div>
+            {% endif %}
+          </figure>
+          <figure class="{% if not step.screenshotAfter %}empty{% endif %}">
+            <figcaption>After</figcaption>
+            {% if step.screenshotAfter %}
+              <img class="screenshot" src="{{ url_for('artifacts', path=step.screenshotAfter) }}" alt="After step {{ step.step }}">
+            {% else %}
+              <div class="shot-placeholder">No capture</div>
+            {% endif %}
+          </figure>
+          <figure class="{% if not step.regionShot %}empty{% endif %}">
+            <figcaption>Target</figcaption>
+            {% if step.regionShot %}
+              <img class="screenshot" src="{{ url_for('artifacts', path=step.regionShot) }}" alt="Target for step {{ step.step }}">
+            {% else %}
+              <div class="shot-placeholder">No target</div>
+            {% endif %}
+          </figure>
+        </div>
+      {% endif %}
+      {% if step.domSnapshot or step.regionDom or step.domSnapshotAfter %}
+        <div class="dom-inspector">
+          <div class="dom-inspector-head">
+            <h3>DOM Snapshots</h3>
+            <p class="muted">Target crops are cut from the before-action viewport screenshot using the highlighted element bounds plus padding; DOM Target is the stored nearby container for that same element.</p>
+          </div>
+          <div class="dom-grid">
+            <section class="dom-panel">
+              <h4>DOM Before</h4>
+              {% if step.domSnapshot %}
+                <pre class="dom-code"><code>{{ step.domSnapshot }}</code></pre>
+              {% else %}
+                <div class="dom-empty">No before DOM captured.</div>
+              {% endif %}
+            </section>
+            <section class="dom-panel">
+              <h4>DOM Target</h4>
+              {% if step.regionDom %}
+                <pre class="dom-code"><code>{{ step.regionDom }}</code></pre>
+              {% else %}
+                <div class="dom-empty">No target DOM captured.</div>
+              {% endif %}
+            </section>
+            {% if step.domSnapshotAfter %}
+              <section class="dom-panel">
+                <h4>DOM After</h4>
+                <pre class="dom-code"><code>{{ step.domSnapshotAfter }}</code></pre>
+              </section>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+      {% if step.rawLlmJson %}
+        <details>
+          <summary>Raw Agent Response</summary>
+          <pre>{{ step.rawLlmJson }}</pre>
+        </details>
+      {% endif %}
+    </article>
+  {% else %}
+    <section class="card"><p class="muted">No timeline records were captured.</p></section>
+  {% endfor %}
+</section>
+{% endblock %}
