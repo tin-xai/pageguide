@@ -1181,20 +1181,23 @@ function gv2GroundingScore(parts) {
 }
 
 /**
- * Loop score for the current step: the fraction of prior target-bearing steps that
- * targeted the same element. L_t = |{j < t : key_j == key_t}| / t.
+ * Loop score for the current step: the fraction of PREVIOUS actions that share this
+ * step's action key. L_t = |{ prev : key(prev) == key_t }| / |prev|.
  *
- * @param {string[]} priorKeys - element keys of prior target-bearing steps (in order)
- * @param {string} currentKey  - element key of the current step
- * @param {number} [t] - denominator (position among target-bearing steps); defaults to priorKeys.length+1
- * @returns {number|null} loop fraction in [0,1], or null when there is no current key (excluded step)
+ * Faithful port of the reference `compute_loop_score`: the denominator is the number
+ * of previous actions (every prior step, not just target-bearing ones), with no +1.
+ * Returns 0.0 when there are no previous actions or the current step has no key.
+ *
+ * @param {string[]} priorKeys - action keys of every prior step (in order)
+ * @param {string} currentKey  - action key of the current step
+ * @returns {number} loop fraction in [0,1]
  */
-function gv2LoopScore(priorKeys, currentKey, t) {
-  if (!currentKey) return null;
+function gv2LoopScore(priorKeys, currentKey) {
   const prior = Array.isArray(priorKeys) ? priorKeys : [];
-  const denom = (typeof t === 'number' && t > 0) ? t : (prior.length + 1);
+  if (prior.length === 0) return 0.0;
+  if (!currentKey) return 0.0;
   const matches = prior.filter(k => k === currentKey).length;
-  return Math.max(0, Math.min(1, matches / denom));
+  return Math.min(1, matches / prior.length);
 }
 
 /**
@@ -1215,16 +1218,22 @@ function gv2ComputeMechanicalConfidence(parts, weights) {
 }
 
 /**
- * Derive the loop "element key" for a step: a normalized identifier for the element it
- * targets. Falls back to the instruction text when no element text is present. Returns
- * '' for steps with no usable key (treated as excluded by the loop score).
+ * Derive the loop "action key" for a step: the first non-empty of the element text,
+ * element description, description, or instruction, stripped + lowercased. Faithful
+ * port of the reference `_action_key` — text-based, NOT page-scoped and NOT index-based.
+ * Two steps loop when this string matches. Returns '' when none (excluded by loop score).
  *
- * @param {{element?:{text?:string}, instruction?:string}} step
- * @returns {string} normalized key, or '' when none
+ * @param {{element?:{text?:string, desc?:string}, description?:string, instruction?:string}} step
+ * @returns {string} normalized action key, or '' when none
  */
 function gv2ElementKey(step) {
-  const raw = (step && (step.element?.text || step.instruction)) || '';
-  return String(raw).toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!step) return '';
+  const el = step.element || {};
+  const candidates = [el.text, el.desc, step.description, step.instruction];
+  for (const v of candidates) {
+    if (v && String(v).trim()) return String(v).trim().toLowerCase();
+  }
+  return '';
 }
 
 /**

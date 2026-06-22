@@ -780,12 +780,13 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       autoMode,
       paused: false,
       lowConfidenceCount: 0,
-      // Seed the loop-detection key list from the kept (target-bearing) steps so L_t keeps
-      // counting correctly after a rewind/steer.
+      // Seed the loop-detection key list from the kept steps so L_t keeps counting
+      // correctly after a rewind/steer. One entry per prior action (the loop denominator
+      // counts ALL previous actions), using the same text-based action key.
       _mechKeys: kept
-        .filter(r => r.target?.text)
-        .map(r => (typeof gv2ElementKey === 'function' ? gv2ElementKey({ element: { text: r.target.text } }) : ''))
-        .filter(Boolean),
+        .map(r => (typeof gv2ElementKey === 'function'
+          ? gv2ElementKey({ element: { text: r.target?.text }, instruction: r.instruction })
+          : '')),
       currentPlanStep: fromStep + 1,
       _lastActionStepNumber: fromStep || null,
       _activeStepNumber: fromStep + 1,
@@ -1972,8 +1973,10 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const mech = (typeof gv2ComputeMechanicalConfidence === 'function')
       ? gv2ComputeMechanicalConfidence({ hasTarget, indexValid, textFound: textMatchIdx !== null, priorKeys, currentKey })
       : { confidence: null, grounding: null, loop: null };
-    // Record this step's element key for future loop detection (target-bearing steps only).
-    if (hasTarget && currentKey) priorKeys.push(currentKey);
+    // Record this step's action key for future loop detection. Every action is pushed
+    // (not just target-bearing ones) so the loop denominator counts ALL previous actions,
+    // matching the reference compute_loop_score.
+    priorKeys.push(currentKey);
 
     // The ACTIVE confidence — what drives the timeline tier, the 3-strikes pause, and the red
     // highlight — is chosen by the source toggle: 'mechanical' uses the rule-based score, otherwise

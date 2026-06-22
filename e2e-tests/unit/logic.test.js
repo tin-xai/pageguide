@@ -708,23 +708,26 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
   });
 
   describe('gv2LoopScore', () => {
-    test('first occurrence of an element → 0', () => {
+    test('no previous actions → 0', () => {
       expect(window.gv2LoopScore([], 'a')).toBe(0);
+    });
+    test('no matching prior key → 0', () => {
       expect(window.gv2LoopScore(['b', 'c'], 'a')).toBe(0);
     });
-    test('repeated element → fraction of prior matches over t', () => {
-      // two prior "a", current "a": t = priorKeys.length + 1 = 3 → 2/3
-      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBeCloseTo(2 / 3, 6);
-      // one prior "a" among others, current "a": t = 4 → 1/4
-      expect(window.gv2LoopScore(['a', 'b', 'c'], 'a')).toBeCloseTo(1 / 4, 6);
+    test('repeated key → matches / number of previous actions (reference)', () => {
+      // two prior "a", current "a": 2 / 2 = 1.0
+      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBeCloseTo(1.0, 6);
+      // one prior "a" among 3 previous: 1 / 3
+      expect(window.gv2LoopScore(['a', 'b', 'c'], 'a')).toBeCloseTo(1 / 3, 6);
+      // reference worked example: prev ["search","filters"], current "search" → 1/2
+      expect(window.gv2LoopScore(['search', 'filters'], 'search')).toBeCloseTo(0.5, 6);
     });
-    test('explicit denominator t is respected and result clipped to [0,1]', () => {
-      expect(window.gv2LoopScore(['a', 'a'], 'a', 2)).toBe(1); // 2/2
-      expect(window.gv2LoopScore(['a', 'a', 'a'], 'a', 2)).toBe(1); // 3/2 → clip 1
+    test('result is capped at 1.0', () => {
+      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBe(1);
     });
-    test('no current key → null (excluded step)', () => {
-      expect(window.gv2LoopScore(['a'], '')).toBeNull();
-      expect(window.gv2LoopScore(['a'], null)).toBeNull();
+    test('no current key → 0 (reference returns 0, not null)', () => {
+      expect(window.gv2LoopScore(['a'], '')).toBe(0);
+      expect(window.gv2LoopScore(['a'], null)).toBe(0);
     });
   });
 
@@ -735,10 +738,14 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
       // G=0.7 (text fallback), L=0 → 0.7
       expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: false, textFound: true, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(0.7, 6);
     });
-    test('loop penalty lowers confidence: G=1.0, one prior repeat (L=0.5, λ=0.5) → 0.75', () => {
-      // priorKeys ['a'], currentKey 'a' → t = priorKeys.length+1 = 2 → L = 1/2;
-      // C = 1.0 * (1 - 0.5*0.5) = 0.75
+    test('loop penalty lowers confidence: G=1.0, one prior repeat (L=1.0, λ=0.5) → 0.5', () => {
+      // priorKeys ['a'], currentKey 'a' → L = 1/1 = 1.0; C = 1.0 * (1 - 0.5*1.0) = 0.5
       const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' });
+      expect(r.loop).toBeCloseTo(1.0, 6);
+      expect(r.confidence).toBeCloseTo(0.5, 6);
+    });
+    test('reference example step 3: prev [search,filters], L=0.5 → C=0.75', () => {
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['search', 'filters'], currentKey: 'search' });
       expect(r.loop).toBeCloseTo(0.5, 6);
       expect(r.confidence).toBeCloseTo(0.75, 6);
     });
@@ -754,15 +761,18 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
       expect(r.loop).toBeNull();
     });
     test('λ_L override is respected', () => {
-      // G=1.0, prior ['a'] current 'a' → L=0.5; λ=1.0 → 1.0*(1-1.0*0.5)=0.5
+      // G=1.0, prior ['a'] current 'a' → L=1.0; λ=1.0 → 1.0*(1-1.0*1.0)=0
       const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' }, { lambdaL: 1.0 });
-      expect(r.confidence).toBeCloseTo(0.5, 6);
+      expect(r.confidence).toBeCloseTo(0.0, 6);
     });
   });
 
   describe('gv2ElementKey', () => {
-    test('uses element.text, normalized (lowercased, collapsed whitespace)', () => {
-      expect(window.gv2ElementKey({ element: { text: '  Sign  In ' }, instruction: 'x' })).toBe('sign in');
+    test('uses element.text, stripped and lowercased', () => {
+      expect(window.gv2ElementKey({ element: { text: '  Search ' }, instruction: 'x' })).toBe('search');
+    });
+    test('element text wins over instruction', () => {
+      expect(window.gv2ElementKey({ element: { text: 'Search' }, instruction: 'Click the search button' })).toBe('search');
     });
     test('falls back to instruction when no element text', () => {
       expect(window.gv2ElementKey({ instruction: 'Click Save' })).toBe('click save');
