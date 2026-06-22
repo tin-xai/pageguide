@@ -1485,6 +1485,29 @@ function gv2DotState(args) {
 if (typeof window !== 'undefined') window.gv2DotState = gv2DotState;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2DotState = gv2DotState;
 
+// ===== GUIDE STEP NUMBER NORMALIZATION =====
+
+/**
+ * The LLM may infer hidden/implicit steps and return a non-sequential `step` value
+ * (e.g. Step 3 immediately after Step 1). Runtime-owned concrete step numbers must
+ * stay contiguous so stored trajectories do not have missing Step 2/6/8 gaps.
+ */
+function gv2NormalizeStepNumber(step, previousSteps) {
+  const count = Array.isArray(previousSteps) ? previousSteps.length : 0;
+  const expectedStep = count + 1;
+  const raw = step && step.step;
+  const llmStep = Number.isFinite(Number(raw)) ? Number(raw) : null;
+  const stepNumberCorrected = llmStep !== expectedStep;
+  return {
+    expectedStep,
+    llmStep,
+    stepNumberCorrected
+  };
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeStepNumber = gv2NormalizeStepNumber;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeStepNumber = gv2NormalizeStepNumber;
+
 // ===== AUTO-MODE GATE HELPERS (Gate 2: state-change check) =====
 
 /**

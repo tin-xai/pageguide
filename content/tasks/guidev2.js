@@ -22,7 +22,6 @@ Given the current page and the user's goal, provide ONE step at a time.
 
 Return JSON only:
 {
-  "step": N,
   "thought": "Your internal chain-of-thought reasoning about the page state and chosen action",
   "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
   "element": {"index": N, "text": "element text to highlight"},
@@ -39,9 +38,6 @@ Return JSON only:
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
-CONFIDENCE COMPONENTS — judge these three independently; the extension combines them into a final score:
-"grounded": 0.0–1.0 — how strongly the chosen element and the visible PAGE INDEX evidence support the predicted action. High when the element clearly matches what the action needs; low when the target is ambiguous, not clearly visible, or you are guessing.
-"loop": 0.0–1.0 — looking at COMPLETED STEPS, how much is this step repeating an already-observed state or action? 0.0 = brand-new progress; 1.0 = you are clearly stuck repeating the same state/action cycle.
 "progress": -1.0–1.0 — compared with the previous step's state, does this step move CLOSER to the user's goal? Positive = progress, 0 = no meaningful change, negative = regression (moving away from the goal).
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
@@ -1522,6 +1518,9 @@ async function gv2CaptureStepRecord(data) {
         mechLoop: data.mechLoop != null ? data.mechLoop : null,
         confidenceSource: data.confidenceSource || null,
         confirmation: data.confirmation || null,
+        llmStep: data.llmStep != null ? data.llmStep : null,
+        expectedStep: data.expectedStep != null ? data.expectedStep : null,
+        stepNumberCorrected: !!data.stepNumberCorrected,
         hasShot: true
       }
     });
@@ -1565,6 +1564,9 @@ async function gv2CaptureStepRecord(data) {
       mechLoop: data.mechLoop != null ? data.mechLoop : null,
       confidenceSource: data.confidenceSource || null,
       confirmation: data.confirmation || null,
+      llmStep: data.llmStep != null ? data.llmStep : null,
+      expectedStep: data.expectedStep != null ? data.expectedStep : null,
+      stepNumberCorrected: !!data.stepNumberCorrected,
       durationMs: Date.now() - startedAt,
       // BEFORE-action screenshot (carried from the previous step's after-shot). The timeline shows
       // this. `screenshot` mirrors it for back-compat. The AFTER-action shot is added later by
@@ -1817,7 +1819,7 @@ Step ${stepNumber}
 === COMPLETED STEPS ===
 ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
 
-Provide the next step as JSON.`;
+Return JSON for Step ${stepNumber}; the "step" field must be ${stepNumber}.`;
 
   try {
 
@@ -1943,6 +1945,24 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     if (!step) throw new Error('Could not parse step JSON');
     if (!step.instruction) throw new Error('LLM response JSON is missing instruction field');
     console.log('[guidev2] Parsed step:', step);
+
+    const stepNumberInfo = (typeof gv2NormalizeStepNumber === 'function')
+      ? gv2NormalizeStepNumber(step, g.previousSteps)
+      : {
+          expectedStep: (Array.isArray(g.previousSteps) ? g.previousSteps.length : 0) + 1,
+          llmStep: Number.isFinite(Number(step.step)) ? Number(step.step) : null,
+          stepNumberCorrected: Number(step.step) !== ((Array.isArray(g.previousSteps) ? g.previousSteps.length : 0) + 1)
+        };
+    if (stepNumberInfo.stepNumberCorrected) {
+      console.warn('[guidev2] Correcting model step number', {
+        llmStep: stepNumberInfo.llmStep,
+        expectedStep: stepNumberInfo.expectedStep
+      });
+    }
+    step.llmStep = stepNumberInfo.llmStep;
+    step.expectedStep = stepNumberInfo.expectedStep;
+    step.stepNumberCorrected = stepNumberInfo.stepNumberCorrected;
+    step.step = stepNumberInfo.expectedStep;
 
     if (Number(step.step) > GV2_MAX_STEPS) {
       return _gv2StopForMaxSteps(g);
@@ -2135,6 +2155,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       mechLoop: mech.loop,
       confidenceSource: confSource,
       confirmation: step.confirmation || null,
+      llmStep: step.llmStep,
+      expectedStep: step.expectedStep,
+      stepNumberCorrected: step.stepNumberCorrected,
       instruction: step.instruction,
       action,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,

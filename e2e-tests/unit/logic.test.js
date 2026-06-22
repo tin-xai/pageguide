@@ -959,6 +959,23 @@ describe('gv2DotState (content/utils.js)', () => {
   });
 });
 
+describe('gv2NormalizeStepNumber (content/utils.js)', () => {
+  test('keeps the expected step when the model is correct', () => {
+    const r = window.gv2NormalizeStepNumber({ step: 2 }, ['Step 1: open']);
+    expect(r).toEqual({ expectedStep: 2, llmStep: 2, stepNumberCorrected: false });
+  });
+
+  test('corrects skipped model step numbers to the next concrete step', () => {
+    const r = window.gv2NormalizeStepNumber({ step: 3 }, ['Step 1: open']);
+    expect(r).toEqual({ expectedStep: 2, llmStep: 3, stepNumberCorrected: true });
+  });
+
+  test('uses the expected step when the model omits or malforms step', () => {
+    const r = window.gv2NormalizeStepNumber({}, ['Step 1: open', 'Step 2: pick']);
+    expect(r).toEqual({ expectedStep: 3, llmStep: null, stepNumberCorrected: true });
+  });
+});
+
 describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
   beforeAll(() => {
     window.chrome = {
@@ -1434,6 +1451,33 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     await window.gv2ProcessResponse(stepJson);
     expect(window._guidev2.paused).toBe(true);
     expect(getPauseMessage()).toBe('Confirmation needed. Please verify and press Resume.');
+  });
+
+  test('normalizes skipped LLM step numbers before storing records', async () => {
+    window._guidev2.previousSteps = ['Step 1: Enter pickup location'];
+    window._guidev2.captureEnabled = true;
+    window._guidev2.sessionId = 'step-normalize-test';
+
+    const stepJson = JSON.stringify({
+      step: 3,
+      thought: 'The model skipped a hidden step number.',
+      instruction: 'Select the pickup date',
+      element: { index: 3, text: 'April 5' },
+      action: 'click'
+    });
+
+    const result = await window.gv2ProcessResponse(stepJson);
+    expect(result.step).toBe(2);
+    expect(result.planStep).toBe(2);
+    expect(window._guidev2.previousSteps[window._guidev2.previousSteps.length - 1]).toBe('Step 2: Select the pickup date');
+
+    const recordCalls = window.rewindPutRecord.mock.calls;
+    const record = recordCalls[recordCalls.length - 1][0];
+    expect(record.step).toBe(2);
+    expect(record.planStep).toBe(2);
+    expect(record.llmStep).toBe(3);
+    expect(record.expectedStep).toBe(2);
+    expect(record.stepNumberCorrected).toBe(true);
   });
 
   test('resuming guide resets lowConfidenceCount to 0', async () => {
