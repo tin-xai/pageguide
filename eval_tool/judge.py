@@ -18,12 +18,31 @@ FAILURE_CATEGORIES = {
 }
 
 DEFAULT_LLM_MODEL = "google/gemini-2.5-flash-lite"
+
+DEFAULT_JUDGE_METHOD = "webjudge"
+JUDGE_METHODS = {
+    "webjudge": "WebJudge (trajectory)",
+    "final_screenshot": "Final screenshot",
+}
+
+
+def normalize_judge_method(value: str | None) -> str:
+    value = (value or "").strip().lower().replace("-", "_")
+    return value if value in JUDGE_METHODS else DEFAULT_JUDGE_METHOD
+
+
+def judge_method_options() -> list[dict[str, str]]:
+    return [{"id": key, "label": label} for key, label in JUDGE_METHODS.items()]
+
 MODEL_OPTIONS = [
     {"id": "google/gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"},
     {"id": "google/gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
     {"id": "google/gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
     {"id": "openai/gpt-4o", "label": "GPT-4o"},
     {"id": "openai/gpt-4o-mini", "label": "GPT-4o Mini"},
+    {"id": "openai/gpt-4.1-nano", "label": "GPT-4.1 Nano"},
+    {"id": "qwen/qwen3.6-flash", "label": "Qwen3.6 Flash"},
+    {"id": "qwen/qwen3.7-plus", "label": "Qwen3.7 Plus"},
 ]
 
 
@@ -215,6 +234,92 @@ Base the score on the referenced ground truth, not only the model's original sel
         parsed["progress_ground_truth"] = score
         parsed["available"] = score is not None
         return parsed
+
+    def judge_progress_self_report(
+        self,
+        task: dict[str, Any],
+        step: dict[str, Any],
+        observed_steps: list[dict[str, Any]] | None = None,
+        use_ground_truth: bool = False,
+    ) -> dict[str, Any]:
+        """Ask the LLM to self-report this step's progress as a strict 3-point score.
+
+        Runs twice per step (driven by the caller): once WITH the dataset reference ground
+        truth (``use_ground_truth=True``) and once WITHOUT, so the chart can show the gap.
+        Text-only (no screenshots) so it is independent of artifact paths.
+
+        The model sees only the CURRENT step plus the COUNT of steps observed so far (and the
+        reference ground truth for the GT variant). The reply is snapped to exactly
+        ``1`` (progress) / ``0`` (no meaningful change) / ``-1`` (regression). Returns
+        ``{"available": bool, "score": int|None, "reason": str}``. The GT variant is unavailable
+        when the task has no ``reference_steps`` column.
+        """
+        reference_steps = (task.get("reference_steps") or "").strip()
+        if use_ground_truth and not reference_steps:
+            return {"available": False, "score": None, "reason": "No reference_steps for this task."}
+        if not self.api_key:
+            return {"available": False, "score": None, "reason": "OPENROUTER_API_KEY is not configured."}
+
+        observed = [s for s in (observed_steps or [step]) if not s.get("isInitial")]
+        observed_count = len(observed)
+        prior_observed = observed[:-1] if observed and observed[-1] is step else [
+            s for s in observed
+            if s is not step and int(s.get("step") or 0) < int(step.get("step") or 0)
+        ]
+        prior_text = "\n".join(
+            f"{idx}. action={s.get('action') or 'state'}; instruction={s.get('instruction') or ''}; "
+            f"target={(s.get('target') or {}).get('text', '')}"
+            for idx, s in enumerate(prior_observed, start=1)
+        ) or "None"
+
+        reference_block = (
+            f"Referenced ground-truth steps:\n{reference_steps}\n\n" if use_ground_truth else ""
+        )
+        basis = (
+            "Judge against the referenced ground-truth steps above."
+            if use_ground_truth
+            else "No reference is provided; judge from the user goal and the current step alone."
+        )
+        prompt = f"""Score whether the CURRENT step moved this PageGuide run toward completing the user goal.
+
+User goal: {task.get('task', '')}
+{reference_block}Number of steps observed so far: {observed_count}
+
+Previously observed steps:
+{prior_text}
+
+Current step:
+Instruction: {step.get('instruction', '')}
+Action: {step.get('action', '')}
+Target element: {(step.get('target') or {}).get('text', '')}
+
+{basis}
+
+Return exactly ONE integer score (no decimals):
+- 1  = progress toward the goal.
+- 0  = no meaningful change toward the goal.
+- -1 = regression / moving away from the goal.
+
+Return JSON only:
+{{
+  "score": 0,
+  "reason": "short explanation"
+}}"""
+        raw_text = self._call_openai(prompt, None)
+        parsed = extract_json(raw_text)
+        try:
+            s = float(parsed.get("score"))
+            # Snap to the discrete {-1, 0, 1} scale without flattening regressions.
+            score = 1 if s > 0 else (-1 if s < 0 else 0)
+        except (TypeError, ValueError):
+            score = None
+        return {
+            "available": score is not None,
+            "score": score,
+            "reason": str(parsed.get("reason") or "").strip(),
+            "prompt": prompt,
+            "raw_response": raw_text,
+        }
 
     def _step_images(self, step: dict[str, Any]) -> list[str]:
         root = Path(__file__).resolve().parents[1]

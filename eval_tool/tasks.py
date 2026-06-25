@@ -2,9 +2,49 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .storage import EvalTask, current_data_csv
+
+
+_GENERIC_TASK_NAMES = {
+    "online_mind2web",
+    "online-mind2web",
+    "onlinemind2web",
+}
+
+
+def short_site_name(url: str) -> str:
+    """Short label from a task URL, e.g. rottentomatoes.com -> rottentomatoes."""
+    host = (urlparse(url or "").netloc or "").lower().split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return ""
+    parts = host.split(".")
+    if len(parts) == 2:
+        return parts[0]
+    return host
+
+
+def display_task_name(task: EvalTask | dict) -> str:
+    """Human-friendly task label for tables; Online-Mind2Web rows use the site name."""
+    if isinstance(task, EvalTask):
+        name = (task.name or "").strip()
+        url = (task.website_url or "").strip()
+    else:
+        name = (task.get("name") or "").strip()
+        url = (task.get("website_url") or "").strip()
+    normalized = re.sub(r"[\s\-]+", "_", name.lower())
+    if normalized in _GENERIC_TASK_NAMES:
+        site = short_site_name(url)
+        if site:
+            return site
+    if name:
+        return name
+    return short_site_name(url) or "task"
 
 
 def _clean_key(key: str) -> str:

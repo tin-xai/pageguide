@@ -401,6 +401,10 @@
       border: 1px solid var(--badge-neutral-border);
     }
 
+    .metric-col-hidden {
+      display: none;
+    }
+
     .error-tags {
       display: flex;
       flex-wrap: wrap;
@@ -587,9 +591,10 @@
           <div style="display: flex; gap: 12px; margin-bottom: 12px; font-size: 0.85em; flex-wrap: wrap;">
           <div style="display: flex; gap: 8px;">
             <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
-            <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">Only Progress</button>
+            <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">LLM Progress</button>
+            <button type="button" class="tab-btn active" id="btn-conf-subgoalProgress" onclick="toggleConfLine('subgoalProgress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #10b981;">Subgoal Progress</button>
             <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
-            <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid #ef4444;">Only Grounding</button>
+            <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(14, 165, 233, 0.15); color: #0ea5e9; border: 1px solid #0ea5e9;" title="Raw cosine similarity. Green at or above 0.80; yellow below 0.80.">Grounding Similarity</button>
           </div>
           <div style="display: flex; gap: 12px;">
             <select id="status-filter" onchange="drawMeanGraph()" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 13px;">
@@ -604,6 +609,9 @@
             </select>
           </div>
         </div>
+      </div>
+      <div style="margin: 0 0 10px;">
+        {% include "_metric_legend.html" %}
       </div>
       <div id="conf-svg-container" style="position: relative; width: 100%; height: 250px; overflow: visible; background: var(--chart-bg); border-radius: 8px; border: 1px solid var(--card-border);">
         <svg id="conf-svg" style="width: 100%; height: 100%; overflow: visible;"></svg>
@@ -710,6 +718,88 @@
 
     <!-- Automatic Runs View -->
     <section id="view-auto" style="display: none;">
+      <!-- Grounding Evaluation Panel -->
+      <div class="table-container" style="margin-bottom: 40px;" id="grounding-eval-panel-container">
+        <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleGroundingEvalPanel()">
+          <h2 style="display: flex; align-items: center; gap: 8px;"><span>🎯</span> Grounding Similarity Evaluation</h2>
+          <button type="button" class="btn" style="background: transparent; box-shadow: none; font-size: 14px;" id="grounding-eval-toggle-btn">▼ Hide</button>
+        </div>
+        <div id="grounding-eval-panel-content" style="padding: 24px;">
+          <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 20px; align-items: flex-start;">
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px;">
+              Threshold Value:
+              <input type="number" id="grounding-eval-threshold" value="0.8" min="0" max="1" step="0.05" onchange="fetchGroundingMetrics()"
+                style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
+            </label>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px;">
+              Evaluation Mode:
+              <select id="grounding-eval-mode" onchange="renderGroundingData()"
+                style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                <option value="1">Mode 1: Metric Alignment (Sim vs Human)</option>
+                <option value="2a">Mode 2a: Model Performance (vs Human Truth)</option>
+                <option value="2b">Mode 2b: Model Performance (vs Cosine Sim >= Threshold)</option>
+              </select>
+            </label>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <strong style="color: var(--text-muted); font-weight: 500; font-size: 13px;">Runs Included:</strong>
+                <button type="button" onclick="document.querySelectorAll('.grounding-eval-run-checkbox').forEach(cb => cb.checked = false); fetchGroundingMetrics();" style="font-size: 11px; background: transparent; border: none; color: var(--accent); cursor: pointer; text-decoration: underline;">Deselect All</button>
+              </div>
+              <div style="display: flex; gap: 12px; flex-wrap: wrap; max-height: 120px; overflow-y: auto; padding: 8px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--bg-default);" id="grounding-eval-runs-container">
+                {% set default_runs = [] %}
+                {% set seen_models = [] %}
+                {% for run in auto_runs %}
+                  {% set m = (run.task_model or 'Unknown').split('/')[-1] %}
+                  {% if m not in seen_models and default_runs|length < 3 %}
+                    {% set _ = seen_models.append(m) %}
+                    {% set _ = default_runs.append(run.run_id) %}
+                  {% endif %}
+                {% endfor %}
+                {% set newest_3_run_ids = default_runs %}
+                {% set panel_runs = auto_runs | sort(attribute='task_model') %}
+                {% for run in panel_runs %}
+                  <label style="font-size: 12px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                    <input type="checkbox" class="grounding-eval-run-checkbox" value="{{ run.run_id }}" {% if run.run_id in newest_3_run_ids %}checked{% endif %} onchange="fetchGroundingMetrics()">
+                    <span style="font-family: monospace;">{{ run.run_id }} ({{ (run.task_model or 'Unknown').split('/')[-1] }})</span>
+                  </label>
+                {% endfor %}
+                {% if not auto_runs %}
+                  <span style="font-size: 12px; color: var(--text-muted); font-style: italic;">No automated runs available.</span>
+                {% endif %}
+              </div>
+            </div>
+            <button type="button" onclick="fetchGroundingMetrics()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500; margin-top: 8px;">↻ Compute Table</button>
+          </div>
+          <div id="grounding-eval-results" style="margin-top: 24px; overflow-x: auto;">
+            <p style="color: var(--text-muted); font-size: 13px; font-style: italic;">Select runs and click Compute Table.</p>
+          </div>
+          <div id="grounding-eval-auroc-container" style="margin-top: 32px; display: none; display: flex; flex-direction: column; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 16px; align-self: flex-start; color: var(--text);">AUROC Graph (FPR vs TPR)</h3>
+            <div style="background: white; padding: 24px; border: 1px solid var(--card-border); border-radius: 8px;">
+              <div style="position: relative; width: 500px; height: 500px; margin: 0 auto; background: white;">
+                <svg id="grounding-auroc-svg" width="500" height="500" style="display: block; overflow: visible; font-family: serif;"></svg>
+                <div id="grounding-eval-auroc-legend" style="position: absolute; bottom: 50px; right: 40px; background: white; border: 1px solid black; padding: 8px; font-size: 14px; font-family: serif; color: black; display: flex; flex-direction: column; gap: 4px;"></div>
+              </div>
+            </div>
+            <div id="grounding-eval-auroc-filters" style="margin-top: 16px; display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; font-size: 13px;"></div>
+          </div>
+          <div id="grounding-eval-minmax-container" style="margin-top: 32px; display: none; flex-direction: column; max-width: 600px;">
+            <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 16px; color: var(--text);">Similarity Boundary Metrics</h3>
+            <table style="width: 100%; border-collapse: collapse; border: 1px solid var(--card-border);">
+              <thead>
+                <tr style="background: var(--badge-neutral-bg);">
+                  <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Model</th>
+                  <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Min (Grounded)</th>
+                  <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Max (Misgrounded)</th>
+                </tr>
+              </thead>
+              <tbody id="grounding-eval-minmax-body">
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- Launcher Form -->
       <form method="post" action="/runs" class="table-container" style="margin-bottom: 40px;">
         <input type="hidden" name="task_set" value="{{ task_set }}">
@@ -730,12 +820,31 @@
           <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px;">
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
               Dataset: 
-              <select onchange="window.location.href='/?tab=automatic&task_set=' + this.value" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+              <select id="task-set-select" onchange="changeTaskSet(this.value)" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
                 {% for opt in task_set_options %}
                   <option value="{{ opt.id }}" {% if opt.id == task_set %}selected{% endif %}>{{ opt.label }}</option>
                 {% endfor %}
               </select>
             </label>
+
+            {% if has_difficulty_filter %}
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
+              Reference Length:
+              <select id="difficulty-select" onchange="changeDifficulty(this.value)" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                <option value="" {% if not difficulty %}selected{% endif %}>All levels ({{ difficulty_level_counts.easy + difficulty_level_counts.medium + difficulty_level_counts.hard }})</option>
+                <option value="easy" {% if difficulty == 'easy' %}selected{% endif %}>Easy ({{ difficulty_level_counts.easy }})</option>
+                <option value="medium" {% if difficulty == 'medium' %}selected{% endif %}>Medium ({{ difficulty_level_counts.medium }})</option>
+                <option value="hard" {% if difficulty == 'hard' %}selected{% endif %}>Hard ({{ difficulty_level_counts.hard }})</option>
+              </select>
+            </label>
+            {% if task_set == 'mind2web' %}
+            <a href="/mind2web/download?level=easy" style="padding: 6px 12px; border-radius: 6px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); text-decoration: none; font-weight: 600; font-size: 13px;">⬇ Download Easy CSV</a>
+            {% if difficulty %}
+            <a href="/mind2web/download?level={{ difficulty }}" style="padding: 6px 12px; border-radius: 6px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); text-decoration: none; font-weight: 600; font-size: 13px;">⬇ Download Filtered CSV</a>
+            {% endif %}
+            {% endif %}
+            <span style="font-size: 12px; color: var(--text-muted); max-width: 460px;">Easy ≤5 reference steps · Medium 6–12 · Hard ≥13.</span>
+            {% endif %}
             
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
               Agent Step Cap:
@@ -746,16 +855,66 @@
               Concurrent Workers:
               <input type="number" name="workers" value="4" min="1" max="10" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
             </label>
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="The LLM that drives the PageGuide agent for this run.">
+              Task Model:
+              <select name="task_model" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                {% for option in model_options %}
+                  <option value="{{ option.id }}" {% if option.id == default_task_model %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="The LLM that judges success / scores progress for this run.">
+              Judge Model:
+              <select name="judge_model" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                {% for option in model_options %}
+                  <option value="{{ option.id }}" {% if option.id == default_judge_model %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="WebJudge scores the whole trajectory (official Online-Mind2Web pipeline). Final screenshot judges only the last frame.">
+              Judge Method:
+              <select name="judge_method" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                {% for option in judge_method_options %}
+                  <option value="{{ option.id }}" {% if option.id == default_judge_method %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+
+            {% if task_set == 'no_login' %}
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="Injects each task's reference_steps into the guide prompt so the agent's self-reported progress is more calibrated.">
+              <input type="checkbox" name="ground_truth_mode" value="1">
+              Inject reference ground-truth steps (calibrates progress)
+            </label>
+            {% endif %}
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
+            <span style="color: var(--text-muted); font-weight: 600; font-size: 13px;">Target capture</span>
+            <div class="target-capture-toggle" role="group" aria-label="Target capture mode" style="display: inline-flex; border-radius: 8px; border: 1px solid var(--card-border); overflow: hidden; width: fit-content;">
+              <button type="button" class="target-cap-btn" data-mode="legacy" style="padding: 8px 14px; border: none; background: transparent; color: var(--text-muted); font-family: inherit; font-weight: 600; font-size: 13px; cursor: pointer;">Legacy target captured</button>
+              <button type="button" class="target-cap-btn" data-mode="aligned" style="padding: 8px 14px; border: none; background: transparent; color: var(--text-muted); font-family: inherit; font-weight: 600; font-size: 13px; cursor: pointer;">New Target Captured</button>
+            </div>
+            <input type="hidden" name="region_capture_mode" id="region_capture_mode" value="{{ default_region_capture_mode }}">
+            <small style="color: var(--text-muted); max-width: 520px;">Legacy crops the carried before-shot. New scrolls the target into view and crops a fresh screenshot (aligned region capture).</small>
           </div>
           
           <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; max-height: 400px; overflow-y: auto; padding-right: 10px;">
             {% for task in available_tasks %}
-              <label style="display: flex; align-items: flex-start; gap: 12px; padding: 16px; background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 12px; cursor: pointer; transition: background 0.2s;">
+              <label data-difficulty="{{ task_difficulty_level(task) }}" style="display: flex; align-items: flex-start; gap: 12px; padding: 16px; background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 12px; cursor: pointer; transition: background 0.2s;">
                 <input type="checkbox" name="task_ids" value="{{ task.task_id }}" style="margin-top: 4px;" checked>
                 <div>
-                  <strong style="display: block; margin-bottom: 4px; color: var(--text);">{{ task.name }}</strong>
+                  <strong style="display: block; margin-bottom: 4px; color: var(--text);">{{ task_display_name(task) }}</strong>
                   <small style="color: var(--text-muted); display: block; margin-bottom: 8px; line-height: 1.3;">{{ task.task }}</small>
-                  <span style="font-size: 11px; padding: 2px 6px; background: var(--task-url-bg); border-radius: 4px; color: var(--task-url-text); font-family: monospace;">{{ task.website_url }}</span>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                    {% if has_difficulty_filter %}
+                    {% set ref_step_count = task_reference_step_count(task) %}
+                    <span title="Difficulty from reference steps{% if ref_step_count %}: {{ ref_step_count }} steps{% endif %}" style="font-size: 11px; padding: 2px 6px; border-radius: 4px; background: rgba(124, 58, 237, 0.12); color: var(--accent); font-weight: 700;">{{ task_difficulty(task) }}{% if ref_step_count %} · {{ ref_step_count }} ref steps{% endif %}</span>
+                    {% endif %}
+                    <span style="font-size: 11px; padding: 2px 6px; background: var(--task-url-bg); border-radius: 4px; color: var(--task-url-text); font-family: monospace;">{{ task.website_url }}</span>
+                  </div>
                 </div>
               </label>
             {% endfor %}
@@ -768,10 +927,14 @@
         <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center;">
           <h2>Automated Batch Runs</h2>
           {% if auto_runs %}
-          <button type="submit" form="runs-delete-form" id="delete-selected-btn" disabled
-            style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-family: inherit; font-size: 13px; cursor: pointer; opacity: 0.5;">
-            🗑 Delete Selected (<span id="delete-selected-count">0</span>)
-          </button>
+          <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end;">
+            <button type="button" class="metric-toggle-btn" onclick="toggleAutoRunColumn('refmeta', this)" aria-pressed="false">Show Ref Steps / Difficulty</button>
+            <button type="button" class="metric-toggle-btn" onclick="toggleAutoRunColumn('runmeta', this)" aria-pressed="false">Show Judge / Target</button>
+            <button type="submit" form="runs-delete-form" id="delete-selected-btn" disabled
+              style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-family: inherit; font-size: 13px; cursor: pointer; opacity: 0.5;">
+              🗑 Delete Selected (<span id="delete-selected-count">0</span>)
+            </button>
+          </div>
           {% endif %}
         </div>
         {% if auto_runs %}
@@ -785,6 +948,10 @@
               <th>Status</th>
               <th>Date</th>
               <th>Dataset</th>
+              <th class="metric-col-refmeta metric-col-hidden">Reference Steps / Difficulty</th>
+              <th>Task Model</th>
+              <th class="metric-col-runmeta metric-col-hidden">Judge Model</th>
+              <th class="metric-col-runmeta metric-col-hidden">Target capture</th>
               <th>Duration</th>
               <th>Action</th>
             </tr>
@@ -805,6 +972,16 @@
               </td>
               <td style="color: var(--text-muted);">{{ run.created_at }}</td>
               <td>{{ run.task_set }}</td>
+              <td class="metric-col-refmeta metric-col-hidden">
+                {% if run.reference_summary and run.reference_summary.available %}
+                  <span class="badge neutral" title="{{ run.reference_summary.title }}" style="text-transform: none; letter-spacing: 0; white-space: normal;">{{ run.reference_summary.label }}</span>
+                {% else %}
+                  <span style="color: var(--text-muted);" title="{{ run.reference_summary.title if run.reference_summary else '' }}">—</span>
+                {% endif %}
+              </td>
+              <td><code style="font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere;">{{ run.task_model or 'Unknown' }}</code></td>
+              <td class="metric-col-runmeta metric-col-hidden"><code style="font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere;">{{ run.judge_model or 'Unknown' }}</code></td>
+              <td class="metric-col-runmeta metric-col-hidden"><span class="badge neutral">{{ region_capture_mode_label(run.region_capture_mode) }}</span></td>
               <td style="color: var(--text-muted);">{% if run.duration %}{{ run.duration }}{% else %}<span style="opacity: 0.5;">—</span>{% endif %}</td>
               <td>
                 <a href="/runs/{{ run.run_id }}" class="btn">View Results</a>
@@ -876,6 +1053,344 @@
   </div>
 
   <script>
+    function toggleGroundingEvalPanel() {
+      const content = document.getElementById('grounding-eval-panel-content');
+      const btn = document.getElementById('grounding-eval-toggle-btn');
+      if (content.style.display === 'none') {
+        content.style.display = 'block';
+        btn.textContent = '▼ Hide';
+      } else {
+        content.style.display = 'none';
+        btn.textContent = '▶ Show';
+      }
+    }
+
+    let lastGroundingData = null;
+
+    async function fetchGroundingMetrics() {
+      const threshold = document.getElementById('grounding-eval-threshold').value;
+      const checkboxes = document.querySelectorAll('.grounding-eval-run-checkbox:checked');
+      const runIds = Array.from(checkboxes).map(cb => cb.value);
+      
+      const resultsDiv = document.getElementById('grounding-eval-results');
+      
+      if (runIds.length === 0) {
+        resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No runs selected.</p>';
+        document.getElementById('grounding-eval-auroc-container').style.display = 'none';
+        return;
+      }
+      
+      resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">Loading metrics...</p>';
+      
+      try {
+        const response = await fetch('/api/grounding_metrics', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_ids: runIds, threshold: threshold })
+        });
+        const data = await response.json();
+        
+        if (data.error) {
+          resultsDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Error: ${data.error}</p>`;
+          return;
+        }
+        
+        lastGroundingData = data;
+        renderGroundingData();
+      } catch (err) {
+        resultsDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Network error: ${err.message}</p>`;
+      }
+    }
+
+    function renderGroundingData() {
+      if (!lastGroundingData) return;
+      const data = lastGroundingData;
+      const threshold = document.getElementById('grounding-eval-threshold').value;
+      const mode = document.getElementById('grounding-eval-mode').value;
+      const resultsDiv = document.getElementById('grounding-eval-results');
+
+      if (Object.keys(data).length === 0) {
+        resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No models found in the selected runs.</p>';
+        document.getElementById('grounding-eval-auroc-container').style.display = 'none';
+        return;
+      }
+
+      const models = Object.keys(data).filter(m => m !== 'Average');
+      
+      let html = `<p style="font-weight: bold; margin-bottom: 12px; font-size: 14px;">For Threshold ${threshold},</p>`;
+      html += `<table style="width: 100%; min-width: 600px; border-collapse: collapse; border: 1px solid var(--card-border);">`;
+      html += `<thead><tr style="background: var(--badge-neutral-bg);">`;
+      html += `<th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Model</th>`;
+      for (const model of models) {
+        html += `<th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">${model}</th>`;
+      }
+      html += `</tr></thead><tbody>`;
+      
+      if (mode === '1') {
+        const metrics = ['Accuracy', 'Precision', 'Recall', 'F1'];
+        for (const metric of metrics) {
+          html += `<tr><td style="padding: 12px; border: 1px solid var(--card-border);">${metric}</td>`;
+          for (const model of models) {
+            const counts = data[model];
+            const tp = counts.tp, tn = counts.tn, fp = counts.fp, fn = counts.fn;
+            const total = tp + tn + fp + fn;
+            const correct = tp + tn;
+            let val = null;
+            if (metric === 'Accuracy') val = total > 0 ? correct / total : null;
+            else if (metric === 'Precision') val = (tp + fp) > 0 ? tp / (tp + fp) : null;
+            else if (metric === 'Recall') val = (tp + fn) > 0 ? tp / (tp + fn) : null;
+            else if (metric === 'F1') {
+              const p = (tp + fp) > 0 ? tp / (tp + fp) : null;
+              const r = (tp + fn) > 0 ? tp / (tp + fn) : null;
+              val = (p !== null && r !== null && (p + r) > 0) ? (2 * p * r) / (p + r) : null;
+            }
+            const displayVal = val !== null ? Number(val).toFixed(2) : '—';
+            html += `<td style="padding: 12px; border: 1px solid var(--card-border);">${displayVal}</td>`;
+          }
+          html += `</tr>`;
+        }
+      } else {
+        html += `<tr><td style="padding: 12px; border: 1px solid var(--card-border);">Accuracy (Success Rate)</td>`;
+        for (const model of models) {
+          const counts = data[model];
+          const total = counts.total_scored_steps;
+          let correct = 0;
+          if (mode === '2a') correct = counts.tp + counts.fn; // Human grounded
+          else if (mode === '2b') correct = counts.tp + counts.fp; // Sim grounded
+          const val = total > 0 ? correct / total : null;
+          const displayVal = val !== null ? Number(val).toFixed(2) : '—';
+          html += `<td style="padding: 12px; border: 1px solid var(--card-border);">${displayVal}</td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</tbody></table>`;
+      resultsDiv.innerHTML = html;
+
+      renderAUROCGraph(data, Number(threshold));
+    }
+
+    function renderAUROCGraph(data, activeThreshold) {
+      const container = document.getElementById('grounding-eval-auroc-container');
+      const svg = document.getElementById('grounding-auroc-svg');
+      const legend = document.getElementById('grounding-eval-auroc-legend');
+      const filters = document.getElementById('grounding-eval-auroc-filters');
+      const minmaxContainer = document.getElementById('grounding-eval-minmax-container');
+      const minmaxBody = document.getElementById('grounding-eval-minmax-body');
+      container.style.display = 'flex';
+      minmaxContainer.style.display = 'flex';
+      svg.innerHTML = '';
+      legend.innerHTML = '';
+      filters.innerHTML = '';
+      minmaxBody.innerHTML = '';
+
+      const width = 500;
+      const height = 500;
+      const padding = { top: 20, right: 20, bottom: 50, left: 60 };
+      const innerWidth = width - padding.left - padding.right;
+      const innerHeight = height - padding.top - padding.bottom;
+      const left = padding.left;
+      const top = padding.top;
+
+      // Draw bounding box (classic matplotlib style)
+      let box = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      box.setAttribute("x", left); box.setAttribute("y", top);
+      box.setAttribute("width", innerWidth); box.setAttribute("height", innerHeight);
+      box.setAttribute("fill", "white");
+      box.setAttribute("stroke", "black");
+      box.setAttribute("stroke-width", "1");
+      svg.appendChild(box);
+
+      // Grid/Ticks
+      for (let i = 0; i <= 5; i++) {
+        const fraction = i / 5;
+        // X Axis ticks (FPR)
+        const x = left + innerWidth * fraction;
+        let tickBottom = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        tickBottom.setAttribute("x1", x); tickBottom.setAttribute("y1", top + innerHeight);
+        tickBottom.setAttribute("x2", x); tickBottom.setAttribute("y2", top + innerHeight - 6);
+        tickBottom.setAttribute("stroke", "black"); tickBottom.setAttribute("stroke-width", "1");
+        svg.appendChild(tickBottom);
+        
+        let tickTop = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        tickTop.setAttribute("x1", x); tickTop.setAttribute("y1", top);
+        tickTop.setAttribute("x2", x); tickTop.setAttribute("y2", top + 6);
+        tickTop.setAttribute("stroke", "black"); tickTop.setAttribute("stroke-width", "1");
+        svg.appendChild(tickTop);
+
+        let textX = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        textX.setAttribute("x", x); textX.setAttribute("y", top + innerHeight + 20);
+        textX.setAttribute("fill", "black"); textX.setAttribute("font-size", "16px"); textX.setAttribute("text-anchor", "middle");
+        textX.textContent = (i === 0) ? "0.0" : fraction.toFixed(1);
+        svg.appendChild(textX);
+
+        // Y Axis ticks (TPR)
+        const y = top + innerHeight * (1 - fraction);
+        let tickLeft = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        tickLeft.setAttribute("x1", left); tickLeft.setAttribute("y1", y);
+        tickLeft.setAttribute("x2", left + 6); tickLeft.setAttribute("y2", y);
+        tickLeft.setAttribute("stroke", "black"); tickLeft.setAttribute("stroke-width", "1");
+        svg.appendChild(tickLeft);
+        
+        let tickRight = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        tickRight.setAttribute("x1", left + innerWidth); tickRight.setAttribute("y1", y);
+        tickRight.setAttribute("x2", left + innerWidth - 6); tickRight.setAttribute("y2", y);
+        tickRight.setAttribute("stroke", "black"); tickRight.setAttribute("stroke-width", "1");
+        svg.appendChild(tickRight);
+
+        let textY = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        textY.setAttribute("x", left - 10); textY.setAttribute("y", y + 5);
+        textY.setAttribute("fill", "black"); textY.setAttribute("font-size", "16px"); textY.setAttribute("text-anchor", "end");
+        textY.textContent = (i === 0) ? "0.0" : fraction.toFixed(1);
+        svg.appendChild(textY);
+      }
+
+      // X/Y Labels
+      let xLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      xLabel.setAttribute("x", left + innerWidth / 2); xLabel.setAttribute("y", top + innerHeight + 42);
+      xLabel.setAttribute("fill", "black"); xLabel.setAttribute("font-size", "18px"); xLabel.setAttribute("text-anchor", "middle");
+      xLabel.textContent = "False positive rate";
+      svg.appendChild(xLabel);
+      
+      let yLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      yLabel.setAttribute("transform", `rotate(-90)`);
+      yLabel.setAttribute("x", -(top + innerHeight / 2)); yLabel.setAttribute("y", left - 40);
+      yLabel.setAttribute("fill", "black"); yLabel.setAttribute("font-size", "18px"); yLabel.setAttribute("text-anchor", "middle");
+      yLabel.textContent = "True positive rate";
+      svg.appendChild(yLabel);
+
+      // Diagonal random line (Baseline 0.5)
+      let diag = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      diag.setAttribute("x1", left); diag.setAttribute("y1", top + innerHeight);
+      diag.setAttribute("x2", left + innerWidth); diag.setAttribute("y2", top);
+      diag.setAttribute("stroke", "#cc9999"); diag.setAttribute("stroke-width", "2"); diag.setAttribute("stroke-dasharray", "8 8");
+      svg.appendChild(diag);
+
+      // Colors specifically chosen to match matplotlib typical colors: Red, Black, Green, Blue
+      const colors = ["#ff0000", "#000000", "#00ff00", "#0000ff", "#ff00ff", "#00ffff"];
+      let colorIdx = 0;
+
+      const models = Object.keys(data).filter(m => m !== 'Average');
+
+      for (const model of models) {
+        const cData = data[model];
+        if (!cData.roc || cData.roc.length === 0) continue;
+        const color = colors[colorIdx % colors.length];
+        colorIdx++;
+
+        let pathId = `roc-path-${model.replace(/\\s+/g, '-')}`;
+        let pathD = "";
+        const sortedRoc = [...cData.roc].sort((a,b) => a.threshold - b.threshold);
+        for (const pt of sortedRoc) {
+          const px = left + pt.fpr * innerWidth;
+          const py = top + (1 - pt.tpr) * innerHeight;
+          if (pathD === "") pathD = `M ${px} ${py}`;
+          else pathD += ` L ${px} ${py}`;
+        }
+        
+        let pathGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        pathGroup.setAttribute("id", pathId);
+        
+        let path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", pathD);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", color);
+        path.setAttribute("stroke-width", "2");
+        pathGroup.appendChild(path);
+        
+        // Let's add the active threshold dot to the path group so it toggles with it!
+        const isActivePt = sortedRoc.sort((a,b) => Math.abs(a.threshold - activeThreshold) - Math.abs(b.threshold - activeThreshold))[0];
+        if (isActivePt) {
+          const px = left + isActivePt.fpr * innerWidth;
+          const py = top + (1 - isActivePt.tpr) * innerHeight;
+          let circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          circle.setAttribute("cx", px); circle.setAttribute("cy", py);
+          circle.setAttribute("r", "4");
+          circle.setAttribute("fill", "white");
+          circle.setAttribute("stroke", color);
+          circle.setAttribute("stroke-width", "2");
+          let title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+          title.textContent = `${model} | Threshold: ${isActivePt.threshold.toFixed(2)}\nTPR: ${isActivePt.tpr.toFixed(3)}\nFPR: ${isActivePt.fpr.toFixed(3)}`;
+          circle.appendChild(title);
+          pathGroup.appendChild(circle);
+        }
+        
+        svg.appendChild(pathGroup);
+
+        // Legend inside plot
+        const legItem = document.createElement('div');
+        legItem.id = `legend-item-${model.replace(/\s+/g, '-')}`;
+        legItem.style.display = 'flex';
+        legItem.style.alignItems = 'center';
+        legItem.innerHTML = `<span style="display:inline-block; width:20px; height:2px; background:${color}; margin-right:8px;"></span>
+          <span style="white-space: nowrap;">${model} (AUC: ${cData.auc.toFixed(3)})</span>`;
+        legend.appendChild(legItem);
+
+        // Filter Checkbox below plot
+        const filterLabel = document.createElement('label');
+        filterLabel.style.display = 'flex'; filterLabel.style.alignItems = 'center'; filterLabel.style.gap = '4px'; filterLabel.style.cursor = 'pointer';
+        filterLabel.style.color = "var(--text)";
+        filterLabel.innerHTML = `<input type="checkbox" checked onchange="document.getElementById('${pathId}').style.display = this.checked ? '' : 'none'; document.getElementById('${legItem.id}').style.display = this.checked ? 'flex' : 'none'; document.getElementById('minmax-row-${model.replace(/\s+/g, '-')}').style.display = this.checked ? '' : 'none';">
+        <span style="font-weight: 500;">${model}</span>`;
+        filters.appendChild(filterLabel);
+
+        // Min/Max Table Row
+        const minRow = document.createElement('tr');
+        minRow.id = `minmax-row-${model.replace(/\s+/g, '-')}`;
+        const minG = cData.min_grounded !== null && cData.min_grounded !== undefined ? cData.min_grounded.toFixed(3) : '—';
+        const maxM = cData.max_misgrounded !== null && cData.max_misgrounded !== undefined ? cData.max_misgrounded.toFixed(3) : '—';
+        minRow.innerHTML = `
+          <td style="padding: 12px; border: 1px solid var(--card-border);">${model}</td>
+          <td style="padding: 12px; border: 1px solid var(--card-border);">${minG}</td>
+          <td style="padding: 12px; border: 1px solid var(--card-border);">${maxM}</td>
+        `;
+        minmaxBody.appendChild(minRow);
+      }
+
+      // Macro-average AUROC in the legend
+      let sumAuc = 0;
+      let countAuc = 0;
+      for (const m of models) {
+        if (data[m].auc !== undefined) {
+          sumAuc += data[m].auc;
+          countAuc++;
+        }
+      }
+      if (countAuc > 0) {
+        const macroAvgAuc = sumAuc / countAuc;
+        const legItem = document.createElement('div');
+        legItem.style.marginTop = '8px';
+        legItem.style.paddingTop = '8px';
+        legItem.style.borderTop = '1px dashed #ccc';
+        legItem.style.fontWeight = 'bold';
+        legItem.style.textAlign = 'center';
+        legItem.innerHTML = `Macro-average AUROC = ${macroAvgAuc.toFixed(3)}`;
+        legend.appendChild(legItem);
+      }
+    }
+    
+    // Fetch metrics on page load if the auto view is default or when we load
+    document.addEventListener("DOMContentLoaded", function() {
+      fetchGroundingMetrics();
+    });
+
+    function automaticUrl(params = {}) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', 'automatic');
+      Object.entries(params).forEach(([key, value]) => {
+        if (value) url.searchParams.set(key, value);
+        else url.searchParams.delete(key);
+      });
+      return url.toString();
+    }
+
+    function changeTaskSet(taskSet) {
+      window.location.href = automaticUrl({ task_set: taskSet, difficulty: null });
+    }
+
+    function changeDifficulty(level) {
+      window.location.href = automaticUrl({ difficulty: level || null });
+    }
+
     function selectAllTasks() {
       document.querySelectorAll('input[name="task_ids"]').forEach(el => el.checked = true);
     }
@@ -921,6 +1436,22 @@
       const master = document.getElementById('runs-select-all');
       if (master) master.checked = total > 0 && checked === total;
     }
+
+    function toggleAutoRunColumn(column, button) {
+      const cells = document.querySelectorAll(`.metric-col-${column}`);
+      const shouldShow = cells.length > 0 && cells[0].classList.contains('metric-col-hidden');
+      cells.forEach(cell => cell.classList.toggle('metric-col-hidden', !shouldShow));
+      if (button) {
+        button.classList.toggle('active', shouldShow);
+        button.setAttribute('aria-pressed', shouldShow ? 'true' : 'false');
+        const labels = {
+          runmeta: 'Judge / Target',
+          refmeta: 'Ref Steps / Difficulty',
+        };
+        const label = labels[column] || column;
+        button.textContent = `${shouldShow ? 'Hide' : 'Show'} ${label}`;
+      }
+    }
     
     function switchMainTab(tab) {
       const tabs = {
@@ -945,11 +1476,49 @@
       switchMainTab('starred');
     }
 
+    (function initTargetCaptureToggle() {
+      const STORAGE_KEY = 'pageguide_eval_region_capture';
+      const hidden = document.getElementById('region_capture_mode');
+      const buttons = Array.from(document.querySelectorAll('.target-cap-btn'));
+      if (!hidden || !buttons.length) return;
+
+      function setMode(mode) {
+        const normalized = mode === 'aligned' ? 'aligned' : 'legacy';
+        hidden.value = normalized;
+        buttons.forEach(btn => {
+          const active = btn.dataset.mode === normalized;
+          btn.classList.toggle('active', active);
+          btn.style.background = active ? 'var(--accent)' : 'transparent';
+          btn.style.color = active ? '#fff' : 'var(--text-muted)';
+        });
+        try { localStorage.setItem(STORAGE_KEY, normalized); } catch (e) {}
+      }
+
+      const saved = (() => {
+        try { return localStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
+      })();
+      setMode(saved || hidden.value || 'legacy');
+      buttons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+    })();
+
     const trajectoriesData = {{ chart_trajectories | tojson }};
-    
+
+    function llmProgressOf(step) {
+      if (step.progress === undefined || step.progress === null) return null;
+      const n = Number(step.progress);
+      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+    }
+
+    function subgoalProgressOf(step) {
+      if (step.subgoal_progress === undefined || step.subgoal_progress === null) return null;
+      const n = Number(step.subgoal_progress);
+      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+    }
+
     let activeConfLines = {
       full: true,
       progress: true,
+      subgoalProgress: true,
       loop: true,
       grounding: true
     };
@@ -1010,35 +1579,46 @@
       for (let i = 0; i < maxStepIdx; i++) {
         let fullSum = 0, fullCount = 0;
         let progSum = 0, progCount = 0;
+        let subgoalSum = 0, subgoalCount = 0;
         let loopSum = 0, loopCount = 0;
         let groundSum = 0, groundCount = 0;
-        
+
         filteredTrajs.forEach(t => {
           if (!t.steps || !t.steps[i]) return;
           const step = t.steps[i];
-          
+
           const actionType = step.action ? step.action.split('(')[0] : 'unknown';
           if (['scroll_down', 'scroll_up', 'scroll'].includes(actionType)) {
              return; // Omit scroll steps
           }
-          
-          const c = (step.confidence !== undefined && step.confidence !== null) ? step.confidence : 0;
-          const g = (step.grounded !== undefined && step.grounded !== null) ? step.grounded : 1;
-          const p = (step.progress !== undefined && step.progress !== null) ? step.progress : 1;
-          const l = (step.loop !== undefined && step.loop !== null) ? step.loop : 0; // Notice L=0 means no loop penalty
-          
-          // Formula: C_t = clip(G * (1 - 0.5 * L), 0, 1) -> If confSource is No-LLM, maybe we just use the raw metrics?
-          // Let's compute mean of the raw metrics
-          fullSum += Math.max(0, Math.min(1, g * (1 - 0.5 * l))); fullCount++;
-          progSum += p; progCount++;
-          loopSum += l; loopCount++;
-          groundSum += g; groundCount++;
+
+          const g = step.rule_grounding;
+          if (g === undefined || g === null) {
+            return; // done/scroll and other non-grounding steps
+          }
+          const l = (step.computed_loop_updated !== undefined && step.computed_loop_updated !== null)
+            ? step.computed_loop_updated
+            : 0;
+          const fullVal = step.mech_confidence;
+          if (fullVal !== undefined && fullVal !== null) {
+            fullSum += fullVal;
+            fullCount++;
+          }
+          const pv = llmProgressOf(step);
+          if (pv !== null) { progSum += pv; progCount++; }
+          const sv = subgoalProgressOf(step);
+          if (sv !== null) { subgoalSum += sv; subgoalCount++; }
+          loopSum += l;
+          loopCount++;
+          const elemSimVal = step.element_step_similarity;
+          if (elemSimVal !== undefined && elemSimVal !== null) { groundSum += elemSimVal; groundCount++; }
         });
-        
+
         stepMeans.push({
           idx: i,
           full: fullCount > 0 ? fullSum / fullCount : null,
           progress: progCount > 0 ? progSum / progCount : null,
+          subgoalProgress: subgoalCount > 0 ? subgoalSum / subgoalCount : null,
           loop: loopCount > 0 ? loopSum / loopCount : null,
           grounding: groundCount > 0 ? groundSum / groundCount : null
         });
@@ -1052,6 +1632,7 @@
       stepMeans.forEach(sm => {
         if (activeConfLines.full && sm.full !== null) { minY = Math.min(minY, sm.full); maxY = Math.max(maxY, sm.full); }
         if (activeConfLines.progress && sm.progress !== null) { minY = Math.min(minY, sm.progress); maxY = Math.max(maxY, sm.progress); }
+        if (activeConfLines.subgoalProgress && sm.subgoalProgress !== null) { minY = Math.min(minY, sm.subgoalProgress); maxY = Math.max(maxY, sm.subgoalProgress); }
         if (activeConfLines.loop && sm.loop !== null) { minY = Math.min(minY, sm.loop); maxY = Math.max(maxY, sm.loop); }
         if (activeConfLines.grounding && sm.grounding !== null) { minY = Math.min(minY, sm.grounding); maxY = Math.max(maxY, sm.grounding); }
       });
@@ -1151,8 +1732,9 @@
       
       if (activeConfLines.full) drawLine("full", "#7857ff");
       if (activeConfLines.progress) drawLine("progress", "#ff8a3d");
+      if (activeConfLines.subgoalProgress) drawLine("subgoalProgress", "#10b981");
       if (activeConfLines.loop) drawLine("loop", "#1bbf9c");
-      if (activeConfLines.grounding) drawLine("grounding", "#ef4444");
+      if (activeConfLines.grounding) drawLine("grounding", "#0ea5e9");
     }
 
     // Handle window resize

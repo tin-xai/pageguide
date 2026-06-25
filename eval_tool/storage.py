@@ -14,6 +14,7 @@ DATA_CSV = DATA_GUIDE_DIR / "Copy of GuideTaskData - guide_task.csv"
 NO_LOGIN_DATA_CSV = DATA_GUIDE_DIR / "Copy of GuideTaskData - guide_task_no_log_in.csv"
 LOGIN_DATA_CSV = DATA_GUIDE_DIR / "Copy of GuideTaskData - guide_task-log-in.csv"
 MIND2WEB_DATA_CSV = DATA_GUIDE_DIR / "mind2web_tasks.csv"
+ONLINE_MIND2WEB_DATA_CSV = DATA_GUIDE_DIR / "online_mind2web_tasks.csv"
 RUNS_DIR = REPO_ROOT / "eval_tool" / "runs"
 
 
@@ -22,6 +23,7 @@ def task_set_options() -> list[dict[str, str]]:
         {"id": "no_login", "label": "No Login", "path": str(NO_LOGIN_DATA_CSV)},
         {"id": "login", "label": "Login", "path": str(LOGIN_DATA_CSV)},
         {"id": "mind2web", "label": "Mind2Web", "path": str(MIND2WEB_DATA_CSV)},
+        {"id": "online_mind2web", "label": "Online-Mind2Web", "path": str(ONLINE_MIND2WEB_DATA_CSV)},
     ]
 
 
@@ -29,6 +31,7 @@ def normalize_task_set(value: str | None) -> str:
     value = (value or "").strip().lower().replace("-", "_")
     if value == "login": return "login"
     if value == "mind2web": return "mind2web"
+    if value == "online_mind2web": return "online_mind2web"
     return "no_login"
 
 
@@ -40,6 +43,8 @@ def current_data_csv(task_set: str | None = None) -> Path:
         return LOGIN_DATA_CSV
     if task_set == "mind2web" and MIND2WEB_DATA_CSV.exists():
         return MIND2WEB_DATA_CSV
+    if task_set == "online_mind2web" and ONLINE_MIND2WEB_DATA_CSV.exists():
+        return ONLINE_MIND2WEB_DATA_CSV
 
     preferred = [
         DATA_CSV,

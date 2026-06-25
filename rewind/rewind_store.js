@@ -90,6 +90,8 @@
       confidenceFormula: record.confidenceFormula,
       mechConfidence: record.mechConfidence,
       mechGrounding: record.mechGrounding,
+      elementStepSimilarity: record.elementStepSimilarity,
+      element_step_similarity: record.element_step_similarity,
       mechLoop: record.mechLoop,
       confidenceSource: record.confidenceSource,
       risk: record.risk,
@@ -98,6 +100,7 @@
       cost: record.cost,
       title: record.title,
       isInitial: record.isInitial,
+      g_goal_relevance_score: record.g_goal_relevance_score,
       // Verification flag: does this step have any screenshot? Steps without one are "void" and
       // get pruned from the timeline / recall.
       hasShot: !!rewindResolveScreenshot(record)
@@ -106,6 +109,17 @@
 
   function rewindResolveScreenshot(record) {
     return record ? (record.screenshotBefore || record.screenshot || record.screenshotAfter || null) : null;
+  }
+
+  const _PLACEHOLDER_SHOT = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+  /** Target-region crop (padded at capture time). Falls back to the full before-shot. */
+  function rewindResolveRegionScreenshot(record) {
+    if (!record) return null;
+    let region = record.regionShot;
+    if (region === _PLACEHOLDER_SHOT) region = null;
+    if (region) return region;
+    return rewindResolveScreenshot(record);
   }
 
   async function _getSessions() {
@@ -358,6 +372,7 @@
     rewindGetRecord,
     rewindPatchRecord,
     rewindResolveScreenshot,
+    rewindResolveRegionScreenshot,
     rewindVerifyScreenshots,
     rewindClear,
     rewindTruncateAfter,

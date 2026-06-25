@@ -15,6 +15,13 @@
       </a>
     {% endfor %}
   </div>
+  {% if task_set == 'mind2web' %}
+  <p class="muted" style="margin-top: 8px;">
+    Mind2Web difficulty: Easy {{ mind2web_level_counts.easy }} · Medium {{ mind2web_level_counts.medium }} · Hard {{ mind2web_level_counts.hard }}
+    (≤5 / 6–12 / ≥13 reference steps).
+    <a href="{{ url_for('download_mind2web_csv', level='easy') }}">Download Easy CSV</a>
+  </p>
+  {% endif %}
 </section>
 
 <form method="post" action="{{ url_for('create_eval_run') }}" class="card">
@@ -22,6 +29,17 @@
   <div class="card-head">
     <h2>Select Tasks</h2>
     <div class="actions">
+      {% if task_set == 'mind2web' %}
+      <label class="secondary" style="display: inline-flex; align-items: center; gap: 8px; margin: 0;">
+        Difficulty
+        <select id="difficulty-filter" onchange="changeMind2webDifficulty(this.value)" style="padding: 6px 10px; border-radius: 6px;">
+          <option value="" {% if not difficulty %}selected{% endif %}>All levels</option>
+          <option value="easy" {% if difficulty == 'easy' %}selected{% endif %}>Easy ({{ mind2web_level_counts.easy }})</option>
+          <option value="medium" {% if difficulty == 'medium' %}selected{% endif %}>Medium ({{ mind2web_level_counts.medium }})</option>
+          <option value="hard" {% if difficulty == 'hard' %}selected{% endif %}>Hard ({{ mind2web_level_counts.hard }})</option>
+        </select>
+      </label>
+      {% endif %}
       <button type="button" class="secondary" id="select-last-two">Select Last 2</button>
       <button type="button" class="secondary" id="check-all-tasks">Check All Tasks</button>
       <button type="submit">Start Evaluation</button>
@@ -49,16 +67,40 @@
         {% endfor %}
       </select>
     </label>
-    <span class="muted">Default is 15. Increase it for longer tasks; lower it to catch loops sooner.</span>
+    <label>
+      Judge method
+      <select name="judge_method">
+        {% for option in judge_method_options %}
+          <option value="{{ option.id }}" {% if option.id == default_judge_method %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if task_set == 'no_login' %}
+    <label style="display: inline-flex; align-items: center; gap: 8px;">
+      <input type="checkbox" name="ground_truth_mode" value="1">
+      Inject reference ground-truth steps (calibrates progress)
+    </label>
+    {% endif %}
+    <span class="muted">WebJudge scores the whole trajectory (Online-Mind2Web pipeline). Final screenshot judges only the last frame.</span>
+    <span class="muted">Default step cap is 15. Increase it for longer tasks; lower it to catch loops sooner.</span>
+  </div>
+  <div class="eval-settings target-capture-settings">
+    <span class="muted" style="align-self: center; font-weight: 600;">Target capture</span>
+    <div class="target-capture-toggle" role="group" aria-label="Target capture mode">
+      <button type="button" class="target-cap-btn" data-mode="legacy">Legacy target captured</button>
+      <button type="button" class="target-cap-btn" data-mode="aligned">New Target Captured</button>
+    </div>
+    <input type="hidden" name="region_capture_mode" id="region_capture_mode" value="{{ default_region_capture_mode }}">
+    <span class="muted">Legacy crops the before-shot. New scrolls the target into view and crops a fresh screenshot.</span>
   </div>
   <div class="task-grid">
     {% for task in tasks %}
       <label class="task-option">
         <input type="checkbox" name="task_ids" value="{{ task.task_id }}" {% if task.task_id in selected %}checked{% endif %}>
         <span>
-          <strong>{{ task.name }}</strong>
+          <strong>{{ task_display_name(task) }}</strong>
           <small>{{ task.task }}</small>
-          <em>{% if task.need_login %}Login: {{ task.need_login }} · {% endif %}{{ task.level }} · {{ task.website_url }}</em>
+          <em>{% if task.need_login %}Login: {{ task.need_login }} · {% endif %}{% if task_set == 'mind2web' %}{{ task_difficulty(task) }} · {% endif %}{{ task.website_url }}</em>
         </span>
       </label>
     {% endfor %}
@@ -66,6 +108,12 @@
 </form>
 
 <script>
+function changeMind2webDifficulty(level) {
+  const url = new URL(window.location.href);
+  if (level) url.searchParams.set('difficulty', level);
+  else url.searchParams.delete('difficulty');
+  window.location.href = url.toString();
+}
 const taskBoxes = Array.from(document.querySelectorAll('input[name="task_ids"]'));
 document.getElementById('check-all-tasks')?.addEventListener('click', () => {
   taskBoxes.forEach(box => { box.checked = true; });
@@ -73,6 +121,27 @@ document.getElementById('check-all-tasks')?.addEventListener('click', () => {
 document.getElementById('select-last-two')?.addEventListener('click', () => {
   taskBoxes.forEach((box, index) => { box.checked = index >= taskBoxes.length - 2; });
 });
+
+(function initTargetCaptureToggle() {
+  const STORAGE_KEY = 'pageguide_eval_region_capture';
+  const hidden = document.getElementById('region_capture_mode');
+  const buttons = Array.from(document.querySelectorAll('.target-cap-btn'));
+  if (!hidden || !buttons.length) return;
+
+  function setMode(mode) {
+    const normalized = mode === 'aligned' ? 'aligned' : 'legacy';
+    hidden.value = normalized;
+    buttons.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === normalized));
+    try { localStorage.setItem(STORAGE_KEY, normalized); } catch (e) {}
+  }
+
+  const saved = (() => {
+    try { return localStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
+  })();
+  setMode(saved || hidden.value || 'legacy');
+
+  buttons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+})();
 </script>
 
 <section class="card">

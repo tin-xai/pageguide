@@ -165,6 +165,7 @@
     if (hasMech) {
       const mechActive = rec.confidenceSource === 'mechanical';
       parts.push(`<span class="pill">Mech G: ${fmt(rec.mechGrounding)}</span>`);
+      parts.push(`<span class="pill">Elem-step cos: ${fmt(rec.elementStepSimilarity ?? rec.element_step_similarity)}</span>`);
       parts.push(`<span class="pill">Mech L: ${fmt(rec.mechLoop)}</span>`);
       parts.push(`<span class="pill ${mechActive ? 'ok' : ''}">No-LLM: ${pct(rec.mechConfidence)}</span>`);
     }
@@ -208,7 +209,7 @@
         <div class="task-grid">
           <div class="task-row"><span class="task-key">Target</span><span class="task-value">${esc(rec.instruction || 'Initial state')}</span></div>
           ${targetText ? `<div class="task-row"><span class="task-key">Element</span><span class="task-value">${esc(targetText)}</span></div>` : ''}
-          ${rec.action ? `<div class="task-row"><span class="task-key">Action</span><span class="task-value">${esc(rec.action)}${rec.typeText ? ' = "' + esc(rec.typeText) + '"' : ''}</span></div>` : ''}
+          ${rec.action ? `<div class="task-row"><span class="task-key">Action</span><span class="task-value">${esc(rec.action === 'clear_text' ? 'Clear text' : rec.action)}${rec.typeText ? ' = "' + esc(rec.typeText) + '"' : ''}</span></div>` : ''}
           ${url ? `<div class="task-row"><span class="task-key">Link</span><span class="task-value">${url}</span></div>` : ''}
         </div>
         ${meta ? `<div class="meta">${meta}</div>` : ''}
@@ -500,6 +501,9 @@
         target: rec.target || null,
         confidence: rec.confidence ?? null, grounded: rec.grounded ?? null, loop: rec.loop ?? null, progress: rec.progress ?? null,
         confidenceFormula: rec.confidenceFormula || null, confidenceFull, confidenceNoProgress, confidenceNoLoop,
+        mechConfidence: rec.mechConfidence ?? null, mechGrounding: rec.mechGrounding ?? null,
+        elementStepSimilarity: rec.elementStepSimilarity ?? rec.element_step_similarity ?? null,
+        mechLoop: rec.mechLoop ?? null,
         agentResponse: rec.rawLlmJson || '', systemPrompt: rec.systemPrompt || '', userPrompt: rec.userPrompt || '',
         durationMs: rec.durationMs ?? null, timestamp: rec.timestamp ?? null
       });

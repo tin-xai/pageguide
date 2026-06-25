@@ -14,6 +14,8 @@
       <div class="model-strip">
         <span>Task model: <strong>{{ run.task_model or "google/gemini-2.5-flash-lite" }}</strong></span>
         <span>Judge model: <strong>{{ run.judge_model or "google/gemini-2.5-flash-lite" }}</strong></span>
+        <span>Judge method: <strong>{{ run.judge_method or "webjudge" }}</strong></span>
+        <span>Target capture: <strong>{{ region_capture_mode_label(run.region_capture_mode) }}</strong></span>
       </div>
     </div>
     <div class="actions">
@@ -23,6 +25,11 @@
         </form>
         <span class="status live">Running</span>
       {% else %}
+        {% if run.status == "completed" %}
+          <form method="post" action="{{ url_for('rerun_subgoal_progress', run_id=run.run_id) }}">
+            <button type="submit" class="secondary">Rerun Subgoal Progress</button>
+          </form>
+        {% endif %}
         <form method="post" action="{{ url_for('judge_phase3', run_id=run.run_id) }}">
           <input type="hidden" name="force" value="1">
           <button type="submit" class="secondary">Rejudge Progress With GT</button>
@@ -42,6 +49,23 @@
   {% endif %}
   {% if run.error %}<p class="alert">{{ run.error }}</p>{% endif %}
   {% if run.warning %}<p class="alert">{{ run.warning }}</p>{% endif %}
+  {% if subgoal_rerun_summary %}
+    <p class="alert">Subgoal Progress rerun complete: {{ subgoal_rerun_summary.tasks }} task(s), {{ subgoal_rerun_summary.steps }} step(s) rescored{% if subgoal_rerun_summary.skipped != "0" %}; {{ subgoal_rerun_summary.skipped }} task(s) skipped{% endif %}.</p>
+  {% endif %}
+  <div class="threshold-form-box" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+    <form method="post" action="{{ url_for('update_run_thresholds', run_id=run.run_id) }}" style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end;">
+      <input type="hidden" name="next" value="{{ url_for('run_detail', run_id=run.run_id) }}">
+      <div>
+        <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Grounding High Threshold</label>
+        <input type="number" step="0.01" name="grounding_high_threshold" value="{{ run.grounding_high_threshold if run.grounding_high_threshold is not none else '0.84' }}" style="width: 100px; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text);">
+      </div>
+      <div>
+        <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px;">Grounding Medium Threshold</label>
+        <input type="number" step="0.01" name="grounding_medium_threshold" value="{{ run.grounding_medium_threshold if run.grounding_medium_threshold is not none else '0.78' }}" style="width: 100px; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text);">
+      </div>
+      <button type="submit" class="secondary" style="margin-bottom: 0;">Apply to All Tasks</button>
+    </form>
+  </div>
   {% if running %}<meta http-equiv="refresh" content="3">{% endif %}
 </section>
 
@@ -73,15 +97,17 @@
   <div class="stat ok"><strong>{{ summary.success }}</strong><span>Success</span></div>
   <div class="stat bad"><strong>{{ summary.failed }}</strong><span>Fail</span></div>
   <div class="stat"><strong>{{ "%.1f"|format(summary.success_rate) }}%</strong><span>Success Rate</span></div>
-  <div class="stat warn"><strong>{{ missing_steps.missing_any_step_tasks }}</strong><span>Missing Any Step</span></div>
-  <div class="stat warn"><strong>{{ missing_steps.missing_step_2_tasks }}</strong><span>Missing Step 2</span></div>
 </section>
 
 <section class="card">
   <details open>
     <summary class="section-summary">Mean by Step Across Tasks</summary>
     <p class="muted">Aggregate scores are averaged by step number across tasks in this run. Step N only includes tasks that recorded a Step N.</p>
+    {% include "_metric_legend.html" %}
     <canvas id="aggregate-chart" height="110"></canvas>
+    <h3>Progress Signals</h3>
+    <p class="muted">LLM Progress is the legacy self-reported score. Subgoal Progress is deterministic from the verified-subgoal count.</p>
+    <canvas id="progress-chart" height="110"></canvas>
   </details>
 </section>
 
@@ -112,8 +138,8 @@
     <div>
       <p class="eyebrow">Confidence calibration</p>
       <h2>Confidence Score &amp; Calibration</h2>
-      <p class="muted">New-spec score (rule-based grounding + embedding progress, &lambda;<sub>L</sub>=0.5)
-        vs the current LLM-based score. Accuracy labels use the human override when set
+      <p class="muted">Rule-based confidence variants and legacy LLM-based confidence.
+        Accuracy labels use the human override when set
         (per task), otherwise the LLM judge.</p>
     </div>
     <div class="actions">
@@ -121,19 +147,19 @@
     </div>
   </div>
 
-  <h3>Plot A — Components of the new-spec score</h3>
+  <h3>Plot A — Components of rule-based confidence</h3>
   <p class="muted">Mean confidence by step across all tasks: Full vs No-Loop vs No-Progress.
     Overlapping lines mean that component adds little signal.</p>
   <canvas id="plotA" data-filename="plotA_spec_variants.png" height="110"></canvas>
 
-  <h3>Plot D — New-spec vs LLM-based (Full)</h3>
-  <p class="muted">Mean Full confidence by step: new spec vs current LLM-based score.
-    Diverging lines mean the new spec changes the score meaningfully.</p>
+  <h3>Plot D — Rule-based vs LLM-based (Full)</h3>
+  <p class="muted">Mean Full confidence by step: rule-based vs current LLM-based score.
+    Diverging lines mean the rule-based score changes the score meaningfully.</p>
   <canvas id="plotD" data-filename="plotD_full_llm_vs_spec.png" height="110"></canvas>
 
-  <h3>Plot C — ECE of new-spec Full
+  <h3>Plot C — ECE of rule-based Full
     <span class="chip">ECE {{ "%.3f"|format(ece.spec_full.ece) if ece.spec_full.ece is not none else "—" }}</span></h3>
-  <p class="muted">Reliability of the new-spec Full score vs task accuracy
+  <p class="muted">Reliability of the rule-based Full score vs task accuracy
     ({{ ece.spec_full.n }} tasks; {{ ece.spec_full.excluded_bot_detection }} bot-detection failures excluded).</p>
   <canvas id="plotC" data-filename="plotC_ece_spec_full.png" height="110"></canvas>
 
@@ -223,10 +249,6 @@
           <span class="task-badges">
             {% if result.task.level %}<span class="chip">{{ result.task.level }}</span>{% endif %}
             {% if result.diagnostics and result.diagnostics.task_model %}<span class="chip">Task model: {{ result.diagnostics.task_model }}</span>{% endif %}
-            {% set missing_row = missing_steps.by_task.get(result.task_id) %}
-            {% if missing_row and missing_row.missing %}
-              <span class="chip warn" title="{{ missing_row.missing_label }}">{{ missing_row.missing_label }}</span>
-            {% endif %}
             <span class="chip">{{ result.terminal_reason }}</span>
             <span class="judge {% if is_success %}ok{% else %}bad{% endif %}">
               {% if is_success %}Success{% else %}{{ error_label }}{% endif %}
@@ -236,6 +258,9 @@
         </summary>
 
         <div class="task-detail">
+          {% if result.spec_goal_text or result.predictedGoalState %}
+          <p class="muted"><strong>Predicted final state:</strong> {{ result.spec_goal_text or result.predictedGoalState }}</p>
+          {% endif %}
           <p>{{ result.judge.reason }}</p>
           <div class="actions">
             <a class="button-link" href="{{ url_for('task_detail', run_id=run.run_id, task_id=result.task_id) }}">Open Full Inspector</a>
@@ -267,8 +292,12 @@
                   <th>Action</th>
                   <th>Instruction</th>
                   <th>G</th>
+                  <th>Cosine Sim</th>
+                  <th>Spec G</th>
+                  <th>Spec Full</th>
                   <th>Loop</th>
-                  <th>Progress</th>
+                  <th>LLM Progress</th>
+                  <th>Subgoal Progress</th>
                   <th>Full</th>
                   <th>No-progress</th>
                   <th>No-loop</th>
@@ -276,19 +305,34 @@
               </thead>
               <tbody>
                 {% for step in non_initial_steps %}
+                  {% set step_high = result.grounding_high_threshold or run.grounding_high_threshold %}
+                  {% set step_medium = result.grounding_medium_threshold or run.grounding_medium_threshold %}
                   <tr>
                     <td>{{ step.step }}</td>
                     <td><span class="mini-pill">{{ step.action or "state" }}</span></td>
                     <td>{{ step.instruction or "Captured state" }}</td>
                     <td>{{ fmt(step.grounded) }}</td>
+                    <td>{{ fmt(step.element_step_similarity) }}</td>
+                    <td>{{ fmt(spec_grounding(step, high_threshold=step_high, medium_threshold=step_medium)) }}</td>
+                    <td>{{ fmt(spec_confidence(step, formula="spec_full", high_threshold=step_high, medium_threshold=step_medium)) }}</td>
                     <td>{{ fmt(step.loop) }}</td>
                     <td>{{ fmt(step.progress) }}</td>
+                    <td>
+                      {% if step.subgoal_progress is defined and step.subgoal_progress is not none %}
+                        {{ fmt(step.subgoal_progress) }}
+                        {% if step.subgoal_verified is defined and step.subgoal_verified is not none %}
+                          <small class="muted">{{ step.subgoal_verified }}/{{ (result.subgoal_rubric.subgoals|length) if result.subgoal_rubric else "?" }} verified</small>
+                        {% endif %}
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
                     <td><span class="score">{{ pct(step.confidence_versions.full) }}</span></td>
                     <td><span class="score">{{ pct(step.confidence_versions.reduced) }}</span></td>
                     <td><span class="score">{{ pct(step.confidence_versions.noloop) }}</span></td>
                   </tr>
                 {% else %}
-                  <tr><td colspan="9" class="empty-cell">No recorded action steps.</td></tr>
+                  <tr><td colspan="13" class="empty-cell">No recorded action steps.</td></tr>
                 {% endfor %}
               </tbody>
             </table>
@@ -358,12 +402,24 @@
 const payload = {{ payload|tojson }};
 const colors = { full: '#7c3aed', reduced: '#0891b2', noloop: '#f59e0b', full_ground_truth: '#22c55e' };
 const labels = { full: 'Full', reduced: 'No-progress', noloop: 'No-loop', full_ground_truth: 'Full + GT' };
+const progressColors = { llm_progress: '#ff8a3d', subgoal_progress: '#10b981' };
+const progressLabels = { llm_progress: 'LLM Progress', subgoal_progress: 'Subgoal Progress' };
 function dataset(formula, rows) {
   return {
     label: labels[formula] || formula,
     data: rows.map(row => row[formula] == null ? null : Math.round(row[formula] * 100)),
     borderColor: colors[formula] || '#94a3b8',
     backgroundColor: colors[formula] || '#94a3b8',
+    tension: 0.25
+  };
+}
+function progressDataset(metric, rows) {
+  return {
+    label: progressLabels[metric] || metric,
+    data: rows.map(row => row[metric] == null ? null : Math.round(row[metric] * 100)),
+    borderColor: progressColors[metric] || '#94a3b8',
+    backgroundColor: progressColors[metric] || '#94a3b8',
+    spanGaps: true,
     tension: 0.25
   };
 }
@@ -377,6 +433,19 @@ if (document.getElementById('aggregate-chart')) {
     options: {
       responsive: true,
       scales: { y: { min: 0, max: 100, title: { display: true, text: 'Confidence %' } } }
+    }
+  });
+}
+if (document.getElementById('progress-chart')) {
+  new Chart(document.getElementById('progress-chart'), {
+    type: 'line',
+    data: {
+      labels: payload.aggregate.map(row => `Step ${row.step}`),
+      datasets: ['llm_progress', 'subgoal_progress'].map(metric => progressDataset(metric, payload.aggregate))
+    },
+    options: {
+      responsive: true,
+      scales: { y: { min: 0, max: 100, title: { display: true, text: 'Progress %' } } }
     }
   });
 }
@@ -490,7 +559,7 @@ function calRenderReliability(canvasId, data) {
 if (calAggregate) {
   calRenderLine('plotA', calAggregate, ['spec_full', 'spec_noloop', 'spec_noprogress']);
   calRenderLine('plotD', calAggregate, ['spec_full', 'full'],
-    { spec_full: 'New-spec Full', full: 'LLM-based Full' });
+    { spec_full: 'Rule-based Full', full: 'LLM-based Full' });
 }
 if (calEce) {
   calRenderReliability('plotC', calEce.spec_full);

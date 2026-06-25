@@ -975,7 +975,7 @@ function gv2DescribeRestoreAction(e) {
     case 'form':           return `${mark} Set ${e.sel}${val}`;
     case 'replay': {
       const tgt = e.sel || (e.target && e.target.text) || e.target || 'element';
-      const verb = ({ type: 'Type into', select: 'Select in', check: 'Toggle', toggle: 'Toggle' })[e.action] || 'Click';
+      const verb = ({ type: 'Type into', clear_text: 'Clear text in', select: 'Select in', check: 'Toggle', toggle: 'Toggle' })[e.action] || 'Click';
       return `${mark} ${verb} ${typeof tgt === 'string' ? tgt : JSON.stringify(tgt)}${val}`;
     }
     default:               return `${mark} ${e.kind}${val}`;
@@ -1042,6 +1042,7 @@ function gv2FriendlyRestoreAction(e) {
       const target = gv2TruncateRestoreText((e.target && e.target.text) || e.sel || e.target || 'the target');
       const action = String(e.action || 'click').toLowerCase();
       if (action === 'type') return ok ? `Filled “${target}”` : `Fill “${target}” did not apply`;
+      if (action === 'clear_text') return ok ? `Cleared “${target}”` : `Clear “${target}” did not apply`;
       if (action === 'select') return ok ? `Selected “${target}”` : `Select “${target}” did not apply`;
       if (action === 'check' || action === 'toggle') return ok ? `Toggled “${target}”` : `Toggle “${target}” did not apply`;
       if (/\b(menu|dropdown|settings|panel)\b/i.test(target)) return ok ? `Opened “${target}”` : `Open “${target}” did not apply`;
@@ -1154,7 +1155,9 @@ function gv2ComputeConfidence(parts, formula = 'full', weights) {
 //
 //   C_t = clip( G_grounding × (1 − λ_L × L_t),  0, 1 )
 //
-//   G_grounding ∈ {0, 0.7, 1.0}  rule-based from SoM resolution (no LLM)
+//   G_grounding ∈ {0, 0.1, 0.5, 1.0} from element-step cosine similarity:
+//   no valid element index → 0.0; similarity ≥ 0.8 → 1.0; ≥ 0.5 → 0.5;
+//   otherwise → 0.1. Scroll/done/initial steps are excluded (null).
 //   L_t         ∈ [0, 1]         fraction of prior target-bearing steps with the same element key
 //   λ_L                          loop penalty weight (default 0.5)
 //
@@ -1164,20 +1167,28 @@ function gv2ComputeConfidence(parts, formula = 'full', weights) {
 // ───────────────────────────────────────────────────────────────────────────
 
 const GV2_GROUNDING_LAMBDA_L = 0.5; // loop penalty weight for the mechanical formula
+const GV2_NON_GROUNDING_ACTIONS = new Set(['scroll', 'scroll_up', 'scroll_down', 'done']);
+const GV2_ELEMENT_GROUNDING_HIGH_THRESHOLD = 0.84;
+const GV2_ELEMENT_GROUNDING_MEDIUM_THRESHOLD = 0.78;
 
 /**
- * Rule-based grounding score from SoM resolution. Measures whether the LLM's chosen
- * element actually resolved on the page — not which path was ultimately clicked.
+ * Element grounding score (G_ground). Matches eval `g_grounding()` after the
+ * live step computes cosine(step instruction, target element text).
  *
- * @param {{hasTarget:boolean, indexValid:boolean, textFound:boolean}} parts
- * @returns {number|null} 1.0 (exact index resolved), 0.7 (text fallback only),
- *   0.0 (nothing resolved), or null when the step has no element target (excluded).
+ * @param {{action?:string, isInitial?:boolean, hasIndex?:boolean, elementStepSimilarity?:number|null}} parts
+ * @returns {number|null}
  */
 function gv2GroundingScore(parts) {
-  if (!parts || !parts.hasTarget) return null;
-  if (parts.indexValid) return 1.0;
-  if (parts.textFound) return 0.7;
-  return 0.0;
+  if (!parts || parts.isInitial) return null;
+  const action = String(parts.action || '').trim().toLowerCase();
+  if (GV2_NON_GROUNDING_ACTIONS.has(action)) return null;
+  if (!parts.hasIndex) return 0.0;
+  const raw = Number(parts.elementStepSimilarity);
+  if (!Number.isFinite(raw)) return 1.0; // back-compat for old callers
+  const relevance = Math.round(Math.max(0, Math.min(1, raw)) * 100) / 100;
+  if (relevance >= GV2_ELEMENT_GROUNDING_HIGH_THRESHOLD) return 1.0;
+  if (relevance >= GV2_ELEMENT_GROUNDING_MEDIUM_THRESHOLD) return 0.5;
+  return 0.1;
 }
 
 /**
@@ -1197,14 +1208,14 @@ function gv2LoopScore(priorKeys, currentKey) {
   if (prior.length === 0) return 0.0;
   if (!currentKey) return 0.0;
   const matches = prior.filter(k => k === currentKey).length;
-  return Math.min(1, matches / prior.length);
+  return Math.min(1.0, matches / 10);
 }
 
 /**
  * Combine the mechanical grounding + loop signals into a single confidence score.
  * Returns null (excluded step) when grounding is null.
  *
- * @param {{hasTarget:boolean, indexValid:boolean, textFound:boolean, priorKeys:string[], currentKey:string}} parts
+ * @param {{action?:string, hasIndex?:boolean, elementStepSimilarity?:number|null, priorKeys:string[], currentKey:string}} parts
  * @param {{lambdaL?:number}} [weights]
  * @returns {{confidence:number|null, grounding:number|null, loop:number|null}}
  */
@@ -1218,10 +1229,9 @@ function gv2ComputeMechanicalConfidence(parts, weights) {
 }
 
 /**
- * Derive the loop "action key" for a step: the first non-empty of the element text,
- * element description, description, or instruction, stripped + lowercased. Faithful
- * port of the reference `_action_key` — text-based, NOT page-scoped and NOT index-based.
- * Two steps loop when this string matches. Returns '' when none (excluded by loop score).
+ * Derive the loop "action key" for a step: normalized action type plus the first
+ * non-empty element/action text. When no action is supplied, preserves the older
+ * text-only key for compatibility with tests and historical callers.
  *
  * @param {{element?:{text?:string, desc?:string}, description?:string, instruction?:string}} step
  * @returns {string} normalized action key, or '' when none
@@ -1230,8 +1240,12 @@ function gv2ElementKey(step) {
   if (!step) return '';
   const el = step.element || {};
   const candidates = [el.text, el.desc, step.description, step.instruction];
+  const action = step.action ? String(step.action).trim().toLowerCase().replace(/[\s-]+/g, '_') : '';
   for (const v of candidates) {
-    if (v && String(v).trim()) return String(v).trim().toLowerCase();
+    if (v && String(v).trim()) {
+      const text = String(v).trim().toLowerCase();
+      return action ? `${action}: ${text}` : text;
+    }
   }
   return '';
 }
@@ -1268,6 +1282,68 @@ function gv2CropRect(rect, dpr, imgW, imgH, pad) {
   return { sx, sy, sw, sh };
 }
 
+/**
+ * Pick the DOM node whose bounds should define the target-region crop.
+ * Prefer the visible highlight span/element over the full indexed container.
+ */
+function gv2ResolveRegionElement(rootDoc) {
+  const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
+  if (!doc) return null;
+  const highlights = (typeof window !== 'undefined' && window._pageguideHighlights) || [];
+  for (const node of highlights) {
+    if (node && doc.contains(node)) return node;
+  }
+  const g = typeof window !== 'undefined' ? window._guidev2 : null;
+  if (g?.currentTargetEl && doc.contains(g.currentTargetEl)) return g.currentTargetEl;
+  return doc.querySelector('[data-pageguide-styled]');
+}
+
+/**
+ * Element whose bounds should define the target-region crop for storage/inspector.
+ * Prefer the resolved click target (currentTargetEl) so the crop matches the action.
+ */
+function gv2ResolveRegionTarget(rootDoc) {
+  const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
+  if (!doc) return null;
+  const g = typeof window !== 'undefined' ? window._guidev2 : null;
+  if (g?.currentTargetEl && doc.contains(g.currentTargetEl)) return g.currentTargetEl;
+  return gv2ResolveRegionElement(doc);
+}
+
+/**
+ * Prompt for predicting the final goal STATE (used for goal-relevance embedding).
+ * Mirrors eval_tool/step_confidence.py SpecProgressClient.predict_goal.
+ */
+function gv2BuildPredictFinalGoalPrompt(task, url) {
+  const taskText = task != null ? String(task).trim() : '';
+  const urlText = url != null ? String(url).trim() : '';
+  return (
+    'Predict the final goal STATE for this browser task in one concise sentence '
+    + 'describing what the page should show when the task is complete.\n\n'
+    + `Task: ${taskText}\n`
+    + `Website: ${urlText}\n\n`
+    + 'Return only the sentence, no preamble.'
+  );
+}
+
+/** Cosine similarity in [0, 1] when vectors are non-zero (raw cosine may be negative). */
+function gv2CosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || a.length !== b.length) return null;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = Number(a[i]) || 0;
+    const y = Number(b[i]) || 0;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  if (na === 0 || nb === 0) return null;
+  const sim = dot / (Math.sqrt(na) * Math.sqrt(nb));
+  return Math.max(0, Math.min(1, sim));
+}
+
 if (typeof window !== 'undefined') {
   window.gv2ConfidenceTier = gv2ConfidenceTier;
   window.gv2ComputeConfidence = gv2ComputeConfidence;
@@ -1276,6 +1352,10 @@ if (typeof window !== 'undefined') {
   window.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
   window.gv2ElementKey = gv2ElementKey;
   window.gv2CropRect = gv2CropRect;
+  window.gv2ResolveRegionElement = gv2ResolveRegionElement;
+  window.gv2ResolveRegionTarget = gv2ResolveRegionTarget;
+  window.gv2BuildPredictFinalGoalPrompt = gv2BuildPredictFinalGoalPrompt;
+  window.gv2CosineSimilarity = gv2CosineSimilarity;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2ConfidenceTier = gv2ConfidenceTier;
@@ -1288,6 +1368,10 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.GV2_LAMBDA_P = GV2_LAMBDA_P;
   module.exports.GV2_GROUNDING_LAMBDA_L = GV2_GROUNDING_LAMBDA_L;
   module.exports.gv2CropRect = gv2CropRect;
+  module.exports.gv2ResolveRegionElement = gv2ResolveRegionElement;
+  module.exports.gv2ResolveRegionTarget = gv2ResolveRegionTarget;
+  module.exports.gv2BuildPredictFinalGoalPrompt = gv2BuildPredictFinalGoalPrompt;
+  module.exports.gv2CosineSimilarity = gv2CosineSimilarity;
 }
 
 /**

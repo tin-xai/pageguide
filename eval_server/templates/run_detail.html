@@ -159,6 +159,22 @@
       border-color: rgba(124, 58, 237, 0.35);
     }
     .metric-col-hidden { display: none; }
+    .predicted-cell-text {
+      color: var(--text-muted);
+      font-size: 12px;
+      max-width: 280px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .predicted-cell-text.is-expanded {
+      max-width: 420px;
+      white-space: normal;
+      word-break: break-word;
+      overflow: visible;
+      text-overflow: unset;
+    }
     table { width: 100%; border-collapse: collapse; text-align: left; }
     th { padding: 16px 24px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); border-bottom: 1px solid var(--card-border); }
     td { padding: 20px 24px; border-bottom: 1px solid var(--card-border); vertical-align: middle; font-size: 14px; }
@@ -291,6 +307,15 @@
         <div>
           <h2 style="font-family: monospace; color: var(--accent); margin-bottom: 8px; font-size: 24px;">{{ run.run_id }}</h2>
           <p style="color: var(--text-muted);">Dataset: {{ run.task_set }}</p>
+          <p style="color: var(--text-muted); margin-top: 4px;">Target capture: <strong style="color: var(--text);">{{ region_capture_mode_label(run.region_capture_mode) }}</strong></p>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+            <span class="badge neutral" style="text-transform: none; letter-spacing: 0; max-width: 100%; white-space: normal;">
+              Task model: <code style="font-family: monospace; color: var(--text); overflow-wrap: anywhere;">{{ run.task_model or 'Unknown' }}</code>
+            </span>
+            <span class="badge neutral" style="text-transform: none; letter-spacing: 0; max-width: 100%; white-space: normal;">
+              Judge model: <code style="font-family: monospace; color: var(--text); overflow-wrap: anywhere;">{{ run.judge_model or 'Unknown' }}</code>
+            </span>
+          </div>
           {% if timing.duration %}
           <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;">
             {% if timing.started_fmt %}
@@ -311,20 +336,33 @@
               <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Duration</span><strong style="color: var(--accent);">{{ timing.duration }}</strong></span>
             </div>
             {% endif %}
-            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 10px;">
-              <span style="font-size: 16px;">⚠️</span>
-              <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Missing Any Step</span><strong style="color: var(--warning);">{{ stats.missing_any_step_tasks }}</strong></span>
-            </div>
-            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 10px;">
-              <span style="font-size: 16px;">2</span>
-              <span><span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block;">Missing Step 2</span><strong style="color: var(--warning);">{{ stats.missing_step_2_tasks }}</strong></span>
-            </div>
           </div>
           {% endif %}
         </div>
         <div>
           {% if run.status == 'completed' %}
             <span class="badge success">Completed</span>
+            <form action="/runs/{{ run.run_id }}/subgoal-progress/rerun" method="post" style="margin-top: 10px; display: block;">
+              <button type="submit" class="btn" style="background: rgba(16, 185, 129, 0.12); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3); box-shadow: none;">Rerun Subgoal Progress for Run</button>
+            </form>
+            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+              <form action="/runs/{{ run.run_id }}/goal-relevance/rerun" method="post" style="margin: 0;">
+                <button type="submit" class="btn" style="background: rgba(6, 182, 212, 0.12); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.3); box-shadow: none;" title="Ask the LLM to predict the final state, then recompute cosine similarity between that final state and each step instruction.">Rerun Goal Relevance</button>
+              </form>
+              <form action="/runs/{{ run.run_id }}/grounding-similarity/rerun" method="post" style="margin: 0;">
+                <button type="submit" class="btn" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); box-shadow: none;" title="Recompute cosine similarity between each step instruction and target element text.">Rerun Grounding Similarity</button>
+              </form>
+            </div>
+            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+              <form action="/runs/{{ run.run_id }}/progress-selfreport/rerun" method="post" style="margin: 0;">
+                <input type="hidden" name="which" value="gt">
+                <button type="submit" class="btn" style="background: rgba(234, 179, 8, 0.12); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.3); box-shadow: none;" title="Self-reported progress WITH reference ground truth (No-Login tasks only). Uses the run's task model.">Rerun GT Progress</button>
+              </form>
+              <form action="/runs/{{ run.run_id }}/progress-selfreport/rerun" method="post" style="margin: 0;">
+                <input type="hidden" name="which" value="nogt">
+                <button type="submit" class="btn" style="background: rgba(236, 72, 153, 0.12); color: #ec4899; border: 1px solid rgba(236, 72, 153, 0.3); box-shadow: none;" title="Self-reported progress WITHOUT reference ground truth. Uses the run's task model.">Rerun No-GT Progress</button>
+              </form>
+            </div>
           {% elif run.status == 'running' %}
             <span class="badge pending">Running ({{ run.progress }})</span>
             <form action="/runs/{{ run.run_id }}/stop" method="post" style="margin-top: 10px; display: inline-block;">
@@ -338,6 +376,69 @@
       {% if run.error %}
         <div style="padding: 16px; background: rgba(239, 68, 68, 0.1); border-left: 4px solid var(--failure); border-radius: 4px; margin-top: 16px; color: #fca5a5;">
           <strong>Error:</strong> {{ run.error }}
+        </div>
+      {% endif %}
+      {% if subgoal_rerun_summary %}
+        <div style="padding: 16px; background: rgba(16, 185, 129, 0.1); border-left: 4px solid var(--success); border-radius: 4px; margin-top: 16px; color: var(--text);">
+          <strong>Subgoal Progress rerun complete:</strong>
+          {{ subgoal_rerun_summary.tasks }} task(s), {{ subgoal_rerun_summary.steps }} step(s) rescored{% if subgoal_rerun_summary.skipped != "0" %}; {{ subgoal_rerun_summary.skipped }} task(s) skipped{% endif %}.
+        </div>
+      {% endif %}
+      {% if goalrel_rerun_summary %}
+        <div style="padding: 16px; background: rgba(6, 182, 212, 0.1); border-left: 4px solid #06b6d4; border-radius: 4px; margin-top: 16px; color: var(--text);">
+          <strong>Goal relevance rerun complete:</strong>
+          {{ goalrel_rerun_summary.tasks }} task(s), {{ goalrel_rerun_summary.steps }} step(s) rescored{% if goalrel_rerun_summary.skipped != "0" %}; {{ goalrel_rerun_summary.skipped }} task(s) skipped{% endif %}{% if goalrel_rerun_summary.reason %}. {{ goalrel_rerun_summary.reason }}{% else %}.{% endif %}
+        </div>
+      {% endif %}
+      {% if grounding_rerun_summary %}
+        <div style="padding: 16px; background: rgba(239, 68, 68, 0.1); border-left: 4px solid #ef4444; border-radius: 4px; margin-top: 16px; color: var(--text);">
+          <strong>Grounding similarity rerun complete:</strong>
+          {{ grounding_rerun_summary.tasks }} task(s), {{ grounding_rerun_summary.steps }} step(s) rescored{% if grounding_rerun_summary.skipped != "0" %}; {{ grounding_rerun_summary.skipped }} task(s) skipped{% endif %}{% if grounding_rerun_summary.reason %}. {{ grounding_rerun_summary.reason }}{% else %}.{% endif %}
+        </div>
+      {% endif %}
+      {% if selfreport_rerun_summary %}
+        <div style="padding: 16px; background: rgba(234, 179, 8, 0.1); border-left: 4px solid #eab308; border-radius: 4px; margin-top: 16px; color: var(--text);">
+          <strong>{{ {'gt':'GT','nogt':'No-GT','both':'GT / No-GT'}[selfreport_rerun_summary.which] }} progress rerun complete</strong>
+          (model: <code>{{ selfreport_rerun_summary.model or 'default' }}</code>):
+          {{ selfreport_rerun_summary.tasks_updated }} task(s) scored ({{ selfreport_rerun_summary.steps_scored }} step(s)),
+          {{ selfreport_rerun_summary.tasks_skipped }} skipped.
+          {% set skipped = selfreport_rerun_summary.reports | selectattr('status', 'equalto', 'skipped') | list %}
+          {% if skipped %}
+            <table style="margin-top: 10px; width: 100%; border-collapse: collapse; font-size: 13px;">
+              <thead><tr><th style="text-align:left; padding:4px 8px; border-bottom:1px solid var(--card-border);">Skipped task</th><th style="text-align:left; padding:4px 8px; border-bottom:1px solid var(--card-border);">Why</th></tr></thead>
+              <tbody>
+                {% for r in skipped %}
+                  <tr><td style="padding:4px 8px; border-bottom:1px solid var(--card-border);">{{ r.name }}</td><td style="padding:4px 8px; border-bottom:1px solid var(--card-border); color: var(--text-muted);">{{ r.reason }}</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+          {% set scored = selfreport_rerun_summary.reports | selectattr('status', 'equalto', 'scored') | list %}
+          {% if scored %}
+          <details style="margin-top: 12px;">
+            <summary style="cursor: pointer; font-weight: 700;">Agent responses, prompts, and scores</summary>
+            <div style="margin-top: 10px; display: grid; gap: 10px;">
+              {% for r in scored %}
+                {% for d in r.details or [] %}
+                <details style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px;">
+                  <summary style="cursor: pointer; font-weight: 700;">
+                    {{ r.name }} · Step {{ d.step }} · {{ d.variant }} score: {{ d.score }}
+                  </summary>
+                  <div style="margin-top: 8px; color: var(--text-muted); font-size: 12px;">{{ d.reason or 'No reason returned.' }}</div>
+                  <div style="margin-top: 10px; font-size: 12px;">
+                    <strong>Prompt</strong>
+                    <pre style="white-space: pre-wrap; overflow: auto; max-height: 240px; background: var(--chart-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; margin-top: 4px;">{{ d.prompt or '(none)' }}</pre>
+                  </div>
+                  <div style="margin-top: 10px; font-size: 12px;">
+                    <strong>Agent response</strong>
+                    <pre style="white-space: pre-wrap; overflow: auto; max-height: 180px; background: var(--chart-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; margin-top: 4px;">{{ d.raw_response or '(none)' }}</pre>
+                  </div>
+                </details>
+                {% endfor %}
+              {% endfor %}
+            </div>
+          </details>
+          {% endif %}
         </div>
       {% endif %}
     </div>
@@ -359,20 +460,131 @@
         <div class="stat-value">{{ stats.failed }}</div>
         <div class="stat-sub">marked as failed / runner error</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Steps</div>
+        <div class="stat-value">{{ stats.total_steps }}</div>
+        <div class="stat-sub">recorded across completed task traces</div>
+      </div>
       <div class="stat-card pending-card">
         <div class="stat-label">Pending Review</div>
         <div class="stat-value">{{ stats.pending }}</div>
         <div class="stat-sub">need manual label / pending</div>
       </div>
-      <div class="stat-card warning-card">
-        <div class="stat-label">Missing Any Step</div>
-        <div class="stat-value">{{ stats.missing_any_step_tasks }}</div>
-        <div class="stat-sub">tasks with gaps in recorded steps</div>
+    </section>
+
+    <section class="error-breakdown" style="margin-bottom: 40px;">
+      <div style="display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap;">
+        <div>
+          <h3>Grounding Similarity Under Threshold</h3>
+          <p style="margin-top: 6px; color: var(--text-muted); font-size: 13px;">Counts instruction/element cosine scores below the selected threshold.</p>
+        </div>
+        <div style="display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;">
+          <label style="display: grid; gap: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+            Threshold
+            <input id="grounding-threshold-input" type="number" step="0.01" min="0" max="1" value="{{ '%.2f'|format(stats.grounding_similarity_default_threshold) }}" oninput="updateGroundingThresholdSummary()" onchange="updateGroundingThresholdSummary()" style="width: 100px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--card-border); background: var(--input-bg); color: var(--input-text); font-family: inherit; font-size: 14px;">
+          </label>
+          <button type="button" class="metric-toggle-btn active" onclick="updateGroundingThresholdSummary()">Apply</button>
+        </div>
       </div>
-      <div class="stat-card warning-card">
-        <div class="stat-label">Missing Step 2</div>
-        <div class="stat-value">{{ stats.missing_step_2_tasks }}</div>
-        <div class="stat-sub">tasks with action steps but no step 2</div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 18px;">
+        <div class="stat-card" style="box-shadow: none; min-height: 0;">
+          <div class="stat-label">Steps Below Threshold</div>
+          <div class="stat-value" id="grounding-low-step-count">{{ stats.grounding_similarity_low_steps }}</div>
+          <div class="stat-sub" id="grounding-low-step-sub">similarity &lt; {{ '%.2f'|format(stats.grounding_similarity_default_threshold) }}</div>
+        </div>
+        <div class="stat-card" style="box-shadow: none; min-height: 0;">
+          <div class="stat-label">Tasks With Low Similarity</div>
+          <div class="stat-value" id="grounding-low-task-count">{{ stats.grounding_similarity_low_tasks }}</div>
+          <div class="stat-sub">at least one below-threshold step</div>
+        </div>
+        <div class="stat-card" style="box-shadow: none; min-height: 0;">
+          <div class="stat-label">Scored Similarity Steps</div>
+          <div class="stat-value" id="grounding-scored-step-count">{{ stats.grounding_similarity_scored_steps }}</div>
+          <div class="stat-sub">steps with cosine values</div>
+        </div>
+      </div>
+      <div id="grounding-task-breakdown" style="margin-top: 16px; display: grid; gap: 8px;">
+        {% set default_low_tasks = results | selectattr('grounding_similarity_low_count') | list %}
+        {% if default_low_tasks %}
+          {% for res in default_low_tasks %}
+            <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
+              <div style="min-width: 220px;">
+                {% if res.session_id %}
+                  <a href="/trajectory/{{ res.session_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
+                {% else %}
+                  <strong>{{ task_display_name(res.task) }}</strong>
+                {% endif %}
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">{{ res.grounding_similarity_low_count }} of {{ res.grounding_similarity_scored }} scored step{% if res.grounding_similarity_scored != 1 %}s{% endif %} below threshold{% if res.grounding_similarity_min is not none %} · min {{ '%.2f'|format(res.grounding_similarity_min) }}{% endif %}</div>
+              </div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                {% for item in res.grounding_similarity_low_steps[:3] %}
+                  <span class="badge" style="background: rgba(234, 179, 8, 0.14); color: #a16207; border: 1px solid rgba(234, 179, 8, 0.35);">Step {{ item.step }}: {{ '%.2f'|format(item.value) }}</span>
+                {% endfor %}
+                {% if res.grounding_similarity_low_count > 3 %}
+                  <span style="color: var(--text-muted); font-size: 12px;">+{{ res.grounding_similarity_low_count - 3 }} more</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div style="color: var(--text-muted); font-size: 13px; padding: 10px 0;">No scored steps are below {{ '%.2f'|format(stats.grounding_similarity_default_threshold) }}.</div>
+        {% endif %}
+      </div>
+      <div style="margin-top: 20px; border-top: 1px solid var(--card-border); padding-top: 16px;">
+        <h3>Human Label Boundary Check</h3>
+        <p style="margin-top: 6px; color: var(--text-muted); font-size: 13px;">Compares the current grounding threshold against Grounded_Human_Label annotations. Missing labels default to Grounded; steps without similarity are excluded.</p>
+        <div id="run-grounding-boundary-summary" style="margin-top: 12px;"></div>
+      </div>
+    </section>
+
+    <section class="error-breakdown" style="margin-bottom: 40px;">
+      <div>
+        <h3>Loop Score Greater Than Zero</h3>
+        <p style="margin-top: 6px; color: var(--text-muted); font-size: 13px;">Counts steps where the updated loop score L_t_u is larger than 0.</p>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 18px;">
+        <div class="stat-card" style="box-shadow: none; min-height: 0;">
+          <div class="stat-label">Steps With L_t_u &gt; 0</div>
+          <div class="stat-value">{{ stats.loop_updated_positive_steps }}</div>
+          <div class="stat-sub">repeat-like action keys</div>
+        </div>
+        <div class="stat-card" style="box-shadow: none; min-height: 0;">
+          <div class="stat-label">Tasks With L_t_u &gt; 0</div>
+          <div class="stat-value">{{ stats.loop_updated_positive_tasks }}</div>
+          <div class="stat-sub">at least one positive loop step</div>
+        </div>
+        <div class="stat-card" style="box-shadow: none; min-height: 0;">
+          <div class="stat-label">Scored Action Steps</div>
+          <div class="stat-value">{{ stats.loop_updated_scored_steps }}</div>
+          <div class="stat-sub">non-initial steps checked</div>
+        </div>
+      </div>
+      <div style="margin-top: 16px; display: grid; gap: 8px;">
+        {% set loop_positive_tasks = results | selectattr('loop_updated_positive_count') | list %}
+        {% if loop_positive_tasks %}
+          {% for res in loop_positive_tasks %}
+            <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
+              <div style="min-width: 220px;">
+                {% if res.session_id %}
+                  <a href="/trajectory/{{ res.session_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
+                {% else %}
+                  <strong>{{ task_display_name(res.task) }}</strong>
+                {% endif %}
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">{{ res.loop_updated_positive_count }} of {{ res.loop_updated_scored_steps }} checked step{% if res.loop_updated_scored_steps != 1 %}s{% endif %} with L_t_u &gt; 0 · max {{ '%.2f'|format(res.loop_updated_max_positive) }}</div>
+              </div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                {% for item in res.loop_updated_positive_steps[:3] %}
+                  <span class="badge" title="{{ item.action_key }}" style="background: rgba(27, 191, 156, 0.16); color: #0f766e; border: 1px solid rgba(27, 191, 156, 0.45);">Step {{ item.step }}: {{ '%.2f'|format(item.value) }}</span>
+                {% endfor %}
+                {% if res.loop_updated_positive_count > 3 %}
+                  <span style="color: var(--text-muted); font-size: 12px;">+{{ res.loop_updated_positive_count - 3 }} more</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div style="color: var(--text-muted); font-size: 13px; padding: 10px 0;">No task has a positive updated loop score.</div>
+        {% endif %}
       </div>
     </section>
 
@@ -405,9 +617,13 @@
           <div style="display: flex; gap: 12px; margin-bottom: 12px; font-size: 0.85em; flex-wrap: wrap;">
             <div style="display: flex; gap: 8px;">
               <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
-              <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">Only Progress</button>
+              <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">LLM Progress</button>
+              <button type="button" class="tab-btn active" id="btn-conf-subgoalProgress" onclick="toggleConfLine('subgoalProgress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #10b981;">Subgoal Progress</button>
               <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
-              <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid #ef4444;">Only Grounding</button>
+              <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(14, 165, 233, 0.15); color: #0ea5e9; border: 1px solid #0ea5e9;" title="Raw cosine similarity. Green at or above 0.80; yellow below 0.80.">Grounding Similarity</button>
+              <button type="button" class="tab-btn active" id="btn-conf-goalRelevance" onclick="toggleConfLine('goalRelevance')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(6, 182, 212, 0.15); color: #06b6d4; border: 1px solid #06b6d4;">Goal Relevance</button>
+              <button type="button" class="tab-btn active" id="btn-conf-gtProgress" onclick="toggleConfLine('gtProgress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(234, 179, 8, 0.15); color: #eab308; border: 1px solid #eab308;">GT Progress</button>
+              <button type="button" class="tab-btn active" id="btn-conf-noGtProgress" onclick="toggleConfLine('noGtProgress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(236, 72, 153, 0.15); color: #ec4899; border: 1px solid #ec4899;">No-GT Progress</button>
             </div>
             <div style="display: flex; gap: 12px;">
               <select id="status-filter" onchange="drawMeanGraph()" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 13px;">
@@ -422,6 +638,10 @@
               </select>
             </div>
           </div>
+          <div id="conf-chart-help" style="margin: 0 0 10px;">
+            {% include "_metric_legend.html" %}
+          </div>
+          <p id="conf-correlation" style="margin: 0 0 10px; font-size: 12px; color: var(--text-muted);"></p>
         </div>
       </div>
       <div id="conf-svg-container" style="position: relative; width: 100%; height: 250px; overflow: visible; background: var(--chart-bg); border-radius: 8px; border: 1px solid var(--card-border);">
@@ -433,8 +653,10 @@
         <div class="table-hdr">
           <h2>Task Trajectories</h2>
         <div class="table-hdr-actions">
+          <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('predicted', this)" aria-pressed="false">Show Predicted final state</button>
+          <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('refmeta', this)" aria-pressed="false">Show Ref Steps / Difficulty</button>
           <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('loops', this)" aria-pressed="false">Show Loops</button>
-          <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('missing', this)" aria-pressed="false">Show Missing Steps</button>
+          <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('gtprog', this)" aria-pressed="false">Show GT / No-GT Progress</button>
           <span class="badge neutral">{{ results|length }} / {{ run.task_ids|length }} Tasks</span>
         </div>
       </div>
@@ -445,11 +667,15 @@
           <tr>
             <th>Task Name</th>
             <th>Task Description</th>
+            <th class="metric-col-predicted metric-col-hidden">Predicted final state</th>
+            <th class="metric-col-refmeta metric-col-hidden">Reference Steps / Difficulty</th>
             <th>Result Status</th>
             <th>Reason</th>
             <th>Steps</th>
             <th class="metric-col-loops metric-col-hidden">Loops</th>
             <th>Loops_u</th>
+            <th class="metric-col-gtprog metric-col-hidden" title="Avg self-reported progress WITH reference ground truth">GT Progress</th>
+            <th class="metric-col-gtprog metric-col-hidden" title="Avg self-reported progress WITHOUT reference ground truth">No-GT Progress</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -463,7 +689,7 @@
                     data-starred="{{ 'true' if res.starred else 'false' }}"
                     onclick="toggleStarRow(this)" title="{{ res.star_reason if (res.starred and res.star_reason) else 'Star this task' }}">{{ '★' if res.starred else '☆' }}</button>
                 {% endif %}
-                <strong>{{ res.task.name }}</strong>
+                <strong>{{ task_display_name(res.task) }}</strong>
               </div>
             </td>
             <td>
@@ -471,14 +697,33 @@
                 {{ res.task.task }}
               </div>
             </td>
+            <td class="metric-col-predicted metric-col-hidden">
+              {% set predicted = res.spec_goal_text or res.predictedGoalState %}
+              {% if predicted %}
+              <div class="predicted-cell-text" onclick="togglePredictedCell(this)" title="Click to expand">{{ predicted }}</div>
+              {% else %}
+              <span style="color: var(--text-muted);">—</span>
+              {% endif %}
+            </td>
+            <td class="metric-col-refmeta metric-col-hidden">
+              {% if res.reference_meta and res.reference_meta.steps is not none %}
+                <span class="badge neutral" style="text-transform: none; letter-spacing: 0;">{{ res.reference_meta.steps }} ref steps · {{ res.reference_meta.label }}</span>
+              {% else %}
+                <span style="color: var(--text-muted);">—</span>
+              {% endif %}
+            </td>
             <td>
               {% if res.status == 'completed' %}
-                {% if res.judge and res.judge.success %}
+                {% set outcome = res.outcome if res.outcome is defined else (res.evaluation.status if res.evaluation else none) %}
+                {% if outcome == 'success' %}
                   <span class="badge success">Passed</span>
-                {% elif res.judge and res.judge.success == false %}
+                {% elif outcome == 'failed' %}
                   <span class="badge failed">Failed</span>
                 {% else %}
                   <span class="badge pending">Needs Label</span>
+                {% endif %}
+                {% if res.has_manual_override %}
+                  <div style="margin-top: 4px; font-size: 11px; color: var(--accent);" title="You changed the outcome from the LLM judge in Evaluate Trajectory">Manual override</div>
                 {% endif %}
               {% else %}
                 <span class="badge" style="background: rgba(255,255,255,0.1); color: var(--text-muted);">{{ res.status }}</span>
@@ -494,15 +739,10 @@
             </td>
             <td>
               {{ res.steps|length }}
-              {% if res.missing_steps_label %}
-                <div class="metric-col-missing metric-col-hidden" style="margin-top: 6px;">
-                  <span class="badge" style="background: rgba(245, 158, 11, 0.14); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.35);" title="{{ res.missing_steps_label }}">{{ res.missing_steps_label }}</span>
-                </div>
-              {% endif %}
             </td>
             <td class="metric-col-loops metric-col-hidden">
               {% if res.loop_steps and res.loop_steps > 0 %}
-                <span class="badge" style="background: rgba(250, 204, 21, 0.18); color: #b45309; border: 1px solid rgba(250, 204, 21, 0.5);" title="{{ res.loop_steps }} step(s) with old text-only L_t > 0.5 (max {{ '%.2f'|format(res.max_loop) }})">🔁 {{ res.loop_steps }}</span>
+                <span class="badge" style="background: rgba(250, 204, 21, 0.18); color: #b45309; border: 1px solid rgba(250, 204, 21, 0.5);" title="{{ res.loop_steps }} step(s) repeat a prior action key (L_t &gt; 0, max {{ '%.2f'|format(res.max_loop) }})">🔁 {{ res.loop_steps }}</span>
               {% else %}
                 <span style="color: var(--text-muted);">0</span>
               {% endif %}
@@ -512,12 +752,27 @@
             </td>
             <td>
               {% if res.loop_steps_updated and res.loop_steps_updated > 0 %}
-                <span class="badge" style="background: rgba(27, 191, 156, 0.16); color: #0f766e; border: 1px solid rgba(27, 191, 156, 0.45);" title="{{ res.loop_steps_updated }} step(s) with updated L_t_u > 0.5 (max {{ '%.2f'|format(res.max_loop_updated) }})">🔁 {{ res.loop_steps_updated }}</span>
+                <span class="badge" style="background: rgba(27, 191, 156, 0.16); color: #0f766e; border: 1px solid rgba(27, 191, 156, 0.45);" title="{{ res.loop_steps_updated }} step(s) with L_t_u &gt; 0.5">{{ '%.2f'|format(res.min_loop_updated) }} → {{ '%.2f'|format(res.max_loop_updated) }}</span>
+                <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">🔁 {{ res.loop_steps_updated }} step{% if res.loop_steps_updated != 1 %}s{% endif %}</div>
               {% else %}
                 <span style="color: var(--text-muted);">0</span>
               {% endif %}
-              {% if res.loop_metric_disagrees %}
-                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);" title="Old and updated loop metrics disagree">max {{ '%.2f'|format(res.max_loop) }} → {{ '%.2f'|format(res.max_loop_updated) }}</div>
+              {% if res.loop_metric_disagrees and res.loop_steps_updated > 0 %}
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);" title="Old L_t range for comparison">L_t {{ '%.2f'|format(res.min_loop) }} → {{ '%.2f'|format(res.max_loop) }}</div>
+              {% endif %}
+            </td>
+            <td class="metric-col-gtprog metric-col-hidden">
+              {% if res.avg_self_progress_gt is not none %}
+                <span class="badge" style="background: rgba(234, 179, 8, 0.16); color: #b45309; border: 1px solid rgba(234, 179, 8, 0.45);">{{ '%.2f'|format(res.avg_self_progress_gt) }}</span>
+              {% else %}
+                <span style="color: var(--text-muted);" title="Run 'Rerun GT Progress' (No-Login tasks only)">—</span>
+              {% endif %}
+            </td>
+            <td class="metric-col-gtprog metric-col-hidden">
+              {% if res.avg_self_progress_no_gt is not none %}
+                <span class="badge" style="background: rgba(236, 72, 153, 0.16); color: #be185d; border: 1px solid rgba(236, 72, 153, 0.45);">{{ '%.2f'|format(res.avg_self_progress_no_gt) }}</span>
+              {% else %}
+                <span style="color: var(--text-muted);" title="Run 'Rerun No-GT Progress'">—</span>
               {% endif %}
             </td>
             <td>
@@ -574,11 +829,257 @@
 
     const trajectoriesData = {{ chart_trajectories | tojson }};
 
+    function groundingThresholdValue() {
+      const input = document.getElementById('grounding-threshold-input');
+      const raw = input ? Number(input.value) : 0.8;
+      if (!Number.isFinite(raw)) return 0.8;
+      return Math.max(0, Math.min(1, raw));
+    }
+
+    function fmtBoundaryMetric(value) {
+      return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—';
+    }
+
+    function humanGroundingLabel(step) {
+      return step && step.grounded_human_label === 'non_grounded' ? 'non_grounded' : 'grounded';
+    }
+
+    function labelText(label) {
+      return label === 'non_grounded' ? 'Non-Grounded' : 'Grounded';
+    }
+
+    function emptyBoundaryMetrics(threshold) {
+      return { threshold, tp: 0, tn: 0, fp: 0, fn: 0, total: 0, correct: 0, incorrect: 0, accuracy: null, precision: null, recall: null, f1: null, mismatches: [] };
+    }
+
+    function finalizeBoundaryMetrics(metrics) {
+      metrics.total = metrics.tp + metrics.tn + metrics.fp + metrics.fn;
+      metrics.correct = metrics.tp + metrics.tn;
+      metrics.incorrect = metrics.fp + metrics.fn;
+      metrics.accuracy = metrics.total ? metrics.correct / metrics.total : null;
+      metrics.precision = (metrics.tp + metrics.fp) ? metrics.tp / (metrics.tp + metrics.fp) : null;
+      metrics.recall = (metrics.tp + metrics.fn) ? metrics.tp / (metrics.tp + metrics.fn) : null;
+      metrics.f1 = (metrics.precision !== null && metrics.recall !== null && (metrics.precision + metrics.recall))
+        ? 2 * metrics.precision * metrics.recall / (metrics.precision + metrics.recall)
+        : null;
+      return metrics;
+    }
+
+    function boundaryMetricsForSteps(steps, threshold) {
+      const metrics = emptyBoundaryMetrics(threshold);
+      (steps || []).forEach(step => {
+        if (!step || step.element_step_similarity === null || step.element_step_similarity === undefined) return;
+        const sim = Number(step.element_step_similarity);
+        if (!Number.isFinite(sim)) return;
+        const predicted = sim >= threshold ? 'grounded' : 'non_grounded';
+        const human = humanGroundingLabel(step);
+        if (human === 'grounded' && predicted === 'grounded') metrics.tp++;
+        else if (human === 'grounded' && predicted === 'non_grounded') metrics.fn++;
+        else if (human === 'non_grounded' && predicted === 'grounded') metrics.fp++;
+        else metrics.tn++;
+        if (predicted !== human) {
+          metrics.mismatches.push({
+            step: step.step,
+            similarity: sim,
+            predicted,
+            human,
+            action: step.action || '',
+            instruction: step.instruction || ''
+          });
+        }
+      });
+      return finalizeBoundaryMetrics(metrics);
+    }
+
+    function renderBoundarySummary(overall, taskRows) {
+      const el = document.getElementById('run-grounding-boundary-summary');
+      if (!el) return;
+      const taskHtml = taskRows.length
+        ? taskRows.map(row => {
+            const href = row.sessionId ? `/trajectory/${encodeURIComponent(row.sessionId)}` : '';
+            const name = href ? `<a href="${href}" style="color: var(--accent); font-weight: 800; text-decoration: none;">${escapeHtml(row.name)}</a>` : `<strong>${escapeHtml(row.name)}</strong>`;
+            const samples = row.metrics.mismatches.slice(0, 3).map(m => `<span class="badge" title="${escapeHtml((m.action || '') + ' · ' + (m.instruction || ''))}" style="background: rgba(239, 68, 68, 0.12); color: var(--failure); border: 1px solid rgba(239, 68, 68, 0.3);">Step ${escapeHtml(String(m.step ?? '?'))}: ${m.similarity.toFixed(2)} predicted ${labelText(m.predicted)}, human ${labelText(m.human)}</span>`).join(' ');
+            const more = row.metrics.mismatches.length > 3 ? `<span style="color: var(--text-muted); font-size: 12px;">+${row.metrics.mismatches.length - 3} more</span>` : '';
+            return `<div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
+              <div style="min-width: 220px;">${name}<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Accuracy ${fmtBoundaryMetric(row.metrics.accuracy)} · ${row.metrics.correct}/${row.metrics.total} correct · ${row.metrics.incorrect} mismatch${row.metrics.incorrect === 1 ? '' : 'es'}</div></div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">${samples || '<span style="color: var(--text-muted); font-size: 12px;">No mismatches</span>'}${more}</div>
+            </div>`;
+          }).join('')
+        : '<div style="color: var(--text-muted); font-size: 13px; padding: 10px 0;">No scored steps with human-label comparison data.</div>';
+      el.innerHTML = `
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 12px;">
+          ${['accuracy', 'precision', 'recall', 'f1'].map(key => `<div style="border: 1px solid var(--card-border); border-radius: 8px; padding: 8px; background: var(--badge-neutral-bg);"><div style="font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase;">${key}</div><div style="font-size: 18px; font-weight: 800;">${fmtBoundaryMetric(overall[key])}</div></div>`).join('')}
+        </div>
+        <div style="display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr); gap: 12px; margin-bottom: 12px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+            <thead><tr><th></th><th>Pred Grounded</th><th>Pred Non-Grounded</th></tr></thead>
+            <tbody>
+              <tr><th>Human Grounded</th><td>${overall.tp}</td><td>${overall.fn}</td></tr>
+              <tr><th>Human Non-Grounded</th><td>${overall.fp}</td><td>${overall.tn}</td></tr>
+            </tbody>
+          </table>
+          <div style="font-size: 12px; color: var(--text-muted);">
+            <strong style="color: var(--text);">Correct:</strong> ${overall.correct} ·
+            <strong style="color: var(--text);">Incorrect:</strong> ${overall.incorrect} ·
+            <strong style="color: var(--text);">Total scored:</strong> ${overall.total}
+          </div>
+        </div>
+        <div style="display: grid; gap: 8px;">${taskHtml}</div>`;
+    }
+
+    function updateGroundingThresholdSummary() {
+      const threshold = groundingThresholdValue();
+      const input = document.getElementById('grounding-threshold-input');
+      if (input) input.value = threshold.toFixed(2);
+
+      let lowSteps = 0;
+      let scoredSteps = 0;
+      const taskRows = [];
+      const boundaryOverall = emptyBoundaryMetrics(threshold);
+      const boundaryTaskRows = [];
+
+      (trajectoriesData || []).forEach((traj, idx) => {
+        const steps = Array.isArray(traj.steps) ? traj.steps : [];
+        const low = [];
+        let scored = 0;
+        steps.forEach(step => {
+          const val = Number(step && step.element_step_similarity);
+          if (!Number.isFinite(val)) return;
+          scored += 1;
+          scoredSteps += 1;
+          if (val < threshold) {
+            lowSteps += 1;
+            low.push({
+              step: step.step,
+              value: val,
+              action: step.action || 'unknown',
+              instruction: step.instruction || ''
+            });
+          }
+        });
+        if (low.length > 0) {
+          const minVal = Math.min(...low.map(s => s.value));
+          taskRows.push({
+            name: traj.task_name || traj.goal || `Task ${idx + 1}`,
+            sessionId: traj.sessionId,
+            low,
+            scored,
+            minVal
+          });
+        }
+        const taskMetrics = boundaryMetricsForSteps(steps, threshold);
+        if (taskMetrics.total > 0) {
+          boundaryTaskRows.push({
+            name: traj.task_name || traj.goal || `Task ${idx + 1}`,
+            sessionId: traj.sessionId,
+            metrics: taskMetrics
+          });
+          boundaryOverall.tp += taskMetrics.tp;
+          boundaryOverall.tn += taskMetrics.tn;
+          boundaryOverall.fp += taskMetrics.fp;
+          boundaryOverall.fn += taskMetrics.fn;
+          boundaryOverall.mismatches.push(...taskMetrics.mismatches);
+        }
+      });
+      finalizeBoundaryMetrics(boundaryOverall);
+      renderBoundarySummary(boundaryOverall, boundaryTaskRows);
+
+      const taskCount = taskRows.length;
+      const stepEl = document.getElementById('grounding-low-step-count');
+      const taskEl = document.getElementById('grounding-low-task-count');
+      const scoredEl = document.getElementById('grounding-scored-step-count');
+      const subEl = document.getElementById('grounding-low-step-sub');
+      if (stepEl) stepEl.textContent = String(lowSteps);
+      if (taskEl) taskEl.textContent = String(taskCount);
+      if (scoredEl) scoredEl.textContent = String(scoredSteps);
+      if (subEl) subEl.textContent = `similarity < ${threshold.toFixed(2)}`;
+
+      const breakdown = document.getElementById('grounding-task-breakdown');
+      if (!breakdown) return;
+      if (taskRows.length === 0) {
+        breakdown.innerHTML = `<div style="color: var(--text-muted); font-size: 13px; padding: 10px 0;">No scored steps are below ${threshold.toFixed(2)}.</div>`;
+        return;
+      }
+      taskRows.sort((a, b) => b.low.length - a.low.length || a.minVal - b.minVal);
+      breakdown.innerHTML = taskRows.map(row => {
+        const href = row.sessionId ? `/trajectory/${encodeURIComponent(row.sessionId)}` : '';
+        const name = href ? `<a href="${href}" style="color: var(--accent); font-weight: 800; text-decoration: none;">${escapeHtml(row.name)}</a>` : `<strong>${escapeHtml(row.name)}</strong>`;
+        const samples = row.low.slice(0, 3).map(s => {
+          const label = `Step ${escapeHtml(String(s.step ?? '?'))}: ${s.value.toFixed(2)}`;
+          const detail = s.instruction ? ` · ${escapeHtml(s.instruction)}` : '';
+          return `<span class="badge" style="background: rgba(234, 179, 8, 0.14); color: #a16207; border: 1px solid rgba(234, 179, 8, 0.35);" title="${escapeHtml((s.action || '') + detail)}">${label}</span>`;
+        }).join(' ');
+        const more = row.low.length > 3 ? `<span style="color: var(--text-muted); font-size: 12px;">+${row.low.length - 3} more</span>` : '';
+        return `
+          <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
+            <div style="min-width: 220px;">
+              ${name}
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${row.low.length} of ${row.scored} scored step${row.scored === 1 ? '' : 's'} below threshold · min ${row.minVal.toFixed(2)}</div>
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">${samples}${more}</div>
+          </div>`;
+      }).join('');
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function subgoalProgressOf(step) {
+      const raw = step.subgoal_progress;
+      if (raw === undefined || raw === null) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+    }
+
+    function llmProgressOf(step) {
+      const raw = step.progress;
+      if (raw === undefined || raw === null) return null;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return null;
+      // Progress is already a 0…1 three-point signal (0.0 / 0.5 / 1.0); clamp as-is.
+      return Math.max(0, Math.min(1, n));
+    }
+
+    function selfReportProgressOf(value) {
+      if (value === undefined || value === null) return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function pearsonCorrelation(pairs) {
+      if (!pairs || pairs.length < 2) return null;
+      const n = pairs.length;
+      const meanX = pairs.reduce((s, p) => s + p.x, 0) / n;
+      const meanY = pairs.reduce((s, p) => s + p.y, 0) / n;
+      let num = 0;
+      let denX = 0;
+      let denY = 0;
+      pairs.forEach(p => {
+        const dx = p.x - meanX;
+        const dy = p.y - meanY;
+        num += dx * dy;
+        denX += dx * dx;
+        denY += dy * dy;
+      });
+      if (denX === 0 || denY === 0) return null;
+      return num / Math.sqrt(denX * denY);
+    }
+
     let activeConfLines = {
       full: true,
       progress: true,
+      subgoalProgress: true,
       loop: true,
-      grounding: true
+      grounding: true,
+      goalRelevance: true,
+      gtProgress: true,
+      noGtProgress: true
     };
 
     function toggleConfLine(lineName) {
@@ -639,7 +1140,12 @@
         let progSum = 0, progCount = 0;
         let loopSum = 0, loopCount = 0;
         let groundSum = 0, groundCount = 0;
-        
+
+        let subgoalSum = 0, subgoalCount = 0;
+        let relSum = 0, relCount = 0;
+        let gtSum = 0, gtCount = 0;
+        let noGtSum = 0, noGtCount = 0;
+
         filteredTrajs.forEach(t => {
           if (!t.steps || !t.steps[i]) return;
           const step = t.steps[i];
@@ -648,24 +1154,51 @@
           if (['scroll_down', 'scroll_up', 'scroll'].includes(actionType)) {
              return; // Omit scroll steps
           }
-          
-          const c = (step.confidence !== undefined && step.confidence !== null) ? step.confidence : 0;
-          const g = (step.grounded !== undefined && step.grounded !== null) ? step.grounded : 1;
-          const p = (step.progress !== undefined && step.progress !== null) ? step.progress : 1;
-          const l = (step.loop !== undefined && step.loop !== null) ? step.loop : 0;
-          
-          fullSum += Math.max(0, Math.min(1, g * (1 - 0.5 * l))); fullCount++;
-          progSum += p; progCount++;
-          loopSum += l; loopCount++;
-          groundSum += g; groundCount++;
+
+          const g = step.rule_grounding;
+          if (g === undefined || g === null) {
+            return; // done/scroll and other non-grounding steps
+          }
+          const l = (step.computed_loop_updated !== undefined && step.computed_loop_updated !== null)
+            ? step.computed_loop_updated
+            : 0;
+          const fullVal = step.mech_confidence;
+          if (fullVal !== undefined && fullVal !== null) {
+            fullSum += fullVal;
+            fullCount++;
+          }
+          const progVal = llmProgressOf(step);
+          if (progVal !== null) {
+            progSum += progVal;
+            progCount++;
+          }
+          const subgoalVal = subgoalProgressOf(step);
+          if (subgoalVal !== null) {
+            subgoalSum += subgoalVal;
+            subgoalCount++;
+          }
+          loopSum += l;
+          loopCount++;
+          const elemSimVal = step.element_step_similarity;
+          if (elemSimVal !== undefined && elemSimVal !== null) { groundSum += elemSimVal; groundCount++; }
+          const relVal = step.g_goal_relevance_score;
+          if (relVal !== undefined && relVal !== null) { relSum += relVal; relCount++; }
+          const gtVal = selfReportProgressOf(step.self_progress_gt);
+          if (gtVal !== undefined && gtVal !== null) { gtSum += gtVal; gtCount++; }
+          const noGtVal = selfReportProgressOf(step.self_progress_no_gt);
+          if (noGtVal !== undefined && noGtVal !== null) { noGtSum += noGtVal; noGtCount++; }
         });
-        
+
         stepMeans.push({
           idx: i,
           full: fullCount > 0 ? fullSum / fullCount : null,
           progress: progCount > 0 ? progSum / progCount : null,
+          subgoalProgress: subgoalCount > 0 ? subgoalSum / subgoalCount : null,
           loop: loopCount > 0 ? loopSum / loopCount : null,
-          grounding: groundCount > 0 ? groundSum / groundCount : null
+          grounding: groundCount > 0 ? groundSum / groundCount : null,
+          goalRelevance: relCount > 0 ? relSum / relCount : null,
+          gtProgress: gtCount > 0 ? gtSum / gtCount : null,
+          noGtProgress: noGtCount > 0 ? noGtSum / noGtCount : null
         });
       }
       
@@ -677,8 +1210,12 @@
       stepMeans.forEach(sm => {
         if (activeConfLines.full && sm.full !== null) { minY = Math.min(minY, sm.full); maxY = Math.max(maxY, sm.full); }
         if (activeConfLines.progress && sm.progress !== null) { minY = Math.min(minY, sm.progress); maxY = Math.max(maxY, sm.progress); }
+        if (activeConfLines.subgoalProgress && sm.subgoalProgress !== null) { minY = Math.min(minY, sm.subgoalProgress); maxY = Math.max(maxY, sm.subgoalProgress); }
         if (activeConfLines.loop && sm.loop !== null) { minY = Math.min(minY, sm.loop); maxY = Math.max(maxY, sm.loop); }
         if (activeConfLines.grounding && sm.grounding !== null) { minY = Math.min(minY, sm.grounding); maxY = Math.max(maxY, sm.grounding); }
+        if (activeConfLines.goalRelevance && sm.goalRelevance !== null) { minY = Math.min(minY, sm.goalRelevance); maxY = Math.max(maxY, sm.goalRelevance); }
+        if (activeConfLines.gtProgress && sm.gtProgress !== null) { minY = Math.min(minY, sm.gtProgress); maxY = Math.max(maxY, sm.gtProgress); }
+        if (activeConfLines.noGtProgress && sm.noGtProgress !== null) { minY = Math.min(minY, sm.noGtProgress); maxY = Math.max(maxY, sm.noGtProgress); }
       });
       minY = Math.floor(minY * 5) / 5;
       maxY = Math.ceil(maxY * 5) / 5;
@@ -712,7 +1249,22 @@
         text.textContent = Math.round(val * 100) + "%";
         svg.appendChild(text);
       }
-      
+
+      // Solid zero baseline so progress (above 0) vs regression (below 0) reads clearly when
+      // the −1..1 GT / No-GT progress means are shown.
+      if (minY < 0 && maxY > 0) {
+        const zeroY = padding.top + innerHeight * (1 - (0 - minY) / yRange);
+        const zline = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        zline.setAttribute("x1", padding.left);
+        zline.setAttribute("y1", zeroY);
+        zline.setAttribute("x2", width - padding.right);
+        zline.setAttribute("y2", zeroY);
+        zline.setAttribute("stroke", "var(--text-muted)");
+        zline.setAttribute("stroke-width", "1.5");
+        zline.setAttribute("opacity", "0.6");
+        svg.appendChild(zline);
+      }
+
       // X axis labels
       for (let i = 0; i < maxStepIdx; i++) {
         const x = padding.left + i * xStep;
@@ -728,7 +1280,7 @@
         }
       }
       
-      const drawLine = (key, color) => {
+      const drawLine = (key, color, label) => {
         let pathD = "";
         stepMeans.forEach((sm, i) => {
           const val = sm[key];
@@ -764,33 +1316,88 @@
             circle.setAttribute("stroke-width", "2");
             
             const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-            title.textContent = `Step ${i}: ${Math.round(val*100)}%`;
+            const parts = [`Step ${i} · ${label}: ${Math.round(val * 100)}%`];
+            if (sm.progress !== null) parts.push(`LLM Progress: ${Math.round(sm.progress * 100)}%`);
+            if (sm.subgoalProgress !== null) parts.push(`Subgoal Progress: ${Math.round(sm.subgoalProgress * 100)}%`);
+            if (sm.loop !== null) parts.push(`Loop (L_t_u): ${Math.round(sm.loop * 100)}%`);
+            if (sm.progress !== null && sm.loop !== null) {
+              const gap = sm.progress - sm.loop;
+              parts.push(`Progress − Loop: ${gap >= 0 ? '+' : ''}${Math.round(gap * 100)} pts`);
+            }
+            title.textContent = parts.join('\n');
             circle.appendChild(title);
             
             svg.appendChild(circle);
           });
         }
       };
+
+      const corrPairs = stepMeans
+        .filter(sm => sm.progress !== null && sm.loop !== null)
+        .map(sm => ({ x: sm.progress, y: sm.loop }));
+      const corr = pearsonCorrelation(corrPairs);
+      const corrEl = document.getElementById('conf-correlation');
+      if (corrEl) {
+        if (corr === null) {
+          corrEl.textContent = 'Progress ↔ Loop: not enough overlapping steps to compute correlation.';
+        } else {
+          const direction = corr < -0.2
+            ? 'High progress at a step tends to coincide with low loop (good — agent advancing without repeating).'
+            : corr > 0.2
+              ? 'High progress tends to coincide with high loop (agent may be repeating while still reporting progress).'
+              : 'Progress and loop move mostly independently at each step index.';
+          corrEl.innerHTML = `<strong>Progress ↔ Loop correlation:</strong> ${corr.toFixed(2)} across step indices (n=${corrPairs.length}). ${direction} Hover dots for per-step Progress − Loop gap.`;
+        }
+      }
       
-      if (activeConfLines.full) drawLine("full", "#7857ff");
-      if (activeConfLines.progress) drawLine("progress", "#ff8a3d");
-      if (activeConfLines.loop) drawLine("loop", "#1bbf9c");
-      if (activeConfLines.grounding) drawLine("grounding", "#ef4444");
+      if (activeConfLines.full) drawLine("full", "#7857ff", "Full confidence");
+      if (activeConfLines.progress) drawLine("progress", "#ff8a3d", "LLM Progress");
+      if (activeConfLines.subgoalProgress) drawLine("subgoalProgress", "#10b981", "Subgoal Progress");
+      if (activeConfLines.loop) drawLine("loop", "#1bbf9c", "Loop");
+      if (activeConfLines.grounding) drawLine("grounding", "#0ea5e9", "Grounding Similarity");
+      if (activeConfLines.goalRelevance) drawLine("goalRelevance", "#06b6d4", "Goal Relevance");
+      if (activeConfLines.gtProgress) drawLine("gtProgress", "#eab308", "GT Progress");
+      if (activeConfLines.noGtProgress) drawLine("noGtProgress", "#ec4899", "No-GT Progress");
     }
 
     window.addEventListener('resize', drawMeanGraph);
-    document.addEventListener('DOMContentLoaded', drawMeanGraph);
+    document.addEventListener('DOMContentLoaded', () => {
+      drawMeanGraph();
+      updateGroundingThresholdSummary();
+      const thresholdInput = document.getElementById('grounding-threshold-input');
+      if (thresholdInput) {
+        thresholdInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            updateGroundingThresholdSummary();
+          }
+        });
+      }
+    });
 
     function toggleRunMetricColumn(column, button) {
       const cells = document.querySelectorAll(`.metric-col-${column}`);
       const shouldShow = cells.length > 0 && cells[0].classList.contains('metric-col-hidden');
       cells.forEach(cell => cell.classList.toggle('metric-col-hidden', !shouldShow));
+      if (column === 'predicted' && shouldShow) {
+        document.querySelectorAll('.predicted-cell-text').forEach(el => el.classList.add('is-expanded'));
+      }
       if (button) {
         button.classList.toggle('active', shouldShow);
-        const label = column === 'loops' ? 'Loops' : (column === 'missing' ? 'Missing Steps' : column);
+        const labels = {
+          predicted: 'Predicted final state',
+          refmeta: 'Ref Steps / Difficulty',
+          loops: 'Loops',
+        };
+        const label = labels[column] || column;
         button.textContent = `${shouldShow ? 'Hide' : 'Show'} ${label}`;
         button.setAttribute('aria-pressed', shouldShow ? 'true' : 'false');
       }
+    }
+
+    function togglePredictedCell(el) {
+      if (!el) return;
+      el.classList.toggle('is-expanded');
     }
 
     // Active run auto-reload polling (Task 4)

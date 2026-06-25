@@ -15,8 +15,10 @@ from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 from .chrome_profile import browser_mode, chrome_profile_name, ensure_chrome_profile_available, resolve_chrome_profile
-from .judge import LlmJudge, _env_value, configured_judge_model, normalize_model
+from .judge import LlmJudge, _env_value, configured_judge_model, normalize_judge_method, normalize_model
+from .webjudge import WebJudge
 from .scoring import enrich_step_scores
+from .step_confidence import SpecProgressClient, backfill_element_step_similarity
 from .storage import EvalRun, REPO_ROOT, load_run, save_run, save_task_result, screenshot_dir, task_path, utc_now
 from .tasks import EvalTask
 
@@ -48,6 +50,26 @@ DEFAULT_CHROMIUM_PROFILE = str(Path.home() / ".pageguide-eval-chromium")
 DEFAULT_MAX_STEPS = 15
 MIN_MAX_STEPS = 1
 MAX_MAX_STEPS = 100
+
+# Mirrors extension key `guideDebugRegionCapture` (side panel debug toggle).
+GUIDE_REGION_CAPTURE_KEY = "guideDebugRegionCapture"
+REGION_CAPTURE_LEGACY = "legacy"
+REGION_CAPTURE_ALIGNED = "aligned"
+
+
+def normalize_region_capture_mode(value: Any) -> str:
+    v = str(value or "").strip().lower().replace("-", "_")
+    if v in {REGION_CAPTURE_ALIGNED, "new", "new_target", "new_target_captured"}:
+        return REGION_CAPTURE_ALIGNED
+    return REGION_CAPTURE_LEGACY
+
+
+def region_capture_mode_label(mode: str | None) -> str:
+    return "New Target Captured" if normalize_region_capture_mode(mode) == REGION_CAPTURE_ALIGNED else "Legacy target captured"
+
+
+def configured_region_capture_mode() -> str:
+    return normalize_region_capture_mode(os.environ.get("PAGEGUIDE_EVAL_REGION_CAPTURE"))
 
 
 def configured_task_model() -> str:
@@ -295,8 +317,12 @@ class PlaywrightGuideRunner:
         self.workers = int(run.get("workers") or 1)
         self.task_model = str(run.get("task_model") or configured_task_model())
         self.judge_model = str(run.get("judge_model") or configured_judge_model())
+        self.judge_method = normalize_judge_method(run.get("judge_method"))
         # Opt-in: inject each task's reference_steps into the guide prompt (Plot B).
         self.ground_truth_mode = bool(run.get("ground_truth_mode"))
+        self.region_capture_mode = normalize_region_capture_mode(
+            run.get("region_capture_mode") or os.environ.get("PAGEGUIDE_EVAL_REGION_CAPTURE")
+        )
         # Default to headful: MV3 extensions are unreliable in headless Chrome. Opt into
         # headless with PAGEGUIDE_EVAL_HEADLESS=1.
         self.headless = os.environ.get("PAGEGUIDE_EVAL_HEADLESS") == "1"
@@ -511,10 +537,11 @@ class PlaywrightGuideRunner:
         raise RuntimeError(f"Could not find PageGuide extension service worker (tried: {detail})")
 
     async def _set_eval_prefs(self, extension_page: Any) -> None:
+        await self._apply_region_capture_mode(extension_page)
         openrouter_key = _env_value("OPENROUTER_API_KEY", "OPEN_REUTER_API_KEY", "open-reuter-api-key")
         openrouter_model = self.task_model
         await extension_page.evaluate(
-            """async ({ openrouterKey, openrouterModel, maxSteps }) => {
+            """async ({ openrouterKey, openrouterModel, maxSteps, regionCaptureMode }) => {
               const syncPrefs = {};
               if (openrouterKey) {
                 syncPrefs.provider = 'openrouter';
@@ -529,11 +556,21 @@ class PlaywrightGuideRunner:
                 rewindCaptureEnabled: true,
                 guideEvalMode: true,
                 guideConfidenceFormula: 'full',
-                guideEvalMaxSteps: maxSteps
+                guideEvalMaxSteps: maxSteps,
+                guideDebugRegionCapture: regionCaptureMode
               });
               await chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']);
             }""",
-            {"openrouterKey": openrouter_key or "", "openrouterModel": openrouter_model, "maxSteps": self.max_steps},
+            {"openrouterKey": openrouter_key or "", "openrouterModel": openrouter_model, "maxSteps": self.max_steps, "regionCaptureMode": self.region_capture_mode},
+        )
+
+    async def _apply_region_capture_mode(self, extension_page: Any) -> None:
+        mode = self.region_capture_mode
+        await extension_page.evaluate(
+            """async (regionCaptureMode) => {
+              await chrome.storage.local.set({ guideDebugRegionCapture: regionCaptureMode });
+            }""",
+            mode,
         )
 
     async def _run_task(
@@ -586,6 +623,7 @@ class PlaywrightGuideRunner:
             # Fresh rewind session for this task.
             diagnostics["reset_response"] = await self._send_to_tab(extension_page, tab_id, {"action": "reset"})
             await self._clear_task_storage(extension_page)
+            await self._apply_region_capture_mode(extension_page)
             progress(0, "starting guide")
             # Inject (or clear) this task's ground-truth reference steps before starting.
             await self._set_ground_truth_steps(extension_page, task)
@@ -622,6 +660,10 @@ class PlaywrightGuideRunner:
                 final_screenshot = None
 
         steps = await self._load_rewind_steps(extension_page, session_id, task.task_id)
+        spec_goal_text = None
+        if isinstance(steps, dict):
+            spec_goal_text = steps.get("spec_goal_text") or steps.get("predictedGoalState")
+            steps = steps.get("steps") or []
         debug_prompts = await self._load_debug_prompts(extension_page)
         diagnostics["step_count"] = len([s for s in steps if not s.get("isInitial")])
         diagnostics["debug_prompt_count"] = len(debug_prompts)
@@ -634,7 +676,13 @@ class PlaywrightGuideRunner:
         if diagnostics["step_count"] == 0:
             diagnostics["zero_step_explanation"] = _zero_step_explanation(diagnostics, terminal_reason)
 
-        judge = self.judge.judge_final_screenshot(task_data, final_screenshot)
+        enriched_steps = enrich_step_scores(steps)
+        if self.judge_method == "webjudge":
+            judge = WebJudge(
+                model=self.judge_model, api_key=self.judge.api_key
+            ).judge_trajectory(task_data, enriched_steps, final_screenshot)
+        else:
+            judge = self.judge.judge_final_screenshot(task_data, final_screenshot)
         result = {
             "task_id": task.task_id,
             "task": task_data,
@@ -646,10 +694,15 @@ class PlaywrightGuideRunner:
             "session_id": session_id,
             "final_screenshot": _rel(final_screenshot) if final_screenshot else None,
             "judge": judge,
-            "steps": enrich_step_scores(steps),
+            "steps": enriched_steps,
+            "spec_goal_text": spec_goal_text,
             "debug_prompts": debug_prompts,
             "diagnostics": diagnostics,
         }
+        try:
+            backfill_element_step_similarity(result, SpecProgressClient())
+        except Exception:
+            pass
         await page.close()
         await self._close_task_pages(context, keep=extension_page)
         return result
@@ -825,9 +878,9 @@ class PlaywrightGuideRunner:
 
         return {"reason": "task_timeout", "sessionId": last_session_id, "stepCount": last_step_count}
 
-    async def _load_rewind_steps(self, extension_page: Any, session_id: str | None, task_id: str) -> list[dict[str, Any]]:
+    async def _load_rewind_steps(self, extension_page: Any, session_id: str | None, task_id: str) -> dict[str, Any]:
         if not session_id:
-            return []
+            return {"steps": [], "spec_goal_text": None, "predictedGoalState": None}
         data = await extension_page.evaluate(
             """async (sessionId) => {
               const all = await chrome.storage.local.get(null);
@@ -839,18 +892,20 @@ class PlaywrightGuideRunner:
                 const rec = all[`RW_REC::${current}::${meta.step}`] || meta;
                 out.push(rec);
               }
-              return out;
+              const predicted = index?.predictedGoalState || index?.spec_goal_text || null;
+              return { steps: out, spec_goal_text: predicted, predictedGoalState: predicted };
             }""",
             session_id,
         )
         out = []
-        for rec in data or []:
+        for rec in (data or {}).get("steps") or []:
             cleaned = dict(rec)
             for key in ("screenshot", "screenshotBefore", "screenshotAfter", "regionShot"):
                 if cleaned.get(key):
                     cleaned[key] = self._save_base64(task_id, cleaned["step"], key, cleaned[key])
             out.append(cleaned)
-        return out
+        predicted = (data or {}).get("spec_goal_text") or (data or {}).get("predictedGoalState")
+        return {"steps": out, "spec_goal_text": predicted, "predictedGoalState": predicted}
 
     async def _load_debug_prompts(self, extension_page: Any) -> list[dict[str, Any]]:
         data = await extension_page.evaluate(

@@ -107,6 +107,17 @@
     if (typeof global.rewindResolveScreenshot === 'function') return global.rewindResolveScreenshot(rec);
     return rec ? (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter || null) : null;
   }
+  function _regionShot(rec) {
+    if (typeof global.rewindResolveRegionScreenshot === 'function') return global.rewindResolveRegionScreenshot(rec);
+    if (!rec) return null;
+    const placeholder = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    let region = rec.regionShot;
+    if (region === placeholder) region = null;
+    return region || _recordShot(rec);
+  }
+  function _hasPreviewShot(rec) {
+    return !!(_regionShot(rec) || _recordShot(rec));
+  }
   function _removeTimelineStep(meta) {
     if (!meta) return;
     const container = document.getElementById(TIMELINE_ID);
@@ -123,7 +134,7 @@
     for (let i = 0; i < attempts; i++) {
       let rec = null;
       try { rec = await rewindGetRecord(meta.sessionId, meta.step); } catch (e) {}
-      if (rec && _recordShot(rec)) return rec;
+      if (rec && _hasPreviewShot(rec)) return rec;
       if (rec && (rec.isInitial || Number(rec.step) === 0) && rec.domSnapshot) return rec;
       if (i < attempts - 1) await new Promise(r => setTimeout(r, 350));
     }
@@ -150,7 +161,7 @@
     }
     const card = document.createElement('div');
     card.className = 'rw-hovercard';
-    const shot = _recordShot(rec);
+    const shot = _regionShot(rec);
     const img = shot ? `<img src="data:image/jpeg;base64,${shot}" alt="">` : '';
     const bits = [];
     if (meta.confidence != null && meta.confidence < 0.5) bits.push('Review suggested');
@@ -215,16 +226,19 @@
     // loop L, progress P) and ALL THREE formula versions side by side, so they can be compared
     // without re-running (computed from the stored signals).
     let debugConfHtml = '';
-    if (global.__pgDebugEnabled && typeof global.gv2ComputeConfidence === 'function'
-        && (rec.grounded != null || rec.loop != null || rec.progress != null)) {
+    if (global.__pgDebugEnabled && (
+        (typeof global.gv2ComputeConfidence === 'function' && (rec.grounded != null || rec.loop != null || rec.progress != null)) ||
+        rec.mechConfidence != null || rec.mechGrounding != null || rec.mechLoop != null
+      )) {
       const f = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '—';
       const pct = (c) => (c != null) ? Math.round(c * 100) + '%' : '—';
       const parts = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
-      const cFull = global.gv2ComputeConfidence(parts, 'full').confidence;
-      const cReduced = global.gv2ComputeConfidence(parts, 'reduced').confidence;
-      const cNoLoop = global.gv2ComputeConfidence(parts, 'noloop').confidence;
+      const cFull = typeof global.gv2ComputeConfidence === 'function' ? global.gv2ComputeConfidence(parts, 'full').confidence : null;
+      const cReduced = typeof global.gv2ComputeConfidence === 'function' ? global.gv2ComputeConfidence(parts, 'reduced').confidence : null;
+      const cNoLoop = typeof global.gv2ComputeConfidence === 'function' ? global.gv2ComputeConfidence(parts, 'noloop').confidence : null;
       const active = rec.confidenceFormula === 'reduced' ? 'No-progress' : (rec.confidenceFormula === 'noloop' ? 'No-loop' : 'Full');
-      debugConfHtml = `<div class="rw-debug-conf" style="margin-top:6px;font:400 11px/1.6 monospace;opacity:.85">🐞 G=${f(rec.grounded)} · L=${f(rec.loop)} · P=${f(rec.progress)}<br>Full (G·loop·progress): <b>${pct(cFull)}</b><br>No-progress (G·loop): <b>${pct(cReduced)}</b><br>No-loop (G·progress): <b>${pct(cNoLoop)}</b><br><span style="opacity:.6">Active formula: ${active}</span></div>`;
+      const elemSim = rec.elementStepSimilarity ?? rec.element_step_similarity;
+      debugConfHtml = `<div class="rw-debug-conf" style="margin-top:6px;font:400 11px/1.6 monospace;opacity:.85">🐞 G=${f(rec.grounded)} · L=${f(rec.loop)} · P=${f(rec.progress)}<br>Full (G·loop·progress): <b>${pct(cFull)}</b><br>No-progress (G·loop): <b>${pct(cReduced)}</b><br>No-loop (G·progress): <b>${pct(cNoLoop)}</b><br>Mech G=${f(rec.mechGrounding)} · Elem-step cos=${f(elemSim)} · Mech L=${f(rec.mechLoop)} · No-LLM=<b>${pct(rec.mechConfidence)}</b><br><span style="opacity:.6">Active formula: ${active}</span></div>`;
     }
 
     const durationText = rec.durationMs != null ? 'Duration: ' + _fmtDuration(rec.durationMs) : '';
@@ -232,8 +246,13 @@
     const extraMeta = [durationText, costText].filter(Boolean).join('  ·  ');
 
     const shot = _recordShot(rec);
+    const regionShot = rec?.regionShot && rec.regionShot !== 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+      ? rec.regionShot
+      : null;
+    const hasRegion = !!regionShot;
     const hasShot = !!shot;
     const hasSnap = !!rec.domSnapshot;
+    const defaultView = hasRegion ? 'region' : (hasShot ? 'shot' : 'snap');
 
     wrap.innerHTML = `
       <div class="rw-ins-hdr">
@@ -253,8 +272,9 @@
           ${debugConfHtml}
         </div>
         <div class="rw-tabs">
-          <button class="rw-ins-btn ${hasShot ? 'active' : ''}" data-rw="tab" data-view="shot" ${hasShot ? '' : 'disabled'}>📷 Screenshot</button>
-          <button class="rw-ins-btn ${!hasShot && hasSnap ? 'active' : ''}" data-rw="tab" data-view="snap" ${hasSnap ? '' : 'disabled'}>🧩 Page snapshot</button>
+          <button class="rw-ins-btn ${defaultView === 'region' ? 'active' : ''}" data-rw="tab" data-view="region" ${hasRegion ? '' : 'disabled'}>🎯 Target region</button>
+          <button class="rw-ins-btn ${defaultView === 'shot' ? 'active' : ''}" data-rw="tab" data-view="shot" ${hasShot ? '' : 'disabled'}>📷 Before action</button>
+          <button class="rw-ins-btn ${defaultView === 'snap' ? 'active' : ''}" data-rw="tab" data-view="snap" ${hasSnap ? '' : 'disabled'}>🧩 Page snapshot</button>
         </div>
         <div class="rw-view"></div>
         ${rec.systemPrompt ? `<details><summary>System prompt sent to AI</summary><pre>${_escape(rec.systemPrompt)}</pre></details>` : ''}
@@ -265,17 +285,19 @@
 
     const view = wrap.querySelector('.rw-view');
     function renderView(which) {
-      if (which === 'snap' && hasSnap) {
+      if (which === 'region' && hasRegion) {
+        view.innerHTML = `<img src="data:image/jpeg;base64,${regionShot}" alt="Step ${_escape(rec.step)} target region">`;
+      } else if (which === 'snap' && hasSnap) {
         view.innerHTML = `<div class="rw-snap-wrap"><div class="rw-snap-banner">🔒 Read-only snapshot</div><iframe sandbox></iframe></div>`;
         const iframe = view.querySelector('iframe');
         iframe.srcdoc = rec.domSnapshot;
       } else if (hasShot) {
-        view.innerHTML = `<img src="data:image/jpeg;base64,${shot}" alt="Step ${_escape(rec.step)} screenshot">`;
+        view.innerHTML = `<img src="data:image/jpeg;base64,${shot}" alt="Step ${_escape(rec.step)} before action">`;
       } else {
         view.innerHTML = `<div style="opacity:.6">No capture available for this step.</div>`;
       }
     }
-    renderView(hasShot ? 'shot' : 'snap');
+    renderView(defaultView);
 
     wrap.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-rw]');
@@ -527,7 +549,7 @@
     // Lazy-load the snapshot thumbnail from the store (kept out of the message payload).
     if (typeof rewindGetRecord === 'function') {
       _getVerifiedRecord(meta).then(rec => {
-        const shot = _recordShot(rec);
+        const shot = _regionShot(rec);
         if (shot) {
           const img = row.querySelector('.rw-thumb');
           if (img) { img.src = 'data:image/jpeg;base64,' + shot; img.style.display = ''; }

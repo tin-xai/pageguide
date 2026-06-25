@@ -37,13 +37,15 @@ def aggregate_task(
     steps: list[dict[str, Any]],
     formula: str,
     mode: str = "mean",
+    high_threshold: float = None,
+    medium_threshold: float = None,
 ) -> float | None:
     """Collapse a task's step confidences into one score for the given formula."""
     values = []
     for step in steps or []:
         if step.get("isInitial") or int(step.get("step") or 0) <= 0:
             continue
-        score = score_step(step, formula)
+        score = score_step(step, formula, high_threshold=high_threshold, medium_threshold=medium_threshold)
         if score is not None:
             values.append(float(score))
     if not values:
@@ -94,6 +96,8 @@ def ece_payload(
     formula: str,
     agg: str = "mean",
     n_bins: int = 5,
+    run_high: float = None,
+    run_medium: float = None,
 ) -> dict[str, Any]:
     """Build the calibration payload for one formula, ready to plot."""
     points = []
@@ -102,7 +106,13 @@ def ece_payload(
         if is_bot_detection_failure(result):
             excluded += 1
             continue
-        score = aggregate_task(result.get("steps", []), formula, agg)
+        high = result.get("grounding_high_threshold")
+        if high is None:
+            high = run_high
+        medium = result.get("grounding_medium_threshold")
+        if medium is None:
+            medium = run_medium
+        score = aggregate_task(result.get("steps", []), formula, agg, high_threshold=high, medium_threshold=medium)
         if score is None:
             continue
         success = effective_success(result)

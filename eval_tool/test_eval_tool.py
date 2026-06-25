@@ -1,30 +1,47 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, Mock, patch
 
-from eval_tool.app import build_phase3_rows, create_app, default_tasks, filter_options, missing_step_summary
+from eval_tool.app import build_phase3_rows, create_app, default_tasks, filter_options
 from eval_tool.credentials import Account
 from eval_tool.ece import aggregate_task, compute_ece, ece_payload, is_bot_detection_failure
 from eval_tool.judge import DEFAULT_LLM_MODEL, LlmJudge, configured_judge_model, normalize_judge_response
-from eval_tool.runner import PlaywrightGuideRunner, _zero_step_explanation, configured_task_model, normalize_max_steps
+from eval_tool.runner import PlaywrightGuideRunner, _zero_step_explanation, configured_task_model, normalize_max_steps, normalize_region_capture_mode, region_capture_mode_label
 from eval_tool.scoring import (
     ALL_FORMULAS,
+    apply_manual_evaluation,
     chart_payload,
     compute_confidence,
     effective_success,
     enrich_step_scores,
+    evaluation_for_inspector,
     score_step,
+    task_outcome,
 )
 from eval_tool.step_confidence import (
     backfill_computed_loop,
+    backfill_element_step_similarity,
+    backfill_g_progress,
     compute_loop_score,
     compute_loop_score_updated,
     compute_spec_confidence,
     element_key,
+    format_low_grounding_summary,
     g_grounding,
+    infer_predicted_goal_state,
+    loop_metrics_summary,
+    low_grounding_summary,
 )
-from eval_tool.tasks import load_tasks
+from eval_tool.mind2web_levels import (
+    difficulty_counts,
+    effective_task_difficulty,
+    filter_tasks_by_difficulty,
+    infer_difficulty_from_reference_length,
+    reference_step_count,
+)
+from eval_tool.tasks import load_tasks, display_task_name, short_site_name
 
 
 class EvalToolTest(unittest.TestCase):
@@ -34,13 +51,121 @@ class EvalToolTest(unittest.TestCase):
         self.assertAlmostEqual(compute_confidence(parts, "full"), 0.8464)
         self.assertAlmostEqual(compute_confidence(parts, "noloop"), 0.92)
 
-    def test_g_grounding_is_rule_based(self):
+    def test_compute_confidence_three_point_progress_scale(self):
+        base = {"grounded": 0.8, "loop": 0.1}  # reduced base = 0.736
+        # 1.0 = clear progress -> full boost; 0.5 = neutral; 0.0 = regression floor.
+        self.assertAlmostEqual(compute_confidence({**base, "progress": 1.0}, "full"), 0.9568)
+        self.assertAlmostEqual(compute_confidence({**base, "progress": 0.5}, "full"), 0.8464)
+        self.assertAlmostEqual(compute_confidence({**base, "progress": 0.0}, "full"), 0.736)
+        # Legacy -1..1 traces: a negative value clamps up to the 0.0 floor (no penalty).
+        self.assertAlmostEqual(compute_confidence({**base, "progress": -1.0}, "full"), 0.736)
+
+    def test_g_grounding_uses_element_step_similarity_thresholds(self):
         self.assertEqual(g_grounding({"action": "click", "target": {"llmIndex": 7, "text": "Go"}}), 1.0)
-        self.assertEqual(g_grounding({"action": "click", "target": {"text": "Go"}}), 0.7)
+        self.assertEqual(g_grounding({"action": "click", "target": {"llmIndex": 7}, "element_step_similarity": 0.84}), 1.0)
+        self.assertEqual(g_grounding({"action": "click", "target": {"llmIndex": 7}, "element_step_similarity": 0.83}), 0.5)
+        self.assertEqual(g_grounding({"action": "click", "target": {"llmIndex": 7}, "element_step_similarity": 0.78}), 0.5)
+        self.assertEqual(g_grounding({"action": "click", "target": {"llmIndex": 7}, "element_step_similarity": 0.77}), 0.1)
+        self.assertEqual(g_grounding({"action": "click", "target": {"text": "Go"}}), 0.0)
         self.assertEqual(g_grounding({"action": "click", "target": {}}), 0.0)
         self.assertIsNone(g_grounding({"action": "scroll_down", "target": {"llmIndex": 7}}))
         self.assertIsNone(g_grounding({"action": "done"}))
         self.assertIsNone(g_grounding({"isInitial": True, "target": {"llmIndex": 1}}))
+
+    def test_grounding_boundary_metrics_defaults_grounded_and_excludes_unscored(self):
+        from eval_server.app import grounding_boundary_metrics
+
+        steps = [
+            {"step": 0, "isInitial": True, "element_step_similarity": 0.0},
+            {"step": 1, "element_step_similarity": 0.8},  # default human grounded, predicted grounded
+            {"step": 2, "element_step_similarity": 0.7},  # default human grounded, predicted non-grounded
+            {"step": 3, "element_step_similarity": 0.9, "grounded_human_label": "non_grounded"},
+            {"step": 4, "element_step_similarity": 0.2, "grounded_human_label": "non_grounded"},
+            {"step": 5},
+        ]
+        metrics = grounding_boundary_metrics(steps, threshold=0.8)
+        self.assertEqual(metrics["total"], 4)
+        self.assertEqual(metrics["tp"], 1)
+        self.assertEqual(metrics["fn"], 1)
+        self.assertEqual(metrics["fp"], 1)
+        self.assertEqual(metrics["tn"], 1)
+        self.assertAlmostEqual(metrics["accuracy"], 0.5)
+        self.assertAlmostEqual(metrics["precision"], 0.5)
+        self.assertAlmostEqual(metrics["recall"], 0.5)
+        self.assertAlmostEqual(metrics["f1"], 0.5)
+        self.assertEqual(len(metrics["mismatches"]), 2)
+
+    def test_grounding_boundary_metrics_zero_denominators_are_unavailable(self):
+        from eval_server.app import grounding_boundary_metrics
+
+        metrics = grounding_boundary_metrics([
+            {"step": 1, "element_step_similarity": 0.2, "grounded_human_label": "non_grounded"},
+        ], threshold=0.8)
+        self.assertEqual(metrics["tn"], 1)
+        self.assertIsNone(metrics["precision"])
+        self.assertIsNone(metrics["recall"])
+        self.assertIsNone(metrics["f1"])
+
+    def test_backfill_element_step_similarity_embeds_instruction_and_element_text(self):
+        result = {"steps": [
+            {"isInitial": True, "target": {"llmIndex": 1}},
+            {"step": 1, "action": "click", "instruction": "Click Search", "target": {"llmIndex": 1, "text": "Search"}},
+            {"step": 2, "action": "click", "instruction": "", "target": {"llmIndex": 2, "text": "Filter"}},
+            {"step": 3, "action": "click", "instruction": "Click missing", "target": {"text": "Missing"}},
+            {"step": 4, "action": "done", "instruction": "Done", "target": {"llmIndex": 4, "text": "Done"}},
+        ]}
+        client = Mock()
+        client.available = True
+        client.embed.return_value = [[1.0, 0.0], [1.0, 0.0]]
+        self.assertTrue(backfill_element_step_similarity(result, client))
+        self.assertAlmostEqual(result["steps"][1]["element_step_similarity"], 1.0)
+        self.assertAlmostEqual(result["steps"][2]["element_step_similarity"], 0.0)
+        self.assertNotIn("element_step_similarity", result["steps"][3])
+        self.assertNotIn("element_step_similarity", result["steps"][4])
+        client.embed.assert_called_once_with(["Click Search", "Search"])
+
+    def test_low_grounding_summary_flags_steps_below_one(self):
+        steps = [
+            {"isInitial": True, "target": {"llmIndex": 1}},
+            {"step": 1, "action": "click", "target": {"llmIndex": 7, "text": "Go"}, "grounded": 0.8},
+            {"step": 2, "action": "click", "target": {"llmIndex": 2, "text": "Go"}, "grounded": 1.0, "element_step_similarity": 0.78},
+            {"step": 3, "action": "click", "target": {}, "grounded": 1.0},
+            {"step": 4, "action": "scroll_down", "target": {"llmIndex": 7}, "grounded": 0.0},
+        ]
+        summary = low_grounding_summary(steps)
+        self.assertTrue(summary["has_issue"])
+        self.assertEqual(summary["count"], 2)
+        self.assertAlmostEqual(summary["min_grounding"], 0.0)
+        self.assertEqual(summary["steps"], [{"step": 2, "g_ground": 0.5}, {"step": 3, "g_ground": 0.0}])
+        self.assertIn("Step 2: 0.5", format_low_grounding_summary(summary))
+
+    def test_low_grounding_summary_ignores_fully_grounded_tasks(self):
+        summary = low_grounding_summary([
+            {"step": 1, "action": "click", "target": {"llmIndex": 1}, "grounded": 0.9},
+            {"step": 2, "action": "type", "target": {"llmIndex": 2}, "grounded": 0.8},
+        ])
+        self.assertFalse(summary["has_issue"])
+        self.assertEqual(summary["count"], 0)
+        self.assertEqual(format_low_grounding_summary(summary), "")
+
+    def test_low_grounding_summary_ignores_llm_grounded_when_rule_score_is_one(self):
+        summary = low_grounding_summary([
+            {"step": 3, "action": "click", "target": {"llmIndex": 3}, "grounded": 0.9},
+            {"step": 4, "action": "click", "target": {"llmIndex": 19}, "grounded": 0.9},
+        ])
+        self.assertFalse(summary["has_issue"])
+        self.assertEqual(summary["count"], 0)
+
+    def test_infer_predicted_goal_state_from_step_records(self):
+        result = {
+            "steps": [
+                {"step": 1, "predictedGoalState": "Hurricane Harbor Phoenix page is open"},
+            ]
+        }
+        self.assertEqual(
+            infer_predicted_goal_state(result),
+            "Hurricane Harbor Phoenix page is open",
+        )
 
     def test_compute_spec_confidence_variants(self):
         # index grounded (1.0), loop 0.4, goal relevance 0.6 -> G_t = 0.8
@@ -56,8 +181,8 @@ class EvalToolTest(unittest.TestCase):
 
     def test_compute_spec_confidence_missing_relevance_falls_back_to_grounding(self):
         # No goal-relevance embedding -> grounding-only (no fabricated neutral value).
-        step = {"action": "click", "target": {"text": "Buy"}, "loop": 0.0}  # text grounding 0.7
-        self.assertAlmostEqual(compute_spec_confidence(step, "spec_full"), 0.7)
+        step = {"action": "click", "target": {"llmIndex": 3, "text": "Buy"}, "loop": 0.0, "element_step_similarity": 0.78}
+        self.assertAlmostEqual(compute_spec_confidence(step, "spec_full"), 0.5)
         self.assertIsNone(compute_spec_confidence({"action": "done"}, "spec_full"))
 
     def test_compute_spec_confidence_prefers_updated_loop_with_legacy_fallback(self):
@@ -84,9 +209,9 @@ class EvalToolTest(unittest.TestCase):
             {"type": "click", "target": {"text": "Search"}},
         ]
         self.assertEqual(compute_loop_score(actions[0], actions[:0]), 0.0)      # no prev
-        self.assertEqual(compute_loop_score(actions[1], actions[:1]), 0.0)      # 0/1
-        self.assertAlmostEqual(compute_loop_score(actions[2], actions[:2]), 0.5)    # 1/2
-        self.assertAlmostEqual(compute_loop_score(actions[3], actions[:3]), 2 / 3)  # 2/3
+        self.assertEqual(compute_loop_score(actions[1], actions[:1]), 0.0)      # 0/10
+        self.assertAlmostEqual(compute_loop_score(actions[2], actions[:2]), 0.1)    # 1/10
+        self.assertAlmostEqual(compute_loop_score(actions[3], actions[:3]), 0.2)  # 2/10
 
     def test_updated_loop_requires_same_action_type_and_text(self):
         actions = [
@@ -95,7 +220,7 @@ class EvalToolTest(unittest.TestCase):
             {"action": "click", "target": {"text": "Search"}},
         ]
         self.assertEqual(compute_loop_score_updated(actions[1], actions[:1]), 0.0)
-        self.assertAlmostEqual(compute_loop_score_updated(actions[2], actions[:2]), 0.5)
+        self.assertAlmostEqual(compute_loop_score_updated(actions[2], actions[:2]), 0.1)
 
     def test_backfill_computed_loop_uses_prev_action_denominator(self):
         steps = [
@@ -108,13 +233,13 @@ class EvalToolTest(unittest.TestCase):
         backfill_computed_loop({"steps": steps})
         self.assertEqual(steps[0]["computed_loop"], 0.0)        # initial excluded
         self.assertEqual(steps[0]["computed_loop_updated"], 0.0)
-        self.assertEqual(steps[1]["computed_loop"], 0.0)        # 0/0 -> 0
-        self.assertEqual(steps[2]["computed_loop"], 0.0)        # 0/1
-        self.assertAlmostEqual(steps[3]["computed_loop"], 0.5)  # 1/2
-        self.assertAlmostEqual(steps[4]["computed_loop"], 2 / 3)  # 2/3
+        self.assertEqual(steps[1]["computed_loop"], 0.0)        # 0/10 -> 0
+        self.assertEqual(steps[2]["computed_loop"], 0.0)        # 0/10
+        self.assertAlmostEqual(steps[3]["computed_loop"], 0.1)  # 1/10
+        self.assertAlmostEqual(steps[4]["computed_loop"], 0.2)  # 2/10
         self.assertEqual(steps[1]["action_key_updated"], "click: search")
-        self.assertAlmostEqual(steps[3]["computed_loop_updated"], 0.5)
-        self.assertAlmostEqual(steps[4]["computed_loop_updated"], 2 / 3)
+        self.assertAlmostEqual(steps[3]["computed_loop_updated"], 0.1)
+        self.assertAlmostEqual(steps[4]["computed_loop_updated"], 0.2)
 
     def test_backfill_updated_loop_does_not_match_click_and_type_same_text(self):
         steps = [
@@ -125,7 +250,98 @@ class EvalToolTest(unittest.TestCase):
         ]
         backfill_computed_loop({"steps": steps})
         self.assertEqual(steps[2]["computed_loop_updated"], 0.0)
-        self.assertAlmostEqual(steps[3]["computed_loop_updated"], 0.5)
+        self.assertAlmostEqual(steps[3]["computed_loop_updated"], 0.1)
+
+    def test_loop_metrics_summary_counts_steps_above_half(self):
+        steps = [{"step": 0, "isInitial": True}]
+        for i in range(1, 10):  # 9 steps
+            steps.append({"step": i, "action": "click", "target": {"text": "Search"}})
+        summary = loop_metrics_summary(steps)
+        self.assertEqual(summary["loop_steps_updated"], 3)  # steps 7, 8, 9 (L_t_u values: 0.6, 0.7, 0.8)
+        self.assertAlmostEqual(summary["min_loop_updated"], 0.0)
+        self.assertAlmostEqual(summary["max_loop_updated"], 0.8)
+
+    def test_loop_metrics_summary_zero_when_no_step_exceeds_half(self):
+        steps = [{"step": 0, "isInitial": True}]
+        for i in range(1, 9):
+            steps.append({"step": i, "action": "click", "target": {"text": f"Unique {i}"}})
+        for i in range(9, 15):  # 6 steps of Select My Car
+            steps.append({"step": i, "action": "click", "target": {"text": "Select My Car"}})
+        summary = loop_metrics_summary(steps)
+        self.assertEqual(summary["loop_steps_updated"], 0)  # max loop score is 5/10 = 0.5, which is not > 0.5
+        self.assertAlmostEqual(summary["max_loop_updated"], 0.5)
+
+    def test_mind2web_difficulty_buckets(self):
+        self.assertEqual(infer_difficulty_from_reference_length(5), "easy")
+        self.assertEqual(infer_difficulty_from_reference_length(6), "medium")
+        self.assertEqual(infer_difficulty_from_reference_length(12), "medium")
+        self.assertEqual(infer_difficulty_from_reference_length(13), "hard")
+        counts = difficulty_counts(load_tasks("mind2web"))
+        self.assertEqual(sum(counts.values()), 100)
+        self.assertEqual(counts["easy"], 39)
+        self.assertEqual(counts["medium"], 50)
+        self.assertEqual(counts["hard"], 11)
+
+    def test_filter_mind2web_by_difficulty(self):
+        tasks = load_tasks("mind2web")
+        easy = filter_tasks_by_difficulty(tasks, "easy")
+        self.assertTrue(easy)
+        self.assertTrue(all(effective_task_difficulty(task) == "easy" for task in easy))
+
+    def test_difficulty_prefers_reference_length_over_dataset_label(self):
+        task = {"reference_length": "11", "level": "Hard"}
+        self.assertEqual(effective_task_difficulty(task), "medium")
+
+    def test_reference_step_count_prefers_reference_length_over_reference_steps(self):
+        task = {"reference_length": "4", "reference_steps": "1. One\n2. Two\n3. Three\n4. Four\n5. Five\n6. Six"}
+        self.assertEqual(reference_step_count(task), 4)
+        self.assertEqual(effective_task_difficulty(task), "easy")
+
+    def test_no_login_difficulty_uses_reference_ground_truth_steps(self):
+        tasks = load_tasks("no_login")
+        counts = difficulty_counts(tasks)
+        self.assertEqual(counts["easy"], 6)
+        self.assertEqual(counts["medium"], 6)
+        self.assertEqual(counts["hard"], 0)
+        self.assertEqual(reference_step_count(tasks[0]), 6)
+
+    def test_reference_step_count_handles_embedded_numbered_steps(self):
+        task = {"reference_steps": "1. Open site\n2. Type Austin 3. Click Search 4. Filter"}
+        self.assertEqual(reference_step_count(task), 4)
+
+    def test_eval_server_dashboard_filters_no_login_by_reference_steps(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        with patch("eval_server.app.list_auto_runs", return_value=[]), \
+             patch("eval_server.app.collect_starred_tasks", return_value=[]):
+            response = server_app.test_client().get("/?tab=automatic&task_set=no_login&difficulty=easy")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Reference Length:", response.data)
+        self.assertIn(b"Easy (6)", response.data)
+        self.assertIn(b"Medium (6)", response.data)
+        self.assertIn(b"Hard (0)", response.data)
+        self.assertIn(b'value=\"easy\" selected', response.data)
+        self.assertIn(b'data-difficulty=\"easy\"', response.data)
+        self.assertNotIn(b'data-difficulty=\"medium\"', response.data)
+        self.assertNotIn(b'data-difficulty=\"hard\"', response.data)
+
+    def test_eval_server_dashboard_filters_online_mind2web_by_reference_length(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        with patch("eval_server.app.list_auto_runs", return_value=[]), \
+             patch("eval_server.app.collect_starred_tasks", return_value=[]):
+            response = server_app.test_client().get("/?tab=automatic&task_set=online_mind2web&difficulty=hard")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Reference Length:", response.data)
+        self.assertIn(b"Easy (80)", response.data)
+        self.assertIn(b"Medium (176)", response.data)
+        self.assertIn(b"Hard (44)", response.data)
+        self.assertIn(b'value=\"hard\" selected', response.data)
+        self.assertIn(b'data-difficulty=\"hard\"', response.data)
+        self.assertNotIn(b'data-difficulty=\"medium\"', response.data)
+        self.assertNotIn(b'data-difficulty=\"easy\"', response.data)
 
     def test_score_step_dispatches_by_family(self):
         step = {"action": "click", "target": {"llmIndex": 1}, "grounded": 0.8, "loop": 0.1, "progress": 0.5}
@@ -138,6 +354,33 @@ class EvalToolTest(unittest.TestCase):
         self.assertFalse(effective_success({"judge": {"success": True}, "human_success": False}))
         self.assertTrue(effective_success({"judge": {"success": True}}))
         self.assertFalse(effective_success({"judge": {"success": False}}))
+        self.assertTrue(effective_success({"evaluation": {"status": "success"}, "judge": {"success": False}}))
+
+    def test_task_outcome_prefers_manual_and_saved_evaluation(self):
+        self.assertEqual(task_outcome({"human_success": True, "judge": {"success": False}}), "success")
+        self.assertEqual(task_outcome({"evaluation": {"status": "failed"}, "judge": {"success": True}}), "failed")
+        self.assertEqual(task_outcome({"judge": {"success": True}}), "success")
+        self.assertEqual(task_outcome({"judge": {"success": False}}), "failed")
+        self.assertEqual(task_outcome({}), "pending")
+
+    def test_evaluation_for_inspector_prefills_from_llm_judge(self):
+        evaluation, source = evaluation_for_inspector({
+            "judge": {"success": False, "failureCategory": "ACCESS DENIED", "reason": "Blocked"},
+        })
+        self.assertEqual(source, "llm_judge")
+        self.assertEqual(evaluation["status"], "failed")
+        self.assertIn("ACCESS DENIED", evaluation["error_types"])
+
+    def test_apply_manual_evaluation_syncs_human_success(self):
+        updated = apply_manual_evaluation(
+            {"judge": {"success": False}, "task_id": "t1"},
+            status="success",
+            notes="Looks correct to me",
+        )
+        self.assertTrue(updated["human_success"])
+        self.assertEqual(updated["evaluation"]["status"], "success")
+        self.assertEqual(updated["evaluation"]["source"], "human")
+        self.assertTrue(effective_success(updated))
 
     def test_compute_ece_zero_when_calibrated_and_nonzero_on_gap(self):
         calibrated = compute_ece([1.0, 1.0, 0.0], [1.0, 1.0, 0.0], n_bins=5)
@@ -149,13 +392,13 @@ class EvalToolTest(unittest.TestCase):
     def test_aggregate_task_modes(self):
         steps = [
             {"step": 1, "action": "click", "target": {"llmIndex": 1}, "loop": 0.0, "g_goal_relevance_score": 1.0},  # 1.0
-            {"step": 2, "action": "click", "target": {"text": "x"}, "loop": 0.0, "g_goal_relevance_score": 0.0},     # 0.35
+            {"step": 2, "action": "click", "target": {"llmIndex": 2, "text": "x"}, "loop": 0.0, "g_goal_relevance_score": 0.0, "element_step_similarity": 0.78},  # 0.25
             {"step": 0, "isInitial": True},
             {"step": 3, "action": "scroll_down"},  # excluded (no grounding)
         ]
-        self.assertAlmostEqual(aggregate_task(steps, "spec_full", "last"), 0.35)
-        self.assertAlmostEqual(aggregate_task(steps, "spec_full", "min"), 0.35)
-        self.assertAlmostEqual(aggregate_task(steps, "spec_full", "mean"), 0.675)
+        self.assertAlmostEqual(aggregate_task(steps, "spec_full", "last"), 0.25)
+        self.assertAlmostEqual(aggregate_task(steps, "spec_full", "min"), 0.25)
+        self.assertAlmostEqual(aggregate_task(steps, "spec_full", "mean"), 0.625)
 
     def test_ece_payload_excludes_bot_detection_and_uses_effective_label(self):
         results = [
@@ -230,6 +473,69 @@ class EvalToolTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         for canvas_id in (b'id="plotA"', b'id="plotC"', b'id="plotD"', b'id="plotE"', b'id="calibration"'):
             self.assertIn(canvas_id, response.data)
+
+    def test_completed_run_can_rerun_subgoal_progress(self):
+        app = create_app()
+        app.config.update(TESTING=True)
+        run = {"run_id": "r1", "status": "completed", "task_ids": ["t1"]}
+        result = {
+            "task_id": "t1", "task": {"task": "Do thing"},
+            "judge": {"success": True},
+            "steps": enrich_step_scores([
+                {"step": 1, "action": "click", "target": {"llmIndex": 1}, "loop": 0.0, "progress": 0.5, "grounded": 0.9},
+            ]),
+        }
+        with patch("eval_tool.app.load_run", return_value=run), \
+             patch("eval_tool.app.list_task_results", return_value=[result]), \
+             patch("eval_tool.app.is_running", return_value=False), \
+             patch("eval_tool.app.backfill_spec_progress"), \
+             patch("eval_tool.app.rerun_subgoal_progress_for_results", return_value={
+                 "tasks_updated": 1,
+                 "tasks_skipped": 0,
+                 "steps_scored": 1,
+             }) as rerun:
+            client = app.test_client()
+            page = client.get("/runs/r1")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b"Rerun Subgoal Progress", page.data)
+
+            response = client.post("/runs/r1/subgoal-progress/rerun")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("subgoal_rerun=1", response.headers["Location"])
+        rerun.assert_called_once()
+
+    def test_completed_task_page_can_rerun_subgoal_progress_for_one_task(self):
+        app = create_app()
+        app.config.update(TESTING=True)
+        run = {"run_id": "r1", "status": "completed", "task_ids": ["t1"]}
+        result = {
+            "task_id": "t1",
+            "task": {"name": "task one", "task": "Do thing", "website_url": "https://example.test"},
+            "judge": {"success": True, "confidence": 0.9, "reason": "Done"},
+            "terminal_reason": "DONE",
+            "steps": enrich_step_scores([
+                {"step": 1, "action": "click", "target": {"llmIndex": 1}, "loop": 0.0, "progress": 0.5, "grounded": 0.9},
+            ]),
+        }
+        with patch("eval_tool.app.load_run", return_value=run), \
+             patch("eval_tool.app.load_task_result", return_value=result), \
+             patch("eval_tool.app.is_running", return_value=False), \
+             patch("eval_tool.app.rerun_subgoal_progress_for_results", return_value={
+                 "tasks_updated": 1,
+                 "tasks_skipped": 0,
+                 "steps_scored": 1,
+             }) as rerun:
+            client = app.test_client()
+            page = client.get("/runs/r1/tasks/t1")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b"Rerun Subgoal Progress for This Task", page.data)
+
+            response = client.post("/runs/r1/tasks/t1/subgoal-progress/rerun")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/runs/r1/tasks/t1", response.headers["Location"])
+        self.assertIn("subgoal_rerun=1", response.headers["Location"])
+        rerun.assert_called_once()
+        self.assertEqual(rerun.call_args.args[1], [result])
 
     def test_charts_route_redirects_to_run_page(self):
         app = create_app()
@@ -439,6 +745,410 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"Task model", response.data)
         self.assertIn(DEFAULT_LLM_MODEL.encode(), response.data)
 
+    def test_eval_server_run_detail_shows_run_models(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {
+            "run_id": "test-run-models",
+            "created_at": "now",
+            "status": "completed",
+            "task_ids": ["t1"],
+            "task_model": "google/gemini-2.5-pro",
+            "judge_model": "openai/gpt-4o",
+        }
+        result = {
+            "task_id": "t1",
+            "status": "completed",
+            "task": {"task": "Do thing"},
+            "judge": {"success": True, "reason": "Done"},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {
+                    "step": 1,
+                    "action": "click",
+                    "target": {"llmIndex": 1},
+                    "element_step_similarity": 0.42,
+                    "self_progress_no_gt": -1,
+                    "self_progress_no_gt_reason": "regression",
+                },
+                {"step": 2, "action": "done"},
+            ],
+        }
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.list_task_results", return_value=[result]), \
+             patch("eval_server.app.is_running", return_value=False):
+            response = server_app.test_client().get("/runs/test-run-models")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Task model:", response.data)
+        self.assertIn(b"google/gemini-2.5-pro", response.data)
+        self.assertIn(b"Judge model:", response.data)
+        self.assertIn(b"openai/gpt-4o", response.data)
+        self.assertIn(b"Total Steps", response.data)
+        self.assertIn(b">2</div>", response.data)
+        self.assertIn(b"Rerun Goal Relevance", response.data)
+        self.assertIn(b"Rerun Grounding Similarity", response.data)
+        self.assertIn(b"self_progress_no_gt", response.data)
+        self.assertIn(b"element_step_similarity", response.data)
+        self.assertIn(b"Grounding Similarity", response.data)
+        self.assertIn(b"Steps Below Threshold", response.data)
+        self.assertIn(b"Tasks With Low Similarity", response.data)
+        self.assertIn(b"Human Label Boundary Check", response.data)
+        self.assertIn(b"Pred Grounded", response.data)
+        self.assertIn(b"precision", response.data)
+        self.assertIn(b"oninput=\"updateGroundingThresholdSummary()\"", response.data)
+        self.assertIn(b"similarity &lt; 0.80", response.data)
+        self.assertIn(b"Step 1: 0.42", response.data)
+        self.assertIn(b"-1", response.data)
+        self.assertIn(b"regression", response.data)
+
+    def test_eval_server_trajectory_inspector_shows_negative_no_gt_progress(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        trajectory = {
+            "sessionId": "neg-no-gt",
+            "goal": "Do thing",
+            "judge": {"success": False, "reason": "Not done"},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {
+                    "step": 1,
+                    "action": "click",
+                    "instruction": "Click Back",
+                    "target": {"llmIndex": 3, "text": "Back"},
+                    "element_step_similarity": 0.42,
+                    "self_progress_no_gt": -1,
+                    "self_progress_no_gt_reason": "moved away from the goal",
+                },
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            saved_dir = Path(tmp) / "saved"
+            runs_dir = Path(tmp) / "runs"
+            saved_dir.mkdir()
+            runs_dir.mkdir()
+            (saved_dir / "neg-no-gt.json").write_text(json.dumps(trajectory), encoding="utf-8")
+            with patch("eval_server.app.SAVED_DIR", str(saved_dir)), \
+                 patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_stars", return_value={}):
+                response = server_app.test_client().get("/trajectory/neg-no-gt")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Rerun Goal Relevance", response.data)
+        self.assertIn(b"Rerun Grounding Similarity", response.data)
+        self.assertIn(b"self_progress_no_gt", response.data)
+        self.assertIn(b"Grounding Similarity", response.data)
+        self.assertNotIn(b"metric-col-elemsim", response.data)
+        self.assertIn(b"0.42", response.data)
+        self.assertIn(b"#a16207", response.data)
+        self.assertIn(b"badge red", response.data)
+        self.assertIn(b">-1</span>", response.data)
+        self.assertIn(b"moved away from the goal", response.data)
+
+    def test_eval_server_trajectory_inspector_shows_grounding_similarity_badges(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        long_element_text = "(dialog) select a date range from June 20 to June 24 for the booking calendar modal"
+        trajectory = {
+            "sessionId": "grounding-similarity-badges",
+            "goal": "Do thing",
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {
+                    "step": 1,
+                    "action": "click",
+                    "instruction": "Click Where",
+                    "target": {"llmIndex": 3, "text": "Where"},
+                    "element_step_similarity": 0.82,
+                },
+                {
+                    "step": 2,
+                    "action": "click",
+                    "instruction": "Click Search",
+                    "target": {"llmIndex": 4, "text": "Search"},
+                    "element_step_similarity": 0.79,
+                },
+                {
+                    "step": 3,
+                    "action": "click",
+                    "instruction": "Select date range",
+                    "target": {"llmIndex": 5, "text": long_element_text},
+                    "element_step_similarity": 0.55,
+                },
+                {
+                    "step": 4,
+                    "action": "click",
+                    "instruction": "Select date range again",
+                    "target": {"llmIndex": 5, "text": long_element_text},
+                    "element_step_similarity": 0.55,
+                },
+                {"step": 5, "action": "click", "instruction": "Click missing", "target": {"llmIndex": 6, "text": "Missing"}},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            saved_dir = Path(tmp) / "saved"
+            runs_dir = Path(tmp) / "runs"
+            saved_dir.mkdir()
+            runs_dir.mkdir()
+            (saved_dir / "grounding-similarity-badges.json").write_text(json.dumps(trajectory), encoding="utf-8")
+            with patch("eval_server.app.SAVED_DIR", str(saved_dir)), \
+                 patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_stars", return_value={}):
+                response = server_app.test_client().get("/trajectory/grounding-similarity-badges")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Grounding Similarity", response.data)
+        self.assertIn(b"Show Grounded_Human_Label", response.data)
+        self.assertIn(b"Grounded_Human_Label", response.data)
+        self.assertIn(b"Human Label Boundary Check", response.data)
+        self.assertIn(b"id=\"task-grounding-boundary-input\"", response.data)
+        self.assertIn(b"oninput=\"renderTaskBoundarySummary()\"", response.data)
+        self.assertIn(b"Pred Grounded", response.data)
+        self.assertIn(b">0.82</span>", response.data)
+        self.assertIn(b">0.79</span>", response.data)
+        self.assertIn(b"#a16207", response.data)
+        self.assertIn(b"Raw cosine similarity: 0.82", response.data)
+        self.assertIn(long_element_text.encode(), response.data)
+        self.assertIn(b"max-width: 260px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.25", response.data)
+        self.assertNotIn(b"max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;", response.data)
+
+    def test_grounding_human_label_api_saves_and_clears_default(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        trajectory = {
+            "sessionId": "human-grounding-label",
+            "goal": "Do thing",
+            "steps": [
+                {"step": 1, "instruction": "Click Search", "element_step_similarity": 0.9},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            saved_dir = Path(tmp) / "saved"
+            runs_dir = Path(tmp) / "runs"
+            saved_dir.mkdir()
+            runs_dir.mkdir()
+            path = saved_dir / "human-grounding-label.json"
+            path.write_text(json.dumps(trajectory), encoding="utf-8")
+            with patch("eval_server.app.SAVED_DIR", str(saved_dir)), \
+                 patch("eval_server.app.RUNS_DIR", str(runs_dir)):
+                client = server_app.test_client()
+                response = client.post(
+                    "/api/trajectory/human-grounding-label/grounding-human-label",
+                    json={"step": 1, "label": "non_grounded", "threshold": 0.8},
+                )
+                self.assertEqual(response.status_code, 200)
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(data["steps"][0]["grounded_human_label"], "non_grounded")
+                self.assertEqual(response.get_json()["metrics"]["fp"], 1)
+
+                response = client.post(
+                    "/api/trajectory/human-grounding-label/grounding-human-label",
+                    json={"step": 1, "label": "grounded", "threshold": 0.8},
+                )
+                self.assertEqual(response.status_code, 200)
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertNotIn("grounded_human_label", data["steps"][0])
+
+    def test_grounding_human_label_api_rejects_invalid_and_running_run(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        with TemporaryDirectory() as tmp:
+            saved_dir = Path(tmp) / "saved"
+            runs_dir = Path(tmp) / "runs"
+            task_dir = runs_dir / "run-active" / "tasks"
+            saved_dir.mkdir()
+            task_dir.mkdir(parents=True)
+            (task_dir / "t1.json").write_text(json.dumps({
+                "session_id": "active-session",
+                "steps": [{"step": 1, "element_step_similarity": 0.4}],
+            }), encoding="utf-8")
+            with patch("eval_server.app.SAVED_DIR", str(saved_dir)), \
+                 patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.is_running", return_value=True):
+                client = server_app.test_client()
+                response = client.post(
+                    "/api/trajectory/active-session/grounding-human-label",
+                    json={"step": 1, "label": "non_grounded"},
+                )
+                self.assertEqual(response.status_code, 400)
+
+            with patch("eval_server.app.SAVED_DIR", str(saved_dir)), \
+                 patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.is_running", return_value=False):
+                response = server_app.test_client().post(
+                    "/api/trajectory/active-session/grounding-human-label",
+                    json={"step": 1, "label": "bad"},
+                )
+                self.assertEqual(response.status_code, 400)
+
+    def test_eval_server_run_detail_can_rerun_goal_relevance_and_grounding_similarity(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "rerun-embeds", "status": "completed", "task_ids": ["t1"], "task_model": "task-model"}
+        task = {
+            "task_id": "t1",
+            "task": {"task": "Do thing", "website_url": "https://example.test"},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {"step": 1, "action": "click", "instruction": "Click submit", "target": {"llmIndex": 1, "text": "Submit"}},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            task_dir = runs_dir / "rerun-embeds" / "tasks"
+            task_dir.mkdir(parents=True)
+            (task_dir / "t1.json").write_text(json.dumps(task), encoding="utf-8")
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run), \
+                 patch("eval_server.app.is_running", return_value=False), \
+                 patch("eval_server.app.rerun_trajectory_goal_relevance", return_value={"updated": True, "steps_scored": 1, "reason": ""}) as rerun_goal, \
+                 patch("eval_server.app.rerun_trajectory_grounding_similarity", return_value={"updated": True, "steps_scored": 1, "reason": ""}) as rerun_ground:
+                client = server_app.test_client()
+                goal_response = client.post("/runs/rerun-embeds/goal-relevance/rerun")
+                ground_response = client.post("/runs/rerun-embeds/grounding-similarity/rerun")
+        self.assertEqual(goal_response.status_code, 302)
+        self.assertIn("goalrel_rerun=1", goal_response.headers["Location"])
+        self.assertIn("goalrel_steps=1", goal_response.headers["Location"])
+        self.assertEqual(ground_response.status_code, 302)
+        self.assertIn("grounding_rerun=1", ground_response.headers["Location"])
+        self.assertIn("grounding_steps=1", ground_response.headers["Location"])
+        rerun_goal.assert_called_once()
+        rerun_ground.assert_called_once()
+
+    def test_eval_server_dashboard_auto_runs_table_shows_models_and_fallback(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        runs = [
+            {
+                "run_id": "run-with-models",
+                "created_at": "now",
+                "status": "completed",
+                "task_ids": [],
+                "task_set": "no_login",
+                "task_model": "google/gemini-2.5-pro",
+                "judge_model": "openai/gpt-4o",
+                "region_capture_mode": "aligned",
+            },
+            {
+                "run_id": "run-without-models",
+                "created_at": "then",
+                "status": "completed",
+                "task_ids": [],
+                "task_set": "no_login",
+                "region_capture_mode": "legacy",
+            },
+        ]
+        with patch("eval_server.app.list_auto_runs", return_value=runs), \
+             patch("eval_server.app.is_running", return_value=False), \
+             patch("eval_server.app.collect_starred_tasks", return_value=[]):
+            response = server_app.test_client().get("/?tab=automatic")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Show Judge / Target", response.data)
+        self.assertIn(b".metric-col-hidden", response.data)
+        self.assertIn(b"metric-col-runmeta metric-col-hidden", response.data)
+        self.assertIn(b"Task Model", response.data)
+        self.assertIn(b"Judge Model", response.data)
+        self.assertIn(b"google/gemini-2.5-pro", response.data)
+        self.assertIn(b"openai/gpt-4o", response.data)
+        self.assertIn(b"Grounding Similarity", response.data)
+        self.assertIn(b"Unknown", response.data)
+
+    def test_eval_server_dashboard_auto_runs_table_can_show_reference_summary(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        runs = [{
+            "run_id": "run-ref-summary",
+            "created_at": "now",
+            "status": "completed",
+            "task_ids": ["easy-task", "medium-task"],
+            "task_set": "no_login",
+        }]
+        task_map = {
+            "easy-task": {"reference_length": "4", "task": "Easy task"},
+            "medium-task": {"reference_length": "8", "task": "Medium task"},
+        }
+        with patch("eval_server.app.list_auto_runs", return_value=runs), \
+             patch("eval_server.app.tasks_by_id", return_value=task_map), \
+             patch("eval_server.app.is_running", return_value=False), \
+             patch("eval_server.app.collect_starred_tasks", return_value=[]):
+            response = server_app.test_client().get("/?tab=automatic")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Show Ref Steps / Difficulty", response.data)
+        self.assertIn(b"Reference Steps / Difficulty", response.data)
+        self.assertIn(b"metric-col-refmeta metric-col-hidden", response.data)
+        self.assertIn(b"4-8 ref steps", response.data)
+        self.assertIn(b"Easy 1 / Medium 1", response.data)
+
+    def test_eval_server_run_detail_can_show_reference_steps_and_difficulty(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {
+            "run_id": "run-refmeta",
+            "created_at": "now",
+            "status": "completed",
+            "task_ids": ["t1"],
+            "task_set": "no_login",
+        }
+        result = {
+            "task_id": "t1",
+            "status": "completed",
+            "task": {"task": "Do short thing", "reference_length": "4"},
+            "judge": {"success": True, "reason": "Done"},
+            "steps": [],
+        }
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.list_task_results", return_value=[result]), \
+             patch("eval_server.app.tasks_by_id", return_value={}), \
+             patch("eval_server.app.is_running", return_value=False):
+            response = server_app.test_client().get("/runs/run-refmeta")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Show Ref Steps / Difficulty", response.data)
+        self.assertIn(b"metric-col-refmeta metric-col-hidden", response.data)
+        self.assertIn(b"4 ref steps", response.data)
+        self.assertIn(b"Easy", response.data)
+
+    def test_eval_server_run_detail_shows_positive_loop_score_panel(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {
+            "run_id": "run-loop-positive",
+            "created_at": "now",
+            "status": "completed",
+            "task_ids": ["t1"],
+            "task_set": "no_login",
+        }
+        result = {
+            "task_id": "t1",
+            "session_id": "loop-session",
+            "status": "completed",
+            "task": {"name": "Loop Task", "task": "Search twice", "reference_length": "4"},
+            "judge": {"success": False, "failureCategory": "LOOP", "reason": "Repeated action"},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {"step": 1, "action": "click", "instruction": "Click Search", "target": {"llmIndex": 1, "text": "Search"}},
+                {"step": 2, "action": "click", "instruction": "Click Search", "target": {"llmIndex": 1, "text": "Search"}},
+            ],
+        }
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.list_task_results", return_value=[result]), \
+             patch("eval_server.app.tasks_by_id", return_value={}), \
+             patch("eval_server.app.is_running", return_value=False), \
+             patch("eval_server.app.load_stars", return_value={}):
+            response = server_app.test_client().get("/runs/run-loop-positive")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Loop Score Greater Than Zero", response.data)
+        self.assertIn(b"Steps With L_t_u &gt; 0", response.data)
+        self.assertIn(b"Tasks With L_t_u &gt; 0", response.data)
+        self.assertIn(b"1 of 2 checked steps with L_t_u &gt; 0", response.data)
+        self.assertIn(b"Step 2: 0.10", response.data)
+
     def test_run_dashboard_renders_zero_step_diagnostics_and_task_charts(self):
         app = create_app()
         app.config.update(TESTING=True)
@@ -466,39 +1176,6 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"Per Task Charts", response.data)
         self.assertIn(b"No PageGuide steps were recorded.", response.data)
         self.assertIn(b"No recorded action steps.", response.data)
-
-    def test_missing_step_summary_counts_gaps_and_step_two(self):
-        results = [
-            {"task_id": "gap", "steps": [{"step": 1}, {"step": 3}, {"step": 4}]},
-            {"task_id": "clean", "steps": [{"step": 1}, {"step": 2}, {"step": 3}]},
-            {"task_id": "zero", "steps": []},
-        ]
-        summary = missing_step_summary(results)
-        self.assertEqual(summary["missing_any_step_tasks"], 1)
-        self.assertEqual(summary["missing_step_2_tasks"], 1)
-        self.assertEqual(summary["by_task"]["gap"]["missing"], [2])
-        self.assertFalse(summary["by_task"]["clean"]["missing_step_2"])
-        self.assertFalse(summary["by_task"]["zero"]["missing_step_2"])
-
-    def test_run_dashboard_renders_missing_step_stats_and_badges(self):
-        app = create_app()
-        app.config.update(TESTING=True)
-        run = {"run_id": "test-run", "created_at": "now", "status": "completed", "task_ids": ["t1"]}
-        result = {
-            "task_id": "t1",
-            "task": {"task": "Do thing", "website_url": "https://example.test", "level": "Easy"},
-            "terminal_reason": "MAX_STEPS",
-            "judge": {"success": False, "failureCategory": "FAILED", "reason": "Not done", "confidence": 0.4},
-            "steps": [{"step": 1, "confidence_versions": {}}, {"step": 3, "confidence_versions": {}}],
-        }
-        with patch("eval_tool.app.load_run", return_value=run), \
-             patch("eval_tool.app.list_task_results", return_value=[result]), \
-             patch("eval_tool.app.is_running", return_value=False):
-            response = app.test_client().get("/runs/test-run")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Missing Any Step", response.data)
-        self.assertIn(b"Missing Step 2", response.data)
-        self.assertIn(b"Missing steps: 2", response.data)
 
     def test_task_detail_renders_dom_before_and_target(self):
         app = create_app()
@@ -684,7 +1361,7 @@ class EvalRunnerAutoLoginTest(unittest.IsolatedAsyncioTestCase):
 
         steps = await runner._load_rewind_steps(extension_page, None, "task-1")
 
-        self.assertEqual(steps, [])
+        self.assertEqual(steps, {"steps": [], "spec_goal_text": None, "predictedGoalState": None})
         extension_page.evaluate.assert_not_called()
 
     async def test_navigate_to_task_uses_commit_and_treats_domcontentloaded_as_best_effort(self):
@@ -720,6 +1397,653 @@ class EvalRunnerDiagnosticsTest(unittest.TestCase):
             "debug_prompt_count": 0,
         }, "NO STEPS RECORDED")
         self.assertIn("no LLM prompt", explanation)
+
+
+class RegionCaptureModeTest(unittest.TestCase):
+    def test_normalize_region_capture_mode(self):
+        self.assertEqual(normalize_region_capture_mode("legacy"), "legacy")
+        self.assertEqual(normalize_region_capture_mode("aligned"), "aligned")
+        self.assertEqual(normalize_region_capture_mode("new_target_captured"), "aligned")
+        self.assertEqual(normalize_region_capture_mode(None), "legacy")
+
+    def test_region_capture_mode_label(self):
+        self.assertEqual(region_capture_mode_label("legacy"), "Legacy target captured")
+        self.assertEqual(region_capture_mode_label("aligned"), "New Target Captured")
+
+
+class OnlineMind2WebTaskSetTest(unittest.TestCase):
+    def test_normalize_task_set_round_trips_online_mind2web(self):
+        from eval_tool.storage import normalize_task_set
+        self.assertEqual(normalize_task_set("online_mind2web"), "online_mind2web")
+        self.assertEqual(normalize_task_set("Online-Mind2Web"), "online_mind2web")
+
+    def test_task_set_options_include_online_mind2web(self):
+        from eval_tool.storage import task_set_options
+        ids = {opt["id"] for opt in task_set_options()}
+        self.assertIn("online_mind2web", ids)
+
+    def test_current_data_csv_returns_online_mind2web_path_when_present(self):
+        from eval_tool.storage import ONLINE_MIND2WEB_DATA_CSV, current_data_csv
+        with patch.object(Path, "exists", return_value=True):
+            self.assertEqual(current_data_csv("online_mind2web"), ONLINE_MIND2WEB_DATA_CSV)
+
+    def test_downloader_maps_online_mind2web_row_to_csv_columns(self):
+        from scripts.download_online_mind2web import map_row
+        row = map_row({
+            "task_id": "abc123",
+            "website": "https://www.example.com",
+            "confirmed_task": "Find the cheapest flight to LA",
+            "reference_length": 9,
+            "level": "hard",
+        })
+        self.assertEqual(row["task_id"], "abc123")
+        self.assertEqual(row["task"], "Find the cheapest flight to LA")
+        # Full URL is used as-is, not synthesized.
+        self.assertEqual(row["website_url"], "https://www.example.com")
+        self.assertEqual(row["reference_length"], 9)
+        # Dataset's own level wins over the step-count inference.
+        self.assertEqual(row["level"], "Hard")
+        self.assertEqual(row["reference_steps"], "")
+        self.assertIn("Find the cheapest flight to LA", row["success_criteria"])
+
+    def test_downloader_falls_back_to_inferred_level_without_dataset_level(self):
+        from scripts.download_online_mind2web import map_row
+        row = map_row({
+            "task_id": "x", "website": "https://e.com",
+            "confirmed_task": "Do a short task", "reference_length": 4,
+        })
+        self.assertEqual(row["level"], "Easy")  # 4 steps -> Easy bucket
+
+    def test_short_site_name_strips_www_and_tld(self):
+        self.assertEqual(short_site_name("https://www.rottentomatoes.com/"), "rottentomatoes")
+        self.assertEqual(short_site_name("https://www.imdb.com/"), "imdb")
+        self.assertEqual(short_site_name("https://us.speedo.com/"), "us.speedo.com")
+        self.assertEqual(short_site_name("https://new.mta.info/"), "new.mta.info")
+
+    def test_display_task_name_uses_site_for_online_mind2web(self):
+        task = {
+            "name": "online_mind2web",
+            "website_url": "https://www.rottentomatoes.com/",
+        }
+        self.assertEqual(display_task_name(task), "rottentomatoes")
+
+    def test_display_task_name_keeps_named_tasks(self):
+        task = {"name": "exploretock", "website_url": "https://www.exploretock.com/"}
+        self.assertEqual(display_task_name(task), "exploretock")
+
+
+class JudgeMethodTest(unittest.TestCase):
+    def test_normalize_judge_method_defaults_to_webjudge(self):
+        from eval_tool.judge import normalize_judge_method
+        self.assertEqual(normalize_judge_method(None), "webjudge")
+        self.assertEqual(normalize_judge_method("not-a-method"), "webjudge")
+        self.assertEqual(normalize_judge_method("final-screenshot"), "final_screenshot")
+        self.assertEqual(normalize_judge_method("webjudge"), "webjudge")
+
+    def test_create_run_persists_judge_method_default_webjudge(self):
+        app = create_app()
+        app.config.update(TESTING=True)
+        task = load_tasks("no_login")[0]
+        fake_run = {"run_id": "test-jm-run", "created_at": "now", "status": "queued", "task_ids": []}
+        saved_runs = []
+        with patch("eval_tool.app.create_run", return_value=fake_run), \
+             patch("eval_tool.app.save_run", side_effect=lambda run: saved_runs.append(run) or run), \
+             patch("eval_tool.app.start_run"):
+            response = app.test_client().post("/runs", data={"task_ids": [task.task_id]})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(saved_runs[-1]["judge_method"], "webjudge")
+
+    def test_create_run_honors_final_screenshot_judge_method(self):
+        app = create_app()
+        app.config.update(TESTING=True)
+        task = load_tasks("no_login")[0]
+        fake_run = {"run_id": "test-jm-run2", "created_at": "now", "status": "queued", "task_ids": []}
+        saved_runs = []
+        with patch("eval_tool.app.create_run", return_value=fake_run), \
+             patch("eval_tool.app.save_run", side_effect=lambda run: saved_runs.append(run) or run), \
+             patch("eval_tool.app.start_run"):
+            response = app.test_client().post("/runs", data={
+                "task_ids": [task.task_id],
+                "judge_method": "final_screenshot",
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(saved_runs[-1]["judge_method"], "final_screenshot")
+
+
+class GroundTruthToggleTest(unittest.TestCase):
+    def _post_run(self, data):
+        app = create_app()
+        app.config.update(TESTING=True)
+        fake_run = {"run_id": "test-gt-run", "created_at": "now", "status": "queued", "task_ids": []}
+        saved_runs = []
+        with patch("eval_tool.app.create_run", return_value=fake_run), \
+             patch("eval_tool.app.save_run", side_effect=lambda run: saved_runs.append(run) or run), \
+             patch("eval_tool.app.start_run"):
+            response = app.test_client().post("/runs", data=data)
+        self.assertEqual(response.status_code, 302)
+        return saved_runs[-1]
+
+    def test_no_login_run_enables_ground_truth_mode_when_checked(self):
+        task = load_tasks("no_login")[0]
+        saved = self._post_run({
+            "task_set": "no_login",
+            "task_ids": [task.task_id],
+            "ground_truth_mode": "1",
+        })
+        self.assertTrue(saved["ground_truth_mode"])
+
+    def test_no_login_run_defaults_ground_truth_mode_off(self):
+        task = load_tasks("no_login")[0]
+        saved = self._post_run({"task_set": "no_login", "task_ids": [task.task_id]})
+        self.assertFalse(saved["ground_truth_mode"])
+
+    def test_non_no_login_set_cannot_enable_ground_truth_mode(self):
+        task = load_tasks("mind2web")[0]
+        saved = self._post_run({
+            "task_set": "mind2web",
+            "task_ids": [task.task_id],
+            "ground_truth_mode": "1",
+        })
+        self.assertFalse(saved["ground_truth_mode"])
+
+
+class WebJudgeTest(unittest.TestCase):
+    def test_parse_screenshot_score(self):
+        from eval_tool.webjudge import parse_screenshot_score
+        self.assertEqual(parse_screenshot_score("Score: 4"), 4)
+        self.assertEqual(parse_screenshot_score("5"), 5)
+        self.assertEqual(parse_screenshot_score("no digit here"), 0)
+
+    def test_parse_status(self):
+        from eval_tool.webjudge import parse_status
+        self.assertTrue(parse_status("Reasoning...\nStatus: success"))
+        self.assertFalse(parse_status("Status: failure"))
+        self.assertIsNone(parse_status("no verdict at all"))
+
+    def test_build_action_history_excludes_initial(self):
+        from eval_tool.webjudge import build_action_history
+        history = build_action_history([
+            {"isInitial": True, "action": "state"},
+            {"action": "click", "target": {"text": "Search"}},
+            {"action": "type", "target": {"text": "LA"}},
+        ])
+        self.assertNotIn("state", history)
+        self.assertIn("1. click -> Search", history)
+        self.assertIn("2. type -> LA", history)
+
+    def test_judge_trajectory_returns_normalized_success(self):
+        from eval_tool.webjudge import WebJudge, REPO_ROOT
+        judge = WebJudge(api_key="test")
+        # Screenshots must live inside the repo (in-repo safety check), so write a
+        # temp file under eval_tool/ rather than in the system temp dir.
+        shot = REPO_ROOT / "eval_tool" / "_wj_test_shot.png"
+        shot.write_bytes(b"fakepng")
+        try:
+            steps = [{"action": "click", "target": {"text": "Buy"}, "screenshot": str(shot.relative_to(REPO_ROOT))}]
+            with patch.object(judge.llm, "_call_openai") as call:
+                # key points, then screenshot score, then outcome
+                call.side_effect = ["1. Item purchased", "5", "Looks done.\nStatus: success"]
+                result = judge.judge_trajectory({"task": "Buy an item"}, steps, shot)
+        finally:
+            shot.unlink(missing_ok=True)
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["failureCategory"])
+        self.assertEqual(result["method"], "webjudge")
+        self.assertIn("screenshot_scores", result)
+
+    def test_judge_trajectory_without_api_key_is_non_fatal(self):
+        from eval_tool.webjudge import WebJudge
+        judge = WebJudge(api_key=None)
+        judge.api_key = None
+        result = judge.judge_trajectory({"task": "Do thing"}, [], None)
+        self.assertFalse(result["success"])
+        # Passes through the same normalized shape as the legacy judge.
+        self.assertIn("confidence", result)
+        self.assertIn("reason", result)
+        self.assertIn("failureCategory", result)
+
+
+SAMPLE_DOM = """
+<html><body>
+  <h1>Search Results</h1>
+  <input type="text" name="q" value="bra top">
+  <input type="checkbox" name="agree" checked aria-label="Agree to terms">
+  <select name="size"><option>Small</option><option selected>Medium</option></select>
+  <input type="radio" name="fit" value="XL" checked aria-label="XL">
+  <button aria-selected="true">Purple</button>
+  <button aria-pressed="true">High Support</button>
+  <button class="size-option active">Large</button>
+  <button>Add to cart</button>
+  <div role="alert" aria-label="Success message">Order placed</div>
+  <script>var x = 'hidden script text';</script>
+</body></html>
+"""
+
+
+class SubgoalPageStateTest(unittest.TestCase):
+    def _state(self, url="https://shop.test/search?q=1", dom=SAMPLE_DOM):
+        from eval_tool.subgoal_progress import PageState
+        return PageState(url, dom)
+
+    def test_extracts_visible_text_excluding_scripts(self):
+        state = self._state()
+        self.assertIn("search results", state.visible_text)
+        self.assertIn("order placed", state.visible_text)
+        self.assertNotIn("hidden script text", state.visible_text)
+
+    def test_extracts_form_control_state(self):
+        state = self._state()
+        q = next(c for c in state.controls if c["name"] == "q")
+        self.assertEqual(q["value"], "bra top")
+        agree = next(c for c in state.controls if c["name"] == "agree")
+        self.assertTrue(agree["checked"])
+        size = next(c for c in state.controls if c["name"] == "size")
+        self.assertIn("Medium", size["selected_text"])
+
+    def test_check_types(self):
+        from eval_tool.subgoal_progress import evaluate_check
+        state = self._state()
+        self.assertTrue(evaluate_check({"type": "url_includes", "value": "search"}, state))
+        self.assertTrue(evaluate_check({"type": "text_includes", "value": "order placed"}, state))
+        self.assertTrue(evaluate_check({"type": "text_excludes", "value": "error 500"}, state))
+        self.assertTrue(evaluate_check({"type": "input_value", "name": "q", "value": "bra top"}, state))
+        self.assertTrue(evaluate_check({"type": "checkbox_checked", "label": "agree"}, state))
+        self.assertTrue(evaluate_check({"type": "select_value", "value": "medium"}, state))
+        self.assertTrue(evaluate_check({"type": "role_label", "role": "button", "name": "add to cart"}, state))
+        self.assertTrue(evaluate_check({"type": "role_label", "role": "alert", "name": "success"}, state))
+        self.assertTrue(evaluate_check({"type": "selected_value", "value": "medium"}, state))
+        self.assertTrue(evaluate_check({"type": "selected_value", "value": "purple"}, state))
+        self.assertTrue(evaluate_check({"type": "control_state", "label": "XL", "state": "checked"}, state))
+        self.assertTrue(evaluate_check({"type": "control_state", "label": "High Support", "state": "pressed"}, state))
+        self.assertTrue(evaluate_check({"type": "control_state", "label": "Large", "state": "active"}, state))
+        self.assertTrue(evaluate_check({"type": "text_group_includes", "all_of": ["search-results", "order placed"]}, state))
+        # Negatives
+        self.assertFalse(evaluate_check({"type": "text_includes", "value": "no such text"}, state))
+        self.assertFalse(evaluate_check({"type": "checkbox_checked", "label": "newsletter"}, state))
+
+    def test_subgoal_verified_legacy_checks_requires_all_checks(self):
+        from eval_tool.subgoal_progress import subgoal_verified
+        state = self._state()
+        ok = {"checks": [{"type": "url_includes", "value": "search"}, {"type": "text_includes", "value": "order placed"}]}
+        bad = {"checks": [{"type": "url_includes", "value": "search"}, {"type": "text_includes", "value": "missing"}]}
+        self.assertTrue(subgoal_verified(ok, state))
+        self.assertFalse(subgoal_verified(bad, state))
+        self.assertFalse(subgoal_verified({"checks": []}, state))
+
+    def test_subgoal_verified_checks_any_uses_or_semantics(self):
+        from eval_tool.subgoal_progress import subgoal_verified
+        state = self._state()
+        any_ok = {"checks_any": [
+            {"type": "text_includes", "value": "missing"},
+            {"type": "url_includes", "value": "search"},
+        ]}
+        any_bad = {"checks_any": [
+            {"type": "text_includes", "value": "missing"},
+            {"type": "url_includes", "value": "checkout"},
+        ]}
+        self.assertTrue(subgoal_verified(any_ok, state))
+        self.assertFalse(subgoal_verified(any_bad, state))
+
+    def test_xl_visible_text_alone_does_not_satisfy_selected_size_check(self):
+        from eval_tool.subgoal_progress import PageState, evaluate_check, subgoal_verified
+        state = PageState("https://shop.test/p/1", """
+          <html><body>
+            <button>XS</button><button>S</button><button>M</button>
+            <button>L</button><button>XL</button><button>XXL</button>
+          </body></html>
+        """)
+        self.assertTrue(evaluate_check({"type": "text_includes", "value": "XL"}, state))
+        self.assertFalse(subgoal_verified({"checks_any": [
+            {"type": "selected_value", "value": "XL"},
+            {"type": "control_state", "label": "XL", "state": "selected"},
+            {"type": "control_state", "label": "XL", "state": "pressed"},
+            {"type": "text_includes", "value": "Size: XL"},
+        ]}, state))
+
+
+class SubgoalScoringTest(unittest.TestCase):
+    def _result(self):
+        def dom(text):
+            return f"<html><body>{text}</body></html>"
+        return {
+            "subgoal_rubric": {"subgoals": [
+                {"order": 1, "goal": "alpha", "checks": [{"type": "text_includes", "value": "alpha"}]},
+                {"order": 2, "goal": "beta", "checks": [{"type": "text_includes", "value": "beta"}]},
+            ]},
+            "steps": [
+                {"step": 1, "url": "", "domSnapshotAfter": dom("alpha")},
+                {"step": 2, "url": "", "domSnapshotAfter": dom("alpha beta")},
+                {"step": 3, "url": "", "domSnapshotAfter": dom("alpha beta extra3")},
+                {"step": 4, "url": "", "domSnapshotAfter": dom("alpha beta")},
+                {"step": 5, "url": "", "domSnapshotAfter": dom("alpha")},
+            ],
+        }
+
+    def test_per_step_scores_use_loop_for_zero(self):
+        # 1.0 when a new subgoal completes; 0.0 when no new subgoal AND looping (L_t_u > 0.5);
+        # 0.5 when no new subgoal but not looping.
+        from eval_tool.subgoal_progress import score_subgoal_progress
+        def dom(t):
+            return f"<html><body>{t}</body></html>"
+        result = {
+            "subgoal_rubric": {"subgoals": [
+                {"order": 1, "goal": "alpha", "checks_any": [{"type": "text_includes", "value": "alpha"}]},
+            ]},
+            "steps": [
+                {"step": 1, "url": "", "action": "click", "instruction": "go", "domSnapshotAfter": dom("alpha")},
+                {"step": 2, "url": "", "action": "click", "instruction": "go", "domSnapshotAfter": dom("alpha")},
+                {"step": 3, "url": "", "action": "click", "instruction": "go", "domSnapshotAfter": dom("alpha")},
+                {"step": 4, "url": "", "action": "click", "instruction": "go", "domSnapshotAfter": dom("alpha")},
+                {"step": 5, "url": "", "action": "click", "instruction": "go", "domSnapshotAfter": dom("alpha")},
+                {"step": 6, "url": "", "action": "click", "instruction": "go", "domSnapshotAfter": dom("alpha")},
+                {"step": 7, "url": "", "action": "click", "instruction": "go", "domSnapshotAfter": dom("alpha")},
+                {"step": 8, "url": "", "action": "click", "instruction": "other", "domSnapshotAfter": dom("alpha")},
+            ],
+        }
+        self.assertTrue(score_subgoal_progress(result))
+        scores = [s["subgoal_progress"] for s in result["steps"]]
+        # step1 completes alpha → 1.0; steps 2..6 no new + repeats < 6 times (L_t_u <= 0.5) → 0.5;
+        # step7 repeats 6 times (L_t_u = 0.6 > 0.5) → 0.0; step8 a different action (L_t_u = 0.0) → 0.5
+        self.assertEqual(scores, [1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.0, 0.5])
+        self.assertAlmostEqual(result["steps"][6]["subgoal_loop_score"], 0.6)
+        self.assertAlmostEqual(result["steps"][7]["subgoal_loop_score"], 0.0)
+
+    def test_independent_subgoals_are_not_implied_by_a_later_one(self):
+        # Subgoals are independent: verifying #3 must NOT auto-credit #1 and #2.
+        from eval_tool.subgoal_progress import score_subgoal_progress
+        result = {
+            "subgoal_rubric": {"subgoals": [
+                {"order": 1, "goal": "alpha", "checks_any": [{"type": "text_includes", "value": "alpha"}]},
+                {"order": 2, "goal": "beta", "checks_any": [{"type": "text_includes", "value": "beta"}]},
+                {"order": 3, "goal": "gamma", "checks_any": [{"type": "text_includes", "value": "gamma"}]},
+            ]},
+            "steps": [
+                {"step": 1, "url": "", "domSnapshotAfter": "<html><body>gamma</body></html>"},
+            ],
+        }
+        self.assertTrue(score_subgoal_progress(result))
+        step = result["steps"][0]
+        self.assertEqual(step["subgoal_verified"], 1)
+        self.assertEqual(step["subgoal_direct_verified_indices"], [3])
+        self.assertEqual(step["subgoal_verified_indices"], [3])
+        self.assertEqual(step["subgoal_implied_indices"], [])
+
+    def test_select_value_matches_option_value_attribute(self):
+        # <option value="XL">Extra Large</option> selected → select_value "XL" must pass even
+        # though the visible option text is "Extra Large" (the XL bug).
+        from eval_tool.subgoal_progress import PageState, evaluate_check
+        state = PageState("https://shop.test/p/1", """
+          <html><body>
+            <select name="size">
+              <option value="M">Medium</option>
+              <option value="XL" selected>Extra Large</option>
+            </select>
+          </body></html>
+        """)
+        self.assertTrue(evaluate_check({"type": "select_value", "value": "XL"}, state))
+        self.assertTrue(evaluate_check({"type": "select_value", "value": "Extra Large"}, state))
+        self.assertTrue(evaluate_check({"type": "selected_value", "value": "XL"}, state))
+        # A non-selected option's value must not match.
+        self.assertFalse(evaluate_check({"type": "select_value", "value": "M"}, state))
+
+    def test_input_value_falls_back_when_named_field_not_found(self):
+        # A typed search term often lands in a field whose name differs from the rubric's `name`.
+        from eval_tool.subgoal_progress import PageState, evaluate_check
+        state = PageState("https://jobs.test/search", """
+          <html><body>
+            <input name="keywords" value="New York" />
+          </body></html>
+        """)
+        # Rubric guessed name "search" (no such field) but the value should still verify.
+        self.assertTrue(evaluate_check({"type": "input_value", "name": "search", "value": "New York"}, state))
+        # Wrong value still fails even with the fallback.
+        self.assertFalse(evaluate_check({"type": "input_value", "name": "search", "value": "Chicago"}, state))
+
+    def test_text_includes_matches_action_label_variants_via_synonyms(self):
+        # "add to cart" check should pass on a page that only shows "Add to bag".
+        from eval_tool.subgoal_progress import PageState, evaluate_check
+        state = PageState("https://shop.test/p/1", "<html><body><button>Add to bag</button></body></html>")
+        self.assertTrue(evaluate_check({"type": "text_includes", "value": "add to cart"}, state))
+        self.assertTrue(evaluate_check({"type": "role_label", "role": "button", "name": "add to cart"}, state))
+
+    def test_completed_subgoals_persist_across_navigation(self):
+        from eval_tool.subgoal_progress import score_subgoal_progress
+        result = {
+            "subgoal_rubric": {"subgoals": [
+                {"order": 1, "goal": "alpha", "checks_any": [{"type": "text_includes", "value": "alpha"}]},
+                {"order": 2, "goal": "beta", "checks_any": [{"type": "text_includes", "value": "beta"}]},
+            ]},
+            "steps": [
+                {"step": 1, "url": "", "domSnapshotAfter": "<html><body>alpha beta</body></html>"},
+                {"step": 2, "url": "https://shop.test/other", "domSnapshotAfter": "<html><body>other page</body></html>"},
+            ],
+        }
+        self.assertTrue(score_subgoal_progress(result))
+        self.assertEqual(result["steps"][0]["subgoal_verified"], 2)
+        self.assertEqual(result["steps"][1]["subgoal_verified"], 2)
+        self.assertEqual(result["steps"][1]["subgoal_progress"], 0.5)
+
+    def test_selected_value_matches_typed_autocomplete_input(self):
+        # "Logistics" typed into a jQuery-UI autocomplete <input> (no selected/aria state) must
+        # verify a selected_value check; a checkbox whose value text coincides must NOT.
+        from eval_tool.subgoal_progress import PageState, evaluate_check
+        state = PageState("https://jobs.test/search", """
+          <html><body>
+            <input type="text" id="jobTitle" value="Logistics" class="ui-autocomplete-input" />
+            <input type="checkbox" id="agree" value="Logistics terms" />
+          </body></html>
+        """)
+        self.assertTrue(evaluate_check({"type": "selected_value", "value": "Logistics"}, state))
+        self.assertTrue(evaluate_check({"type": "select_value", "value": "Logistics"}, state))
+        self.assertFalse(evaluate_check({"type": "selected_value", "value": "terms"}, state))
+
+    def test_default_selected_value_on_page_load_is_not_credited(self):
+        # A native <select> defaulting to "20 miles" on arrival is a page default, not progress.
+        from eval_tool.subgoal_progress import score_subgoal_progress
+        radius = ('<select id="radius"><option value="">Radius</option>'
+                  '<option value="20" selected>20 miles</option></select>')
+        result = {
+            "subgoal_rubric": {"subgoals": [
+                {"order": 1, "goal": "distance 20 miles", "checks_any": [{"type": "selected_value", "value": "20 miles"}]},
+            ]},
+            "steps": [
+                {"step": 1, "url": "https://jobs.test/search?rad=20", "domSnapshotAfter": f"<html><body>{radius}</body></html>"},
+                {"step": 2, "url": "https://jobs.test/search?rad=30", "domSnapshotAfter": f"<html><body>{radius}</body></html>"},
+            ],
+        }
+        self.assertTrue(score_subgoal_progress(result))
+        self.assertEqual(result["steps"][0]["subgoal_verified"], 0)
+        self.assertEqual(result["steps"][0]["subgoal_direct_verified_indices"], [])
+        self.assertEqual(result["steps"][1]["subgoal_verified"], 0)
+
+    def test_selection_set_after_page_load_is_credited(self):
+        # Same control, but unset on arrival and chosen later → counts (not a default).
+        from eval_tool.subgoal_progress import score_subgoal_progress
+        empty = ('<select id="radius"><option value="" selected>Radius</option>'
+                 '<option value="20">20 miles</option></select>')
+        chosen = ('<select id="radius"><option value="">Radius</option>'
+                  '<option value="20" selected>20 miles</option></select>')
+        result = {
+            "subgoal_rubric": {"subgoals": [
+                {"order": 1, "goal": "distance 20 miles", "checks_any": [{"type": "selected_value", "value": "20 miles"}]},
+            ]},
+            "steps": [
+                {"step": 1, "url": "https://jobs.test/search", "domSnapshotAfter": f"<html><body>{empty}</body></html>"},
+                {"step": 2, "url": "https://jobs.test/search", "domSnapshotAfter": f"<html><body>{chosen}</body></html>"},
+            ],
+        }
+        self.assertTrue(score_subgoal_progress(result))
+        self.assertEqual(result["steps"][0]["subgoal_verified"], 0)
+        self.assertEqual(result["steps"][1]["subgoal_verified"], 1)
+        self.assertEqual(result["steps"][1]["subgoal_progress"], 1.0)
+
+    def test_no_rubric_is_noop(self):
+        from eval_tool.subgoal_progress import score_subgoal_progress
+        self.assertFalse(score_subgoal_progress({"steps": [{"step": 1}]}))
+
+    def test_predict_subgoal_rubric_parses_json(self):
+        from eval_tool.step_confidence import SpecProgressClient
+        client = SpecProgressClient(api_key="test")
+        payload = {"choices": [{"message": {"content":
+            '{"subgoals":[{"order":1,"goal":"g","checks_any":[{"type":"url_includes","value":"x"}]}]}'}}]}
+        with patch.object(client, "_post", return_value=payload):
+            rubric = client.predict_subgoal_rubric({"task": "do a thing", "website_url": "https://x.test"})
+        self.assertEqual(len(rubric["subgoals"]), 1)
+        self.assertEqual(rubric["subgoals"][0]["checks_any"][0]["type"], "url_includes")
+
+    def test_predict_subgoal_rubric_keeps_legacy_checks(self):
+        from eval_tool.step_confidence import SpecProgressClient
+        client = SpecProgressClient(api_key="test")
+        payload = {"choices": [{"message": {"content":
+            '{"subgoals":[{"order":1,"goal":"g","checks":[{"type":"url_includes","value":"x"}]}]}'}}]}
+        with patch.object(client, "_post", return_value=payload):
+            rubric = client.predict_subgoal_rubric({"task": "do a thing", "website_url": "https://x.test"})
+        self.assertEqual(rubric["subgoals"][0]["checks"][0]["type"], "url_includes")
+
+    def test_backfill_generates_rubric_then_scores(self):
+        from eval_tool.step_confidence import SpecProgressClient
+        from eval_tool.subgoal_progress import backfill_subgoal_progress
+        client = SpecProgressClient(api_key="test")
+        payload = {"choices": [{"message": {"content":
+            '{"subgoals":[{"order":1,"goal":"alpha","checks_any":[{"type":"text_includes","value":"alpha"}]}]}'}}]}
+        result = {"task": {"task": "find alpha"}, "steps": [
+            {"step": 1, "url": "", "domSnapshotAfter": "<html><body>nope</body></html>"},
+            {"step": 2, "url": "", "domSnapshotAfter": "<html><body>alpha here</body></html>"},
+        ]}
+        with patch.object(client, "_post", return_value=payload):
+            self.assertTrue(backfill_subgoal_progress(result, client))
+        self.assertEqual(len(result["subgoal_rubric"]["subgoals"]), 1)
+        self.assertEqual(result["steps"][0]["subgoal_progress"], 0.5)  # 0 verified, same as prev(0), new state
+        self.assertEqual(result["steps"][1]["subgoal_progress"], 1.0)  # verified increased
+
+
+class NewModelOptionsTest(unittest.TestCase):
+    def test_new_model_ids_are_selectable(self):
+        from eval_tool.judge import MODEL_OPTIONS, normalize_model
+        ids = {opt["id"] for opt in MODEL_OPTIONS}
+        for mid in ("qwen/qwen3.6-flash", "qwen/qwen3.7-plus", "openai/gpt-4.1-nano"):
+            self.assertIn(mid, ids)
+            # Valid ids pass the allow-list unchanged (no fallback to default).
+            self.assertEqual(normalize_model(mid), mid)
+
+
+class GoalRelevanceBackfillTest(unittest.TestCase):
+    def test_backfill_g_progress_sets_goal_and_cosine_scores(self):
+        from eval_tool.step_confidence import SpecProgressClient
+        client = SpecProgressClient(api_key="test")
+        result = {
+            "task": {"task": "buy a shirt", "website_url": "https://shop.test"},
+            "steps": [
+                {"step": 1, "action": "click", "target": {"llmIndex": 3}, "instruction": "open product"},
+                {"step": 2, "action": "click", "target": {"llmIndex": 5}, "instruction": "add to cart"},
+            ],
+        }
+        # goal embedding == step-2 embedding (cosine 1.0); step-1 orthogonal (cosine 0.0).
+        with patch.object(client, "predict_goal", return_value="cart shows the shirt"), \
+             patch.object(client, "embed", return_value=[[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]):
+            self.assertTrue(backfill_g_progress(result, client))
+        self.assertEqual(result["spec_goal_text"], "cart shows the shirt")
+        self.assertAlmostEqual(result["steps"][0]["g_goal_relevance_score"], 0.0)
+        self.assertAlmostEqual(result["steps"][1]["g_goal_relevance_score"], 1.0)
+
+    def test_backfill_g_progress_noop_without_client(self):
+        from eval_tool.step_confidence import SpecProgressClient
+        client = SpecProgressClient(api_key="test")
+        client.api_key = None  # force unavailable regardless of env/.env
+        self.assertFalse(client.available)
+        self.assertFalse(backfill_g_progress({"task": {}, "steps": []}, client))
+
+
+class ProgressSelfReportJudgeTest(unittest.TestCase):
+    def _step(self):
+        return {"step": 1, "action": "click", "instruction": "search New York", "target": {"text": "Search"}}
+
+    def test_gt_variant_unavailable_without_reference_steps(self):
+        judge = LlmJudge(api_key="test")
+        out = judge.judge_progress_self_report({"task": "g"}, self._step(), use_ground_truth=True)
+        self.assertFalse(out["available"])
+        self.assertIsNone(out["score"])
+
+    def test_scores_snap_to_discrete_minus_one_zero_one(self):
+        judge = LlmJudge(api_key="test")
+        task_gt = {"task": "g", "reference_steps": "1. search\n2. filter"}
+        cases = {2.0: 1, 0.6: 1, 0.2: 1, 0.0: 0, -0.01: -1, -0.4: -1, -0.8: -1, -3.0: -1}
+        for raw, expected in cases.items():
+            with patch.object(judge, "_call_openai", return_value=f'{{"score": {raw}, "reason": "r"}}'):
+                out = judge.judge_progress_self_report(task_gt, self._step(), use_ground_truth=True)
+            self.assertTrue(out["available"])
+            self.assertEqual(out["score"], expected, f"{raw} should snap to {expected}")
+
+    def test_no_gt_variant_works_without_reference(self):
+        judge = LlmJudge(api_key="test")
+        with patch.object(judge, "_call_openai", return_value='{"score": 0, "reason": "no change"}'):
+            out = judge.judge_progress_self_report({"task": "g"}, self._step(), use_ground_truth=False)
+        self.assertTrue(out["available"])
+        self.assertEqual(out["score"], 0)
+        self.assertEqual(out["reason"], "no change")
+        self.assertIn("No reference is provided", out["prompt"])
+        self.assertEqual(out["raw_response"], '{"score": 0, "reason": "no change"}')
+
+    def test_no_gt_prompt_includes_previous_observed_steps(self):
+        judge = LlmJudge(api_key="test")
+        previous = {"step": 1, "action": "click", "instruction": "Click Search", "target": {"text": "Search"}}
+        current = {"step": 2, "action": "click", "instruction": "Click Search again", "target": {"text": "Search"}}
+        with patch.object(judge, "_call_openai", return_value='{"score": -1, "reason": "repeat"}'):
+            out = judge.judge_progress_self_report({"task": "g"}, current, [previous, current], use_ground_truth=False)
+        self.assertEqual(out["score"], -1)
+        self.assertIn("Previously observed steps:", out["prompt"])
+        self.assertIn("Click Search", out["prompt"])
+
+    def test_rerun_self_report_stores_prompt_and_raw_response(self):
+        from eval_server.app import rerun_trajectory_progress_self_report
+
+        trajectory = {
+            "task": {"task": "g"},
+            "steps": [
+                {"step": 1, "action": "click", "instruction": "Click Search", "target": {"text": "Search"}},
+            ],
+        }
+        with patch("eval_server.app.LlmJudge") as judge_cls:
+            judge = judge_cls.return_value
+            judge.api_key = "test"
+            judge.judge_progress_self_report.return_value = {
+                "score": -1,
+                "reason": "regression",
+                "prompt": "PROMPT TEXT",
+                "raw_response": '{"score": -1, "reason": "regression"}',
+            }
+            summary = rerun_trajectory_progress_self_report(trajectory, which="nogt", model="m")
+        self.assertTrue(summary["updated"])
+        self.assertEqual(trajectory["steps"][0]["self_progress_no_gt"], -1)
+        self.assertEqual(trajectory["steps"][0]["self_progress_no_gt_prompt"], "PROMPT TEXT")
+        self.assertIn('"score": -1', trajectory["steps"][0]["self_progress_no_gt_raw_response"])
+        self.assertEqual(summary["details"][0]["score"], -1)
+
+    def test_rerun_gt_self_report_stores_prompt_and_raw_response(self):
+        from eval_server.app import rerun_trajectory_progress_self_report
+
+        trajectory = {
+            "task": {"task": "g", "reference_steps": "1. Search"},
+            "steps": [
+                {"step": 1, "action": "click", "instruction": "Click Search", "target": {"text": "Search"}},
+            ],
+        }
+        with patch("eval_server.app.LlmJudge") as judge_cls:
+            judge = judge_cls.return_value
+            judge.api_key = "test"
+            judge.judge_progress_self_report.return_value = {
+                "score": 1,
+                "reason": "matches reference",
+                "prompt": "GT PROMPT TEXT",
+                "raw_response": '{"score": 1, "reason": "matches reference"}',
+            }
+            summary = rerun_trajectory_progress_self_report(trajectory, which="gt", model="m")
+        self.assertTrue(summary["updated"])
+        self.assertEqual(trajectory["steps"][0]["self_progress_gt"], 1)
+        self.assertEqual(trajectory["steps"][0]["self_progress_gt_prompt"], "GT PROMPT TEXT")
+        self.assertIn('"score": 1', trajectory["steps"][0]["self_progress_gt_raw_response"])
+        self.assertEqual(summary["details"][0]["variant"], "GT")
+        self.assertEqual(summary["details"][0]["prompt"], "GT PROMPT TEXT")
 
 
 if __name__ == "__main__":

@@ -142,6 +142,31 @@ button.danger {
 }
 .eval-settings input { width: 86px; }
 .eval-settings select { min-width: 190px; }
+.target-capture-settings {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+}
+.target-capture-toggle {
+  display: inline-flex;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.target-cap-btn {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+.target-cap-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
 h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 8px; font-size: 32px; letter-spacing: -.04em; }
 h2 { margin-bottom: 12px; font-size: 20px; }

@@ -68,6 +68,27 @@ const CONTENT_SCRIPTS = [
 // Track if side panel is open
 let sidePanelOpen = false;
 
+async function _injectContentScriptsIfNeeded(tabId) {
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => typeof window._pageguideLoaded !== 'undefined'
+    });
+    if (!result?.result) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: CONTENT_SCRIPTS
+      });
+      await chrome.scripting.insertCSS({
+        target: { tabId },
+        files: ['content/content.css']
+      });
+    }
+  } catch (err) {
+    console.log('Script injection skipped:', err.message);
+  }
+}
+
 // ===== Guidance V2 State (SeeAct-inspired) =====
 // Primary state store — survives page navigations as long as the SW is alive.
 // Content scripts read this by connecting a 'guidev2' port on every page load.
@@ -93,31 +114,11 @@ chrome.action.onClicked.addListener(async (tab) => {
       // Open the side panel
       await chrome.sidePanel.open({ tabId: tab.id });
       sidePanelOpen = true;
-      
-      // Inject content scripts only if not already loaded (check via manifest injection)
+
+      // Defer injection so we don't block the main thread during the side-panel resize animation.
       if (tab.url?.startsWith('http')) {
-        try {
-          // Check if content scripts are already loaded
-          const [result] = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: () => typeof window._pageguideLoaded !== 'undefined'
-          });
-          
-          // Only inject if not already loaded
-          if (!result?.result) {
-            await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              files: CONTENT_SCRIPTS
-            });
-            await chrome.scripting.insertCSS({
-              target: { tabId: tab.id },
-              files: ['content/content.css']
-            });
-          }
-        } catch (err) {
-          // Scripts might already be injected or page doesn't allow scripts
-          console.log('Script injection skipped:', err.message);
-        }
+        const tabId = tab.id;
+        setTimeout(() => _injectContentScriptsIfNeeded(tabId), 400);
       }
     }
   } catch (err) {
@@ -230,6 +231,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }).catch(() => {});
 
     callLLM(request.messages, request.systemPrompt, request.imageBase64)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'callEmbed') {
+    callEmbed(request.texts)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -590,6 +597,67 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
   // Stop keep-alive after LLM call completes
   stopKeepAlive();
   return result;
+}
+
+const EMBED_MODEL = 'openai/text-embedding-ada-002';
+
+/** OpenAI-compatible embeddings (OpenRouter or OpenAI) for goal-relevance scoring. */
+async function callEmbed(texts) {
+  startKeepAlive();
+  const input = Array.isArray(texts) ? texts.map(t => String(t ?? '')) : [];
+  if (!input.length) {
+    stopKeepAlive();
+    return { error: 'No texts to embed' };
+  }
+
+  let settings;
+  try {
+    settings = await chrome.storage.sync.get(['provider', 'openrouterApiKey', 'openaiApiKey']);
+  } catch (e) {
+    stopKeepAlive();
+    return { error: 'Failed to load settings' };
+  }
+
+  const provider = settings.provider || CONFIG.defaultProvider;
+  let endpoint;
+  let apiKey;
+  if (provider === 'openai') {
+    endpoint = 'https://api.openai.com/v1/embeddings';
+    apiKey = (settings.openaiApiKey || CONFIG.providers.openai.defaultApiKey || '').trim();
+  } else {
+    endpoint = 'https://openrouter.ai/api/v1/embeddings';
+    apiKey = (settings.openrouterApiKey || CONFIG.providers.openrouter.defaultApiKey || '').trim();
+    if (!apiKey) apiKey = (settings.openaiApiKey || '').trim();
+  }
+
+  if (!apiKey) {
+    stopKeepAlive();
+    return { error: 'Embedding API key not configured (OpenRouter or OpenAI).' };
+  }
+
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'chrome-extension://pageguide',
+        'X-Title': 'PageGuide'
+      },
+      body: JSON.stringify({ model: EMBED_MODEL, input })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      stopKeepAlive();
+      return { error: data?.error?.message || `Embedding HTTP ${resp.status}` };
+    }
+    const rows = Array.isArray(data.data) ? data.data.slice().sort((a, b) => (a.index || 0) - (b.index || 0)) : [];
+    stopKeepAlive();
+    return { embeddings: rows.map(r => r.embedding || []) };
+  } catch (e) {
+    stopKeepAlive();
+    return { error: `Embedding network error: ${e.message}` };
+  }
 }
 
 // ===== Gemini API Call =====

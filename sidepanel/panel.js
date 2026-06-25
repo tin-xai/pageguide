@@ -736,6 +736,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initGuideModeToggle();
   initConfidenceFormulaToggle();
   initConfidenceSourceToggle();
+  initRegionCaptureToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1399,7 +1400,7 @@ function _steerActionLabel(e) {
     case 'scroll':         return 'Restored scroll position';
     case 'form':           return `Refilled ${e.sel || 'a field'}`;
     case 'replay': {
-      const verb = ({ type: 'Typed into', select: 'Selected', check: 'Toggled', toggle: 'Toggled' })[e.action] || 'Clicked';
+      const verb = ({ type: 'Typed into', clear_text: 'Cleared text in', select: 'Selected', check: 'Toggled', toggle: 'Toggled' })[e.action] || 'Clicked';
       return `${verb} "${t}"`;
     }
     default:               return e.kind;
@@ -2316,6 +2317,57 @@ function initConfidenceSourceToggle() {
     const source = _normalizeConfSource(option.dataset.source);
     try { await chrome.storage.local.set({ [GUIDE_CONF_SOURCE_KEY]: source }); } catch (e) {}
     _renderConfSource(btn, source);
+    menu.style.display = 'none';
+  });
+}
+
+// Target-region capture mode (debug-only): legacy vs scroll+aligned fresh crop.
+const GUIDE_REGION_CAPTURE_KEY = 'guideDebugRegionCapture';
+const GUIDE_REGION_CAPTURE_MODES = {
+  legacy: {
+    label: 'Legacy',
+    title: 'Crop the carried before-shot using immediate element bounds.',
+  },
+  aligned: {
+    label: 'Aligned',
+    title: 'Scroll the target into view, capture a fresh screenshot, then crop (before action).',
+  },
+};
+
+function _normalizeRegionCaptureMode(v) {
+  return v === 'aligned' ? 'aligned' : 'legacy';
+}
+
+function _renderRegionCaptureMode(btn, mode) {
+  mode = _normalizeRegionCaptureMode(mode);
+  const spec = GUIDE_REGION_CAPTURE_MODES[mode];
+  btn.innerHTML = `${UI_ICONS.image}Target: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-regioncap-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === mode);
+  });
+}
+
+function initRegionCaptureToggle() {
+  const btn = document.getElementById('pageguide-regioncap-toggle');
+  const menu = document.getElementById('pageguide-regioncap-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_REGION_CAPTURE_KEY)
+    .then(r => _renderRegionCaptureMode(btn, _normalizeRegionCaptureMode(r[GUIDE_REGION_CAPTURE_KEY])))
+    .catch(() => _renderRegionCaptureMode(btn, 'legacy'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizeRegionCaptureMode(option.dataset.mode);
+    try { await chrome.storage.local.set({ [GUIDE_REGION_CAPTURE_KEY]: mode }); } catch (err) {}
+    _renderRegionCaptureMode(btn, mode);
     menu.style.display = 'none';
   });
 }
@@ -4671,5 +4723,9 @@ function updateDebugButtonVisibility(enabled) {
   const confSrcWrap = document.querySelector('.pageguide-confsrc-wrap');
   if (confSrcWrap) {
     confSrcWrap.style.display = enabled ? '' : 'none';
+  }
+  const regionCapWrap = document.querySelector('.pageguide-regioncap-wrap');
+  if (regionCapWrap) {
+    regionCapWrap.style.display = enabled ? '' : 'none';
   }
 }

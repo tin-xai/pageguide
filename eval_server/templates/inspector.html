@@ -615,10 +615,25 @@
       cursor: zoom-in;
     }
 
+    .image-container.target-region-view {
+      aspect-ratio: unset;
+      min-height: 120px;
+      background: var(--task-card-bg);
+      padding: 8px;
+    }
+
     .image-container img {
       max-width: 100%;
       max-height: 100%;
       object-fit: contain;
+    }
+
+    .image-container.target-region-view img {
+      width: 100%;
+      height: auto;
+      max-height: 70vh;
+      object-fit: contain;
+      border-radius: 8px;
     }
 
     .image-overlay {
@@ -633,12 +648,29 @@
       color: var(--text-muted);
     }
 
-    .dom-container iframe {
+    .dom-container iframe,
+    .dom-snap-wrap iframe {
       width: 100%;
       height: 500px;
       background: #fff;
       border: 1px solid var(--card-border);
       border-radius: 12px;
+    }
+
+    .dom-snap-wrap {
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .dom-snap-banner {
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--task-card-bg);
+      border-bottom: 1px solid var(--card-border);
     }
 
     .dom-code {
@@ -974,7 +1006,16 @@
     .confidence-table td {
       padding: 12px 16px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-      vertical-align: middle;
+      vertical-align: top;
+    }
+    .confidence-table .instruction-cell {
+      max-width: none;
+      min-width: 200px;
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      line-height: 1.45;
+      color: var(--text);
     }
     .confidence-table tr:hover td {
       background: rgba(255, 255, 255, 0.03);
@@ -1048,6 +1089,23 @@
         <span style="font-size: 13px; font-weight: 500; color: var(--text-muted);">Session: {{ trajectory.sessionId }} · Run Date: {{ trajectory.date_str }}</span>
       </div>
       <div style="display: flex; align-items: center; gap: 16px;">
+        <form method="post" action="{{ url_for('rerun_trajectory_subgoal_progress_route', session_id=trajectory.sessionId) }}" style="margin: 0;">
+          <button type="submit" class="save-eval-btn" style="white-space: nowrap;">Rerun Subgoal Progress</button>
+        </form>
+        <form method="post" action="{{ url_for('rerun_trajectory_progress_self_report_route', session_id=trajectory.sessionId) }}" style="margin: 0;">
+          <input type="hidden" name="which" value="gt">
+          <button type="submit" class="save-eval-btn" style="white-space: nowrap; background: rgba(234, 179, 8, 0.12); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.3);" title="Self-reported progress WITH reference ground truth (No-Login tasks only)">Rerun GT Progress</button>
+        </form>
+        <form method="post" action="{{ url_for('rerun_trajectory_progress_self_report_route', session_id=trajectory.sessionId) }}" style="margin: 0;">
+          <input type="hidden" name="which" value="nogt">
+          <button type="submit" class="save-eval-btn" style="white-space: nowrap; background: rgba(236, 72, 153, 0.12); color: #ec4899; border: 1px solid rgba(236, 72, 153, 0.3);" title="Self-reported progress WITHOUT reference ground truth">Rerun No-GT Progress</button>
+        </form>
+        <form method="post" action="{{ url_for('rerun_trajectory_goal_relevance_route', session_id=trajectory.sessionId) }}" style="margin: 0;">
+          <button type="submit" class="save-eval-btn" style="white-space: nowrap; background: rgba(6, 182, 212, 0.12); color: #06b6d4; border: 1px solid rgba(6, 182, 212, 0.3);" title="Predict the final goal once and recompute each step's cosine-similarity goal relevance">Rerun Goal Relevance</button>
+        </form>
+        <form method="post" action="{{ url_for('rerun_trajectory_grounding_similarity_route', session_id=trajectory.sessionId) }}" style="margin: 0;">
+          <button type="submit" class="save-eval-btn" style="white-space: nowrap; background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);" title="Recompute cosine similarity between each step instruction and target element text">Rerun Grounding Similarity</button>
+        </form>
         <button id="theme-toggle" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.2); color: var(--text); padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; font-family: inherit;">
           🌓 Toggle Theme
         </button>
@@ -1055,13 +1113,59 @@
       </div>
     </header>
 
-    <section class="goal-banner">
-      <b>🎯 Task Goal</b>
-      <div class="goal-prompt">{{ trajectory.goal }}</div>
+    <section class="goal-banner" style="display: flex; flex-direction: column; gap: 12px;">
+      <div>
+        <b>🎯 Task Goal</b>
+        <div class="goal-prompt">{{ trajectory.goal }}</div>
+      </div>
+      {% set predicted_goal = trajectory.spec_goal_text or trajectory.predictedGoalState %}
+      {% if predicted_goal %}
+      <div style="border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 12px; margin-top: 4px;">
+        <b>🔮 Predicted Final Goal State</b>
+        <div class="goal-prompt" style="color: #06b6d4; font-style: italic;">{{ predicted_goal }}</div>
+      </div>
+      {% endif %}
     </section>
 
     <!-- Success/Failure Notification Banner -->
     <div id="eval-alert" class="alert"></div>
+    {% if subgoal_rerun_summary %}
+    <div class="alert visible success" style="display: block;">
+      {% if subgoal_rerun_summary.updated %}
+        Subgoal Progress rerun complete: {{ subgoal_rerun_summary.steps }} step(s) rescored.
+      {% else %}
+        Subgoal Progress rerun did not update this trajectory. Check that a rubric exists or that the LLM client is configured for rubric generation.
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if selfreport_rerun_summary %}
+    <div class="alert visible {{ 'success' if selfreport_rerun_summary.updated else 'error' }}" style="display: block;">
+      {% set wlabel = {'gt':'GT','nogt':'No-GT','both':'GT / No-GT'}[selfreport_rerun_summary.which] %}
+      {% if selfreport_rerun_summary.updated %}
+        {{ wlabel }} progress rerun complete: {{ selfreport_rerun_summary.steps }} step(s) scored.
+      {% else %}
+        {{ wlabel }} progress rerun was skipped{% if selfreport_rerun_summary.reason %}: {{ selfreport_rerun_summary.reason }}{% endif %}.
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if goalrel_rerun_summary %}
+    <div class="alert visible {{ 'success' if goalrel_rerun_summary.updated else 'error' }}" style="display: block;">
+      {% if goalrel_rerun_summary.updated %}
+        Goal relevance rerun complete: {{ goalrel_rerun_summary.steps }} step(s) scored.
+      {% else %}
+        Goal relevance rerun was skipped{% if goalrel_rerun_summary.reason %}: {{ goalrel_rerun_summary.reason }}{% endif %}.
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if grounding_rerun_summary %}
+    <div class="alert visible {{ 'success' if grounding_rerun_summary.updated else 'error' }}" style="display: block;">
+      {% if grounding_rerun_summary.updated %}
+        Grounding similarity rerun complete: {{ grounding_rerun_summary.steps }} step(s) scored.
+      {% else %}
+        Grounding similarity rerun was skipped{% if grounding_rerun_summary.reason %}: {{ grounding_rerun_summary.reason }}{% endif %}.
+      {% endif %}
+    </div>
+    {% endif %}
 
     <div class="inspector-grid">
       <!-- Left sidebar: timeline of steps -->
@@ -1103,6 +1207,11 @@
         <!-- Evaluation Panel Card -->
         <section class="eval-card">
           <h2>📝 Evaluate Trajectory</h2>
+          {% if trajectory.evaluation_source == 'llm_judge' %}
+          <p style="font-size: 13px; color: var(--text-muted); margin: 0 0 16px;">Prefilled from the LLM judge. Change Success/Failed and click Save Evaluation to override the automatic run outcome.</p>
+          {% elif trajectory.evaluation_source == 'human' %}
+          <p style="font-size: 13px; color: var(--success); margin: 0 0 16px;">Manual evaluation saved{% if trajectory.judge_success is not none and ((trajectory.evaluation.status == 'success') != trajectory.judge_success) %} — overrides LLM judge (was {% if trajectory.judge_success %}Passed{% else %}Failed{% endif %}){% endif %}.</p>
+          {% endif %}
           <form id="evaluation-form" onsubmit="saveEvaluation(event)">
             <div style="margin-bottom: 24px; display: flex; gap: 16px;">
               <div style="flex: 1;">
@@ -1189,11 +1298,18 @@
         <!-- Confidence Score Trend Card -->
         <section class="eval-card" id="conf-graph-section">
           <h2>📈 Confidence Score Trend</h2>
-          <div style="display:flex; gap:10px; margin-bottom:16px;">
+          <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap: wrap;">
             <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
-            <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">Only Goal Relevance</button>
+            <button type="button" class="tab-btn active" id="btn-conf-llmProgress" onclick="toggleConfLine('llmProgress')" style="background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">LLM Progress</button>
+            <button type="button" class="tab-btn active" id="btn-conf-subgoalProgress" onclick="toggleConfLine('subgoalProgress')" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #10b981;">Subgoal Progress</button>
             <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
-            <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid #ef4444;">Only Grounding</button>
+            <button type="button" class="tab-btn active" id="btn-conf-grounding" onclick="toggleConfLine('grounding')" style="background: rgba(14, 165, 233, 0.15); color: #0ea5e9; border: 1px solid #0ea5e9;" title="Raw cosine similarity. Green at or above 0.80; yellow below 0.80.">Grounding Similarity</button>
+            <button type="button" class="tab-btn active" id="btn-conf-goalRelevance" onclick="toggleConfLine('goalRelevance')" style="background: rgba(6, 182, 212, 0.15); color: #06b6d4; border: 1px solid #06b6d4;">Goal Relevance</button>
+            <button type="button" class="tab-btn active" id="btn-conf-gtProgress" onclick="toggleConfLine('gtProgress')" style="background: rgba(234, 179, 8, 0.15); color: #eab308; border: 1px solid #eab308;">GT Progress</button>
+            <button type="button" class="tab-btn active" id="btn-conf-noGtProgress" onclick="toggleConfLine('noGtProgress')" style="background: rgba(236, 72, 153, 0.15); color: #ec4899; border: 1px solid #ec4899;">No-GT Progress</button>
+          </div>
+          <div style="margin: 0 0 12px;">
+            {% include "_metric_legend.html" %}
           </div>
           <div id="conf-svg-container" style="position: relative; width: 100%; height: 200px; overflow: visible; background: var(--chart-bg); border-radius: 8px; border: 1px solid var(--card-border);">
             <svg id="conf-svg" style="width: 100%; height: 100%; overflow: visible;"></svg>
@@ -1207,26 +1323,68 @@
           </summary>
           <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px; margin-top: 8px;">
             <div style="margin-bottom: 12px;">
-              Step Confidence (C_t = clip(G_grounding × (1 - 0.5 × L_t_u), 0, 1)) <br/>
+              Step Confidence (C_t = clip(internal grounding × (1 - 0.5 × L_t_u), 0, 1)) <br/>
               <span style="opacity: 0.8;">Scroll steps (scroll_down, scroll_up) are excluded — they return None and are omitted from aggregations.</span>
             </div>
-            
             <details style="background: var(--badge-neutral-bg); border: 1px solid var(--badge-neutral-border); border-radius: 8px; padding: 10px 14px;">
               <summary style="cursor: pointer; font-weight: 600; outline: none; user-select: none; color: var(--text);">ℹ️ How are these metrics calculated?</summary>
               <div style="margin-top: 12px; line-height: 1.6; font-size: 13px; color: var(--text-muted);">
-                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">G_ground (Grounding Score):</strong> Rule-based, no-LLM score for whether the agent targeted a real element: 1.0 when an element index is present, 0.7 when only matching by text, 0.0 when no target (— for done/scroll). This is what feeds C_t. <em>(Currently checks that an index is present, not yet that it resolves in the page snapshot.)</em></div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Grounding Similarity:</strong> Raw cosine similarity between the step instruction and target element text. Values ≥ <code>0.80</code> are shown green; lower available values are shown yellow.</div>
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">LLM grounded:</strong> The model's own self-reported grounding (0–1), shown alongside for comparison. <em>Not</em> used in C_t.</div>
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">L_t (Old Loop Penalty):</strong> Computed post-hoc from the trace — the fraction of <em>all</em> previous actions with the same <em>element/action text</em> (element text, falling back to the instruction), regardless of action type.</div>
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">L_t_u (Updated Loop Penalty):</strong> Same denominator as L_t, but a match requires the same normalized <em>action type</em> and the same <em>element/action text</em>. For example, click Search and type Search are no longer treated as the same loop.</div>
-                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Goal Relevance:</strong> How relevant the step is to the goal — cosine similarity between an embedding of the step instruction and an embedding of the <em>predicted final goal state</em> (text-embedding-ada-002). This measures relevance, not real progress. Shown for insight; not factored into C_t. Blank when no embedding is available.</div>
-                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Progress:</strong> The agent's own <em>LLM-self-reported</em> progress for the step (range −1 to 1). A separate signal from Goal Relevance. Shown for insight; not factored into C_t.</div>
-                <div><strong style="color: var(--text);">C_t (Step Confidence):</strong> clip(G_ground × (1 − 0.5 × L_t_u), 0, 1). Goal Relevance and Progress are informational and not part of this formula.</div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">LLM Progress:</strong> The agent's own <em>LLM-self-reported</em> progress for the step — three-point: <code>1.0</code> clear progress, <code>0.5</code> no net / exploratory movement, <code>0.0</code> regression. Shown for insight; not factored into C_t.</div>
+                <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Subgoal Progress:</strong> <em>Deterministic.</em> The LLM authors an ordered subgoal rubric once per task; the system then verifies each subgoal from page state (URL/DOM) every step. <code>1.0</code> = verified count increased, <code>0.5</code> = unchanged, <code>0.0</code> = decreased or returned to a previously-seen state without a new subgoal.</div>
+                <div><strong style="color: var(--text);">C_t (Step Confidence):</strong> clip(internal grounding × (1 − 0.5 × L_t_u), 0, 1). Progress signals are informational and not part of this formula.</div>
               </div>
             </details>
+          </div>
+
+          {% if trajectory.subgoal_rubric and trajectory.subgoal_rubric.subgoals %}
+          <details class="eval-card" open style="cursor: default; margin-bottom: 16px; border: 1px solid rgba(16, 185, 129, 0.3); background: rgba(16, 185, 129, 0.05);">
+            <summary style="font-size: 16px; font-weight: 600; cursor: pointer; outline: none; color: var(--text);">🎯 LLM-generated subgoal rubric ({{ trajectory.subgoal_rubric.subgoals|length }})</summary>
+            <div style="margin-top: 10px; font-size: 13px; color: var(--text-muted);">
+              <div style="margin-bottom: 10px;">Each subgoal is verified deterministically from page state only. New rubrics use alternative checks, so <em>any one listed check</em> can verify a subgoal. Legacy rubrics still require all listed checks.</div>
+              <ol style="margin: 0; padding-left: 20px;">
+                {% for sg in trajectory.subgoal_rubric.subgoals %}
+                <li style="margin-bottom: 8px;">
+                  <strong style="color: var(--text);">{{ sg.goal }}</strong>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">{{ 'Any one check passes' if sg.checks_any else 'All checks pass (legacy)' }}</div>
+                  <div style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px;">
+                    {% for c in (sg.checks_any if sg.checks_any else sg.checks) %}
+                    <code style="font-size: 11px; background: var(--badge-neutral-bg); border: 1px solid var(--badge-neutral-border); border-radius: 4px; padding: 2px 6px;">{{ c.type }}: {{ c.value or c.name or c.label or c.role or c.state or c.all_of or c.any_of or '' }}</code>
+                    {% endfor %}
+                  </div>
+                </li>
+                {% endfor %}
+              </ol>
+            </div>
+          </details>
+          {% endif %}
+          <div class="eval-card" style="margin-bottom: 16px; border: 1px solid var(--card-border); box-shadow: none;">
+            <div style="display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 10px;">
+              <div>
+                <h3 style="font-size: 15px; margin-bottom: 6px;">Human Label Boundary Check</h3>
+                <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Compares Grounding Similarity against your Grounded_Human_Label annotations. Missing labels default to Grounded; steps without similarity are excluded.</p>
+              </div>
+              <label style="display: grid; gap: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+                Decision Boundary
+                <input id="task-grounding-boundary-input" type="number" step="0.01" min="0" max="1" value="{{ '%.2f'|format(trajectory.grounding_boundary_metrics.threshold) }}" oninput="renderTaskBoundarySummary()" onchange="renderTaskBoundarySummary()" style="width: 110px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--card-border); background: var(--input-bg); color: var(--input-text); font-family: inherit; font-size: 14px;">
+              </label>
+            </div>
+            <div id="task-grounding-boundary-summary"></div>
           </div>
           <div class="metric-controls" aria-label="Optional confidence columns">
             <button type="button" class="metric-toggle-btn" data-metric-column="lt" onclick="toggleMetricColumn('lt', this)">Show L_t</button>
             <button type="button" class="metric-toggle-btn" data-metric-column="llm" onclick="toggleMetricColumn('llm', this)">Show LLM grounded</button>
+            <button type="button" class="metric-toggle-btn" data-metric-column="groundhuman" onclick="toggleMetricColumn('groundhuman', this)">Show Grounded_Human_Label</button>
+            {% set show_goalrel = (goalrel_rerun_summary is not none) %}
+            <button type="button" class="metric-toggle-btn{% if show_goalrel %} active{% endif %}" data-metric-column="goalrel" onclick="toggleMetricColumn('goalrel', this)">{{ 'Hide' if show_goalrel else 'Show' }} Goal Relevance</button>
+            <button type="button" class="metric-toggle-btn" data-metric-column="gtprog" onclick="toggleMetricColumn('gtprog', this)">Show GT / No-GT Progress</button>
+            {% if trajectory.has_self_report %}
+            <button type="button" class="metric-toggle-btn" data-metric-column="agentresp" onclick="toggleMetricColumn('agentresp', this)">Show Agent Response</button>
+            {% endif %}
+            <button type="button" class="metric-toggle-btn active" id="global-dom-text-toggle" onclick="toggleAllDomTexts(this)">Hide All Real Element Text</button>
           </div>
           <div style="overflow-x: auto;">
             <table class="confidence-table">
@@ -1235,13 +1393,18 @@
                   <th>#</th>
                   <th>Type</th>
                   <th>Instruction</th>
-                  <th>G_ground</th>
+                  <th>Grounding Similarity</th>
+                  <th class="metric-col-groundhuman metric-col-hidden">Grounded_Human_Label</th>
                   <th class="metric-col-llm metric-col-hidden">LLM grounded</th>
                   <th class="metric-col-lt metric-col-hidden">L_t</th>
+                  <th class="metric-col-goalrel{% if not show_goalrel %} metric-col-hidden{% endif %}">Goal Relevance</th>
                   <th>L_t_u</th>
-                  <th>Goal Relevance</th>
-                  <th>Progress</th>
+                  <th>LLM Progress</th>
+                  <th>Subgoal Progress</th>
                   <th>C_t</th>
+                  <th class="metric-col-gtprog metric-col-hidden" title="Self-reported progress WITH reference ground truth (−1 regression / 0 no change / 1 progress)">GT Progress</th>
+                  <th class="metric-col-gtprog metric-col-hidden" title="Self-reported progress WITHOUT reference ground truth (−1 / 0 / 1)">No-GT Progress</th>
+                  <th class="metric-col-agentresp metric-col-hidden" title="The judge LLM's reasoning behind the GT / No-GT progress score">Agent Response</th>
                 </tr>
               </thead>
               <tbody>
@@ -1260,16 +1423,42 @@
                     <span class="badge purple">
                       {{ action_type }}
                     </span>
+                    {% if step.typeText %}
+                      <div style="font-size: 11px; margin-top: 6px; color: var(--text-primary); max-width: 200px; word-break: break-word; white-space: normal;">
+                        <strong style="color: var(--text-muted);">Typed Value:</strong> {{ step.typeText }}
+                      </div>
+                    {% endif %}
                   </td>
-                  <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ step.instruction or 'Initial State' }}">{{ step.instruction or 'Initial State' }}</td>
+                  <td class="instruction-cell">
+                    {{ step.instruction or 'Initial State' }}
+                    {% if step.dom_element_text and step.target and step.target.llmIndex is not none %}
+                      {% set words = step.dom_element_text.split() %}
+                      {% set short_text = words[:50] | join(' ') ~ ('...' if words|length > 50 else '') %}
+                      <div style="margin-top: 8px;" onclick="event.stopPropagation();">
+                        <button class="dom-text-toggle-btn" onclick="var el = document.getElementById('dom-text-{{ step.step }}'); if(el.style.display==='none'){el.style.display='block'; this.innerText='Hide Real Element Text';}else{el.style.display='none'; this.innerText='Show Real Element Text';}" style="font-size: 10px; padding: 2px 6px; border: 1px solid var(--card-border); background: var(--bg-default); border-radius: 4px; cursor: pointer; color: var(--text-primary);">Hide Real Element Text</button>
+                        <div id="dom-text-{{ step.step }}" class="dom-text-content" style="display: block; font-size: 11px; margin-top: 4px; color: var(--text-muted); background: var(--badge-neutral-bg); padding: 6px; border-radius: 4px;">
+                          <strong>DOM [{{ step.target.llmIndex }}]:</strong> {{ short_text }}
+                        </div>
+                      </div>
+                    {% endif %}
+                  </td>
                   <td>
-                    {% if is_scroll %}
-                      <span class="badge neutral" style="font-style: italic;">scroll</span>
-                    {% elif step.rule_grounding is defined and step.rule_grounding is not none %}
-                      <span class="badge green">{{ "%.2f"|format(step.rule_grounding) }}</span>
+                    {% if step.element_step_similarity is defined and step.element_step_similarity is not none %}
+                      {% if step.element_step_similarity >= 0.80 %}
+                        <span class="badge green" title="Raw cosine similarity: {{ step.element_step_similarity }}">{{ "%.2f"|format(step.element_step_similarity) }}</span>
+                      {% else %}
+                        <span class="badge" style="background: rgba(234, 179, 8, 0.14); color: #a16207; border: 1px solid rgba(234, 179, 8, 0.35);" title="Raw cosine similarity: {{ step.element_step_similarity }}">{{ "%.2f"|format(step.element_step_similarity) }}</span>
+                      {% endif %}
                     {% else %}
                       <span style="color: var(--text-muted);">—</span>
                     {% endif %}
+                  </td>
+                  <td class="metric-col-groundhuman metric-col-hidden" onclick="event.stopPropagation();">
+                    {% set human_label = step.grounded_human_label if step.grounded_human_label is defined else 'grounded' %}
+                    <div style="display: inline-flex; border: 1px solid var(--card-border); border-radius: 8px; overflow: hidden; background: var(--badge-neutral-bg);" data-grounding-label-wrap="{{ step.step }}">
+                      <button type="button" onclick="saveGroundingHumanLabel({{ step.step }}, 'grounded')" data-grounding-label-btn="{{ step.step }}:grounded" style="border: none; padding: 5px 8px; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; background: {{ 'rgba(16, 185, 129, 0.18)' if human_label != 'non_grounded' else 'transparent' }}; color: {{ 'var(--success)' if human_label != 'non_grounded' else 'var(--text-muted)' }};">Grounded</button>
+                      <button type="button" onclick="saveGroundingHumanLabel({{ step.step }}, 'non_grounded')" data-grounding-label-btn="{{ step.step }}:non_grounded" style="border: none; border-left: 1px solid var(--card-border); padding: 5px 8px; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; background: {{ 'rgba(239, 68, 68, 0.16)' if human_label == 'non_grounded' else 'transparent' }}; color: {{ 'var(--failure)' if human_label == 'non_grounded' else 'var(--text-muted)' }};">Non-Grounded</button>
+                    </div>
                   </td>
                   <td class="metric-col-llm metric-col-hidden">
                     {% if step.grounded is defined and step.grounded is not none %}
@@ -1283,7 +1472,14 @@
                       <span style="color: var(--text-muted);">—</span>
                     {% elif step.computed_loop is defined and step.computed_loop is not none %}
                       <span title="old loop key: {{ step.action_key }}">{{ "%.2f"|format(step.computed_loop) }}</span>
-                      {% if step.action_key %}<div style="font-size: 10px; color: var(--text-muted); max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="old loop key: {{ step.action_key }}">{{ step.action_key }}</div>{% endif %}
+                      {% if step.action_key %}<div style="font-size: 10px; color: var(--text-muted); max-width: 260px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.25;" title="old loop key: {{ step.action_key }}">{{ step.action_key }}</div>{% endif %}
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-goalrel{% if not show_goalrel %} metric-col-hidden{% endif %}">
+                    {% if step.g_goal_relevance_score is defined and step.g_goal_relevance_score is not none %}
+                      <span style="color: var(--text-muted);" title="Goal relevance: {{ step.g_goal_relevance_score }}">{{ "%.4f"|format(step.g_goal_relevance_score) }}</span>
                     {% else %}
                       <span style="color: var(--text-muted);">—</span>
                     {% endif %}
@@ -1293,17 +1489,11 @@
                       <span style="color: var(--text-muted);">—</span>
                     {% elif step.computed_loop_updated is defined and step.computed_loop_updated is not none %}
                       <span title="updated loop key: {{ step.action_key_updated }}">{{ "%.2f"|format(step.computed_loop_updated) }}{% if loop_disagrees %} Δ{% endif %}</span>
-                      {% if step.action_key_updated %}<div style="font-size: 10px; color: var(--text-muted); max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="updated loop key: {{ step.action_key_updated }}">{{ step.action_key_updated }}</div>{% endif %}
-                    {% else %}
-                      <span style="color: var(--text-muted);">—</span>
-                    {% endif %}
-                  </td>
-                  {% set goal_rel = step.g_goal_relevance_score if step.g_goal_relevance_score is defined and step.g_goal_relevance_score is not none else step.g_progress_score %}
-                  <td>
-                    {% if is_scroll %}
-                      <span style="color: var(--text-muted);">—</span>
-                    {% elif goal_rel is defined and goal_rel is not none %}
-                      <span>{{ "%.2f"|format(goal_rel) }}</span>
+                      {% if step.action_key_updated %}
+                        <div style="font-size: 10px; color: var(--text-muted); max-width: none; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.25;" title="updated loop key: {{ step.action_key_updated }}">
+                          <strong>Element text:</strong> {{ step.action_key_updated.split(':', 1)[1] if ':' in step.action_key_updated else step.action_key_updated }}
+                        </div>
+                      {% endif %}
                     {% else %}
                       <span style="color: var(--text-muted);">—</span>
                     {% endif %}
@@ -1313,6 +1503,54 @@
                       <span style="color: var(--text-muted);">—</span>
                     {% elif step.progress is defined and step.progress is not none %}
                       <span>{{ "%.2f"|format(step.progress) }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if step.subgoal_progress is defined and step.subgoal_progress is not none %}
+                      {% set sp = step.subgoal_progress %}
+                      <span class="badge {{ 'green' if sp >= 1.0 else ('neutral' if sp >= 0.5 else 'red') }}"
+                            title="{{ '+1 verified subgoal' if sp >= 1.0 else ('no change' if sp >= 0.5 else 'fewer verified / revisited state') }}">{{ "%.1f"|format(sp) }}</span>
+                      {% if step.subgoal_verified is defined and step.subgoal_verified is not none %}
+                      <div style="font-size: 10px; color: var(--text-muted);">{{ step.subgoal_verified }}/{{ (trajectory.subgoal_rubric.subgoals|length) if trajectory.subgoal_rubric else '?' }} verified</div>
+                      {% endif %}
+                      {% if step.subgoal_breakdown %}
+                      {% set completed_subgoals = step.subgoal_breakdown|selectattr('verified')|list %}
+                      <details style="margin-top: 6px; min-width: 260px;" onclick="event.stopPropagation();">
+                        <summary style="cursor: pointer; font-size: 11px; color: var(--text-muted);">
+                          {% if completed_subgoals %}
+                            Completed: {% for sg in completed_subgoals %}#{{ sg.order }}{% if not loop.last %}, {% endif %}{% endfor %}
+                          {% else %}
+                            No subgoal completed
+                          {% endif %}
+                        </summary>
+                        <div style="margin-top: 6px; display: grid; gap: 8px; max-width: 360px;">
+                          {% for sg in step.subgoal_breakdown %}
+                          <div style="border: 1px solid var(--card-border); border-radius: 6px; padding: 6px 8px; background: {{ 'rgba(16, 185, 129, 0.06)' if sg.verified else 'var(--badge-neutral-bg)' }};">
+                            <div style="font-size: 11px; font-weight: 700; color: var(--text);">
+                              {{ '✓' if sg.verified else '○' }} #{{ sg.order }} {{ sg.goal }}
+                              {% if sg.earlier %}
+                                <span style="font-size: 10px; color: var(--text-muted); font-weight: 600;">(verified on an earlier step)</span>
+                              {% elif sg.direct %}
+                                <span style="font-size: 10px; color: var(--success); font-weight: 600;">(matched check)</span>
+                              {% endif %}
+                              <span style="font-size: 10px; color: var(--text-muted); font-weight: 600;">{{ 'any check' if sg.mode == 'any' else 'all checks' }}</span>
+                            </div>
+                            <div style="margin-top: 4px; display: grid; gap: 3px;">
+                              {% for check in sg.checks %}
+                              <div style="font-size: 10px; color: {{ 'var(--success)' if check.passed else 'var(--text-muted)' }};">
+                                {{ '✓' if check.passed else '✗' }} {{ check.label }}
+                              </div>
+                              {% else %}
+                              <div style="font-size: 10px; color: var(--text-muted);">No checks in rubric; cannot verify.</div>
+                              {% endfor %}
+                            </div>
+                          </div>
+                          {% endfor %}
+                        </div>
+                      </details>
+                      {% endif %}
                     {% else %}
                       <span style="color: var(--text-muted);">—</span>
                     {% endif %}
@@ -1329,6 +1567,49 @@
                       {% else %}
                         <span class="badge failed">{{ "%.3f"|format(final_c) }}</span>
                       {% endif %}
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-gtprog metric-col-hidden">
+                    {% if step.self_progress_gt is defined and step.self_progress_gt is not none %}
+                      {% set v = step.self_progress_gt %}
+                      <span class="badge {{ 'green' if v > 0.5 else ('neutral' if v >= 0 else 'red') }}" title="{{ step.self_progress_gt_reason or '' }}">{{ "%.0f"|format(v) }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-gtprog metric-col-hidden">
+                    {% if step.self_progress_no_gt is defined and step.self_progress_no_gt is not none %}
+                      {% set v = step.self_progress_no_gt %}
+                      <span class="badge {{ 'green' if v > 0.5 else ('neutral' if v >= 0 else 'red') }}" title="{{ step.self_progress_no_gt_reason or '' }}">{{ "%.0f"|format(v) }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-agentresp metric-col-hidden" onclick="event.stopPropagation();">
+	                    {% if step.self_progress_gt_reason or step.self_progress_no_gt_reason %}
+	                      <div style="max-width: 320px; font-size: 11px; color: var(--text-muted); white-space: normal;">
+	                        {% if step.self_progress_gt_reason %}<div><strong style="color: #eab308;">GT:</strong> {{ step.self_progress_gt_reason }}</div>{% endif %}
+	                        {% if step.self_progress_no_gt_reason %}<div style="margin-top: 4px;"><strong style="color: #ec4899;">No-GT:</strong> {{ step.self_progress_no_gt_reason }}</div>{% endif %}
+	                        {% if step.self_progress_gt_prompt or step.self_progress_no_gt_prompt or step.self_progress_gt_raw_response or step.self_progress_no_gt_raw_response %}
+	                        <details style="margin-top: 8px;">
+	                          <summary style="cursor: pointer; color: var(--text); font-weight: 700;">Prompt / agent response</summary>
+	                          {% if step.self_progress_gt_prompt %}
+	                          <div style="margin-top: 6px;"><strong style="color: #eab308;">GT prompt</strong><pre style="white-space: pre-wrap; overflow: auto; max-height: 180px; margin-top: 4px;">{{ step.self_progress_gt_prompt }}</pre></div>
+	                          {% endif %}
+	                          {% if step.self_progress_gt_raw_response %}
+	                          <div style="margin-top: 6px;"><strong style="color: #eab308;">GT agent response</strong><pre style="white-space: pre-wrap; overflow: auto; max-height: 120px; margin-top: 4px;">{{ step.self_progress_gt_raw_response }}</pre></div>
+	                          {% endif %}
+	                          {% if step.self_progress_no_gt_prompt %}
+	                          <div style="margin-top: 6px;"><strong style="color: #ec4899;">No-GT prompt</strong><pre style="white-space: pre-wrap; overflow: auto; max-height: 180px; margin-top: 4px;">{{ step.self_progress_no_gt_prompt }}</pre></div>
+	                          {% endif %}
+	                          {% if step.self_progress_no_gt_raw_response %}
+	                          <div style="margin-top: 6px;"><strong style="color: #ec4899;">No-GT agent response</strong><pre style="white-space: pre-wrap; overflow: auto; max-height: 120px; margin-top: 4px;">{{ step.self_progress_no_gt_raw_response }}</pre></div>
+	                          {% endif %}
+	                        </details>
+	                        {% endif %}
+	                      </div>
+	                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
                     {% endif %}
                   </td>
                 </tr>
@@ -1365,6 +1646,14 @@
               <div class="meta-label">Duration</div>
               <div class="meta-value" id="details-meta-duration">—</div>
             </div>
+            <div class="meta-item">
+              <div class="meta-label">Grounding Similarity</div>
+              <div class="meta-value" id="details-meta-spec-grounding">—</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Spec Full</div>
+              <div class="meta-value" id="details-meta-spec-full">—</div>
+            </div>
             <div class="meta-item" style="grid-column: span 2;">
               <div class="meta-label">Target URL</div>
               <div class="meta-value" id="details-meta-url">—</div>
@@ -1372,6 +1661,10 @@
             <div class="meta-item" style="grid-column: span 2;">
               <div class="meta-label">Target Element</div>
               <div class="meta-value" id="details-meta-target">—</div>
+            </div>
+            <div class="meta-item" style="grid-column: span 2;">
+              <div class="meta-label">Target Capture</div>
+              <div class="meta-value" id="details-meta-capture-mode">—</div>
             </div>
           </div>
 
@@ -1393,7 +1686,7 @@
           </div>
 
           <div id="tab-target" class="tab-content">
-            <div class="image-container" onclick="openLightbox('target')">
+            <div class="image-container target-region-view" onclick="openLightbox('target')">
               <img id="img-target" src="" alt="Screenshot of target region">
               <div class="image-overlay">🔍 Click screenshot to expand</div>
             </div>
@@ -1470,6 +1763,146 @@
     let currentLightboxStepIdx = 0;
     let currentLightboxView = 'before';
     const LIGHTBOX_META_PREF = 'pageguideEvalLightboxMetaVisible';
+    const DEFAULT_GROUNDING_THRESHOLD = Number((trajectory.grounding_boundary_metrics || {}).threshold || 0.8);
+
+    function fmtMetric(value) {
+      return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—';
+    }
+
+    function taskGroundingThresholdValue() {
+      const input = document.getElementById('task-grounding-boundary-input');
+      const raw = input ? Number(input.value) : DEFAULT_GROUNDING_THRESHOLD;
+      const value = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : DEFAULT_GROUNDING_THRESHOLD;
+      if (input && input.value !== '') input.value = value.toFixed(2);
+      return value;
+    }
+
+    function humanGroundingLabel(step) {
+      return step && step.grounded_human_label === 'non_grounded' ? 'non_grounded' : 'grounded';
+    }
+
+    function groundingBoundaryMetrics(steps, threshold = DEFAULT_GROUNDING_THRESHOLD) {
+      let tp = 0, tn = 0, fp = 0, fn = 0;
+      const mismatches = [];
+      (steps || []).forEach(step => {
+        if (!step || step.isInitial) return;
+        const sim = Number(step.element_step_similarity);
+        if (!Number.isFinite(sim)) return;
+        const predicted = sim >= threshold ? 'grounded' : 'non_grounded';
+        const human = humanGroundingLabel(step);
+        if (human === 'grounded' && predicted === 'grounded') tp++;
+        else if (human === 'grounded' && predicted === 'non_grounded') fn++;
+        else if (human === 'non_grounded' && predicted === 'grounded') fp++;
+        else tn++;
+        if (human !== predicted) {
+          mismatches.push({
+            step: step.step,
+            similarity: sim,
+            predicted,
+            human,
+            instruction: step.instruction || '',
+            action: step.action || ''
+          });
+        }
+      });
+      const total = tp + tn + fp + fn;
+      const precision = (tp + fp) ? tp / (tp + fp) : null;
+      const recall = (tp + fn) ? tp / (tp + fn) : null;
+      const f1 = (precision !== null && recall !== null && (precision + recall)) ? 2 * precision * recall / (precision + recall) : null;
+      return {
+        threshold, tp, tn, fp, fn, total,
+        correct: tp + tn,
+        incorrect: fp + fn,
+        accuracy: total ? (tp + tn) / total : null,
+        precision,
+        recall,
+        f1,
+        mismatches
+      };
+    }
+
+    function labelText(label) {
+      return label === 'non_grounded' ? 'Non-Grounded' : 'Grounded';
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function renderBoundaryMetrics(metrics, targetId) {
+      const el = document.getElementById(targetId);
+      if (!el) return;
+      const mismatchHtml = metrics.mismatches.length
+        ? metrics.mismatches.slice(0, 5).map(m => `<span class="badge" title="${escapeHtml((m.action || '') + ' · ' + (m.instruction || ''))}" style="background: rgba(239, 68, 68, 0.12); color: var(--failure); border: 1px solid rgba(239, 68, 68, 0.3);">Step ${escapeHtml(String(m.step ?? '?'))}: ${m.similarity.toFixed(2)} predicted ${labelText(m.predicted)}, human ${labelText(m.human)}</span>`).join(' ')
+        : '<span style="color: var(--text-muted); font-size: 12px;">No mismatches at this threshold.</span>';
+      el.innerHTML = `
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 12px;">
+          ${['accuracy', 'precision', 'recall', 'f1'].map(key => `<div style="border: 1px solid var(--card-border); border-radius: 8px; padding: 8px; background: var(--badge-neutral-bg);"><div style="font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase;">${key}</div><div style="font-size: 18px; font-weight: 800;">${fmtMetric(metrics[key])}</div></div>`).join('')}
+        </div>
+        <div style="display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr); gap: 12px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+            <thead><tr><th></th><th>Pred Grounded</th><th>Pred Non-Grounded</th></tr></thead>
+            <tbody>
+              <tr><th>Human Grounded</th><td>${metrics.tp}</td><td>${metrics.fn}</td></tr>
+              <tr><th>Human Non-Grounded</th><td>${metrics.fp}</td><td>${metrics.tn}</td></tr>
+            </tbody>
+          </table>
+          <div style="font-size: 12px; color: var(--text-muted);">
+            <strong style="color: var(--text);">Correct:</strong> ${metrics.correct} ·
+            <strong style="color: var(--text);">Incorrect:</strong> ${metrics.incorrect} ·
+            <strong style="color: var(--text);">Total scored:</strong> ${metrics.total}
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">${mismatchHtml}</div>
+          </div>
+        </div>`;
+    }
+
+    function renderTaskBoundarySummary() {
+      renderBoundaryMetrics(groundingBoundaryMetrics(trajectory.steps || [], taskGroundingThresholdValue()), 'task-grounding-boundary-summary');
+    }
+
+    function setGroundingLabelButtonState(stepId, label) {
+      ['grounded', 'non_grounded'].forEach(value => {
+        const btn = document.querySelector(`[data-grounding-label-btn="${stepId}:${value}"]`);
+        if (!btn) return;
+        const selected = value === label;
+        btn.style.background = selected
+          ? (value === 'grounded' ? 'rgba(16, 185, 129, 0.18)' : 'rgba(239, 68, 68, 0.16)')
+          : 'transparent';
+        btn.style.color = selected
+          ? (value === 'grounded' ? 'var(--success)' : 'var(--failure)')
+          : 'var(--text-muted)';
+      });
+    }
+
+    async function saveGroundingHumanLabel(stepId, label) {
+      try {
+        const response = await fetch(`/api/trajectory/${trajectory.sessionId}/grounding-human-label`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ step: stepId, label, threshold: taskGroundingThresholdValue() })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          showAlert(`Error saving grounding label: ${data.error || response.status}`, 'error');
+          return;
+        }
+        const step = trajectory.steps.find(s => Number(s.step) === Number(stepId));
+        if (step) {
+          if (label === 'non_grounded') step.grounded_human_label = 'non_grounded';
+          else delete step.grounded_human_label;
+        }
+        setGroundingLabelButtonState(stepId, label);
+        renderTaskBoundarySummary();
+        showAlert('Grounding label saved.', 'success');
+      } catch (err) {
+        showAlert(`Error saving grounding label: ${err.message}`, 'error');
+      }
+    }
 
     function resolveScreenshot(shot) {
       if (!shot) return null;
@@ -1482,8 +1915,24 @@
       return `data:image/jpeg;base64,${shot}`;
     }
 
+    function captureModeLabel(mode) {
+      return mode === 'aligned' ? 'New Target Captured' : 'Legacy target captured';
+    }
+
+    function mountDomSnapshot(wrap, html, banner) {
+      if (!wrap) return;
+      if (!html) {
+        wrap.innerHTML = '<div class="empty-tab">No snapshot available for this step.</div>';
+        return;
+      }
+      wrap.innerHTML = `<div class="dom-snap-wrap"><div class="dom-snap-banner">${banner}</div><iframe sandbox="" title="${banner}"></iframe></div>`;
+      const frame = wrap.querySelector('iframe');
+      if (frame) frame.srcdoc = html;
+    }
+
     function init() {
       setLightboxMetaVisible(lightboxMetaVisible());
+      renderTaskBoundarySummary();
       if (trajectory.steps.length > 0) {
         selectStep(trajectory.steps[0].step);
       }
@@ -1495,9 +1944,27 @@
       cells.forEach(cell => cell.classList.toggle('metric-col-hidden', !shouldShow));
       if (button) {
         button.classList.toggle('active', shouldShow);
-        const label = column === 'lt' ? 'L_t' : 'LLM grounded';
+        const labels = { lt: 'L_t', llm: 'LLM grounded', goalrel: 'Goal Relevance', groundhuman: 'Grounded_Human_Label', gtprog: 'GT / No-GT Progress', agentresp: 'Agent Response' };
+        const label = labels[column] || column;
         button.textContent = `${shouldShow ? 'Hide' : 'Show'} ${label}`;
         button.setAttribute('aria-pressed', shouldShow ? 'true' : 'false');
+      }
+    }
+
+    function toggleAllDomTexts(button) {
+      button.classList.toggle('active');
+      const isShowing = button.classList.contains('active');
+      button.innerText = (isShowing ? 'Hide ' : 'Show ') + 'All Real Element Text';
+      
+      const textDivs = document.querySelectorAll('.dom-text-content');
+      const toggleBtns = document.querySelectorAll('.dom-text-toggle-btn');
+      
+      if (isShowing) {
+        textDivs.forEach(div => div.style.display = 'block');
+        toggleBtns.forEach(btn => btn.innerText = 'Hide Real Element Text');
+      } else {
+        textDivs.forEach(div => div.style.display = 'none');
+        toggleBtns.forEach(btn => btn.innerText = 'Show Real Element Text');
       }
     }
 
@@ -1598,6 +2065,13 @@
       document.getElementById('details-meta-duration').textContent = 
         dur ? (dur < 1000 ? `${dur}ms` : `${(dur / 1000).toFixed(1)}s`) : 'N/A';
         
+      const specG = stepData.element_step_similarity;
+      document.getElementById('details-meta-spec-grounding').textContent =
+        (specG !== undefined && specG !== null) ? specG.toFixed(2) : '—';
+      const specFull = stepData.mech_confidence;
+      document.getElementById('details-meta-spec-full').textContent =
+        (specFull !== undefined && specFull !== null) ? specFull.toFixed(3) : '—';
+        
       const url = stepData.url;
       if (url) {
         document.getElementById('details-meta-url').innerHTML = `<a href="${url}" target="_blank" style="color: var(--accent); text-decoration: none;">${url}</a>`;
@@ -1618,6 +2092,10 @@
       } else {
         targetElem.textContent = 'N/A';
       }
+
+      const captureMode = stepData.regionCaptureMode || (stepData.regionShot ? 'legacy' : null);
+      document.getElementById('details-meta-capture-mode').textContent =
+        captureMode ? captureModeLabel(captureMode) : '—';
 
       // Update base64 screenshots
       const shotBefore = stepData.screenshotBefore || stepData.screenshot || null;
@@ -1659,12 +2137,11 @@
         if (currentActiveTab === 'after') switchTab('before');
       }
 
-      // Update DOM Snapshot HTML
+      // Update DOM Snapshot HTML (rendered read-only iframe, same as live inspector)
       const domContent = stepData.domSnapshot || null;
       const iframeWrap = document.getElementById('dom-iframe-wrap');
       if (domContent) {
-        iframeWrap.innerHTML = '<pre class="dom-code" id="dom-pre"></pre>';
-        document.getElementById('dom-pre').textContent = domContent;
+        mountDomSnapshot(iframeWrap, domContent, 'Read-only page snapshot — before action');
         document.getElementById('btn-tab-dom').disabled = false;
       } else {
         iframeWrap.innerHTML = '<div class="empty-tab">No DOM Snapshot available for this step.</div>';
@@ -1675,9 +2152,18 @@
       // Update Target DOM Snapshot HTML
       const domTargetContent = stepData.regionDom || null;
       const iframeTargetWrap = document.getElementById('dom-target-iframe-wrap');
+      const captureNote = captureMode === 'aligned'
+        ? 'New Target Captured: scroll into view, fresh screenshot, then crop with padding around the highlighted element.'
+        : 'Legacy target captured: crop the carried before-shot using the highlighted element bounds plus padding.';
       if (domTargetContent) {
-        iframeTargetWrap.innerHTML = '<p class="dom-note">Target crop is cut from the before-action viewport screenshot using the highlighted element bounds plus padding. DOM Target is the stored nearby container for that same element.</p><pre class="dom-code" id="dom-target-pre"></pre>';
-        document.getElementById('dom-target-pre').textContent = domTargetContent;
+        mountDomSnapshot(iframeTargetWrap, domTargetContent, 'Target region DOM — nearby container');
+        const note = iframeTargetWrap.querySelector('.dom-snap-wrap');
+        if (note) {
+          const p = document.createElement('p');
+          p.className = 'dom-note';
+          p.textContent = captureNote;
+          iframeTargetWrap.insertBefore(p, note);
+        }
         document.getElementById('btn-tab-dom-target').disabled = false;
       } else {
         iframeTargetWrap.innerHTML = '<div class="empty-tab">No Target DOM available.</div>';
@@ -1698,6 +2184,12 @@
       
       // Update graph highlighting
       drawConfidenceGraph();
+
+      // Default to target-region view when available (matches live guide preview).
+      if (shotTarget) switchTab('target');
+      else if (shotBefore) switchTab('before');
+      else if (shotAfter) switchTab('after');
+      else if (domContent) switchTab('dom');
     }
 
     function switchTab(tabName) {
@@ -1777,12 +2269,15 @@
         });
         
         if (response.ok) {
+          const data = await response.json();
           showAlert('Evaluation saved successfully!', 'success');
           // Update trajectory state in-memory to prevent warning loss if saved again
           if (!trajectory.evaluation) trajectory.evaluation = {};
           trajectory.evaluation.status = status;
           trajectory.evaluation.error_types = errorTypes;
           trajectory.evaluation.notes = notes;
+          trajectory.evaluation.source = 'human';
+          trajectory.evaluation_source = 'human';
           trajectory.llm_source = llmSource;
           trajectory.conf_source = confSource;
         } else {
@@ -1950,23 +2445,39 @@
       }
     }
 
-    // Goal relevance (embedding cosine sim), honoring the legacy field name.
-    function goalRelevanceOf(step) {
-      if (step.g_goal_relevance_score !== undefined && step.g_goal_relevance_score !== null) {
-        return step.g_goal_relevance_score;
-      }
-      if (step.g_progress_score !== undefined && step.g_progress_score !== null) {
-        return step.g_progress_score;
-      }
-      return 1;
+    // Deterministic Subgoal Progress (0.0 / 0.5 / 1.0) from the verified-subgoal delta.
+    function subgoalProgressOf(step) {
+      const raw = step.subgoal_progress;
+      if (raw === undefined || raw === null) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+    }
+
+    function llmProgressOf(step) {
+      const raw = step.progress;
+      if (raw === undefined || raw === null) return null;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return null;
+      // Progress is already a 0…1 three-point signal (0.0 / 0.5 / 1.0); clamp as-is.
+      return Math.max(0, Math.min(1, n));
+    }
+
+    function selfReportProgressOf(value) {
+      if (value === undefined || value === null) return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
     }
 
     // Confidence Graph Settings
     let activeConfLines = {
       full: true,
-      progress: true,
+      llmProgress: true,
+      subgoalProgress: true,
       loop: true,
-      grounding: true
+      grounding: true,
+      goalRelevance: true,
+      gtProgress: true,
+      noGtProgress: true
     };
     
     function toggleConfLine(type) {
@@ -2008,9 +2519,13 @@
       steps.forEach(step => {
         const push = v => { if (v !== undefined && v !== null && isFinite(v)) allVals.push(v); };
         if (activeConfLines.full) push(step.mech_confidence);
-        if (activeConfLines.progress) push(goalRelevanceOf(step));
+        if (activeConfLines.llmProgress) push(llmProgressOf(step));
+        if (activeConfLines.subgoalProgress) push(subgoalProgressOf(step));
         if (activeConfLines.loop) push(step.computed_loop_updated);
-        if (activeConfLines.grounding) push(step.rule_grounding);
+        if (activeConfLines.grounding) push(step.element_step_similarity);
+        if (activeConfLines.goalRelevance) push(step.g_goal_relevance_score);
+        if (activeConfLines.gtProgress) push(selfReportProgressOf(step.self_progress_gt));
+        if (activeConfLines.noGtProgress) push(selfReportProgressOf(step.self_progress_no_gt));
       });
       if (allVals.length > 0) {
         minVal = Math.min(0, ...allVals);
@@ -2046,7 +2561,22 @@
         text.textContent = Math.round(currentVal * 100) + "%";
         svg.appendChild(text);
       }
-      
+
+      // Solid zero baseline so progress (above 0) vs regression (below 0) is readable when
+      // the −1..1 self-report lines are shown.
+      if (minVal < 0 && maxVal > 0) {
+        const zeroY = padding.top + innerHeight * (1 - (0 - minVal) / valRange);
+        const zline = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        zline.setAttribute("x1", padding.left);
+        zline.setAttribute("y1", zeroY);
+        zline.setAttribute("x2", width - padding.right);
+        zline.setAttribute("y2", zeroY);
+        zline.setAttribute("stroke", "var(--text-muted)");
+        zline.setAttribute("stroke-width", "1.5");
+        zline.setAttribute("opacity", "0.6");
+        svg.appendChild(zline);
+      }
+
       // Draw active step highlight
       const activeIdx = steps.findIndex(s => s.step === currentStepId);
       if (activeIdx >= 0) {
@@ -2110,16 +2640,28 @@
       if (activeConfLines.full) {
         drawLine(s => metric(s.mech_confidence), "#7857ff");        // Full = mechanical C_t
       }
-      if (activeConfLines.progress) {
-        drawLine(s => metric(goalRelevanceOf(s)), "#ff8a3d");       // Goal relevance
+      if (activeConfLines.llmProgress) {
+        drawLine(s => metric(llmProgressOf(s)), "#ff8a3d");         // Agent self-reported progress
+      }
+      if (activeConfLines.subgoalProgress) {
+        drawLine(s => metric(subgoalProgressOf(s)), "#10b981");     // Deterministic subgoal progress
       }
       if (activeConfLines.loop) {
         drawLine(s => metric(s.computed_loop_updated), "#1bbf9c");  // L_t_u
       }
       if (activeConfLines.grounding) {
-        drawLine(s => metric(s.rule_grounding), "#ef4444");         // rule-based grounding
+        drawLine(s => metric(s.element_step_similarity), "#0ea5e9"); // cosine(step instr, element text)
       }
-      
+      if (activeConfLines.goalRelevance) {
+        drawLine(s => metric(s.g_goal_relevance_score), "#06b6d4"); // cosine(step instr, goal)
+      }
+      if (activeConfLines.gtProgress) {
+        drawLine(s => metric(selfReportProgressOf(s.self_progress_gt)), "#eab308");       // self-report w/ ground truth
+      }
+      if (activeConfLines.noGtProgress) {
+        drawLine(s => metric(selfReportProgressOf(s.self_progress_no_gt)), "#ec4899");    // self-report w/o ground truth
+      }
+
       // X axis labels
       steps.forEach((step, i) => {
         const x = padding.left + (i * xStep);

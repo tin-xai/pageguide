@@ -690,19 +690,22 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
   beforeAll(() => { loadScript('content/utils.js'); });
 
   describe('gv2GroundingScore', () => {
-    test('exact SoM index resolved → 1.0', () => {
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: true, textFound: false })).toBe(1.0);
-      // indexValid wins even if text also matched
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: true, textFound: true })).toBe(1.0);
+    test('indexed element uses element-step cosine thresholds', () => {
+      expect(window.gv2GroundingScore({ action: 'click', hasIndex: true, elementStepSimilarity: 0.84 })).toBe(1.0);
+      expect(window.gv2GroundingScore({ action: 'click', hasIndex: true, elementStepSimilarity: 0.83 })).toBe(0.5);
+      expect(window.gv2GroundingScore({ action: 'click', hasIndex: true, elementStepSimilarity: 0.78 })).toBe(0.5);
+      expect(window.gv2GroundingScore({ action: 'click', hasIndex: true, elementStepSimilarity: 0.77 })).toBe(0.1);
     });
-    test('index failed but text fallback found → 0.7', () => {
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: false, textFound: true })).toBe(0.7);
+    test('text only, no index → 0.0', () => {
+      expect(window.gv2GroundingScore({ action: 'click', hasIndex: false, hasText: true })).toBe(0.0);
     });
-    test('nothing resolved → 0.0', () => {
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: false, textFound: false })).toBe(0.0);
+    test('click with no index or text → 0.0', () => {
+      expect(window.gv2GroundingScore({ action: 'click', hasIndex: false, hasText: false })).toBe(0.0);
     });
-    test('no element target → null (excluded step)', () => {
-      expect(window.gv2GroundingScore({ hasTarget: false, indexValid: true, textFound: true })).toBeNull();
+    test('scroll / done / initial → null (excluded step)', () => {
+      expect(window.gv2GroundingScore({ action: 'done', hasIndex: true, hasText: true })).toBeNull();
+      expect(window.gv2GroundingScore({ action: 'scroll_down', hasIndex: true })).toBeNull();
+      expect(window.gv2GroundingScore({ isInitial: true, hasIndex: true })).toBeNull();
       expect(window.gv2GroundingScore(null)).toBeNull();
     });
   });
@@ -714,16 +717,17 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
     test('no matching prior key → 0', () => {
       expect(window.gv2LoopScore(['b', 'c'], 'a')).toBe(0);
     });
-    test('repeated key → matches / number of previous actions (reference)', () => {
-      // two prior "a", current "a": 2 / 2 = 1.0
-      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBeCloseTo(1.0, 6);
-      // one prior "a" among 3 previous: 1 / 3
-      expect(window.gv2LoopScore(['a', 'b', 'c'], 'a')).toBeCloseTo(1 / 3, 6);
-      // reference worked example: prev ["search","filters"], current "search" → 1/2
-      expect(window.gv2LoopScore(['search', 'filters'], 'search')).toBeCloseTo(0.5, 6);
+    test('repeated key → matches / 10', () => {
+      // two prior "a", current "a": 2 / 10 = 0.2
+      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBeCloseTo(0.2, 6);
+      // one prior "a" among 3 previous: 1 / 10 = 0.1
+      expect(window.gv2LoopScore(['a', 'b', 'c'], 'a')).toBeCloseTo(0.1, 6);
+      // reference worked example: prev ["search","filters"], current "search" → 1/10 = 0.1
+      expect(window.gv2LoopScore(['search', 'filters'], 'search')).toBeCloseTo(0.1, 6);
     });
     test('result is capped at 1.0', () => {
-      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBe(1);
+      const longPrior = Array(12).fill('a');
+      expect(window.gv2LoopScore(longPrior, 'a')).toBe(1.0);
     });
     test('no current key → 0 (reference returns 0, not null)', () => {
       expect(window.gv2LoopScore(['a'], '')).toBe(0);
@@ -734,35 +738,37 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
   describe('gv2ComputeMechanicalConfidence', () => {
     test('C_t = G × (1 − λ_L·L_t), default λ_L = 0.5', () => {
       // G=1.0, no prior → L=0 → 1.0
-      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(1.0, 6);
-      // G=0.7 (text fallback), L=0 → 0.7
-      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: false, textFound: true, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(0.7, 6);
+      expect(window.gv2ComputeMechanicalConfidence({ action: 'click', hasIndex: true, elementStepSimilarity: 0.84, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(1.0, 6);
+      // G=0.5 (medium cosine), L=0 → 0.5
+      expect(window.gv2ComputeMechanicalConfidence({ action: 'click', hasIndex: true, elementStepSimilarity: 0.78, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(0.5, 6);
+      // no valid index → 0.0
+      expect(window.gv2ComputeMechanicalConfidence({ action: 'click', hasIndex: false, hasText: true, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(0.0, 6);
     });
-    test('loop penalty lowers confidence: G=1.0, one prior repeat (L=1.0, λ=0.5) → 0.5', () => {
-      // priorKeys ['a'], currentKey 'a' → L = 1/1 = 1.0; C = 1.0 * (1 - 0.5*1.0) = 0.5
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' });
-      expect(r.loop).toBeCloseTo(1.0, 6);
-      expect(r.confidence).toBeCloseTo(0.5, 6);
+    test('loop penalty lowers confidence: G=1.0, one prior repeat (L=0.1, λ=0.5) → 0.95', () => {
+      // priorKeys ['a'], currentKey 'a' → L = 1/10 = 0.1; C = 1.0 * (1 - 0.5*0.1) = 0.95
+      const r = window.gv2ComputeMechanicalConfidence({ action: 'click', hasIndex: true, elementStepSimilarity: 0.84, priorKeys: ['a'], currentKey: 'a' });
+      expect(r.loop).toBeCloseTo(0.1, 6);
+      expect(r.confidence).toBeCloseTo(0.95, 6);
     });
-    test('reference example step 3: prev [search,filters], L=0.5 → C=0.75', () => {
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['search', 'filters'], currentKey: 'search' });
-      expect(r.loop).toBeCloseTo(0.5, 6);
-      expect(r.confidence).toBeCloseTo(0.75, 6);
+    test('reference example step 3: prev [search,filters], L=0.1 → C=0.95', () => {
+      const r = window.gv2ComputeMechanicalConfidence({ action: 'click', hasIndex: true, elementStepSimilarity: 0.84, priorKeys: ['search', 'filters'], currentKey: 'search' });
+      expect(r.loop).toBeCloseTo(0.1, 6);
+      expect(r.confidence).toBeCloseTo(0.95, 6);
     });
     test('grounding zero → confidence 0 (hard floor)', () => {
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: false, textFound: false, priorKeys: ['a', 'a'], currentKey: 'a' });
+      const r = window.gv2ComputeMechanicalConfidence({ action: 'click', hasIndex: false, priorKeys: ['a', 'a'], currentKey: 'a' });
       expect(r.grounding).toBe(0);
       expect(r.confidence).toBe(0);
     });
-    test('no target → null confidence (excluded)', () => {
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: false, priorKeys: [], currentKey: '' });
+    test('done step → null confidence (excluded)', () => {
+      const r = window.gv2ComputeMechanicalConfidence({ action: 'done', priorKeys: [], currentKey: '' });
       expect(r.confidence).toBeNull();
       expect(r.grounding).toBeNull();
       expect(r.loop).toBeNull();
     });
     test('λ_L override is respected', () => {
-      // G=1.0, prior ['a'] current 'a' → L=1.0; λ=1.0 → 1.0*(1-1.0*1.0)=0
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' }, { lambdaL: 1.0 });
+      // G=1.0, prior ['a'] current 'a' → L=0.1; λ=10.0 → 1.0*(1-10.0*0.1)=0
+      const r = window.gv2ComputeMechanicalConfidence({ action: 'click', hasIndex: true, elementStepSimilarity: 0.84, priorKeys: ['a'], currentKey: 'a' }, { lambdaL: 10.0 });
       expect(r.confidence).toBeCloseTo(0.0, 6);
     });
   });
@@ -777,10 +783,177 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
     test('falls back to instruction when no element text', () => {
       expect(window.gv2ElementKey({ instruction: 'Click Save' })).toBe('click save');
     });
+    test('includes action type when present so clear/type/click are distinct', () => {
+      expect(window.gv2ElementKey({ action: 'click', element: { text: 'Search' } })).toBe('click: search');
+      expect(window.gv2ElementKey({ action: 'type', element: { text: 'Search' } })).toBe('type: search');
+      expect(window.gv2ElementKey({ action: 'clear_text', element: { text: 'Search' } })).toBe('clear_text: search');
+    });
     test('returns empty string when neither present', () => {
       expect(window.gv2ElementKey({})).toBe('');
       expect(window.gv2ElementKey(null)).toBe('');
     });
+  });
+});
+
+describe('gv2ResolveRegionElement (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('prefers the active highlight node over currentTargetEl', () => {
+    const highlight = { getBoundingClientRect: () => ({}) };
+    const container = { getBoundingClientRect: () => ({}) };
+    window._pageguideHighlights = [highlight];
+    window._guidev2 = { currentTargetEl: container };
+    const doc = { contains: (el) => el === highlight || el === container, querySelector: () => null };
+    expect(window.gv2ResolveRegionElement(doc)).toBe(highlight);
+  });
+
+  test('falls back to currentTargetEl then data-pageguide-styled', () => {
+    window._pageguideHighlights = [];
+    const styled = { id: 'styled' };
+    const container = { id: 'container' };
+    window._guidev2 = { currentTargetEl: container };
+    const doc = {
+      contains: (el) => el === container || el === styled,
+      querySelector: (sel) => (sel === '[data-pageguide-styled]' ? styled : null),
+    };
+    expect(window.gv2ResolveRegionElement(doc)).toBe(container);
+    window._guidev2 = {};
+    expect(window.gv2ResolveRegionElement(doc)).toBe(styled);
+  });
+});
+
+describe('gv2ResolveRegionTarget (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('prefers currentTargetEl over highlight span for region crop bounds', () => {
+    const highlight = { getBoundingClientRect: () => ({}) };
+    const container = { getBoundingClientRect: () => ({}) };
+    window._pageguideHighlights = [highlight];
+    window._guidev2 = { currentTargetEl: container };
+    const doc = { contains: (el) => el === highlight || el === container, querySelector: () => null };
+    expect(window.gv2ResolveRegionTarget(doc)).toBe(container);
+  });
+});
+
+describe('gv2PickTargetIndex (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    window.getAccessibleName = (el) => el._name || el.textContent || '';
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  test('keeps LLM index when its accessible name also matches the search text', () => {
+    window._pageguideIndex = {
+      10: { _name: 'High Impact', textContent: 'High Impact' },
+      20: { _name: 'High Impact filter', textContent: 'High Impact' },
+    };
+    expect(window.gv2PickTargetIndex('High Impact', 10)).toBe(10);
+  });
+
+  test('uses text match when LLM index does not match the search text', () => {
+    window._pageguideIndex = {
+      10: { _name: 'Purple filter', textContent: 'Purple' },
+      20: { _name: 'High Impact', textContent: 'High Impact' },
+    };
+    expect(window.gv2PickTargetIndex('High Impact', 10)).toBe(20);
+  });
+});
+
+describe('gv2CosineSimilarity / gv2BuildPredictFinalGoalPrompt (content/utils.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+  });
+
+  test('gv2BuildPredictFinalGoalPrompt includes task and url', () => {
+    const p = window.gv2BuildPredictFinalGoalPrompt('Change language to French', 'https://example.com');
+    expect(p).toContain('Change language to French');
+    expect(p).toContain('https://example.com');
+    expect(p).toMatch(/final goal STATE/i);
+  });
+
+  test('gv2CosineSimilarity returns 1 for identical vectors and 0 for orthogonal', () => {
+    expect(window.gv2CosineSimilarity([1, 0, 0], [1, 0, 0])).toBe(1);
+    expect(window.gv2CosineSimilarity([1, 0, 0], [0, 1, 0])).toBe(0);
+  });
+
+  test('gv2CosineSimilarity clamps negative cosine to 0', () => {
+    expect(window.gv2CosineSimilarity([1, 0], [-1, 0])).toBe(0);
+  });
+});
+
+describe('_gv2ShouldUseAlignedRegionCapture (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    global.chrome = {
+      storage: {
+        local: {
+          get: jest.fn(async () => ({ guideDebugRegionCapture: 'legacy' })),
+        },
+      },
+    };
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  test('forces aligned capture during auto mode regardless of debug toggle', async () => {
+    await expect(window._gv2ShouldUseAlignedRegionCapture({ autoMode: true })).resolves.toBe(true);
+  });
+
+  test('respects debug aligned toggle in manual mode', async () => {
+    chrome.storage.local.get.mockResolvedValueOnce({ guideDebugRegionCapture: 'aligned' });
+    await expect(window._gv2ShouldUseAlignedRegionCapture({ autoMode: false })).resolves.toBe(true);
+
+    chrome.storage.local.get.mockResolvedValueOnce({ guideDebugRegionCapture: 'legacy' });
+    await expect(window._gv2ShouldUseAlignedRegionCapture({ autoMode: false })).resolves.toBe(false);
+  });
+});
+
+describe('scrollToHighlight (content/functions/scroll.js)', () => {
+  beforeAll(() => {
+    loadScript('content/functions/scroll.js');
+  });
+
+  beforeEach(() => {
+    delete window._guidev2;
+    window._pageguideHighlights = [];
+  });
+
+  test('uses smooth scroll in manual mode', () => {
+    const el = { scrollIntoView: jest.fn(), style: {} };
+    window._pageguideHighlights = [el];
+    window.scrollToHighlight(0);
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+  });
+
+  test('uses instant scroll during auto guide', () => {
+    window._guidev2 = { autoMode: true };
+    const el = { scrollIntoView: jest.fn(), style: {} };
+    window._pageguideHighlights = [el];
+    window.scrollToHighlight(0);
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'instant', block: 'center' });
+  });
+});
+
+describe('scrollToHighlightAndWait (content/functions/scroll.js)', () => {
+  beforeAll(() => {
+    loadScript('content/functions/scroll.js');
+  });
+
+  beforeEach(() => {
+    delete window._guidev2;
+    window._pageguideHighlights = [];
+  });
+
+  test('resolves false when there is no highlight', async () => {
+    window._pageguideHighlights = [];
+    await expect(window.scrollToHighlightAndWait()).resolves.toBe(false);
+  });
+
+  test('scrolls the highlight and resolves true', async () => {
+    const el = {
+      scrollIntoView: jest.fn(),
+      style: {},
+    };
+    window._pageguideHighlights = [el];
+    await expect(window.scrollToHighlightAndWait(0, 20)).resolves.toBe(true);
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
   });
 });
 
@@ -876,6 +1049,7 @@ describe('gv2AssessRisk (content/utils.js)', () => {
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Delete your account' })).toBe('high');
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Click Pay now' })).toBe('high');
     expect(window.gv2AssessRisk({ risk: 'low', action: 'type', typeText: 'hunter2', element: { text: 'Password' } })).toBe('high');
+    expect(window.gv2AssessRisk({ risk: 'low', action: 'clear_text', element: { text: 'Password' } })).toBe('high');
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Send the message' })).toBe('high');
   });
 
@@ -1040,6 +1214,42 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
     expect(window._guidev2._autoClickTimer).toBeNull();
     expect(window._guidev2._autoTypeTimer).toBeNull();
     expect(window._guidev2.active).toBe(false);
+  });
+
+  test('guide prompt teaches clear_text action', () => {
+    expect(window.GUIDE_V2_PROMPT).toContain('"clear_text"');
+    expect(window.GUIDE_V2_PROMPT).toContain('action="clear_text"');
+  });
+
+  test('clear_text helper empties input and dispatches input/change events', () => {
+    const input = document.createElement('input');
+    input.value = 'old value';
+    const events = [];
+    input.addEventListener('input', () => events.push('input'));
+    input.addEventListener('change', () => events.push('change'));
+    document.body.appendChild(input);
+
+    expect(window._gv2SetEditableValue(input, '')).toBe(true);
+
+    expect(input.value).toBe('');
+    expect(events).toEqual(['input', 'change']);
+    input.remove();
+  });
+
+  test('clear_text helper empties contenteditable and dispatches change', () => {
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    editable.textContent = 'draft';
+    const events = [];
+    editable.addEventListener('input', () => events.push('input'));
+    editable.addEventListener('change', () => events.push('change'));
+    document.body.appendChild(editable);
+
+    expect(window._gv2SetEditableValue(editable, '')).toBe(true);
+
+    expect(editable.textContent).toBe('');
+    expect(events).toContain('change');
+    editable.remove();
   });
 
   test('stop unlocks the auto-mode page overlay immediately', () => {
@@ -1214,6 +1424,13 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     expect(window.rewindResolveScreenshot({ screenshot: 'LEGACY', screenshotAfter: 'AFTER' })).toBe('LEGACY');
     expect(window.rewindResolveScreenshot({ screenshotAfter: 'AFTER' })).toBe('AFTER');
     expect(window.rewindResolveScreenshot({})).toBeNull();
+  });
+
+  test('resolveRegionScreenshot prefers region crop then falls back to before shot', () => {
+    expect(window.rewindResolveRegionScreenshot({ regionShot: 'REGION', screenshotBefore: 'BEFORE' })).toBe('REGION');
+    expect(window.rewindResolveRegionScreenshot({ screenshotBefore: 'BEFORE' })).toBe('BEFORE');
+    expect(window.rewindResolveRegionScreenshot({ regionShot: 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', screenshotBefore: 'BEFORE' })).toBe('BEFORE');
+    expect(window.rewindResolveRegionScreenshot({})).toBeNull();
   });
 
   test('verifyScreenshots removes non-initial records with no screenshot and keeps fallback shots', async () => {
