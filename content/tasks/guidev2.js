@@ -1514,12 +1514,14 @@ ${g.question}
 ${tutorialSection}
 
 Return JSON for the task plan.`;
+  const planningStartedAt = Date.now();
+  const planningMetadata = { mode: 'guide_plan', step: 0, url: window.location.href };
   try {
     const response = await safeSendMessage({
       action: 'callLLM',
       systemPrompt: GUIDE_V2_PLANNING_PROMPT,
       messages: [{ role: 'user', content: prompt }],
-      metadata: { mode: 'guide_plan', step: 0, url: window.location.href }
+      metadata: planningMetadata
     });
     if (response?.error || !response?.content) throw new Error(response?.error || 'No planning response');
     const parsed = (typeof gv2ExtractJsonObject === 'function')
@@ -1544,7 +1546,13 @@ Return JSON for the task plan.`;
         await rewindUpdateSessionMeta(g.sessionId, {
           plan: g.plan,
           planTitle: g.planTitle,
-          planningMode: g.planningMode
+          planningMode: g.planningMode,
+          planningPromptTimestamp: planningStartedAt,
+          planningSystemPrompt: GUIDE_V2_PLANNING_PROMPT,
+          planningPrompt: prompt,
+          planningRawResponse: response.content || '',
+          planningResponseError: '',
+          planningMetadata
         });
       } catch (e) {}
     }
@@ -1554,6 +1562,19 @@ Return JSON for the task plan.`;
     g.planningMode = 'direct';
     g.plan = [];
     g.planTitle = '';
+    if (g.sessionId && typeof rewindUpdateSessionMeta === 'function') {
+      try {
+        await rewindUpdateSessionMeta(g.sessionId, {
+          planningMode: 'direct',
+          planningPromptTimestamp: planningStartedAt,
+          planningSystemPrompt: GUIDE_V2_PLANNING_PROMPT,
+          planningPrompt: prompt,
+          planningRawResponse: '',
+          planningResponseError: e?.message || String(e),
+          planningMetadata
+        });
+      } catch (metaErr) {}
+    }
     try {
       chrome.runtime.sendMessage({
         action: 'addMessage',

@@ -4764,6 +4764,40 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
   const stepSelect = document.getElementById('pageguide-debug-step-select');
   const contentDiv = document.getElementById('pageguide-debug-prompt-content');
 
+  function isPlanningPromptData(p) {
+    return p?.metadata?.mode === 'guide_plan';
+  }
+
+  function formatDebugModeLabel(mode) {
+    if (mode === 'guide_plan') return 'Planning';
+    if (!mode) return '';
+    return String(mode).replace(/_/g, ' ');
+  }
+
+  function makePlanningPromptEntry(idx, sid) {
+    if (!idx || !(idx.planningPrompt || idx.planningSystemPrompt || idx.planningRawResponse || idx.planningResponseError)) {
+      return null;
+    }
+    const metadata = { ...(idx.planningMetadata || { step: 0, url: idx.url || '' }) };
+    metadata.mode = metadata.mode || 'guide_plan';
+    return {
+      type: 'saved_plan',
+      sessionId: sid,
+      timestamp: idx.planningPromptTimestamp || idx.startedAt || Date.now(),
+      instruction: 'Planning initialization',
+      data: {
+        timestamp: idx.planningPromptTimestamp || idx.startedAt || Date.now(),
+        action: 'callLLM',
+        systemPrompt: idx.planningSystemPrompt || '',
+        userPrompt: idx.planningPrompt || '',
+        messages: [{ role: 'user', content: idx.planningPrompt || '' }],
+        responseContent: idx.planningRawResponse || '',
+        responseError: idx.planningResponseError || '',
+        metadata
+      }
+    };
+  }
+
   // Populate Sessions Selector
   const sortedSaved = savedSessions.slice().sort((a, b) => b.startedAt - a.startedAt);
 
@@ -4813,8 +4847,9 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
       try {
         if (typeof rewindGetIndex === 'function') {
           const idx = await rewindGetIndex(sid);
-          if (idx && idx.steps && idx.steps.length > 0) {
-            currentLoadedSteps = idx.steps.map(s => ({
+          if (idx && ((idx.steps && idx.steps.length > 0) || idx.planningPrompt || idx.planningRawResponse || idx.planningResponseError)) {
+            const planningEntry = makePlanningPromptEntry(idx, sid);
+            currentLoadedSteps = (idx.steps || []).map(s => ({
               type: 'saved',
               sessionId: sid,
               stepNum: s.step,
@@ -4823,6 +4858,7 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
               action: s.action,
               timestamp: s.timestamp
             }));
+            if (planningEntry) currentLoadedSteps.unshift(planningEntry);
             populateStepDropdown(currentLoadedSteps);
           } else {
             currentLoadedSteps = [];
@@ -4848,11 +4884,16 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
       let label = '';
       if (s.type === 'live') {
         const timeStr = new Date(s.data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const stepNum = s.data.metadata?.step !== undefined ? ` (Step ${s.data.metadata.step})` : '';
-        const modeLabel = s.data.metadata?.mode ? `[${s.data.metadata.mode}]` : '';
-        const actionLabel = s.data.action === 'callLLMWithImages' ? '📸' : '🤖';
+        const isPlan = isPlanningPromptData(s.data);
+        const stepNum = isPlan ? ' (Plan)' : (s.data.metadata?.step !== undefined ? ` (Step ${s.data.metadata.step})` : '');
+        const modeLabel = s.data.metadata?.mode ? `[${formatDebugModeLabel(s.data.metadata.mode)}]` : '';
+        const actionLabel = isPlan ? '🧭' : (s.data.action === 'callLLMWithImages' ? '📸' : '🤖');
         const previewText = s.data.userPrompt ? s.data.userPrompt.substring(0, 40).replace(/\s+/g, ' ') + '...' : '(empty)';
         label = `${actionLabel} ${timeStr} ${modeLabel}${stepNum} - ${previewText}`;
+      } else if (s.type === 'saved_plan') {
+        const timeStr = new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const previewText = s.data?.userPrompt ? s.data.userPrompt.substring(0, 40).replace(/\s+/g, ' ') + '...' : 'Planning initialization';
+        label = `🧭 ${timeStr} [Planning] (Plan) - ${previewText}`;
       } else {
         const timeStr = new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const stepNum = `Step ${s.stepNum}`;
@@ -4880,6 +4921,8 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
 
     if (stepInfo.type === 'live') {
       renderPromptDetails(stepInfo.data);
+    } else if (stepInfo.type === 'saved_plan') {
+      renderPromptDetails(stepInfo.data);
     } else {
       try {
         if (typeof rewindGetRecord === 'function') {
@@ -4894,6 +4937,8 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
                 { role: 'user', content: rec.userPrompt || rec.instruction || '' }
               ],
               imageBase64: rec.screenshotBefore || rec.screenshot || null,
+              responseContent: rec.rawLlmJson || '',
+              responseError: rec.responseError || '',
               metadata: {
                 mode: rec.mode || 'guide',
                 step: rec.step,
@@ -4962,6 +5007,24 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
         </div>
       </details>
     `;
+
+    const responseContent = p.responseContent || p.rawResponse || p.response?.content || '';
+    const responseError = p.responseError || p.response?.error || '';
+    if (responseContent || responseError) {
+      const title = isPlanningPromptData(p) ? 'Planning Response' : 'Agent Response';
+      const errorHtml = responseError ? `
+        <div style="margin-bottom: 6px; color: #d32f2f; font-weight: 700;">Error: ${escapeHtml(responseError)}</div>
+      ` : '';
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">${title}</summary>
+          <div style="margin-top: 6px;">
+            ${errorHtml}
+            <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin: 0; border: 1px solid var(--pg-border); max-height: 35vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(responseContent || '(empty)')}</pre>
+          </div>
+        </details>
+      `;
+    }
 
     // Images / Media Block
     let imagesList = [];

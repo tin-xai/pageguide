@@ -220,7 +220,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === 'callLLM') {
     const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
-    appendDebugPrompt({
+    const promptData = {
       timestamp: Date.now(),
       action: 'callLLM',
       systemPrompt: request.systemPrompt || '',
@@ -228,11 +228,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       messages: request.messages || [],
       imageBase64: request.imageBase64 || null,
       metadata: request.metadata || {}
-    }).catch(() => {});
+    };
 
     callLLM(request.messages, request.systemPrompt, request.imageBase64)
-      .then(sendResponse)
-      .catch(err => sendResponse({ error: err.message }));
+      .then(result => {
+        appendDebugPrompt({
+          ...promptData,
+          responseContent: result?.content || '',
+          responseError: result?.error || '',
+          response: result || null
+        }).catch(() => {});
+        sendResponse(result);
+      })
+      .catch(err => {
+        const errorResponse = { error: err.message };
+        appendDebugPrompt({
+          ...promptData,
+          responseContent: '',
+          responseError: err.message,
+          response: errorResponse
+        }).catch(() => {});
+        sendResponse(errorResponse);
+      });
     return true;
   }
   if (request.action === 'callEmbed') {
@@ -243,7 +260,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === 'callLLMWithImages') {
     const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
-    appendDebugPrompt({
+    const promptData = {
       timestamp: Date.now(),
       action: 'callLLMWithImages',
       systemPrompt: request.systemPrompt || '',
@@ -251,11 +268,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       messages: request.messages || [],
       images: request.images || null,
       metadata: request.metadata || {}
-    }).catch(() => {});
+    };
 
     callLLMWithImages(request.messages, request.systemPrompt, request.images)
-      .then(sendResponse)
-      .catch(err => sendResponse({ error: err.message }));
+      .then(result => {
+        appendDebugPrompt({
+          ...promptData,
+          responseContent: result?.content || '',
+          responseError: result?.error || '',
+          response: result || null
+        }).catch(() => {});
+        sendResponse(result);
+      })
+      .catch(err => {
+        const errorResponse = { error: err.message };
+        appendDebugPrompt({
+          ...promptData,
+          responseContent: '',
+          responseError: err.message,
+          response: errorResponse
+        }).catch(() => {});
+        sendResponse(errorResponse);
+      });
     return true;
   }
   if (request.action === 'captureScreenshot') {
