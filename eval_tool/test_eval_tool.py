@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from eval_tool.app import build_phase3_rows, create_app, default_tasks, filter_options
 from eval_tool.credentials import Account
 from eval_tool.ece import aggregate_task, compute_ece, ece_payload, is_bot_detection_failure
-from eval_tool.judge import DEFAULT_LLM_MODEL, LlmJudge, configured_judge_model, normalize_judge_response
+from eval_tool.judge import DEFAULT_LLM_MODEL, LlmJudge, configured_judge_model, normalize_grounding_label, normalize_judge_response
 from eval_tool.runner import PlaywrightGuideRunner, _zero_step_explanation, configured_task_model, normalize_max_steps, normalize_region_capture_mode, region_capture_mode_label
 from eval_tool.scoring import (
     ALL_FORMULAS,
@@ -45,6 +45,78 @@ from eval_tool.tasks import load_tasks, display_task_name, short_site_name
 
 
 class EvalToolTest(unittest.TestCase):
+    def test_llm_grounding_label_normalizer_accepts_expected_forms(self):
+        self.assertEqual(normalize_grounding_label("Grounded"), "grounded")
+        self.assertEqual(normalize_grounding_label("grounded"), "grounded")
+        self.assertEqual(normalize_grounding_label("Not Grounded"), "not_grounded")
+        self.assertEqual(normalize_grounding_label("not_grounded"), "not_grounded")
+        self.assertEqual(normalize_grounding_label("non-grounded"), "not_grounded")
+        self.assertIsNone(normalize_grounding_label("maybe"))
+
+    def test_rerun_llm_grounding_labels_stores_per_model_and_skips_inapplicable_steps(self):
+        from eval_server.app import rerun_trajectory_llm_grounding_labels
+
+        class FakeJudge:
+            api_key = "key"
+            def __init__(self):
+                self.calls = []
+            def judge_grounding_label(self, task, step, element_text):
+                self.calls.append((step["step"], element_text))
+                return {
+                    "available": True,
+                    "label": "not_grounded" if step["step"] == 2 else "grounded",
+                    "reason": f"reason {step['step']}",
+                    "prompt": "prompt",
+                    "raw_response": '{"label":"grounded"}',
+                }
+
+        trajectory = {
+            "task": {"task": "Find a thing"},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {"step": 1, "action": "click", "instruction": "Click Where", "target": {"llmIndex": 1, "text": "Where"}},
+                {"step": 2, "action": "click", "instruction": "Click orange product", "target": {"llmIndex": 2, "text": "Blue dress"}},
+                {"step": 3, "action": "scroll", "instruction": "Scroll down", "target": {"llmIndex": 3, "text": "Results"}},
+                {"step": 4, "action": "click", "instruction": "Click missing", "target": {"text": "Missing index"}},
+            ],
+        }
+        fake = FakeJudge()
+        summary = rerun_trajectory_llm_grounding_labels(trajectory, model="openai/gpt-4o", judge=fake)
+
+        self.assertTrue(summary["updated"])
+        self.assertEqual(summary["steps_scored"], 2)
+        self.assertEqual(summary["grounded"], 1)
+        self.assertEqual(summary["not_grounded"], 1)
+        self.assertEqual([call[0] for call in fake.calls], [1, 2])
+        self.assertEqual(trajectory["steps"][1]["grounded_llm_labels"]["openai/gpt-4o"]["label"], "grounded")
+        self.assertEqual(trajectory["steps"][2]["grounded_llm_labels"]["openai/gpt-4o"]["label"], "not_grounded")
+
+        class GroundedJudge(FakeJudge):
+            def judge_grounding_label(self, task, step, element_text):
+                return {"available": True, "label": "grounded", "reason": "other", "prompt": "p2", "raw_response": "{}"}
+
+        rerun_trajectory_llm_grounding_labels(trajectory, model="google/gemini-2.5-flash", judge=GroundedJudge())
+        self.assertEqual(trajectory["steps"][2]["grounded_llm_labels"]["openai/gpt-4o"]["label"], "not_grounded")
+        self.assertEqual(trajectory["steps"][2]["grounded_llm_labels"]["google/gemini-2.5-flash"]["label"], "grounded")
+
+    def test_rerun_llm_grounding_labels_invalid_output_is_unavailable(self):
+        from eval_server.app import rerun_trajectory_llm_grounding_labels
+
+        class BadJudge:
+            api_key = "key"
+            def judge_grounding_label(self, task, step, element_text):
+                return {"available": False, "label": None, "reason": "invalid"}
+
+        trajectory = {
+            "task": {"task": "Do thing"},
+            "steps": [{"step": 1, "action": "click", "instruction": "Click Search", "target": {"llmIndex": 1, "text": "Search"}}],
+        }
+        summary = rerun_trajectory_llm_grounding_labels(trajectory, model="openai/gpt-4o", judge=BadJudge())
+        self.assertFalse(summary["updated"])
+        self.assertEqual(summary["steps_scored"], 0)
+        self.assertEqual(summary["steps_skipped"], 1)
+        self.assertNotIn("grounded_llm_labels", trajectory["steps"][0])
+
     def test_compute_confidence_matches_extension_formula(self):
         parts = {"grounded": 0.8, "loop": 0.1, "progress": 0.5}
         self.assertAlmostEqual(compute_confidence(parts, "reduced"), 0.736)
@@ -105,6 +177,20 @@ class EvalToolTest(unittest.TestCase):
         self.assertIsNone(metrics["precision"])
         self.assertIsNone(metrics["recall"])
         self.assertIsNone(metrics["f1"])
+
+    def test_grounding_youden_index_returns_best_threshold(self):
+        from eval_server.app import grounding_youden_index
+
+        summary = grounding_youden_index([
+            {"step": 1, "element_step_similarity": 0.9},  # default grounded
+            {"step": 2, "element_step_similarity": 0.7},
+            {"step": 3, "element_step_similarity": 0.4, "grounded_human_label": "non_grounded"},
+            {"step": 4, "element_step_similarity": 0.2, "grounded_human_label": "non_grounded"},
+        ])
+        self.assertAlmostEqual(summary["threshold"], 0.7)
+        self.assertAlmostEqual(summary["youden_j"], 1.0)
+        self.assertAlmostEqual(summary["tpr"], 1.0)
+        self.assertAlmostEqual(summary["fpr"], 0.0)
 
     def test_backfill_element_step_similarity_embeds_instruction_and_element_text(self):
         result = {"steps": [
@@ -788,6 +874,8 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b">2</div>", response.data)
         self.assertIn(b"Rerun Goal Relevance", response.data)
         self.assertIn(b"Rerun Grounding Similarity", response.data)
+        self.assertIn(b"Rerun LLM Grounding Labels", response.data)
+        self.assertIn(b"Grounded_LLM_Label", response.data)
         self.assertIn(b"self_progress_no_gt", response.data)
         self.assertIn(b"element_step_similarity", response.data)
         self.assertIn(b"Grounding Similarity", response.data)
@@ -796,6 +884,7 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"Human Label Boundary Check", response.data)
         self.assertIn(b"Pred Grounded", response.data)
         self.assertIn(b"precision", response.data)
+        self.assertIn(b"Youden Index", response.data)
         self.assertIn(b"oninput=\"updateGroundingThresholdSummary()\"", response.data)
         self.assertIn(b"similarity &lt; 0.80", response.data)
         self.assertIn(b"Step 1: 0.42", response.data)
@@ -861,6 +950,7 @@ class EvalToolTest(unittest.TestCase):
                     "instruction": "Click Where",
                     "target": {"llmIndex": 3, "text": "Where"},
                     "element_step_similarity": 0.82,
+                    "grounded_llm_labels": {"openai/gpt-4o": {"label": "grounded", "reason": "where field"}},
                 },
                 {
                     "step": 2,
@@ -868,6 +958,7 @@ class EvalToolTest(unittest.TestCase):
                     "instruction": "Click Search",
                     "target": {"llmIndex": 4, "text": "Search"},
                     "element_step_similarity": 0.79,
+                    "grounded_llm_labels": {"openai/gpt-4o": {"label": "not_grounded", "reason": "wrong element"}},
                 },
                 {
                     "step": 3,
@@ -900,10 +991,16 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"Grounding Similarity", response.data)
         self.assertIn(b"Show Grounded_Human_Label", response.data)
         self.assertIn(b"Grounded_Human_Label", response.data)
+        self.assertIn(b"Show Grounded_LLM_Label", response.data)
+        self.assertIn(b"Grounded_LLM_Label", response.data)
+        self.assertIn(b"LLM Annotated Ground Truth", response.data)
+        self.assertIn(b"where field", response.data)
+        self.assertIn(b"Not Grounded", response.data)
         self.assertIn(b"Human Label Boundary Check", response.data)
         self.assertIn(b"id=\"task-grounding-boundary-input\"", response.data)
         self.assertIn(b"oninput=\"renderTaskBoundarySummary()\"", response.data)
         self.assertIn(b"Pred Grounded", response.data)
+        self.assertIn(b"Youden Index", response.data)
         self.assertIn(b">0.82</span>", response.data)
         self.assertIn(b">0.79</span>", response.data)
         self.assertIn(b"#a16207", response.data)
@@ -983,6 +1080,197 @@ class EvalToolTest(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 400)
 
+    def test_grounding_metrics_api_returns_youden_index(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-youdens", "task_model": "google/gemini-2.5-flash", "status": "completed"}
+        task_result = {
+            "session_id": "s-youdens",
+            "steps": [
+                {"step": 1, "element_step_similarity": 0.9},
+                {"step": 2, "element_step_similarity": 0.7},
+                {"step": 3, "element_step_similarity": 0.4, "grounded_human_label": "non_grounded"},
+                {"step": 4, "element_step_similarity": 0.2, "grounded_human_label": "non_grounded"},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            task_dir = runs_dir / "run-youdens" / "tasks"
+            task_dir.mkdir(parents=True)
+            (task_dir / "t1.json").write_text(json.dumps(task_result), encoding="utf-8")
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run):
+                response = server_app.test_client().post(
+                    "/api/grounding_metrics",
+                    json={"run_ids": ["run-youdens"], "threshold": 0.8},
+                )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertIn("Gemini", data)
+        self.assertAlmostEqual(data["Gemini"]["optimal_threshold"], 0.7)
+        self.assertAlmostEqual(data["Gemini"]["youden_j"], 1.0)
+
+    def test_grounding_metrics_api_can_compare_similarity_to_llm_labels(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-llm-metrics", "task_model": "openai/gpt-4.1-nano", "status": "completed"}
+        task_result = {
+            "session_id": "s-llm-metrics",
+            "steps": [
+                {"step": 1, "element_step_similarity": 0.9, "grounded_llm_labels": {"openai/gpt-4o": {"label": "grounded"}}},
+                {"step": 2, "element_step_similarity": 0.7, "grounded_llm_labels": {"openai/gpt-4o": {"label": "grounded"}}},
+                {"step": 3, "element_step_similarity": 0.4, "grounded_llm_labels": {"openai/gpt-4o": {"label": "not_grounded"}}},
+                {"step": 4, "element_step_similarity": 0.2},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            task_dir = runs_dir / "run-llm-metrics" / "tasks"
+            task_dir.mkdir(parents=True)
+            (task_dir / "t1.json").write_text(json.dumps(task_result), encoding="utf-8")
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run):
+                response = server_app.test_client().post(
+                    "/api/grounding_metrics",
+                    json={
+                        "run_ids": ["run-llm-metrics"],
+                        "threshold": 0.8,
+                        "label_source": "llm",
+                        "llm_label_model": "openai/gpt-4o",
+                    },
+                )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["__meta"]["label_source"], "llm")
+        self.assertEqual(data["__meta"]["llm_label_model"], "openai/gpt-4o")
+        self.assertIn("Gpt-4.1-nano", data)
+        self.assertEqual(data["Gpt-4.1-nano"]["total_scored_steps"], 3)
+        self.assertEqual(data["Gpt-4.1-nano"]["tp"], 1)
+        self.assertEqual(data["Gpt-4.1-nano"]["fn"], 1)
+        self.assertEqual(data["Gpt-4.1-nano"]["tn"], 1)
+
+    def test_grounding_llm_labels_api_annotates_selected_runs(self):
+        from eval_server.app import app as server_app
+
+        class FakeJudge:
+            api_key = "key"
+            def __init__(self, model=None):
+                self.model = model
+            def judge_grounding_label(self, task, step, element_text):
+                return {
+                    "available": True,
+                    "label": "not_grounded" if "dress" in element_text.lower() else "grounded",
+                    "reason": "ok",
+                    "prompt": "prompt",
+                    "raw_response": '{"label":"grounded"}',
+                }
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-llm-grounding", "task_model": "openai/gpt-4o", "status": "completed"}
+        task_result = {
+            "session_id": "s-llm-grounding",
+            "task": {"task": "Find a destination"},
+            "steps": [
+                {"step": 1, "action": "click", "instruction": "Click Where", "target": {"llmIndex": 33, "text": "Where to?. Results available."}},
+                {"step": 2, "action": "click", "instruction": "Click orange product", "target": {"llmIndex": 102, "text": "ANRABESS Women Athletic Dress"}},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            task_dir = runs_dir / "run-llm-grounding" / "tasks"
+            task_dir.mkdir(parents=True)
+            task_path = task_dir / "t1.json"
+            task_path.write_text(json.dumps(task_result), encoding="utf-8")
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run), \
+                 patch("eval_server.app.is_running", return_value=False), \
+                 patch("eval_server.app.LlmJudge", FakeJudge):
+                response = server_app.test_client().post(
+                    "/api/grounding-llm-labels/rerun",
+                    json={"run_ids": ["run-llm-grounding"], "model": "openai/gpt-4o"},
+                )
+            data = response.get_json()
+            saved = json.loads(task_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["totals"]["steps_scored"], 2)
+        self.assertEqual(data["totals"]["not_grounded"], 1)
+        self.assertEqual(saved["steps"][0]["grounded_llm_labels"]["openai/gpt-4o"]["label"], "grounded")
+        self.assertEqual(saved["steps"][1]["grounded_llm_labels"]["openai/gpt-4o"]["label"], "not_grounded")
+
+    def test_grounding_llm_labels_routes_reject_running_and_missing_key(self):
+        from eval_server.app import app as server_app
+
+        class NoKeyJudge:
+            api_key = ""
+            def __init__(self, model=None):
+                self.model = model
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-active-llm", "status": "running", "task_model": "openai/gpt-4o"}
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.is_running", return_value=True):
+            response = server_app.test_client().post(
+                "/runs/run-active-llm/grounding-llm-labels/rerun",
+                data={"model": "openai/gpt-4o"},
+            )
+        self.assertEqual(response.status_code, 400)
+
+        run = {"run_id": "run-no-key", "status": "completed", "task_model": "openai/gpt-4o"}
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            (runs_dir / "run-no-key" / "tasks").mkdir(parents=True)
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run), \
+                 patch("eval_server.app.is_running", return_value=False), \
+                 patch("eval_server.app.LlmJudge", NoKeyJudge):
+                response = server_app.test_client().post(
+                    "/api/grounding-llm-labels/rerun",
+                    json={"run_ids": ["run-no-key"], "model": "openai/gpt-4o"},
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["runs"][0]["reason"], "OPENROUTER_API_KEY is not configured")
+
+    def test_trajectory_llm_grounding_label_route_writes_single_trajectory(self):
+        from eval_server.app import app as server_app
+
+        class FakeJudge:
+            api_key = "key"
+            def __init__(self, model=None):
+                self.model = model
+            def judge_grounding_label(self, task, step, element_text):
+                return {"available": True, "label": "grounded", "reason": "matches", "prompt": "prompt", "raw_response": "{}"}
+
+        server_app.config.update(TESTING=True)
+        trajectory = {
+            "sessionId": "single-llm-ground",
+            "task": {"task": "Do thing"},
+            "steps": [
+                {"step": 1, "action": "click", "instruction": "Click Search", "target": {"llmIndex": 1, "text": "Search"}},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            saved_dir = Path(tmp) / "saved"
+            runs_dir = Path(tmp) / "runs"
+            saved_dir.mkdir()
+            runs_dir.mkdir()
+            path = saved_dir / "single-llm-ground.json"
+            path.write_text(json.dumps(trajectory), encoding="utf-8")
+            with patch("eval_server.app.SAVED_DIR", str(saved_dir)), \
+                 patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.LlmJudge", FakeJudge):
+                response = server_app.test_client().post(
+                    "/trajectory/single-llm-ground/grounding-llm-labels/rerun",
+                    data={"model": "openai/gpt-4o"},
+                )
+            saved = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("llm_grounding_rerun=1", response.headers["Location"])
+        self.assertEqual(saved["steps"][0]["grounded_llm_labels"]["openai/gpt-4o"]["label"], "grounded")
+
     def test_eval_server_run_detail_can_rerun_goal_relevance_and_grounding_similarity(self):
         from eval_server.app import app as server_app
 
@@ -1024,8 +1312,18 @@ class EvalToolTest(unittest.TestCase):
         server_app.config.update(TESTING=True)
         runs = [
             {
-                "run_id": "run-with-models",
-                "created_at": "now",
+                "run_id": "run-new-with-models",
+                "created_at": "2026-06-24T10:00:00+00:00",
+                "status": "completed",
+                "task_ids": [],
+                "task_set": "no_login",
+                "task_model": "google/gemini-2.5-pro",
+                "judge_model": "openai/gpt-4o",
+                "region_capture_mode": "aligned",
+            },
+            {
+                "run_id": "run-old-with-models",
+                "created_at": "2026-06-20T10:00:00+00:00",
                 "status": "completed",
                 "task_ids": [],
                 "task_set": "no_login",
@@ -1035,7 +1333,7 @@ class EvalToolTest(unittest.TestCase):
             },
             {
                 "run_id": "run-without-models",
-                "created_at": "then",
+                "created_at": "2026-06-22T10:00:00+00:00",
                 "status": "completed",
                 "task_ids": [],
                 "task_set": "no_login",
@@ -1052,8 +1350,16 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"metric-col-runmeta metric-col-hidden", response.data)
         self.assertIn(b"Task Model", response.data)
         self.assertIn(b"Judge Model", response.data)
+        self.assertIn(b"Best Threshold (Youden)", response.data)
+        self.assertIn(b"Youden J", response.data)
         self.assertIn(b"google/gemini-2.5-pro", response.data)
         self.assertIn(b"openai/gpt-4o", response.data)
+        self.assertIn(b"Annotate Selected Runs", response.data)
+        self.assertIn(b"LLM Label Model", response.data)
+        self.assertIn(b"Mode 1b: Metric Alignment (Sim vs LLM Label)", response.data)
+        self.assertIn(b"label_source", response.data)
+        self.assertIn(b"llm_label_model", response.data)
+        self.assertLess(response.data.index(b"run-new-with-models"), response.data.index(b"run-old-with-models"))
         self.assertIn(b"Grounding Similarity", response.data)
         self.assertIn(b"Unknown", response.data)
 
@@ -1921,7 +2227,7 @@ class NewModelOptionsTest(unittest.TestCase):
     def test_new_model_ids_are_selectable(self):
         from eval_tool.judge import MODEL_OPTIONS, normalize_model
         ids = {opt["id"] for opt in MODEL_OPTIONS}
-        for mid in ("qwen/qwen3.6-flash", "qwen/qwen3.7-plus", "openai/gpt-4.1-nano"):
+        for mid in ("google/gemini-2.5-flash", "qwen/qwen3.6-flash", "qwen/qwen3.7-plus", "openai/gpt-4.1-nano"):
             self.assertIn(mid, ids)
             # Valid ids pass the allow-list unchanged (no fallback to default).
             self.assertEqual(normalize_model(mid), mid)

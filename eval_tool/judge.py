@@ -112,6 +112,15 @@ def normalize_judge_response(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_grounding_label(value: Any) -> str | None:
+    label = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if label in {"grounded", "ground"}:
+        return "grounded"
+    if label in {"not_grounded", "non_grounded", "ungrounded", "notgrounded"}:
+        return "not_grounded"
+    return None
+
+
 class LlmJudge:
     def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
         self.model = model or configured_judge_model()
@@ -316,6 +325,54 @@ Return JSON only:
         return {
             "available": score is not None,
             "score": score,
+            "reason": str(parsed.get("reason") or "").strip(),
+            "prompt": prompt,
+            "raw_response": raw_text,
+        }
+
+    def judge_grounding_label(
+        self,
+        task: dict[str, Any],
+        step: dict[str, Any],
+        element_text: str,
+    ) -> dict[str, Any]:
+        if not self.api_key:
+            return {"available": False, "label": None, "reason": "OPENROUTER_API_KEY is not configured."}
+
+        target = step.get("target") or {}
+        prompt = f"""Decide whether a browser action step is grounded in the selected DOM element.
+
+Judge ONLY whether the DOM element text is related to and anchored on the step instruction. Do not judge whether the task succeeded.
+
+Grounded means the DOM element is the field, button, link, option, or UI object that the step instruction is asking the agent to use.
+Not Grounded means the DOM element is unrelated, only accidentally similar, or points to a different item/object than the instruction asks for.
+
+Examples:
+- Step: Enter 'Austin' in the 'Where to?' field.
+  DOM element text: DOM [33]: Where to?. Results available.
+  Label: grounded
+- Step: Click on the first orange product listing to view its details.
+  DOM element text: DOM [102]: ANRABESS Women Athletic Dress Summer Tennis Workout Active Sports Mini Romper Dress Built in Shorts Travel Vacation Clot...
+  Label: not_grounded
+
+Task goal: {task.get('task', '')}
+Step number: {step.get('step', '')}
+Step instruction: {step.get('instruction', '')}
+Action: {step.get('action', '')}
+Element index: {target.get('llmIndex', '')}
+DOM element text: DOM [{target.get('llmIndex', '')}]: {element_text}
+
+Return JSON only:
+{{
+  "label": "grounded",
+  "reason": "short explanation"
+}}"""
+        raw_text = self._call_openai(prompt, None)
+        parsed = extract_json(raw_text)
+        label = normalize_grounding_label(parsed.get("label"))
+        return {
+            "available": label is not None,
+            "label": label,
             "reason": str(parsed.get("reason") or "").strip(),
             "prompt": prompt,
             "raw_response": raw_text,

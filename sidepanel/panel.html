@@ -174,6 +174,32 @@
             </div>
           </div>
 
+          <!-- Guide planning mode (debug-only): initial task plan vs direct step-by-step prompting. -->
+          <div class="pageguide-mode-wrap pageguide-planning-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-planning-toggle" title="Choose whether Guide creates a plan before acting"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6h1"/><path d="M4 12h1"/><path d="M4 18h1"/></svg></span>Plan ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-planning-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-mode="planning">
+                <span class="pageguide-mode-opt-text"><b>Planning</b><small>Create a high-level task plan first, then mark plan steps complete as actions run.</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-mode="direct">
+                <span class="pageguide-mode-opt-text"><b>Direct</b><small>Use the current one-step-at-a-time Guide behavior without an initial plan.</small></span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Debug field chooser: controls which research/debug chips are visible. -->
+          <div class="pageguide-mode-wrap pageguide-debugfields-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-debugfields-toggle" title="Choose visible debug fields"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="14" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg></span>Fields ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-debugfields-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-debug-field="planning"><span class="pageguide-mode-opt-text"><b>Planning</b><small>Show the Planning / Direct guide mode control.</small></span></button>
+              <button class="pageguide-mode-option" data-debug-field="history"><span class="pageguide-mode-opt-text"><b>History</b><small>Show whether prior steps are passed to the LLM.</small></span></button>
+              <button class="pageguide-mode-option" data-debug-field="confidence"><span class="pageguide-mode-opt-text"><b>Confidence</b><small>Show confidence formula selection.</small></span></button>
+              <button class="pageguide-mode-option" data-debug-field="source"><span class="pageguide-mode-opt-text"><b>Source</b><small>Show LLM vs no-LLM confidence source.</small></span></button>
+              <button class="pageguide-mode-option" data-debug-field="target"><span class="pageguide-mode-opt-text"><b>Target</b><small>Show target-region capture mode.</small></span></button>
+              <button class="pageguide-mode-option" data-debug-field="prompt"><span class="pageguide-mode-opt-text"><b>Prompt</b><small>Show the prompt/debug history button.</small></span></button>
+            </div>
+          </div>
+
           <!-- Confidence-score formula selector: Full (grounded·loop·progress) vs Reduced (no progress).
                Hidden by default; only shown in debug mode (see updateDebugButtonVisibility). -->
           <div class="pageguide-mode-wrap pageguide-conf-wrap" style="display:none;">
@@ -214,6 +240,19 @@
               </button>
               <button class="pageguide-mode-option" data-mode="aligned">
                 <span class="pageguide-mode-opt-text"><b>Aligned crop (debug)</b><small>Scroll target into view, take a fresh screenshot, then crop before the action.</small></span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Pass History mode (debug-only): whether to include previous steps in LLM prompt. -->
+          <div class="pageguide-mode-wrap pageguide-passhistory-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-passhistory-toggle" title="Whether to pass observed steps and redirection history to LLM"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>History: No ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-passhistory-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-mode="passing">
+                <span class="pageguide-mode-opt-text"><b>Include History</b><small>Pass past observed number of steps and user redirection to LLM.</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-mode="not_passing">
+                <span class="pageguide-mode-opt-text"><b>Not Include History</b><small>Do not pass history to LLM (default).</small></span>
               </button>
             </div>
           </div>

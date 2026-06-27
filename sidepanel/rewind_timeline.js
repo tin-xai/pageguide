@@ -476,8 +476,8 @@
     container.style.display = '';
     strip.style.display = '';
     strip.innerHTML = '<div class="rw-plan-hdr">Plan</div>' + _plan.map(p => {
-      const done = p.n < _planProgress;
-      const current = p.n === _planProgress;
+      const done = p.status === 'complete' || p.n < _planProgress;
+      const current = !done && p.n === _planProgress;
       const mark = done ? '✓' : (current ? '▸' : '○');
       const cls = done ? 'done' : (current ? 'current' : '');
       return `<div class="rw-plan-item ${cls}"><span class="rw-pi-mark">${mark}</span><span>${_escape(p.goal)}</span></div>`;
@@ -486,7 +486,9 @@
 
   function setPlan(plan) {
     _plan = Array.isArray(plan) ? plan : [];
-    _planProgress = _plan.length ? 1 : 0;
+    const completed = _plan.filter(p => p.status === 'complete').map(p => Number(p.n) || 0);
+    const highestDone = completed.length ? Math.max(...completed) : 0;
+    _planProgress = _plan.length ? Math.min(_plan.length, highestDone + 1 || 1) : 0;
     _renderPlan();
   }
 

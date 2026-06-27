@@ -718,6 +718,44 @@
 
     <!-- Automatic Runs View -->
     <section id="view-auto" style="display: none;">
+      <div class="table-container" style="margin-bottom: 40px;">
+        <div class="table-hdr" style="display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap;">
+          <h2>Human-Annotated Task Set</h2>
+          <a class="btn" href="/runs/{{ human_annotation_run_id }}" style="text-decoration: none;">Open Review Set</a>
+        </div>
+        <div style="padding: 24px; display: grid; gap: 16px;">
+          <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
+            <label style="display: grid; gap: 6px; color: var(--text-muted); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">
+              Tasks Per Source Run
+              <input id="human-annotation-per-run" type="number" min="1" max="200" step="1" value="20" style="width: 110px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--card-border); background: var(--input-bg); color: var(--input-text); font-family: inherit;">
+            </label>
+            <button type="button" onclick="generateHumanAnnotationSet()" style="padding: 9px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.10); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.25); cursor: pointer; font-family: inherit; font-weight: 800;">Create Random Review Set</button>
+            <span id="human-annotation-generate-status" style="font-size: 13px; color: var(--text-muted);"></span>
+          </div>
+          <div style="display: grid; gap: 8px;">
+            <div style="font-size: 13px; color: var(--text-muted); font-weight: 700;">Source runs</div>
+            <div style="display: grid; gap: 8px;">
+              {% for run in human_annotation_sources %}
+                <label style="display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--task-card-bg); cursor: pointer;">
+                  <input type="checkbox" class="human-annotation-source-run" value="{{ run.run_id }}" checked>
+                  <span style="font-family: monospace; overflow-wrap: anywhere;">{{ run.run_id }}</span>
+                  <code style="font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere;">{{ run.task_model or 'Unknown' }}</code>
+                  <span class="badge neutral" style="font-size: 10px;">{{ (run.task_ids or [])|length }} tasks</span>
+                </label>
+              {% endfor %}
+              {% if not human_annotation_sources %}
+                {% for run_id in human_annotation_default_run_ids %}
+                  <label style="display: flex; gap: 8px; align-items: center; color: var(--text-muted);">
+                    <input type="checkbox" class="human-annotation-source-run" value="{{ run_id }}" checked>
+                    <span style="font-family: monospace;">{{ run_id }}</span>
+                  </label>
+                {% endfor %}
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Grounding Evaluation Panel -->
       <div class="table-container" style="margin-bottom: 40px;" id="grounding-eval-panel-container">
         <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleGroundingEvalPanel()">
@@ -733,9 +771,10 @@
             </label>
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px;">
               Evaluation Mode:
-              <select id="grounding-eval-mode" onchange="renderGroundingData()"
+              <select id="grounding-eval-mode" onchange="fetchGroundingMetrics()"
                 style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
                 <option value="1">Mode 1: Metric Alignment (Sim vs Human)</option>
+                <option value="1llm">Mode 1b: Metric Alignment (Sim vs LLM Label)</option>
                 <option value="2a">Mode 2a: Model Performance (vs Human Truth)</option>
                 <option value="2b">Mode 2b: Model Performance (vs Cosine Sim >= Threshold)</option>
               </select>
@@ -745,31 +784,39 @@
                 <strong style="color: var(--text-muted); font-weight: 500; font-size: 13px;">Runs Included:</strong>
                 <button type="button" onclick="document.querySelectorAll('.grounding-eval-run-checkbox').forEach(cb => cb.checked = false); fetchGroundingMetrics();" style="font-size: 11px; background: transparent; border: none; color: var(--accent); cursor: pointer; text-decoration: underline;">Deselect All</button>
               </div>
-              <div style="display: flex; gap: 12px; flex-wrap: wrap; max-height: 120px; overflow-y: auto; padding: 8px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--bg-default);" id="grounding-eval-runs-container">
-                {% set default_runs = [] %}
-                {% set seen_models = [] %}
-                {% for run in auto_runs %}
-                  {% set m = (run.task_model or 'Unknown').split('/')[-1] %}
-                  {% if m not in seen_models and default_runs|length < 3 %}
-                    {% set _ = seen_models.append(m) %}
-                    {% set _ = default_runs.append(run.run_id) %}
-                  {% endif %}
-                {% endfor %}
-                {% set newest_3_run_ids = default_runs %}
-                {% set panel_runs = auto_runs | sort(attribute='task_model') %}
-                {% for run in panel_runs %}
-                  <label style="font-size: 12px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                    <input type="checkbox" class="grounding-eval-run-checkbox" value="{{ run.run_id }}" {% if run.run_id in newest_3_run_ids %}checked{% endif %} onchange="fetchGroundingMetrics()">
-                    <span style="font-family: monospace;">{{ run.run_id }} ({{ (run.task_model or 'Unknown').split('/')[-1] }})</span>
-                  </label>
+              <div style="display: grid; gap: 10px; max-height: 220px; overflow-y: auto; padding: 10px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--bg-default);" id="grounding-eval-runs-container">
+                {% for group in grounding_run_groups %}
+                  <div style="display: grid; gap: 6px;">
+                    <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">{{ group.model or 'Unknown' }}</div>
+                    <div style="display: grid; gap: 4px;">
+                      {% for run in group.runs %}
+                        <label style="font-size: 12px; display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 6px; background: var(--task-card-bg);">
+                          <input type="checkbox" class="grounding-eval-run-checkbox" value="{{ run.run_id }}" {% if run.run_id in default_grounding_run_ids %}checked{% endif %} onchange="fetchGroundingMetrics()">
+                          <span style="font-family: monospace; overflow-wrap: anywhere;">{{ run.run_id }}</span>
+                          <span style="color: var(--text-muted); white-space: nowrap;">{{ run.display_time or 'no date' }}</span>
+                          <span class="badge neutral" style="font-size: 10px;">{{ run.status or 'unknown' }} · {{ (run.task_ids or [])|length }} task{% if (run.task_ids or [])|length != 1 %}s{% endif %}</span>
+                        </label>
+                      {% endfor %}
+                    </div>
+                  </div>
                 {% endfor %}
                 {% if not auto_runs %}
                   <span style="font-size: 12px; color: var(--text-muted); font-style: italic;">No automated runs available.</span>
                 {% endif %}
               </div>
             </div>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px;">
+              LLM Label Model:
+              <select id="grounding-llm-label-model" onchange="if (document.getElementById('grounding-eval-mode').value === '1llm') fetchGroundingMetrics();" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                {% for option in grounding_label_model_options %}
+                  <option value="{{ option.id }}" {% if option.id == default_grounding_label_model %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
             <button type="button" onclick="fetchGroundingMetrics()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500; margin-top: 8px;">↻ Compute Table</button>
+            <button type="button" onclick="annotateSelectedGroundingRuns()" style="padding: 8px 16px; border-radius: 8px; background: rgba(14, 165, 233, 0.10); color: #0ea5e9; border: 1px solid rgba(14, 165, 233, 0.28); cursor: pointer; font-family: inherit; font-weight: 500; margin-top: 8px;">Annotate Selected Runs</button>
           </div>
+          <div id="grounding-llm-label-results" style="margin-top: 16px;"></div>
           <div id="grounding-eval-results" style="margin-top: 24px; overflow-x: auto;">
             <p style="color: var(--text-muted); font-size: 13px; font-style: italic;">Select runs and click Compute Table.</p>
           </div>
@@ -783,7 +830,7 @@
             </div>
             <div id="grounding-eval-auroc-filters" style="margin-top: 16px; display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; font-size: 13px;"></div>
           </div>
-          <div id="grounding-eval-minmax-container" style="margin-top: 32px; display: none; flex-direction: column; max-width: 600px;">
+          <div id="grounding-eval-minmax-container" style="margin-top: 32px; display: none; flex-direction: column; max-width: 900px;">
             <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 16px; color: var(--text);">Similarity Boundary Metrics</h3>
             <table style="width: 100%; border-collapse: collapse; border: 1px solid var(--card-border);">
               <thead>
@@ -791,6 +838,8 @@
                   <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Model</th>
                   <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Min (Grounded)</th>
                   <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Max (Misgrounded)</th>
+                  <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Best Threshold (Youden)</th>
+                  <th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Youden J</th>
                 </tr>
               </thead>
               <tbody id="grounding-eval-minmax-body">
@@ -1067,10 +1116,87 @@
 
     let lastGroundingData = null;
 
+    function selectedGroundingRunIds() {
+      return Array.from(document.querySelectorAll('.grounding-eval-run-checkbox:checked')).map(cb => cb.value);
+    }
+
+    function renderLlmGroundingAnnotationSummary(data) {
+      const el = document.getElementById('grounding-llm-label-results');
+      if (!el) return;
+      if (!data || data.error) {
+        el.innerHTML = `<p style="color: #ef4444; font-size: 13px;">${data && data.error ? data.error : 'No annotation result.'}</p>`;
+        return;
+      }
+      const totals = data.totals || {};
+      const runRows = (data.runs || []).map(run => {
+        const tasks = (run.tasks || []).map(task => {
+          const examples = (task.details || [])
+            .filter(d => d.label === 'not_grounded')
+            .slice(0, 3)
+            .map(d => `<span class="badge" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.28);">Step ${d.step}: Not Grounded</span>`)
+            .join(' ');
+          return `<tr>
+            <td style="padding: 6px 8px; border-top: 1px solid var(--card-border);">${task.name || 'Task'}</td>
+            <td style="padding: 6px 8px; border-top: 1px solid var(--card-border);">${task.steps_scored || 0}</td>
+            <td style="padding: 6px 8px; border-top: 1px solid var(--card-border);">${task.grounded || 0}</td>
+            <td style="padding: 6px 8px; border-top: 1px solid var(--card-border);">${task.not_grounded || 0}</td>
+            <td style="padding: 6px 8px; border-top: 1px solid var(--card-border);">${examples || '<span style="color: var(--text-muted);">—</span>'}</td>
+          </tr>`;
+        }).join('');
+        return `<details open style="border: 1px solid var(--card-border); border-radius: 8px; padding: 10px; background: var(--task-card-bg);">
+          <summary style="cursor: pointer; font-weight: 800;"><code>${run.run_id}</code> · ${run.steps_scored || 0} step(s) annotated · ${run.not_grounded || 0} Not Grounded</summary>
+          <table style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px;">
+            <thead><tr><th style="text-align:left; padding: 4px 8px;">Task</th><th style="text-align:left; padding: 4px 8px;">Scored</th><th style="text-align:left; padding: 4px 8px;">Grounded</th><th style="text-align:left; padding: 4px 8px;">Not Grounded</th><th style="text-align:left; padding: 4px 8px;">Examples</th></tr></thead>
+            <tbody>${tasks || '<tr><td colspan="5" style="padding: 8px; color: var(--text-muted);">No task rows.</td></tr>'}</tbody>
+          </table>
+          ${run.reason ? `<div style="margin-top: 6px; color: var(--text-muted); font-size: 12px;">${run.reason}</div>` : ''}
+        </details>`;
+      }).join('');
+      el.innerHTML = `<div style="border: 1px solid var(--card-border); border-radius: 10px; padding: 12px; background: rgba(14, 165, 233, 0.06);">
+        <div style="font-weight: 800; margin-bottom: 8px;">LLM Annotated Ground Truth <code>${data.model}</code></div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
+          <span class="badge neutral">${totals.steps_scored || 0} scored</span>
+          <span class="badge green">${totals.grounded || 0} Grounded</span>
+          <span class="badge" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.28);">${totals.not_grounded || 0} Not Grounded</span>
+          <span class="badge neutral">${totals.steps_skipped || 0} skipped</span>
+        </div>
+        <div style="display: grid; gap: 8px;">${runRows}</div>
+      </div>`;
+    }
+
+    async function annotateSelectedGroundingRuns() {
+      const runIds = selectedGroundingRunIds();
+      const model = document.getElementById('grounding-llm-label-model').value;
+      const el = document.getElementById('grounding-llm-label-results');
+      if (runIds.length === 0) {
+        el.innerHTML = '<p style="color: var(--text-muted); font-size: 13px;">No runs selected.</p>';
+        return;
+      }
+      el.innerHTML = '<p style="color: var(--text-muted); font-size: 13px;">Annotating selected runs...</p>';
+      try {
+        const response = await fetch('/api/grounding-llm-labels/rerun', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_ids: runIds, model })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          renderLlmGroundingAnnotationSummary({ error: data.error || response.status });
+          return;
+        }
+        renderLlmGroundingAnnotationSummary(data);
+        fetchGroundingMetrics();
+      } catch (err) {
+        renderLlmGroundingAnnotationSummary({ error: err.message });
+      }
+    }
+
     async function fetchGroundingMetrics() {
       const threshold = document.getElementById('grounding-eval-threshold').value;
-      const checkboxes = document.querySelectorAll('.grounding-eval-run-checkbox:checked');
-      const runIds = Array.from(checkboxes).map(cb => cb.value);
+      const runIds = selectedGroundingRunIds();
+      const mode = document.getElementById('grounding-eval-mode').value;
+      const labelSource = mode === '1llm' ? 'llm' : 'human';
+      const llmLabelModel = document.getElementById('grounding-llm-label-model').value;
       
       const resultsDiv = document.getElementById('grounding-eval-results');
       
@@ -1086,7 +1212,7 @@
         const response = await fetch('/api/grounding_metrics', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ run_ids: runIds, threshold: threshold })
+          body: JSON.stringify({ run_ids: runIds, threshold: threshold, label_source: labelSource, llm_label_model: llmLabelModel })
         });
         const data = await response.json();
         
@@ -1099,6 +1225,37 @@
         renderGroundingData();
       } catch (err) {
         resultsDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Network error: ${err.message}</p>`;
+      }
+    }
+
+    async function generateHumanAnnotationSet() {
+      const statusEl = document.getElementById('human-annotation-generate-status');
+      const runIds = Array.from(document.querySelectorAll('.human-annotation-source-run:checked')).map(cb => cb.value);
+      const tasksPerRun = Number(document.getElementById('human-annotation-per-run').value || 20);
+      if (!runIds.length) {
+        statusEl.textContent = 'Select at least one source run.';
+        statusEl.style.color = '#ef4444';
+        return;
+      }
+      statusEl.textContent = 'Sampling tasks...';
+      statusEl.style.color = 'var(--text-muted)';
+      try {
+        const response = await fetch('/api/human-annotation-set/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_ids: runIds, tasks_per_run: tasksPerRun })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error) {
+          statusEl.textContent = `Error: ${data.error || response.status}`;
+          statusEl.style.color = '#ef4444';
+          return;
+        }
+        statusEl.innerHTML = `Created ${data.task_count} task review set. <a href="${data.url}" style="color: var(--accent); font-weight: 800;">Open it</a>`;
+        statusEl.style.color = 'var(--success)';
+      } catch (err) {
+        statusEl.textContent = `Error: ${err.message}`;
+        statusEl.style.color = '#ef4444';
       }
     }
 
@@ -1115,9 +1272,12 @@
         return;
       }
 
-      const models = Object.keys(data).filter(m => m !== 'Average');
+      const models = Object.keys(data).filter(m => m !== 'Average' && m !== '__meta');
       
-      let html = `<p style="font-weight: bold; margin-bottom: 12px; font-size: 14px;">For Threshold ${threshold},</p>`;
+      const labelInfo = data.__meta && data.__meta.label_source === 'llm'
+        ? ` vs LLM labels (${data.__meta.llm_label_model})`
+        : '';
+      let html = `<p style="font-weight: bold; margin-bottom: 12px; font-size: 14px;">For Threshold ${threshold}${labelInfo},</p>`;
       html += `<table style="width: 100%; min-width: 600px; border-collapse: collapse; border: 1px solid var(--card-border);">`;
       html += `<thead><tr style="background: var(--badge-neutral-bg);">`;
       html += `<th style="padding: 12px; text-align: left; border: 1px solid var(--card-border);">Model</th>`;
@@ -1126,8 +1286,8 @@
       }
       html += `</tr></thead><tbody>`;
       
-      if (mode === '1') {
-        const metrics = ['Accuracy', 'Precision', 'Recall', 'F1'];
+      if (mode === '1' || mode === '1llm') {
+        const metrics = ['Accuracy', 'Precision', 'Recall', 'F1', "Cohen's Kappa", 'Best Threshold (Youden)', 'Youden J'];
         for (const metric of metrics) {
           html += `<tr><td style="padding: 12px; border: 1px solid var(--card-border);">${metric}</td>`;
           for (const model of models) {
@@ -1143,7 +1303,9 @@
               const p = (tp + fp) > 0 ? tp / (tp + fp) : null;
               const r = (tp + fn) > 0 ? tp / (tp + fn) : null;
               val = (p !== null && r !== null && (p + r) > 0) ? (2 * p * r) / (p + r) : null;
-            }
+            } else if (metric === 'Best Threshold (Youden)') val = counts.optimal_threshold;
+            else if (metric === 'Youden J') val = counts.youden_j;
+            else if (metric === "Cohen's Kappa") val = counts.cohen_kappa;
             const displayVal = val !== null ? Number(val).toFixed(2) : '—';
             html += `<td style="padding: 12px; border: 1px solid var(--card-border);">${displayVal}</td>`;
           }
@@ -1269,7 +1431,7 @@
       const colors = ["#ff0000", "#000000", "#00ff00", "#0000ff", "#ff00ff", "#00ffff"];
       let colorIdx = 0;
 
-      const models = Object.keys(data).filter(m => m !== 'Average');
+      const models = Object.keys(data).filter(m => m !== 'Average' && m !== '__meta');
 
       for (const model of models) {
         const cData = data[model];
@@ -1338,10 +1500,14 @@
         minRow.id = `minmax-row-${model.replace(/\s+/g, '-')}`;
         const minG = cData.min_grounded !== null && cData.min_grounded !== undefined ? cData.min_grounded.toFixed(3) : '—';
         const maxM = cData.max_misgrounded !== null && cData.max_misgrounded !== undefined ? cData.max_misgrounded.toFixed(3) : '—';
+        const bestT = cData.optimal_threshold !== null && cData.optimal_threshold !== undefined ? cData.optimal_threshold.toFixed(3) : '—';
+        const youdenJ = cData.youden_j !== null && cData.youden_j !== undefined ? cData.youden_j.toFixed(3) : '—';
         minRow.innerHTML = `
           <td style="padding: 12px; border: 1px solid var(--card-border);">${model}</td>
           <td style="padding: 12px; border: 1px solid var(--card-border);">${minG}</td>
           <td style="padding: 12px; border: 1px solid var(--card-border);">${maxM}</td>
+          <td style="padding: 12px; border: 1px solid var(--card-border);">${bestT}</td>
+          <td style="padding: 12px; border: 1px solid var(--card-border);">${youdenJ}</td>
         `;
         minmaxBody.appendChild(minRow);
       }

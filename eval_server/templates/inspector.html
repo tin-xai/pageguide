@@ -1106,6 +1106,14 @@
         <form method="post" action="{{ url_for('rerun_trajectory_grounding_similarity_route', session_id=trajectory.sessionId) }}" style="margin: 0;">
           <button type="submit" class="save-eval-btn" style="white-space: nowrap; background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);" title="Recompute cosine similarity between each step instruction and target element text">Rerun Grounding Similarity</button>
         </form>
+        <form method="post" action="{{ url_for('rerun_trajectory_llm_grounding_labels_route', session_id=trajectory.sessionId) }}" style="margin: 0; display: flex; gap: 6px; align-items: center;">
+          <select name="model" style="padding: 8px 10px; border-radius: 8px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 12px;">
+            {% for option in grounding_label_model_options %}
+              <option value="{{ option.id }}" {% if option.id == llm_grounding_model %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="save-eval-btn" style="white-space: nowrap; background: rgba(14, 165, 233, 0.10); color: #0ea5e9; border: 1px solid rgba(14, 165, 233, 0.28);" title="Ask the selected LLM whether each step instruction is grounded in the real DOM element text">Rerun LLM Grounding Labels</button>
+        </form>
         <button id="theme-toggle" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.2); color: var(--text); padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; font-family: inherit;">
           🌓 Toggle Theme
         </button>
@@ -1163,6 +1171,15 @@
         Grounding similarity rerun complete: {{ grounding_rerun_summary.steps }} step(s) scored.
       {% else %}
         Grounding similarity rerun was skipped{% if grounding_rerun_summary.reason %}: {{ grounding_rerun_summary.reason }}{% endif %}.
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if llm_grounding_rerun_summary %}
+    <div class="alert visible {{ 'success' if llm_grounding_rerun_summary.updated else 'error' }}" style="display: block;">
+      {% if llm_grounding_rerun_summary.updated %}
+        LLM grounding labels rerun complete with <code>{{ llm_grounding_rerun_summary.model }}</code>: {{ llm_grounding_rerun_summary.steps }} step(s) annotated, {{ llm_grounding_rerun_summary.grounded }} Grounded, {{ llm_grounding_rerun_summary.not_grounded }} Not Grounded{% if llm_grounding_rerun_summary.skipped != "0" %}, {{ llm_grounding_rerun_summary.skipped }} skipped{% endif %}.
+      {% else %}
+        LLM grounding label rerun was skipped{% if llm_grounding_rerun_summary.reason %}: {{ llm_grounding_rerun_summary.reason }}{% endif %}.
       {% endif %}
     </div>
     {% endif %}
@@ -1374,10 +1391,29 @@
             </div>
             <div id="task-grounding-boundary-summary"></div>
           </div>
+          <div class="eval-card" style="margin-bottom: 16px; border: 1px solid var(--card-border); box-shadow: none;">
+            <h3 style="font-size: 15px; margin-bottom: 6px;">LLM Annotated Ground Truth</h3>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 0 0 10px;">Labels from <code>{{ llm_grounding_model }}</code> for whether each step instruction is grounded in the real DOM element text.</p>
+            {% set lsum = trajectory.llm_grounding_summary %}
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <span class="badge neutral">{{ lsum.scored }} of {{ lsum.applicable }} applicable scored</span>
+              <span class="badge green">{{ lsum.grounded }} Grounded</span>
+              <span class="badge" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.28);">{{ lsum.not_grounded }} Not Grounded</span>
+              {% if lsum.skipped %}<span class="badge neutral">{{ lsum.skipped }} missing labels</span>{% endif %}
+            </div>
+            {% if lsum.not_grounded_examples %}
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+              {% for item in lsum.not_grounded_examples[:5] %}
+                <span class="badge" title="{{ item.reason }} · {{ item.element_text }}" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.28);">Step {{ item.step }} Not Grounded</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
           <div class="metric-controls" aria-label="Optional confidence columns">
             <button type="button" class="metric-toggle-btn" data-metric-column="lt" onclick="toggleMetricColumn('lt', this)">Show L_t</button>
             <button type="button" class="metric-toggle-btn" data-metric-column="llm" onclick="toggleMetricColumn('llm', this)">Show LLM grounded</button>
             <button type="button" class="metric-toggle-btn" data-metric-column="groundhuman" onclick="toggleMetricColumn('groundhuman', this)">Show Grounded_Human_Label</button>
+            <button type="button" class="metric-toggle-btn" data-metric-column="groundllm" onclick="toggleMetricColumn('groundllm', this)">Show Grounded_LLM_Label</button>
             {% set show_goalrel = (goalrel_rerun_summary is not none) %}
             <button type="button" class="metric-toggle-btn{% if show_goalrel %} active{% endif %}" data-metric-column="goalrel" onclick="toggleMetricColumn('goalrel', this)">{{ 'Hide' if show_goalrel else 'Show' }} Goal Relevance</button>
             <button type="button" class="metric-toggle-btn" data-metric-column="gtprog" onclick="toggleMetricColumn('gtprog', this)">Show GT / No-GT Progress</button>
@@ -1395,6 +1431,7 @@
                   <th>Instruction</th>
                   <th>Grounding Similarity</th>
                   <th class="metric-col-groundhuman metric-col-hidden">Grounded_Human_Label</th>
+                  <th class="metric-col-groundllm metric-col-hidden">Grounded_LLM_Label</th>
                   <th class="metric-col-llm metric-col-hidden">LLM grounded</th>
                   <th class="metric-col-lt metric-col-hidden">L_t</th>
                   <th class="metric-col-goalrel{% if not show_goalrel %} metric-col-hidden{% endif %}">Goal Relevance</th>
@@ -1454,11 +1491,25 @@
                     {% endif %}
                   </td>
                   <td class="metric-col-groundhuman metric-col-hidden" onclick="event.stopPropagation();">
-                    {% set human_label = step.grounded_human_label if step.grounded_human_label is defined else 'grounded' %}
+                    {% set human_label = step.grounded_human_label if step.grounded_human_label is defined else none %}
+                    {% set human_reviewed = (human_label is not none) or step.grounded_human_label_explicit %}
                     <div style="display: inline-flex; border: 1px solid var(--card-border); border-radius: 8px; overflow: hidden; background: var(--badge-neutral-bg);" data-grounding-label-wrap="{{ step.step }}">
-                      <button type="button" onclick="saveGroundingHumanLabel({{ step.step }}, 'grounded')" data-grounding-label-btn="{{ step.step }}:grounded" style="border: none; padding: 5px 8px; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; background: {{ 'rgba(16, 185, 129, 0.18)' if human_label != 'non_grounded' else 'transparent' }}; color: {{ 'var(--success)' if human_label != 'non_grounded' else 'var(--text-muted)' }};">Grounded</button>
+                      <button type="button" onclick="saveGroundingHumanLabel({{ step.step }}, 'grounded')" data-grounding-label-btn="{{ step.step }}:grounded" style="border: none; padding: 5px 8px; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; background: {{ 'rgba(16, 185, 129, 0.18)' if human_label == 'grounded' or (not trajectory.is_human_annotation_task and human_label != 'non_grounded') else 'transparent' }}; color: {{ 'var(--success)' if human_label == 'grounded' or (not trajectory.is_human_annotation_task and human_label != 'non_grounded') else 'var(--text-muted)' }};">Grounded</button>
                       <button type="button" onclick="saveGroundingHumanLabel({{ step.step }}, 'non_grounded')" data-grounding-label-btn="{{ step.step }}:non_grounded" style="border: none; border-left: 1px solid var(--card-border); padding: 5px 8px; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; background: {{ 'rgba(239, 68, 68, 0.16)' if human_label == 'non_grounded' else 'transparent' }}; color: {{ 'var(--failure)' if human_label == 'non_grounded' else 'var(--text-muted)' }};">Non-Grounded</button>
                     </div>
+                    {% if trajectory.is_human_annotation_task and not human_reviewed %}
+                      <div data-grounding-review-state="{{ step.step }}" style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Unreviewed</div>
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-groundllm metric-col-hidden">
+                    {% set llm_entry = (step.grounded_llm_labels or {}).get(llm_grounding_model) if step.grounded_llm_labels is defined else none %}
+                    {% if llm_entry and llm_entry.label == 'grounded' %}
+                      <span class="badge green" title="{{ llm_entry.reason or '' }}">Grounded</span>
+                    {% elif llm_entry and llm_entry.label == 'not_grounded' %}
+                      <span class="badge" title="{{ llm_entry.reason or '' }}" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.28);">Not Grounded</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);" title="Run 'Rerun LLM Grounding Labels' for {{ llm_grounding_model }}">—</span>
+                    {% endif %}
                   </td>
                   <td class="metric-col-llm metric-col-hidden">
                     {% if step.grounded is defined and step.grounded is not none %}
@@ -1764,6 +1815,7 @@
     let currentLightboxView = 'before';
     const LIGHTBOX_META_PREF = 'pageguideEvalLightboxMetaVisible';
     const DEFAULT_GROUNDING_THRESHOLD = Number((trajectory.grounding_boundary_metrics || {}).threshold || 0.8);
+    const SERVER_YOUDEN = trajectory.grounding_youden || {};
 
     function fmtMetric(value) {
       return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—';
@@ -1777,8 +1829,27 @@
       return value;
     }
 
+    function cohenKappa(tp, tn, fp, fn) {
+      const total = tp + tn + fp + fn;
+      if (!total) return null;
+      const observed = (tp + tn) / total;
+      const predictedGrounded = (tp + fp) / total;
+      const predictedNotGrounded = (fn + tn) / total;
+      const actualGrounded = (tp + fn) / total;
+      const actualNotGrounded = (fp + tn) / total;
+      const expected = predictedGrounded * actualGrounded + predictedNotGrounded * actualNotGrounded;
+      if (Math.abs(1 - expected) < 1e-12) return Math.abs(observed - 1) < 1e-12 ? 1 : null;
+      return (observed - expected) / (1 - expected);
+    }
+
     function humanGroundingLabel(step) {
-      return step && step.grounded_human_label === 'non_grounded' ? 'non_grounded' : 'grounded';
+      if (!step) return trajectory.is_human_annotation_task ? null : 'grounded';
+      if (step.grounded_human_label === 'non_grounded') return 'non_grounded';
+      if (trajectory.is_human_annotation_task) {
+        if (step.grounded_human_label === 'grounded' || step.grounded_human_label_explicit) return 'grounded';
+        return null;
+      }
+      return 'grounded';
     }
 
     function groundingBoundaryMetrics(steps, threshold = DEFAULT_GROUNDING_THRESHOLD) {
@@ -1790,6 +1861,7 @@
         if (!Number.isFinite(sim)) return;
         const predicted = sim >= threshold ? 'grounded' : 'non_grounded';
         const human = humanGroundingLabel(step);
+        if (!human) return;
         if (human === 'grounded' && predicted === 'grounded') tp++;
         else if (human === 'grounded' && predicted === 'non_grounded') fn++;
         else if (human === 'non_grounded' && predicted === 'grounded') fp++;
@@ -1817,8 +1889,37 @@
         precision,
         recall,
         f1,
+        cohen_kappa: cohenKappa(tp, tn, fp, fn),
         mismatches
       };
+    }
+
+    function youdenForSteps(steps) {
+      const scored = [];
+      (steps || []).forEach(step => {
+        if (!step || step.isInitial) return;
+        const sim = Number(step.element_step_similarity);
+        if (!Number.isFinite(sim)) return;
+        const human = humanGroundingLabel(step);
+        if (!human) return;
+        scored.push({ sim: Math.max(0, Math.min(1, sim)), human: human === 'grounded' });
+      });
+      if (scored.length === 0) return { threshold: null, youden_j: null, tpr: null, fpr: null, total: 0 };
+      const candidates = Array.from(new Set([0, 1, ...scored.map(s => s.sim)])).sort((a, b) => a - b);
+      let best = { threshold: candidates[0], youden_j: -2, tpr: 0, fpr: 0, total: scored.length };
+      candidates.forEach(threshold => {
+        const tp = scored.filter(s => s.human && s.sim >= threshold).length;
+        const fn = scored.filter(s => s.human && s.sim < threshold).length;
+        const fp = scored.filter(s => !s.human && s.sim >= threshold).length;
+        const tn = scored.filter(s => !s.human && s.sim < threshold).length;
+        const tpr = (tp + fn) ? tp / (tp + fn) : 0;
+        const fpr = (fp + tn) ? fp / (fp + tn) : 0;
+        const j = tpr - fpr;
+        if (j > best.youden_j || (Math.abs(j - best.youden_j) < 1e-12 && threshold > best.threshold)) {
+          best = { threshold, youden_j: j, tpr, fpr, total: scored.length };
+        }
+      });
+      return best;
     }
 
     function labelText(label) {
@@ -1837,12 +1938,19 @@
     function renderBoundaryMetrics(metrics, targetId) {
       const el = document.getElementById(targetId);
       if (!el) return;
+      const youden = targetId === 'task-grounding-boundary-summary'
+        ? youdenForSteps(trajectory.steps || [])
+        : SERVER_YOUDEN;
+      const youdenText = youden && youden.threshold !== null && youden.threshold !== undefined
+        ? `Best threshold ${Number(youden.threshold).toFixed(2)} · Youden J ${fmtMetric(youden.youden_j)}`
+        : 'Best threshold — · Youden J —';
       const mismatchHtml = metrics.mismatches.length
         ? metrics.mismatches.slice(0, 5).map(m => `<span class="badge" title="${escapeHtml((m.action || '') + ' · ' + (m.instruction || ''))}" style="background: rgba(239, 68, 68, 0.12); color: var(--failure); border: 1px solid rgba(239, 68, 68, 0.3);">Step ${escapeHtml(String(m.step ?? '?'))}: ${m.similarity.toFixed(2)} predicted ${labelText(m.predicted)}, human ${labelText(m.human)}</span>`).join(' ')
         : '<span style="color: var(--text-muted); font-size: 12px;">No mismatches at this threshold.</span>';
       el.innerHTML = `
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 12px;">
-          ${['accuracy', 'precision', 'recall', 'f1'].map(key => `<div style="border: 1px solid var(--card-border); border-radius: 8px; padding: 8px; background: var(--badge-neutral-bg);"><div style="font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase;">${key}</div><div style="font-size: 18px; font-weight: 800;">${fmtMetric(metrics[key])}</div></div>`).join('')}
+          ${['accuracy', 'precision', 'recall', 'f1', 'cohen_kappa'].map(key => `<div style="border: 1px solid var(--card-border); border-radius: 8px; padding: 8px; background: var(--badge-neutral-bg);"><div style="font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase;">${key === 'cohen_kappa' ? "Cohen's Kappa" : key}</div><div style="font-size: 18px; font-weight: 800;">${fmtMetric(metrics[key])}</div></div>`).join('')}
+          <div style="border: 1px solid var(--card-border); border-radius: 8px; padding: 8px; background: rgba(14, 165, 233, 0.08);"><div style="font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase;">Youden Index</div><div style="font-size: 13px; font-weight: 800;">${youdenText}</div></div>
         </div>
         <div style="display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr); gap: 12px;">
           <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
@@ -1893,9 +2001,11 @@
         }
         const step = trajectory.steps.find(s => Number(s.step) === Number(stepId));
         if (step) {
-          if (label === 'non_grounded') step.grounded_human_label = 'non_grounded';
-          else delete step.grounded_human_label;
+          step.grounded_human_label = label === 'non_grounded' ? 'non_grounded' : 'grounded';
+          step.grounded_human_label_explicit = true;
         }
+        const reviewState = document.querySelector(`[data-grounding-review-state="${stepId}"]`);
+        if (reviewState) reviewState.remove();
         setGroundingLabelButtonState(stepId, label);
         renderTaskBoundarySummary();
         showAlert('Grounding label saved.', 'success');
@@ -1944,7 +2054,7 @@
       cells.forEach(cell => cell.classList.toggle('metric-col-hidden', !shouldShow));
       if (button) {
         button.classList.toggle('active', shouldShow);
-        const labels = { lt: 'L_t', llm: 'LLM grounded', goalrel: 'Goal Relevance', groundhuman: 'Grounded_Human_Label', gtprog: 'GT / No-GT Progress', agentresp: 'Agent Response' };
+        const labels = { lt: 'L_t', llm: 'LLM grounded', goalrel: 'Goal Relevance', groundhuman: 'Grounded_Human_Label', groundllm: 'Grounded_LLM_Label', gtprog: 'GT / No-GT Progress', agentresp: 'Agent Response' };
         const label = labels[column] || column;
         button.textContent = `${shouldShow ? 'Hide' : 'Show'} ${label}`;
         button.setAttribute('aria-pressed', shouldShow ? 'true' : 'false');

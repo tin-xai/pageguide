@@ -336,7 +336,10 @@ function renderGoalDots(current, total) {
   // Always render at least `total` dots so the count matches the "Step X of N" text.
   const count = Math.max(total || 0, states.length);
   for (let i = 1; i <= count; i++) {
+    const planItem = currentGuidePlan.find(p => Number(p.n) === i);
     const st = states[i - 1] || { status: i < current ? 'done' : (i === current ? 'current' : 'pending'), review: false, verify: null };
+    if (planItem?.status === 'complete') st.status = 'done';
+    else if (planItem && i === current) st.status = 'current';
     const rec = getGuideStepMeta(i);
     const dot = document.createElement('button');
     dot.type = 'button';
@@ -655,7 +658,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab?.id;
   renderWorkingTabChip(tab);
-  
+
   // Attach event listeners
   document.getElementById('pageguide-settings')?.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
@@ -690,7 +693,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (backdrop) backdrop.style.display = 'block';
     showBranchTree();
   });
-  
+
   const closeBranchOverlay = () => {
     _hideBranchTreeHover(true);
     const overlay = document.getElementById('pageguide-branch-overlay');
@@ -704,7 +707,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       _hideBranchTreeHover(true);
     }
   });
-  
+
   document.getElementById('pageguide-branch-close')?.addEventListener('click', closeBranchOverlay);
   document.getElementById('pageguide-branch-backdrop')?.addEventListener('click', closeBranchOverlay);
 
@@ -725,7 +728,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pg-zoom-reset')?.addEventListener('click', () => {
     updateTreeScale(1.0);
   });
-  
+
   document.getElementById('pageguide-send').addEventListener('click', () => {
     if (panelRunning) stopRun(); else sendMessage();
   });
@@ -737,6 +740,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   initConfidenceFormulaToggle();
   initConfidenceSourceToggle();
   initRegionCaptureToggle();
+  initPassHistoryToggle();
+  initPlanningModeToggle();
+  await initDebugFieldChooser();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -747,18 +753,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       sendMessage();
     }
   });
-  
+
   // Quick action buttons
   document.querySelectorAll('[data-action]').forEach(btn => {
     btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
   });
-  
+
   // PDF Reader button
   document.getElementById('pageguide-pdf-reader')?.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
     hideMoreMenu();
   });
-  
+
   // Chat history
   document.getElementById('pageguide-open-history')?.addEventListener('click', showHistoryPanel);
   document.getElementById('pageguide-history-close')?.addEventListener('click', hideHistoryPanel);
@@ -815,7 +821,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Paste image support (Ctrl+V / Cmd+V)
   document.addEventListener('paste', handlePasteImage);
-  
+
   // Focus input
   document.getElementById('pageguide-input')?.focus();
 
@@ -929,26 +935,26 @@ function parseCitations(text, isPdf = false) {
   const normalizedText = text
     .replace(/[""]/g, '"')
     .replace(/['']/g, "'");
-  
+
   // Use normalized text for parsing
   text = normalizedText;
-  
+
   let result = '';
   let lastIndex = 0;
   let citationCount = 0;
-  
+
   // First, check for indexed citations: [idx:N], [idx:N-M], or [idx:N-M, X-Y, ...]
   const indexedCitationPattern = /\[idx:([^\]]+)\]/gi;
   const hasIndexedCitations = indexedCitationPattern.test(text);
   indexedCitationPattern.lastIndex = 0;
-  
+
   if (hasIndexedCitations) {
     let match;
-    
+
     while ((match = indexedCitationPattern.exec(text)) !== null) {
       citationCount++;
       const rangesStr = match[1]; // e.g., "1-2, 38-42, 58-59" or "57"
-      
+
       // Parse all ranges
       const ranges = [];
       const rangeParts = rangesStr.split(/[,;]\s*/);
@@ -960,71 +966,71 @@ function parseCitations(text, isPdf = false) {
           ranges.push({ start, end });
         }
       }
-      
+
       // Add text before this citation (already HTML from parseMarkdown)
       result += text.slice(lastIndex, match.index);
-      
+
       // Store all ranges as JSON in data attribute
       const rangesJson = JSON.stringify(ranges);
       const tooltipText = ranges.map(r => r.start === r.end ? r.start : `${r.start}-${r.end}`).join(', ');
       result += `<span class="pageguide-pdf-citation" data-ranges='${rangesJson}' data-citation="${citationCount}" title="Elements: ${tooltipText}">[${citationCount}]</span>`;
-      
+
       lastIndex = match.index + match[0].length;
     }
-    
+
     // Add remaining text (already HTML from parseMarkdown)
     result += text.slice(lastIndex);
     return result;
   }
-  
+
   // Second, handle PDF page citations: [Page N: "text"] or [Page N: 'text']
   const pdfCitationPattern = /\[Page\s*(\d+):\s*["']([^"']+)["']\]/gi;
-  
+
   // Check if there are PDF citations
   const hasPdfCitations = pdfCitationPattern.test(text);
   pdfCitationPattern.lastIndex = 0; // Reset regex
-  
+
   if (hasPdfCitations) {
     let match;
-    
+
     while ((match = pdfCitationPattern.exec(text)) !== null) {
       citationCount++;
       const pageNum = match[1];
       const quoteText = match[2];
-      
+
       // Add text before this citation (already HTML from parseMarkdown)
       result += text.slice(lastIndex, match.index);
-      
+
       // Add clickable PDF citation - show index only, store quote for highlighting
       // Truncate quote for tooltip (first 60 chars)
       const tooltipText = quoteText.length > 60 ? quoteText.slice(0, 60) + '...' : quoteText;
       result += `<span class="pageguide-pdf-citation" data-page="${pageNum}" data-text="${escapeHtml(quoteText)}" data-citation="${citationCount}" title="Page ${pageNum}: ${escapeHtml(tooltipText)}">[${citationCount}]</span>`;
-      
+
       lastIndex = match.index + match[0].length;
     }
-    
+
     // Add remaining text (already HTML from parseMarkdown)
     result += text.slice(lastIndex);
     return result;
   }
-  
+
   // Handle regular web citations: [N], [N:"text"], or [N, M, ...] (multiple indices)
   // Pattern matches: [517], [517:"text"], [517, 519], [517, 519:"text"]
   const citationPattern = /\[([\d,\s]+)(?::\s*(?:"([^"]+)"|'([^']+)'|([^\]]+)))?\]/g;
-  
+
   let match;
   let webCitationCount = 0;
   while ((match = citationPattern.exec(text)) !== null) {
     const indicesStr = match[1]; // Could be "517" or "517, 519" or "517,519"
     // Text could be in group 2 (double quoted), 3 (single quoted), or 4 (unquoted)
     const explicitText = match[2] || match[3] || match[4];
-    
+
     // Parse all indices (handle comma-separated)
     const indices = indicesStr.split(/[,\s]+/).filter(s => s.match(/^\d+$/));
-    
+
     const textBefore = text.slice(lastIndex, match.index);
     result += textBefore;
-    
+
     // Create citation with toggleable text and index
     // Default: collapsed (show only index), click to expand (show text + index)
     indices.forEach((idx, i) => {
@@ -1037,13 +1043,13 @@ function parseCitations(text, isPdf = false) {
         result += `<span class="pageguide-citation pageguide-citation-idx" data-index="${idx}" data-citation="${webCitationCount}"><sup class="citation-index">[${webCitationCount}]</sup></span>`;
       }
     });
-    
+
     lastIndex = match.index + match[0].length;
   }
-  
+
   // Add remaining text (already HTML from parseMarkdown)
   result += text.slice(lastIndex);
-  
+
   return result;
 }
 
@@ -1063,59 +1069,59 @@ function escapeHtml(text) {
 function parseMarkdown(text) {
   // First escape HTML to prevent XSS
   let result = escapeHtml(text);
-  
+
   // Code blocks with triple backticks (must be done before inline code)
   result = result.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-  
+
   // Inline code with single backticks
   result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
-  
+
   // Bold with **text** (must be done before italic)
   result = result.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  
+
   // Bullet lists (- item or * item at start of line)
   result = result.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
-  
+
   // Collapse spaces/newlines between list items
   result = result.replace(/<\/li>\s*<li>/g, '</li><li>');
-  
+
   // Wrap consecutive <li> elements in <ul>
   result = result.replace(/(<li>[\s\S]*?<\/li>)+/g, '<ul>$&</ul>');
-  
+
   // Italic with *text* (single asterisks, not part of **)
   // Stop at newline so it doesn't span multiple paragraphs/list items
   result = result.replace(/(?<!\*)\*([^*^\n]+)\*(?!\*)/g, '<em>$1</em>');
-  
+
   // Links [text](url) - handle markdown links (with up to 1 level of nested parentheses in URL)
   result = result.replace(/\[([^\]]+)\]\(((?:[^()]+|\([^()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="pageguide-markdown-link">$1</a>');
-  
+
   // Raw URLs (basic linkify for URLs not inside existing tags or markdown links)
   // Be careful not to replace URLs that are already part of an href attribute or markdown link.
   // Supports up to 1 level of nested parentheses in URL
   const rawUrlRegex = /(^|\s)(https?:\/\/(?:[^\s\(\)<>]+|\([^\s\(\)<>]+\))+)/g;
   result = result.replace(rawUrlRegex, '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="pageguide-markdown-link">$2</a>');
-  
+
   // Headers
   result = result.replace(/^### (.+)$/gm, '<h4>$1</h4>');
   result = result.replace(/^## (.+)$/gm, '<h3>$1</h3>');
   result = result.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-  
+
   // Numbered lists (1. item, 2. item, etc.)
   result = result.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-  
+
   // Line breaks (convert \n to <br> but preserve paragraph structure)
   result = result.replace(/\n\n/g, '</p><p>');
   result = result.replace(/\n/g, '<br>');
-  
+
   // Clean up any empty paragraphs and fix structure
   result = result.replace(/<p><\/p>/g, '');
   result = result.replace(/<br><br>/g, '</p><p>');
-  
+
   // Wrap in paragraph if not already wrapped with a block element
   if (!result.startsWith('<h') && !result.startsWith('<ul') && !result.startsWith('<pre') && !result.startsWith('<p')) {
     result = '<p>' + result + '</p>';
   }
-  
+
   return result;
 }
 
@@ -1266,12 +1272,12 @@ function _setupMessageContainerDelegate(container) {
 function addMessage(content, type = 'assistant', clickable = false, context = null) {
   const container = document.getElementById('pageguide-messages');
   if (!container) return;
-  
+
   hideTyping();
-  
+
   const msg = document.createElement('div');
   msg.className = `pageguide-message ${type}`;
-  
+
   let innerHTML = '';
 
   // Prepend context pill if provided
@@ -1315,11 +1321,11 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
     // Apply markdown parsing for non-clickable messages too
     innerHTML += parseMarkdown(content);
   }
-  
+
   msg.innerHTML = innerHTML;
   // Click handlers for citations and message toggle are handled by the
   // delegated listener on the container (_setupMessageContainerDelegate).
-  
+
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
 
@@ -1509,6 +1515,17 @@ function addSteerRestoreCard(message) {
     ${message.url ? `<div class="pageguide-step-meta">🔗 ${escapeHtml(message.url)}</div>` : ''}
     <ul class="pageguide-steer-restore-log">${lines}</ul>
     ${errHtml}
+    <div class="pageguide-steer-reason-wrap" style="margin: 8px 12px; display: flex; flex-direction: column; gap: 8px;">
+      <textarea id="pageguide-steer-reason-input" class="pageguide-input" placeholder="Why did you restore at this step?" style="min-height: 50px; resize: vertical; margin: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--pg-border); background: var(--pg-bg-input); color: var(--pg-fg); font-family: inherit; font-size: 13px;"></textarea>
+      <div style="display: flex; gap: 6px; margin-bottom: 4px;">
+        <button type="button" class="pageguide-mode-btn active" id="pageguide-steer-mode-wrong" style="flex: 1; padding: 4px; font-size: 11px; border-radius: 4px; border: 1px solid var(--pg-border); background: var(--pg-bg); color: var(--pg-fg); cursor: pointer; text-align: center;">Fixing an error</button>
+        <button type="button" class="pageguide-mode-btn" id="pageguide-steer-mode-intent" style="flex: 1; padding: 4px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; background: transparent; color: var(--pg-fg-muted); cursor: pointer; text-align: center;">Updating goal</button>
+      </div>
+      <label id="pageguide-steer-fixed-wrap" style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; color: var(--pg-fg-muted);">
+        <input type="checkbox" id="pageguide-steer-fixed-cb" style="margin: 0; cursor: pointer;">
+        I already corrected the error manually
+      </label>
+    </div>
     <div class="pageguide-step-btn-row">
       <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-confirm">Confirm</button>
       <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-manual">Do it yourself</button>
@@ -1528,11 +1545,48 @@ function addSteerRestoreCard(message) {
     errEl.textContent = msg;
   };
 
+  const btnWrong = card.querySelector('#pageguide-steer-mode-wrong');
+  const btnIntent = card.querySelector('#pageguide-steer-mode-intent');
+  const fixedWrap = card.querySelector('#pageguide-steer-fixed-wrap');
+  let selectedMode = 'wrong';
+
+  if (btnWrong && btnIntent) {
+    btnWrong.addEventListener('click', () => {
+      selectedMode = 'wrong';
+      btnWrong.style.borderColor = 'var(--pg-border)';
+      btnWrong.style.background = 'var(--pg-bg)';
+      btnWrong.style.color = 'var(--pg-fg)';
+      btnIntent.style.borderColor = 'transparent';
+      btnIntent.style.background = 'transparent';
+      btnIntent.style.color = 'var(--pg-fg-muted)';
+      if (fixedWrap) fixedWrap.style.display = 'flex';
+    });
+    btnIntent.addEventListener('click', () => {
+      selectedMode = 'intent';
+      btnIntent.style.borderColor = 'var(--pg-border)';
+      btnIntent.style.background = 'var(--pg-bg)';
+      btnIntent.style.color = 'var(--pg-fg)';
+      btnWrong.style.borderColor = 'transparent';
+      btnWrong.style.background = 'transparent';
+      btnWrong.style.color = 'var(--pg-fg-muted)';
+      if (fixedWrap) fixedWrap.style.display = 'none';
+    });
+  }
+
   card.querySelector('.pageguide-steer-restore-confirm')?.addEventListener('click', (e) => {
     e.stopPropagation();
+
+    const reasonText = card.querySelector('#pageguide-steer-reason-input')?.value || '';
+    const isFixed = card.querySelector('#pageguide-steer-fixed-cb')?.checked || false;
+
     card.querySelectorAll('button').forEach(b => { b.disabled = true; });
     showTyping();
-    sendToContentScript({ action: 'confirmSteerRestore' });
+    sendToContentScript({
+      action: 'confirmSteerRestore',
+      reason: reasonText,
+      mode: selectedMode,
+      isFixed: isFixed
+    });
     card.remove();
   });
   card.querySelector('.pageguide-steer-restore-journey')?.addEventListener('click', async (e) => {
@@ -1942,8 +1996,8 @@ async function showBranchTree(keepZoom = false) {
       let regionShot = rec?.regionShot || null;
       if (regionShot === PLACEHOLDER_SHOT) regionShot = null;
       const topShot = regionShot || beforeShot;
-      const imgHtml = topShot 
-        ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>` 
+      const imgHtml = topShot
+        ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>`
         : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>';
 
       const beforeHtml = (beforeShot && regionShot)
@@ -1983,7 +2037,7 @@ async function showBranchTree(keepZoom = false) {
         steerBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           steerBtn.disabled = true;
-          
+
           if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
             const ok = await RewindTimeline.steerFromStep({
               sessionId: node.sessionId,
@@ -2012,8 +2066,8 @@ async function showBranchTree(keepZoom = false) {
 
       card.addEventListener('click', (e) => {
         const target = e.target;
-        if (target.closest('button') || 
-            target.closest('textarea') || 
+        if (target.closest('button') ||
+            target.closest('textarea') ||
             target.closest('a')) {
           return;
         }
@@ -2085,10 +2139,10 @@ async function showBranchTree(keepZoom = false) {
       nodeEl.addEventListener('click', async (e) => {
         if (wasDragging) return;
         e.stopPropagation();
-        
+
         cancelHideTimer();
         _hovercardPinned = true;
-        
+
         if (!_branchTreeHoverCard || _hovercardActiveNodeEl !== nodeEl) {
           await showCard(nodeEl);
         }
@@ -2372,6 +2426,213 @@ function initRegionCaptureToggle() {
   });
 }
 
+// Pass History mode (debug-only): whether to include previous steps in LLM prompt.
+const GUIDE_PASS_HISTORY_KEY = 'guideDebugPassHistory';
+const GUIDE_PASS_HISTORY_MODES = {
+  not_passing: {
+    label: 'No',
+    title: 'Do not pass history to LLM (default).',
+  },
+  passing: {
+    label: 'Yes',
+    title: 'Pass past observed number of steps and user redirection to LLM.',
+  },
+};
+
+function _normalizePassHistoryMode(v) {
+  return v === 'not_passing' ? 'not_passing' : 'passing'; // passing is default
+}
+
+function _renderPassHistoryMode(btn, mode) {
+  mode = _normalizePassHistoryMode(mode);
+  const spec = GUIDE_PASS_HISTORY_MODES[mode];
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>History: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-passhistory-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === mode);
+  });
+}
+
+function initPassHistoryToggle() {
+  const btn = document.getElementById('pageguide-passhistory-toggle');
+  const menu = document.getElementById('pageguide-passhistory-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_PASS_HISTORY_KEY)
+    .then(r => _renderPassHistoryMode(btn, _normalizePassHistoryMode(r[GUIDE_PASS_HISTORY_KEY])))
+    .catch(() => _renderPassHistoryMode(btn, 'passing'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizePassHistoryMode(option.dataset.mode);
+    try { await chrome.storage.local.set({ [GUIDE_PASS_HISTORY_KEY]: mode }); } catch (err) {}
+    _renderPassHistoryMode(btn, mode);
+    menu.style.display = 'none';
+  });
+}
+
+// Planning mode (debug-only): whether Guide asks for an initial plan before action steps.
+const GUIDE_PLANNING_MODE_KEY = 'guideDebugPlanningMode';
+const GUIDE_PLANNING_MODES = {
+  planning: {
+    label: 'Planning',
+    title: 'Create a task plan first, then mark plan steps complete as actions run.',
+  },
+  direct: {
+    label: 'Direct',
+    title: 'Use direct one-step-at-a-time Guide prompting.',
+  },
+};
+
+function _normalizePlanningMode(v) {
+  return v === 'direct' ? 'direct' : 'planning';
+}
+
+function _renderPlanningMode(btn, mode) {
+  mode = _normalizePlanningMode(mode);
+  const spec = GUIDE_PLANNING_MODES[mode];
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6h1"/><path d="M4 12h1"/><path d="M4 18h1"/></svg></span>Plan: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-planning-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === mode);
+  });
+}
+
+function initPlanningModeToggle() {
+  const btn = document.getElementById('pageguide-planning-toggle');
+  const menu = document.getElementById('pageguide-planning-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_PLANNING_MODE_KEY)
+    .then(r => _renderPlanningMode(btn, _normalizePlanningMode(r[GUIDE_PLANNING_MODE_KEY])))
+    .catch(() => _renderPlanningMode(btn, 'planning'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizePlanningMode(option.dataset.mode);
+    try { await chrome.storage.local.set({ [GUIDE_PLANNING_MODE_KEY]: mode }); } catch (err) {}
+    _renderPlanningMode(btn, mode);
+    menu.style.display = 'none';
+  });
+}
+
+// Debug field visibility chooser. Defaults to the two controls currently used most often.
+const GUIDE_DEBUG_FIELDS_KEY = 'guideDebugVisibleFields';
+const GUIDE_DEBUG_FIELDS_DEFAULT = ['planning', 'history'];
+const GUIDE_DEBUG_FIELD_SPECS = {
+  planning: { label: 'Planning', selector: '.pageguide-planning-wrap' },
+  history: { label: 'History', selector: '.pageguide-passhistory-wrap' },
+  confidence: { label: 'Confidence', selector: '.pageguide-conf-wrap' },
+  source: { label: 'Source', selector: '.pageguide-confsrc-wrap' },
+  target: { label: 'Target', selector: '.pageguide-regioncap-wrap' },
+  prompt: { label: 'Prompt', selector: '#pageguide-debug-prompt-btn' },
+};
+let debugVisibleFieldSet = new Set(GUIDE_DEBUG_FIELDS_DEFAULT);
+
+function _normalizeDebugFields(value) {
+  const input = Array.isArray(value) ? value : GUIDE_DEBUG_FIELDS_DEFAULT;
+  const allowed = new Set(Object.keys(GUIDE_DEBUG_FIELD_SPECS));
+  const out = input.filter(v => allowed.has(v));
+  return out.length ? out : [...GUIDE_DEBUG_FIELDS_DEFAULT];
+}
+
+function _renderDebugFieldChooser() {
+  const btn = document.getElementById('pageguide-debugfields-toggle');
+  if (btn) {
+    const labels = [...debugVisibleFieldSet].map(key => GUIDE_DEBUG_FIELD_SPECS[key]?.label).filter(Boolean);
+    btn.title = `Visible debug fields: ${labels.join(', ') || 'none'}`;
+  }
+  document.querySelectorAll('#pageguide-debugfields-menu .pageguide-mode-option').forEach(opt => {
+    const selected = debugVisibleFieldSet.has(opt.dataset.debugField);
+    opt.classList.toggle('active', selected);
+    const text = opt.querySelector('.pageguide-mode-opt-text b');
+    if (text) {
+      const clean = text.textContent.replace(/^✓\s*/, '');
+      text.textContent = selected ? `✓ ${clean}` : clean;
+    }
+  });
+}
+
+function applyDebugFieldVisibility(enabled) {
+  const chooser = document.querySelector('.pageguide-debugfields-wrap');
+  if (chooser) chooser.style.display = enabled ? '' : 'none';
+  Object.entries(GUIDE_DEBUG_FIELD_SPECS).forEach(([key, spec]) => {
+    const el = document.querySelector(spec.selector);
+    if (!el) return;
+    el.style.display = enabled && debugVisibleFieldSet.has(key) ? (spec.selector.startsWith('#') ? 'inline-flex' : '') : 'none';
+  });
+  _renderDebugFieldChooser();
+}
+
+async function initDebugFieldChooser() {
+  const btn = document.getElementById('pageguide-debugfields-toggle');
+  const menu = document.getElementById('pageguide-debugfields-menu');
+  if (!btn) return;
+  try {
+    const r = await chrome.storage.local.get(GUIDE_DEBUG_FIELDS_KEY);
+    debugVisibleFieldSet = new Set(_normalizeDebugFields(r[GUIDE_DEBUG_FIELDS_KEY]));
+  } catch (e) {
+    debugVisibleFieldSet = new Set(GUIDE_DEBUG_FIELDS_DEFAULT);
+  }
+  _renderDebugFieldChooser();
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const field = option.dataset.debugField;
+    if (!GUIDE_DEBUG_FIELD_SPECS[field]) return;
+    if (debugVisibleFieldSet.has(field)) debugVisibleFieldSet.delete(field);
+    else debugVisibleFieldSet.add(field);
+    if (debugVisibleFieldSet.size === 0) {
+      debugVisibleFieldSet = new Set(GUIDE_DEBUG_FIELDS_DEFAULT);
+    }
+    const fields = [...debugVisibleFieldSet];
+    try { await chrome.storage.local.set({ [GUIDE_DEBUG_FIELDS_KEY]: fields }); } catch (err) {}
+    applyDebugFieldVisibility(window.__pgDebugEnabled === true);
+  });
+}
+
+function applyGuidePlanMessage(message) {
+  const plan = Array.isArray(message.plan) ? message.plan : [];
+  currentGuidePlan = plan.map((p, idx) => ({
+    n: Number(p.n) || idx + 1,
+    goal: String(p.goal || '').trim(),
+    status: p.status === 'complete' ? 'complete' : 'pending'
+  })).filter(p => p.goal);
+  currentGuideTitle = message.title || currentGuideTitle || currentGoal?.prompt || '';
+  currentGuideStep = currentGuidePlan.find(p => p.status !== 'complete')?.n || (currentGuidePlan.length ? currentGuidePlan.length : currentGuideStep);
+  if (message.prompt || !currentGoal) {
+    currentGoal = { prompt: message.prompt || currentGuideTitle || 'Guide task', route: 'guide' };
+  }
+  if (typeof RewindTimeline !== 'undefined' && currentGuidePlan.length > 0) {
+    try { RewindTimeline.setPlan(currentGuidePlan); } catch (e) {}
+  }
+  renderGoalCard({
+    route: 'guide',
+    title: currentGuideTitle,
+    step: currentGuideStep || 1,
+    total: currentGuidePlan.length || undefined
+  });
+}
+
 function hideMoreMenu() {
   const menu = document.getElementById('pageguide-more-menu');
   if (menu) menu.style.display = 'none';
@@ -2624,18 +2885,18 @@ function addGuideStep(result) {
 function addAskStep(result) {
   const container = document.getElementById('pageguide-messages');
   if (!container) return;
-  
+
   hideTyping();
-  
+
   const msg = document.createElement('div');
   msg.className = 'pageguide-message ask-step';
-  
+
   // Different icons for different action types
   const actionIcon = result.actionType === 'scroll' ? '📜' : '📦';
-  const actionHint = result.actionType === 'scroll' 
-    ? '⏳ Auto-scrolling in 2 seconds...' 
+  const actionHint = result.actionType === 'scroll'
+    ? '⏳ Auto-scrolling in 2 seconds...'
     : '👆 Click the highlighted button';
-  
+
   msg.innerHTML = `
     <div class="pageguide-ask-step">
       <span class="pageguide-action-icon">${actionIcon}</span>
@@ -2643,7 +2904,7 @@ function addAskStep(result) {
     </div>
     <div class="pageguide-action-hint">${actionHint}</div>
   `;
-  
+
   if (result.hasHighlights) {
     msg.classList.add('pageguide-clickable');
     // Click handler handled by delegated listener (_setupMessageContainerDelegate).
@@ -2732,11 +2993,11 @@ async function sendToContentScript(message) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTabId = tab?.id;
   }
-  
+
   if (!currentTabId) {
     throw new Error('No active tab found');
   }
-  
+
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(currentTabId, message, response => {
       if (chrome.runtime.lastError) {
@@ -2754,21 +3015,21 @@ async function sendToContentScript(message) {
 async function handlePasteImage(event) {
   const clipboardItems = event.clipboardData?.items;
   if (!clipboardItems) return;
-  
+
   // Look for image in clipboard
   for (const item of clipboardItems) {
     if (item.type.startsWith('image/')) {
       event.preventDefault();
-      
+
       const file = item.getAsFile();
       if (!file) continue;
-      
+
       // Validate file size (max 10MB)
       if (file.size > 10 * 1024 * 1024) {
         addMessage('❌ Image too large. Max size is 10MB', 'error');
         return;
       }
-      
+
       try {
         // Convert to base64
         const reader = new FileReader();
@@ -2776,21 +3037,21 @@ async function handlePasteImage(event) {
           const base64 = e.target.result;
           // Remove data URL prefix to get pure base64
           uploadedImageBase64 = base64.split(',')[1];
-          
+
           // Show preview
           const preview = document.getElementById('pageguide-image-preview');
           const previewImg = document.getElementById('pageguide-preview-img');
           const uploadLabel = document.getElementById('pageguide-upload-label');
-          
+
           if (preview && previewImg) {
             previewImg.src = base64;
             preview.style.display = 'flex';
           }
-          
+
           // Highlight upload button and show image icon
           if (uploadLabel) uploadLabel.classList.add('has-image');
           _setUploadIcon('📷');
-          
+
           // Send image to content script
           try {
             await sendToContentScript({
@@ -2811,7 +3072,7 @@ async function handlePasteImage(event) {
 
           addMessage('📋 Image pasted! Ask me to find it on the page.', 'system');
         };
-        
+
         reader.readAsDataURL(file);
         return; // Only handle first image
       } catch (err) {
@@ -2848,19 +3109,19 @@ function _setUploadIcon(kind) {
 async function handleImageUpload(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  
+
   // Validate file type
   if (!file.type.startsWith('image/')) {
     addMessage('❌ Please upload an image file', 'error');
     return;
   }
-  
+
   // Validate file size (max 10MB)
   if (file.size > 10 * 1024 * 1024) {
     addMessage('❌ Image too large. Max size is 10MB', 'error');
     return;
   }
-  
+
   try {
     // Convert to base64
     const reader = new FileReader();
@@ -2868,17 +3129,17 @@ async function handleImageUpload(event) {
       const base64 = e.target.result;
       // Remove data URL prefix to get pure base64
       uploadedImageBase64 = base64.split(',')[1];
-      
+
       // Show preview
       const preview = document.getElementById('pageguide-image-preview');
       const previewImg = document.getElementById('pageguide-preview-img');
       const uploadLabel = document.getElementById('pageguide-upload-label');
-      
+
       if (preview && previewImg) {
         previewImg.src = base64;
         preview.style.display = 'flex';
       }
-      
+
       // Highlight upload button and show image icon
       if (uploadLabel) uploadLabel.classList.add('has-image');
       _setUploadIcon('📷');
@@ -2902,7 +3163,7 @@ async function handleImageUpload(event) {
 
       addMessage('📷 Image uploaded! Ask me to find it on the page.', 'system');
     };
-    
+
     reader.readAsDataURL(file);
   } catch (err) {
     addMessage(`❌ Error uploading image: ${err.message}`, 'error');
@@ -3319,7 +3580,7 @@ async function sendMessage() {
       return;
     }
   }
-  
+
   // Check if current message has an image attached
   const currentMessageHasImage = !!uploadedImageBase64;
   if (currentMessageHasImage) {
@@ -3329,10 +3590,10 @@ async function sendMessage() {
   // If a text file is attached or text is selected, build an augmented query
   // The original user-visible message stays clean; the enriched version goes to the LLM.
   let effectiveQuery = activeQuery;
-  
+
   if (uploadedFileContent || currentSelectedText) {
     const parts = [];
-    
+
     if (uploadedFileContent) {
       const MAX_FILE_CHARS = 40000;
       const snippet = uploadedFileContent.length > MAX_FILE_CHARS
@@ -3340,7 +3601,7 @@ async function sendMessage() {
         : uploadedFileContent;
       parts.push(`[Attached file: ${uploadedFileName}]\n---\n${snippet}\n---`);
     }
-    
+
     if (currentSelectedText) {
       const MAX_SELECTION_CHARS = 20000;
       const selectionSnippet = currentSelectedText.length > MAX_SELECTION_CHARS
@@ -3348,7 +3609,7 @@ async function sendMessage() {
         : currentSelectedText;
       parts.push(`[Selected text from page]\n---\n${selectionSnippet}\n---`);
     }
-    
+
     if (activeQuery) {
       effectiveQuery = `${parts.join('\n\n')}\n\nUser question: ${activeQuery}`;
     } else {
@@ -3384,14 +3645,14 @@ async function sendMessage() {
     route: displayRoute || 'ask'
   });
   showTyping();
-  
+
   try {
     // Check if current tab is the PDF viewer
     const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const isOnPdfViewer = currentTab?.url?.includes('pdf-viewer/viewer.html');
-    
+
     let result;
-    
+
     if (noPageContext) {
       // User explicitly disabled page context — answer from AI knowledge only
       const systemPrompt = PROMPTS.KNOWLEDGE_ONLY || PROMPTS.ANSWER_AND_HIGHLIGHT
@@ -3431,21 +3692,21 @@ async function sendMessage() {
     } else if (isOnPdfViewer) {
       // Get PDF context from storage
       const pdfContext = await chrome.storage.session.get(['pdfViewerActive', 'pdfName', 'pdfTotalPages', 'pdfText']);
-      
+
       console.log('📄 PDF context from storage:', {
         active: pdfContext.pdfViewerActive,
         name: pdfContext.pdfName,
         pages: pdfContext.pdfTotalPages,
         textPages: pdfContext.pdfText?.length
       });
-      
+
       if (pdfContext.pdfText?.length > 0) {
         // Handle PDF question directly
         result = await handlePdfQuestion(effectiveQuery, pdfContext);
       } else {
         // No PDF loaded yet - show friendly message
-        result = { 
-          success: true, 
+        result = {
+          success: true,
           answer: '📄 Please load a PDF first!\n\nUpload a PDF file or paste a URL in the viewer, then ask me questions about it.',
           isPdf: false
         };
@@ -3453,16 +3714,16 @@ async function sendMessage() {
     } else if (currentTab?.url && (currentTab.url.startsWith('chrome://') || currentTab.url.startsWith('chrome-extension://') || currentTab.url.startsWith('edge://'))) {
       // Restricted page - cannot run content scripts. Default to Knowledge Base fallback.
       console.log('🛡️ Restricted page detected. Bypassing content script and using Knowledge Base.');
-      
+
       const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
         .replace('{pageContent}', '(No text content found - restricted browser page)')
         .replace('{pageIndex}', '(No elements indexed)');
-        
+
       const messages = [
         ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
         { role: 'user', content: effectiveQuery }
       ];
-      
+
       const response = await new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({
           action: 'callLLM',
@@ -3477,7 +3738,7 @@ async function sendMessage() {
           else resolve(res);
         });
       });
-      
+
       if (response && !response.error) {
         result = {
           success: true,
@@ -3500,7 +3761,7 @@ async function sendMessage() {
         forcedRoute: forcedRoute
       });
     }
-    
+
     hideTyping();
 
     // User pressed Stop while this (non-guide) request was in flight → discard the result.
@@ -3519,7 +3780,7 @@ async function sendMessage() {
 
       // Build debug info for collapsible section
       const debugLines = [];
-      
+
       // Routing decision
       if (result.routedTo && result.routedTo !== 'guide') {
         const confidence = Math.round((result.routeConfidence || 0) * 100);
@@ -3531,7 +3792,7 @@ async function sendMessage() {
         }[result.routedTo] || '🎯';
         debugLines.push(`${handlerEmoji} Routed to: ${result.routedTo} (${confidence}%)`);
       }
-      
+
       // Image ask info
       if (result.isImageAsk) {
         if (result.imageAskSteps) {
@@ -3548,7 +3809,7 @@ async function sendMessage() {
           renderImageRegions(result.imageRegions);
         }
       }
-      
+
       // PDF info
       if (result.isPdf) {
         debugLines.push(`📄 PDF mode: ${result.extractedPages || '?'}/${result.totalPages || '?'} pages extracted`);
@@ -3556,7 +3817,7 @@ async function sendMessage() {
           debugLines.push(`🔧 Method: PDF.js client-side extraction`);
         }
       }
-      
+
       // Vision decision
       if (result.visionDecision) {
         const vd = result.visionDecision;
@@ -3564,11 +3825,11 @@ async function sendMessage() {
         const visionEmoji = vd.needsVision ? '📸' : '📝';
         const visionMode = vd.needsVision ? 'Vision' : 'Text-only';
         debugLines.push(`${visionEmoji} Mode: ${visionMode} (${visionConfidence}%)`);
-        
+
         if (result.useVision && result.visionSteps) {
           debugLines.push(`🔍 Steps: ${result.visionSteps}`);
         }
-        
+
         if (result.visionActions && result.visionActions.length > 0) {
           debugLines.push(`🧭 Navigation:`);
           result.visionActions.forEach(action => {
@@ -3576,17 +3837,17 @@ async function sendMessage() {
           });
         }
       }
-      
+
       // Add collapsible debug section if there's debug info
       if (debugLines.length > 0) {
         addCollapsibleDebug(debugLines);
       }
-      
+
       // Add assistant response to history (but not for intermediate steps)
       if (result.answer && !result.isAskStep) {
         conversationHistory.push({ role: 'assistant', content: result.answer });
       }
-      
+
       if (result.isGuide) {
         addGuideStep(result);
       } else if (result.isAskStep) {
@@ -3600,7 +3861,7 @@ async function sendMessage() {
         // Make clickable if has highlights OR is a PDF response (has citations)
         const hasHighlights = result.hasHighlights || result.highlightCount > 0;
         const hasPdfCitations = result.isPdf && (
-          result.answer?.includes('[Page ') || 
+          result.answer?.includes('[Page ') ||
           result.answer?.includes('[idx:')
         );
         addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
@@ -3643,18 +3904,18 @@ async function sendMessage() {
  */
 async function handlePdfQuestion(query, pdfContext) {
   console.log('📄 Handling PDF question:', query);
-  
+
   // Use indexed text if available, otherwise fall back to regular text
   const hasIndexedText = pdfContext.pdfText.some(p => p.indexedText);
-  
+
   const pdfTextContent = pdfContext.pdfText.map(p => {
     if (hasIndexedText && p.indexedText) {
       return `[Page ${p.page}]\n${p.indexedText}`;
     }
     return `[Page ${p.page}]\n${p.text}`;
   }).join('\n\n');
-  
-  const systemPrompt = hasIndexedText 
+
+  const systemPrompt = hasIndexedText
     ? `You are a helpful assistant that answers questions about PDF documents.
 Consider conversation history for context, but always answer based on the CURRENT document content.
 
@@ -3685,13 +3946,13 @@ Total Pages: ${pdfContext.pdfTotalPages}
 
 PDF Content:
 ${pdfTextContent}`;
-  
+
   // Build messages (without system prompt - it goes separately)
   const messages = [
     ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
     { role: 'user', content: query }
   ];
-  
+
   try {
     const response = await chrome.runtime.sendMessage({
       action: 'callLLM',
@@ -3702,14 +3963,14 @@ ${pdfTextContent}`;
         url: pdfContext?.pdfUrl || ''
       }
     });
-    
+
     if (response.error) {
       return { success: false, error: response.error };
     }
-    
+
     // Add to conversation history
     conversationHistory.push({ role: 'assistant', content: response.content });
-    
+
     return {
       success: true,
       answer: response.content,
@@ -3753,7 +4014,15 @@ function _saveTabSession(tabId) {
     html: container ? container.innerHTML : '',
     visibleJourneySessionId,
     visibleJourneyTitle,
-    visibleJourneyRecalled
+    visibleJourneyRecalled,
+    activeGuideRecords: [...currentGuideRecords],
+    activeGuideInitial: currentGuideInitial,
+    activeGuidePlan: [...currentGuidePlan],
+    activeGuideStep: currentGuideStep,
+    activeSessionId: typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.getSessionId === 'function' ? RewindTimeline.getSessionId() : null,
+    currentGoal: currentGoal,
+    currentGuideTitle: currentGuideTitle,
+    guidePaused: guidePaused
   });
 }
 
@@ -3794,6 +4063,27 @@ function _restoreTabSession(session) {
     showStoredJourney(visibleJourneySessionId);
   } else {
     clearGoalAndStepPanel();
+    if (session.activeSessionId && session.activeGuideRecords && typeof RewindTimeline !== 'undefined') {
+      currentGuideRecords = [...session.activeGuideRecords];
+      currentGuideInitial = session.activeGuideInitial;
+      currentGuidePlan = session.activeGuidePlan ? [...session.activeGuidePlan] : [];
+      currentGuideStep = session.activeGuideStep || 0;
+      currentGoal = session.currentGoal || null;
+      currentGuideTitle = session.currentGuideTitle || '';
+      guidePaused = session.guidePaused || false;
+
+      RewindTimeline.clear();
+      if (currentGuideInitial) RewindTimeline.addStep(currentGuideInitial);
+      for (const rec of currentGuideRecords) {
+        RewindTimeline.addStep(rec);
+      }
+      if (currentGuidePlan.length > 0) RewindTimeline.setPlan(currentGuidePlan);
+
+      if (currentGoal) {
+        renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
+      }
+      updateGuidePauseButton();
+    }
   }
 }
 
@@ -4267,6 +4557,7 @@ function handleContentMessage(message, sender, sendResponse) {
   if (guideStopped && (
         message.action === 'showTyping' ||
         message.action === 'guideStep' ||
+        message.action === 'guidePlan' ||
         message.action === 'guideStepRecord' ||
         message.action === 'askStep')) {
     return;
@@ -4274,6 +4565,9 @@ function handleContentMessage(message, sender, sendResponse) {
   if (message.action === 'guideStep') {
     hideTyping();
     addGuideStep(message.result);
+  } else if (message.action === 'guidePlan') {
+    guideStopped = false;
+    applyGuidePlanMessage(message);
   } else if (message.action === 'guidePaused') {
     if (!guideActive && !guidePaused) return;
     guideStopped = false;
@@ -4304,6 +4598,16 @@ function handleContentMessage(message, sender, sendResponse) {
         if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);
         else currentGuideRecords.push(message.meta);
         currentGuideRecords.sort((a, b) => Number(a.step) - Number(b.step));
+        if (Array.isArray(message.meta.plan) && message.meta.plan.length) {
+          currentGuidePlan = message.meta.plan.map((p, idx) => ({
+            n: Number(p.n) || idx + 1,
+            goal: String(p.goal || '').trim(),
+            status: p.status === 'complete' ? 'complete' : 'pending'
+          })).filter(p => p.goal);
+          if (typeof RewindTimeline !== 'undefined' && currentGuidePlan.length > 0) {
+            try { RewindTimeline.setPlan(currentGuidePlan); } catch (e) {}
+          }
+        }
         currentGuideStep = message.meta.planStep || message.meta.step || currentGuideStep;
         renderGoalCard({ route: 'guide', step: currentGuideStep });
         setExportEnabled(true);
@@ -4376,18 +4680,18 @@ function handleContentMessage(message, sender, sendResponse) {
     // Handle text selection passed from the content script
     const preview = document.getElementById('pageguide-selected-text-preview');
     const label = document.getElementById('pageguide-selected-text-label');
-    
+
     if (message.text && message.text.length > 0) {
       currentSelectedText = message.text;
       if (preview && label) {
         // Display snippet (max 80 chars)
-        const snippet = message.text.length > 80 
-          ? message.text.substring(0, 80) + '...' 
+        const snippet = message.text.length > 80
+          ? message.text.substring(0, 80) + '...'
           : message.text;
-        
+
         // Count words for better context hint
         const wordCount = message.text.split(/\s+/).filter(w => w.length > 0).length;
-        
+
         label.innerHTML = `${UI_ICONS.quote}<span>"${escapeHtml(snippet)}" (${wordCount} words)</span>`;
         label.title = message.text; // Full text on hover
         preview.style.display = 'flex';
@@ -4540,7 +4844,7 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
     stepsList.forEach((s, idx) => {
       const opt = document.createElement('option');
       opt.value = idx;
-      
+
       let label = '';
       if (s.type === 'live') {
         const timeStr = new Date(s.data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -4710,22 +5014,5 @@ function updateDebugButtonVisibility(enabled) {
   // Publish a global flag so other in-panel modules (e.g. the rewind inspector) can show
   // debug-only details like the confidence breakdown without re-reading storage.
   window.__pgDebugEnabled = !!enabled;
-  const btn = document.getElementById('pageguide-debug-prompt-btn');
-  if (btn) {
-    btn.style.display = enabled ? 'inline-flex' : 'none';
-  }
-  // The confidence-formula and confidence-source toggles are debug/research controls —
-  // only surface them in debug mode.
-  const confWrap = document.querySelector('.pageguide-conf-wrap');
-  if (confWrap) {
-    confWrap.style.display = enabled ? '' : 'none';
-  }
-  const confSrcWrap = document.querySelector('.pageguide-confsrc-wrap');
-  if (confSrcWrap) {
-    confSrcWrap.style.display = enabled ? '' : 'none';
-  }
-  const regionCapWrap = document.querySelector('.pageguide-regioncap-wrap');
-  if (regionCapWrap) {
-    regionCapWrap.style.display = enabled ? '' : 'none';
-  }
+  applyDebugFieldVisibility(!!enabled);
 }

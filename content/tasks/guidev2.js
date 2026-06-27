@@ -33,7 +33,6 @@ Return JSON only:
   "action": "click" | "type" | "clear_text" | "done",
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
   "isLastStep": false,
-  "progress": 0.0,
   "risk": "low" | "high",
   "riskReason": "short reason for the risk level",
   "confirmation": "needed" | "no need"
@@ -41,7 +40,6 @@ Return JSON only:
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
-"progress": 0.0, 0.5, or 1.0 — given the observed prior steps, current page state, and proposed action, does this step move the agent CLOSER to the user’s goal? 1.0 = clear progress toward completion, 0.5 = no clear net progress or only exploratory/redundant movement, 0.0 = regression, deviation, or undoing prior progress.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
 
@@ -74,6 +72,28 @@ extension cannot access native browser UI. Example last-step instruction:
 "Click 'Print' in the File menu. Your browser's print dialog will open — choose your printer and
 settings there, then click the Print or Save button to finish."`;
 if (typeof window !== 'undefined') window.GUIDE_V2_PROMPT = GUIDE_V2_PROMPT;
+
+const GUIDE_V2_PLANNING_PROMPT = `You are a helpful guide planner for PageGuide.
+
+Given the current page and the user's goal, produce a concise user-visible plan for completing the goal.
+
+Return JSON only:
+{
+  "planTitle": "short title",
+  "steps": [
+    {"n": 1, "goal": "Open destination field"},
+    {"n": 2, "goal": "Enter destination"},
+    {"n": 3, "goal": "Submit search"}
+  ]
+}
+
+Rules:
+1. Produce only a high-level plan, not an action to execute now.
+2. Each goal must be short, user-visible, and easy to understand.
+3. Do not include private reasoning, chain-of-thought, or page-index implementation details.
+4. Use no more than 15 steps.
+5. If the task is already complete, return one step with goal "Confirm completion".`;
+if (typeof window !== 'undefined') window.GUIDE_V2_PLANNING_PROMPT = GUIDE_V2_PLANNING_PROMPT;
 
 // ===== CONSTANTS =====
 
@@ -430,6 +450,9 @@ async function gv2SaveFallback(extra = {}) {
         tutorialRef: s.tutorialRef,
         tutorialReason: s.tutorialReason,
         currentPlanStep: s.currentPlanStep,
+        planningMode: s.planningMode || 'planning',
+        plan: Array.isArray(s.plan) ? s.plan : [],
+        planTitle: s.planTitle || '',
         autoMode: s.autoMode,
         paused: !!s.paused,
         lowConfidenceCount: s.lowConfidenceCount || 0,
@@ -620,6 +643,9 @@ async function _gv2ResumeFromState(state) {
     tutorialRef: state.tutorialRef || null,
     tutorialReason: state.tutorialReason || null,
     currentPlanStep: state.currentPlanStep || 1,
+    planningMode: state.planningMode === 'direct' ? 'direct' : 'planning',
+    plan: Array.isArray(state.plan) ? state.plan : [],
+    planTitle: state.planTitle || '',
     autoMode: state.autoMode === true,
     paused: false,
     lowConfidenceCount: state.lowConfidenceCount || 0,
@@ -749,24 +775,39 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
 
     // Keep steps 1…fromStep (inclusive); the agent re-runs from fromStep+1.
     const kept = [];
-    if (typeof rewindGetRecord === 'function') {
-      for (let s = 1; s <= fromStep; s++) {
-        const r = await rewindGetRecord(payload.sessionId, s);
-        if (r) kept.push(r);
+    const originalTrajectory = [];
+    let goal = '';
+
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(payload.sessionId);
+      if (idx && idx.goal) goal = idx.goal;
+      if (idx && Array.isArray(idx.plan)) {
+        payload._planningPlan = idx.plan;
+        payload._planningTitle = idx.planTitle || '';
+        payload._planningMode = idx.planningMode || 'planning';
+      }
+
+      if (idx && idx.steps) {
+        const sortedSteps = idx.steps.slice().sort((a, b) => Number(a.step) - Number(b.step));
+        for (const meta of sortedSteps) {
+          if (meta.step === 0) continue;
+          const r = typeof rewindGetRecord === 'function' ? await rewindGetRecord(payload.sessionId, meta.step) : null;
+          if (r) {
+            originalTrajectory.push(`Step ${r.step}: ${r.instruction || ''}`);
+            if (r.step <= fromStep) kept.push(r);
+          }
+        }
+      } else {
+        // Fallback if idx.steps is missing
+        for (let s = 1; s <= fromStep; s++) {
+          const r = await rewindGetRecord(payload.sessionId, s);
+          if (r) kept.push(r);
+        }
       }
     }
 
-    // Original goal lives in the session index; combine it with the steer redirection.
-    let goal = '';
-    try {
-      if (typeof rewindGetIndex === 'function') {
-        const idx = await rewindGetIndex(payload.sessionId);
-        if (idx && idx.goal) goal = idx.goal;
-      }
-    } catch (e) {}
-    const question = payload.newGoal
-      ? `${goal}\nUSER REDIRECTION — redo step ${redoStep} differently: ${payload.newGoal || ''}`.trim()
-      : String(goal || '').trim();
+    // Always use the pure original goal as the core question
+    const question = String(goal || '').trim();
 
     const captureEnabled = await _gv2IsCaptureEnabled();
     const autoMode = await _gv2IsAutoMode();
@@ -778,6 +819,9 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     window._guidev2 = {
       active: true,
       question,
+      _steerRedirection: payload.newGoal || null,
+      _steerRedoStep: redoStep,
+      _originalTrajectory: originalTrajectory,
       previousSteps: kept.map(r => `Step ${r.step}: ${r.instruction || ''}`),
       tutorialRef: match?.tutorial || null,
       tutorialReason: match?.reason || null,
@@ -786,6 +830,9 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       autoMode,
       paused: false,
       lowConfidenceCount: 0,
+      planningMode: payload._planningMode === 'direct' ? 'direct' : (Array.isArray(payload._planningPlan) && payload._planningPlan.length ? 'planning' : 'direct'),
+      plan: Array.isArray(payload._planningPlan) ? payload._planningPlan : [],
+      planTitle: payload._planningTitle || '',
       // Seed the loop-detection key list from the kept steps so L_t keeps counting
       // correctly after a rewind/steer. One entry per prior action (the loop denominator
       // counts ALL previous actions), using the same action+text key.
@@ -899,13 +946,18 @@ async function _gv2GenerateAndDispatchSteer() {
  * let the agent continue from the branch step with the new instruction. Invoked from the
  * content-script message router on `confirmSteerRestore`.
  */
-async function gv2ConfirmSteerRestore() {
+async function gv2ConfirmSteerRestore(reason, mode, isFixed) {
   const g = window._guidev2;
   if (!g || !g._awaitingRestoreConfirm) {
     console.warn('[guidev2] confirmSteerRestore: nothing awaiting confirmation');
     return;
   }
   g._awaitingRestoreConfirm = false;
+
+  g._steerReason = reason || null;
+  g._steerMode = mode || 'wrong';
+  g._steerFixed = !!isFixed;
+
   try {
     const sid = g._restoreContext && g._restoreContext.sessionId;
     if (sid && typeof rewindUpdateSessionMeta === 'function') {
@@ -1248,6 +1300,9 @@ async function _gv2SetState(pendingResume) {
     tutorialRef: s.tutorialRef,
     tutorialReason: s.tutorialReason,
     currentPlanStep: s.currentPlanStep,
+    planningMode: s.planningMode || 'planning',
+    plan: Array.isArray(s.plan) ? s.plan : [],
+    planTitle: s.planTitle || '',
     lastActionStepNumber: s._lastActionStepNumber || null,
     activeStepNumber: s._activeStepNumber || null,
     // Mode: carry Manual/Auto across navigations.
@@ -1369,6 +1424,146 @@ async function _gv2ShouldUseAlignedRegionCapture(g) {
   return _gv2IsAlignedRegionCapture();
 }
 if (typeof window !== 'undefined') window._gv2ShouldUseAlignedRegionCapture = _gv2ShouldUseAlignedRegionCapture;
+
+const _GV2_PASS_HISTORY_KEY = 'guideDebugPassHistory';
+
+async function _gv2IsPassHistory() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_PASS_HISTORY_KEY);
+    return r[_GV2_PASS_HISTORY_KEY] !== 'not_passing'; // default true
+  } catch (e) {
+    return true;
+  }
+}
+
+const _GV2_PLANNING_MODE_KEY = 'guideDebugPlanningMode';
+
+async function _gv2PlanningMode() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_PLANNING_MODE_KEY);
+    return r[_GV2_PLANNING_MODE_KEY] === 'direct' ? 'direct' : 'planning';
+  } catch (e) {
+    return 'planning';
+  }
+}
+
+function _gv2NormalizePlan(raw) {
+  const steps = Array.isArray(raw?.steps) ? raw.steps : [];
+  const out = [];
+  steps.slice(0, GV2_MAX_STEPS).forEach((item, idx) => {
+    const goal = String(item?.goal || item?.text || item?.instruction || '').replace(/\s+/g, ' ').trim();
+    if (!goal) return;
+    out.push({ n: out.length + 1, goal, status: 'pending' });
+  });
+  return {
+    planTitle: String(raw?.planTitle || raw?.title || '').replace(/\s+/g, ' ').trim(),
+    steps: out
+  };
+}
+
+function _truncateGuideText(text, max = 60) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+function _gv2PlanSection(g) {
+  if (!g || g.planningMode !== 'planning' || !Array.isArray(g.plan) || !g.plan.length) return '';
+  const lines = g.plan.map(p => {
+    const status = p.status === 'complete' ? 'complete' : (Number(p.n) === Number(g.currentPlanStep || 1) ? 'current' : 'pending');
+    return `${p.n}. [${status}] ${p.goal}`;
+  }).join('\n');
+  return `
+=== TASK PLAN ===
+Use this plan as a reference point. It is advisory; choose the best next action from the current page.
+After choosing the action, include these extra JSON fields:
+"completedPlanStep": the highest plan step completed by this action, or null if none is completed yet
+"completedPlanStepReason": short explanation for that completion value
+${lines}
+`;
+}
+
+function _gv2MarkPlanComplete(g, completedPlanStep) {
+  if (!g || !Array.isArray(g.plan) || !g.plan.length) return null;
+  const raw = Number(completedPlanStep);
+  if (!Number.isFinite(raw) || raw < 1) return null;
+  const n = Math.max(1, Math.min(g.plan.length, Math.floor(raw)));
+  g.plan = g.plan.map(p => ({ ...p, status: Number(p.n) <= n ? 'complete' : (p.status || 'pending') }));
+  g.currentPlanStep = Math.min(g.plan.length, n + 1);
+  return n;
+}
+
+async function _gv2GenerateInitialPlan(g, pageIndex, pageBg) {
+  if (!g || g.planningMode !== 'planning' || !pageIndex) return false;
+  let tutorialSection = '';
+  if (g.tutorialRef) {
+    tutorialSection = `
+=== TUTORIAL REFERENCE ===
+Pre-verified steps for "${g.tutorialRef.task}" on ${g.tutorialRef.website}:
+${g.tutorialRef.content.steps.join('\n')}
+Use these as a reference guide but map the plan to the actual elements visible in the PAGE INDEX above.
+`;
+  }
+  const prompt = `PAGE BACKGROUND: ${pageBg?.isDark ? 'DARK' : 'LIGHT'}
+CURRENT URL: ${window.location.href}
+
+=== PAGE INDEX ===
+${pageIndex.indexText}
+
+=== USER GOAL ===
+${g.question}
+${tutorialSection}
+
+Return JSON for the task plan.`;
+  try {
+    const response = await safeSendMessage({
+      action: 'callLLM',
+      systemPrompt: GUIDE_V2_PLANNING_PROMPT,
+      messages: [{ role: 'user', content: prompt }],
+      metadata: { mode: 'guide_plan', step: 0, url: window.location.href }
+    });
+    if (response?.error || !response?.content) throw new Error(response?.error || 'No planning response');
+    const parsed = (typeof gv2ExtractJsonObject === 'function')
+      ? gv2ExtractJsonObject(response.content)
+      : JSON.parse(response.content);
+    const normalized = _gv2NormalizePlan(parsed);
+    if (!normalized.steps.length) throw new Error('Planning response did not include steps');
+    g.plan = normalized.steps;
+    g.planTitle = normalized.planTitle || _truncateGuideText(g.question, 60);
+    g.currentPlanStep = 1;
+    try {
+      chrome.runtime.sendMessage({
+        action: 'guidePlan',
+        plan: g.plan,
+        title: g.planTitle,
+        sessionId: g.sessionId,
+        prompt: g.question
+      });
+    } catch (e) {}
+    if (g.sessionId && typeof rewindUpdateSessionMeta === 'function') {
+      try {
+        await rewindUpdateSessionMeta(g.sessionId, {
+          plan: g.plan,
+          planTitle: g.planTitle,
+          planningMode: g.planningMode
+        });
+      } catch (e) {}
+    }
+    return true;
+  } catch (e) {
+    console.warn('[guidev2] planning initialization failed:', e);
+    g.planningMode = 'direct';
+    g.plan = [];
+    g.planTitle = '';
+    try {
+      chrome.runtime.sendMessage({
+        action: 'addMessage',
+        content: `Planning initialization skipped: ${e.message || e}`,
+        type: 'info'
+      });
+    } catch (sendErr) {}
+    return false;
+  }
+}
 
 async function _gv2WaitForLayoutSettle() {
   await new Promise((resolve) => {
@@ -1680,6 +1875,9 @@ async function gv2CaptureStepRecord(data) {
         sessionId: g.sessionId,
         step: data.step,
         planStep: data.planStep != null ? data.planStep : data.step,
+        completedPlanStep: data.completedPlanStep != null ? data.completedPlanStep : null,
+        completedPlanStepReason: data.completedPlanStepReason || '',
+        plan: Array.isArray(data.plan) ? data.plan : null,
         instruction: data.instruction || '',
         action: data.action || null,
         isLastStep: !!data.isLastStep,
@@ -1728,6 +1926,9 @@ async function gv2CaptureStepRecord(data) {
       sessionId: g.sessionId,
       step: data.step,
       planStep: data.planStep != null ? data.planStep : data.step,
+      completedPlanStep: data.completedPlanStep != null ? data.completedPlanStep : null,
+      completedPlanStepReason: data.completedPlanStepReason || '',
+      plan: Array.isArray(data.plan) ? data.plan : null,
       timestamp: Date.now(),
       url: window.location.href,
       title: document.title || '',
@@ -1898,6 +2099,7 @@ async function _handleStepByStepGuideV2(question) {
   const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   const captureEnabled = await _gv2IsCaptureEnabled();
   const autoMode = await _gv2IsAutoMode();
+  const planningMode = await _gv2PlanningMode();
 
   window._guidev2 = {
     active: true,
@@ -1908,6 +2110,9 @@ async function _handleStepByStepGuideV2(question) {
     sessionId,
     captureEnabled,
     autoMode,
+    planningMode,
+    plan: [],
+    planTitle: '',
     paused: false,
     lowConfidenceCount: 0,
     _mechKeys: [],
@@ -1989,6 +2194,12 @@ async function gv2GenerateNextStep() {
   const stepNumber = g.previousSteps.length + 1;
   console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
 
+  if (stepNumber === 1 && g.planningMode === 'planning' && (!Array.isArray(g.plan) || !g.plan.length)) {
+    _gv2ShowIndicator('Planning task…');
+    await _gv2GenerateInitialPlan(g, pageIndex, pageBg);
+    _gv2ShowIndicator('Agent thinking…');
+  }
+
   // Use tutorial cached at session start (no repeated lookup or API call)
   let tutorialSection = '';
   if (g.tutorialRef) {
@@ -1996,6 +2207,68 @@ async function gv2GenerateNextStep() {
 Pre-verified steps for "${g.tutorialRef.task}" on ${g.tutorialRef.website}:
 ${g.tutorialRef.content.steps.join('\n')}
 Use these as a reference guide but map each step to the actual elements visible in the PAGE INDEX above.
+`;
+  }
+
+  const passHistory = await _gv2IsPassHistory();
+
+  let completedStepsSection = '';
+  let activeQuestion = g.question;
+
+  if (g._steerRedoStep && g._steerMode === 'intent') {
+    // Mode 2: Updating goal
+    // Replace original goal with new intent
+    activeQuestion = g._steerReason || activeQuestion;
+
+    if (passHistory) {
+      const originalTraj = g._originalTrajectory && g._originalTrajectory.length > 0
+        ? g._originalTrajectory.join('\n')
+        : 'None';
+      completedStepsSection = `
+=== ORIGINAL TRAJECTORY (Before Steering) ===
+${originalTraj}
+
+=== STEERING ===
+The user restored the page to the state before Step ${g._steerRedoStep} and provided a completely new goal for the rest of the journey.
+You must now abandon the old goal and fulfill the new USER GOAL, starting from Step ${stepNumber}.
+
+=== COMPLETED STEPS (New Trajectory) ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+`;
+    } else {
+      completedStepsSection = `
+=== COMPLETED STEPS ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+`;
+    }
+
+  } else if (passHistory && g._steerRedoStep) {
+    // Mode 1: Fixing an error (and pass history is true)
+    const originalTraj = g._originalTrajectory && g._originalTrajectory.length > 0
+      ? g._originalTrajectory.join('\n')
+      : 'None';
+
+    let steerInstruction = `\nThe user restored the page to the state before Step ${g._steerRedoStep} because: "${g._steerReason || g._steerRedirection || 'The previous step was incorrect'}"`;
+
+    if (g._steerFixed) {
+      steerInstruction += `\nNOTE: The user has already manually corrected the error on the page. You should proceed with the next step as normal to fulfill the original goal.`;
+    } else {
+      steerInstruction += `\nYou must now generate Step ${stepNumber} to correct this error and fulfill the original goal.`;
+    }
+
+    completedStepsSection = `
+=== ORIGINAL TRAJECTORY (Before Steering) ===
+${originalTraj}
+
+=== STEERING ===${steerInstruction}
+
+=== COMPLETED STEPS (New Trajectory) ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+`;
+  } else {
+    completedStepsSection = `
+=== COMPLETED STEPS ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
 `;
   }
 
@@ -2007,14 +2280,12 @@ CURRENT URL: ${window.location.href}
 ${pageIndex.indexText}
 
 === USER GOAL ===
-${g.question}
+${activeQuestion}
 ${tutorialSection}
+${_gv2PlanSection(g)}
 === CURRENT STEP ===
 Step ${stepNumber}
-
-=== COMPLETED STEPS ===
-${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
-
+${completedStepsSection}
 Return JSON for Step ${stepNumber}`;
 
   try {
@@ -2230,8 +2501,25 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // the LLM self-report (default). Both are stored on the record regardless (side-by-side).
     const confSource = await _gv2ConfidenceSource();
     const confidence = (confSource === 'mechanical') ? mech.confidence : llmConfidence;
-    if (typeof step.planStep === 'number' && step.planStep >= 1) {
+    let completedPlanStep = null;
+    if (g.planningMode === 'planning' && Array.isArray(g.plan) && g.plan.length) {
+      const rawCompleted = step.completedPlanStep;
+      if (rawCompleted !== null && rawCompleted !== undefined && rawCompleted !== '') {
+        completedPlanStep = _gv2MarkPlanComplete(g, rawCompleted);
+      }
+    } else if (typeof step.planStep === 'number' && step.planStep >= 1) {
       g.currentPlanStep = step.planStep;
+    }
+    const planStepForRecord = completedPlanStep || (g.planningMode === 'planning' ? (g.currentPlanStep || 1) : step.step);
+    if (g.planningMode === 'planning' && g.sessionId && typeof rewindUpdateSessionMeta === 'function') {
+      try {
+        await rewindUpdateSessionMeta(g.sessionId, {
+          plan: Array.isArray(g.plan) ? g.plan : [],
+          planTitle: g.planTitle || '',
+          currentPlanStep: g.currentPlanStep || 1,
+          planningMode: g.planningMode
+        });
+      } catch (e) {}
     }
 
     // Clear previous highlights
@@ -2357,7 +2645,10 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Rewind: capture screenshot + target region + DOM snapshot BEFORE auto-performing the action.
     await gv2CaptureStepRecord({
       step: step.step,
-      planStep: step.step,
+      planStep: planStepForRecord,
+      completedPlanStep,
+      completedPlanStepReason: step.completedPlanStepReason || '',
+      plan: Array.isArray(g.plan) ? g.plan : [],
       confidence,
       grounded: conf.grounded,
       loop: conf.loop,
@@ -2411,11 +2702,14 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       success: true,
       answer: step.instruction,
       step: step.step,
+      planStep: planStepForRecord,
+      completedPlanStep,
+      completedPlanStepReason: step.completedPlanStepReason || '',
+      plan: Array.isArray(g.plan) ? g.plan : [],
       isLastStep: isLast,
       targetText: step.element?.text || null,
       action,
       confidence,
-      planStep: step.step,
       highlightCount,
       hasHighlights: highlightCount > 0,
       autoMode: !!g.autoMode,
@@ -2973,6 +3267,9 @@ async function _gv2HydrateResumeState() {
     tutorialRef: saved.tutorialRef || null,
     tutorialReason: saved.tutorialReason || null,
     currentPlanStep: saved.currentPlanStep || 1,
+    planningMode: saved.planningMode === 'direct' ? 'direct' : 'planning',
+    plan: Array.isArray(saved.plan) ? saved.plan : [],
+    planTitle: saved.planTitle || '',
     autoMode: saved.autoMode === true,
     paused: !!saved.paused,
     lowConfidenceCount: saved.lowConfidenceCount || 0,
