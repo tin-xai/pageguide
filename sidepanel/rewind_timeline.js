@@ -326,7 +326,20 @@
 
     const branchSessionId = _branchSessionId(sessionId, redoStep);
     const branchLabel = 'View journey before Step ' + redoStep;
-    const branchTitle = 'Before Step ' + redoStep;
+    let parentObservedStepCount = null;
+    let redoInstruction = '';
+    try {
+      if (typeof rewindGetIndex === 'function') {
+        const parentIdx = await rewindGetIndex(sessionId);
+        if (parentIdx && Array.isArray(parentIdx.steps)) {
+          parentObservedStepCount = parentIdx.steps.filter(s => !(s.isInitial || Number(s.step) === 0)).length;
+        }
+      }
+      if (typeof rewindGetRecord === 'function') {
+        const redoRec = await rewindGetRecord(sessionId, redoStep);
+        redoInstruction = (redoRec && redoRec.instruction) || '';
+      }
+    } catch (e) {}
     const payload = {
       sessionId: branchSessionId,
       parentSessionId: sessionId,
@@ -335,6 +348,8 @@
       newGoal,
       url: landingUrl,
       branchLabel,
+      parentObservedStepCount,
+      redoInstruction,
       createdAt: Date.now()
     };
     try {
@@ -343,8 +358,7 @@
         await rewindCreateBranchSession(sessionId, branchSessionId, anchorStep, {
           redoStep,
           branchLabel,
-          branchStatus: 'pending_restore',
-          goal: branchTitle
+          branchStatus: 'pending_restore'
         });
       }
       // Stash the handoff too — it's the fallback path if we have to reload (different page).

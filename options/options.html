@@ -475,6 +475,18 @@
       </div>
     </div>
     
+    <!-- Agent Behavior Section -->
+    <div class="section">
+      <h2>🤖 Agent Behavior</h2>
+      <div class="form-group">
+        <label for="maxSteps">Maximum Autonomous Steps</label>
+        <div class="toggle-info" style="margin-bottom: 8px;">
+          <span class="toggle-desc">The maximum number of steps the agent can take autonomously in auto mode before pausing to prevent infinite loops.</span>
+        </div>
+        <input type="number" id="maxSteps" min="1" max="100" value="20" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
+      </div>
+    </div>
+
     <!-- Rewind Capture Section -->
     <div class="section">
       <h2>🕘 Guide Rewind</h2>
@@ -495,6 +507,18 @@
     <!-- Debugging Settings Section -->
     <div class="section">
       <h2>🛠️ Debugging Settings</h2>
+      <div class="toggle-group">
+        <label class="toggle-label">
+          <div class="toggle-info">
+            <span class="toggle-title">Always Show Prompt Button</span>
+            <span class="toggle-desc">When enabled, the Prompt button is always visible in the chat panel, even outside of debug mode.</span>
+          </div>
+          <div class="toggle-switch">
+            <input type="checkbox" id="alwaysShowPromptBtn">
+            <span class="toggle-slider"></span>
+          </div>
+        </label>
+      </div>
       <div class="form-group" id="debugCodeGroup">
         <label for="debugCode">Enter Debug Code</label>
         <input type="text" id="debugCode" placeholder="Enter code to unlock debugging...">
@@ -507,6 +531,16 @@
           </div>
           <div class="toggle-switch">
             <input type="checkbox" id="debugEnabled">
+            <span class="toggle-slider"></span>
+          </div>
+        </label>
+        <label class="toggle-label">
+          <div class="toggle-info">
+            <span class="toggle-title">Include steer context in prompts</span>
+            <span class="toggle-desc">When enabled in debug mode, restored branches add the observed journey length and steered step to the agent prompt.</span>
+          </div>
+          <div class="toggle-switch">
+            <input type="checkbox" id="debugSteerContextEnabled">
             <span class="toggle-slider"></span>
           </div>
         </label>

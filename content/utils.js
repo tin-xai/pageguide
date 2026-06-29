@@ -1417,6 +1417,10 @@ const _GV2_RISKY_PATTERN = /\b(delete|remove|permanently|pay|buy|purchase|checko
 function gv2AssessRisk(step) {
   if (!step) return 'low';
   if (step.risk === 'high') return 'high';
+  
+  // Clearing a text field is inherently a safe, reversible client-side action.
+  if (step.action === 'clear_text') return 'low';
+
   const text = [
     step.instruction,
     step.typeText,
@@ -1424,7 +1428,16 @@ function gv2AssessRisk(step) {
     step.element && step.element.text,
     step.riskReason
   ].filter(Boolean).join(' ');
-  if (_GV2_RISKY_PATTERN.test(text)) return 'high';
+
+  // Filter out safe phrases that contain risky words (e.g. "remove the search text", "delete the input")
+  // so they don't falsely trigger the high-risk scanner.
+  const safeText = text.replace(/\b(delete|remove)\b(?=\s+(the\s+)?(text|search|input|query|field|entry|content|filter)\b)/gi, '');
+
+  const match = safeText.match(_GV2_RISKY_PATTERN);
+  if (match) {
+    step.riskReason = `Safety scanner detected sensitive keyword: "${match[0]}"`;
+    return 'high';
+  }
   return 'low';
 }
 

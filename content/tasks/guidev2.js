@@ -14,6 +14,11 @@
 //
 // window.handleStepByStepGuide is overridden so the router calls v2 instead of guide.js.
 
+// Feature flag: disabled for now in favour of the deterministic Subgoal Progress score
+// computed offline in the eval tool. When false, we skip the once-per-session
+// predicted-final-goal-state LLM call and the per-step goal-relevance embedding.
+const GV2_GOAL_RELEVANCE_ENABLED = false;
+
 // ===== PROMPT (inline to keep guidev2.js self-contained) =====
 
 const GUIDE_V2_PROMPT = `You are a helpful guide assistant providing step-by-step interactive guidance.
@@ -25,11 +30,9 @@ Return JSON only:
   "thought": "Your internal chain-of-thought reasoning about the page state and chosen action",
   "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
   "element": {"index": N, "text": "element text to highlight"},
-  "action": "click" | "type" | "done",
-  "typeText": "text to type (only when action=type)",
+  "action": "click" | "type" | "clear_text" | "done",
+  "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
   "isLastStep": false,
-  "grounded": 0.0,
-  "loop": 0.0,
   "progress": 0.0,
   "risk": "low" | "high",
   "riskReason": "short reason for the risk level",
@@ -38,7 +41,7 @@ Return JSON only:
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
-"progress": -1.0–1.0 — compared with the previous step's state, does this step move CLOSER to the user's goal? Positive = progress, 0 = no meaningful change, negative = regression (moving away from the goal).
+"progress": 0.0, 0.5, or 1.0 — given the observed prior steps, current page state, and proposed action, does this step move the agent CLOSER to the user’s goal? 1.0 = clear progress toward completion, 0.5 = no clear net progress or only exploratory/redundant movement, 0.0 = regression, deviation, or undoing prior progress.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
 
@@ -50,13 +53,17 @@ RULES:
    the user does it for high-risk ones)
 5. action="type": provide typeText; the agent auto-fills low-risk fields, and lets the user
    type high-risk ones (e.g. passwords)
-4. action="done": set isLastStep=true; no element interaction needed
-5. Highlight the element to interact with using its index from PAGE INDEX
-6. If the target is not visible, guide the user to open the relevant menu first
+6. action="clear_text": clear the highlighted form field's current value; leave typeText
+   empty/null. Use it before typing a replacement value or when the task asks to reset a field.
+   Sensitive fields (passwords, payment, private data) are high risk and should be handed to the user.
+7. action="done": set isLastStep=true; no element interaction needed
+8. Highlight the element to interact with using its index from PAGE INDEX
+9. If the target is not visible, guide the user to open the relevant menu first
 
 COMMON PATTERNS:
 - Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
 - Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
+- Replace text:   Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
 - Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
 
 NATIVE BROWSER DIALOGS (print, save, open file, etc.):
@@ -66,6 +73,7 @@ the dialog and what they should do, but do NOT attempt to guide actions inside t
 extension cannot access native browser UI. Example last-step instruction:
 "Click 'Print' in the File menu. Your browser's print dialog will open — choose your printer and
 settings there, then click the Print or Save button to finish."`;
+if (typeof window !== 'undefined') window.GUIDE_V2_PROMPT = GUIDE_V2_PROMPT;
 
 // ===== CONSTANTS =====
 
@@ -328,9 +336,20 @@ let _guidev2WaitingForClick = false;
 // Flag set when the user explicitly stops the guide
 let _guidev2Stopped = false;
 
-// Hard safety cap for concrete Guide v2 steps. If we need step 16, we stop
-// instead of asking the model to continue drifting.
-const GV2_MAX_STEPS = 15;
+// Hard safety cap for concrete Guide v2 steps.
+let GV2_MAX_STEPS = 20;
+try {
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
+    chrome.storage.sync.get(['maxSteps']).then(res => {
+      if (res && typeof res.maxSteps === 'number') GV2_MAX_STEPS = res.maxSteps;
+    });
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace === 'sync' && changes.maxSteps && typeof changes.maxSteps.newValue === 'number') {
+        GV2_MAX_STEPS = changes.maxSteps.newValue;
+      }
+    });
+  }
+} catch (e) {}
 
 function _gv2IsStopped() {
   const g = window._guidev2;
@@ -425,9 +444,11 @@ async function gv2SaveFallback(extra = {}) {
         autoMode: s.autoMode,
         paused: !!s.paused,
         lowConfidenceCount: s.lowConfidenceCount || 0,
+        predictedGoalState: s.predictedGoalState || null,
         mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
         lastActionStepNumber: s._lastActionStepNumber || null,
         activeStepNumber: s._activeStepNumber || null,
+        predictedGoalState: s.predictedGoalState || null,
         lastUrl: window.location.href,
         timestamp: Date.now(),
         ...extra
@@ -739,24 +760,34 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
 
     // Keep steps 1…fromStep (inclusive); the agent re-runs from fromStep+1.
     const kept = [];
-    if (typeof rewindGetRecord === 'function') {
-      for (let s = 1; s <= fromStep; s++) {
-        const r = await rewindGetRecord(payload.sessionId, s);
-        if (r) kept.push(r);
+    const originalTrajectory = [];
+    let goal = '';
+    
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(payload.sessionId);
+      if (idx && idx.goal) goal = idx.goal;
+      
+      if (idx && idx.steps) {
+        const sortedSteps = idx.steps.slice().sort((a, b) => Number(a.step) - Number(b.step));
+        for (const meta of sortedSteps) {
+          if (meta.step === 0) continue;
+          const r = typeof rewindGetRecord === 'function' ? await rewindGetRecord(payload.sessionId, meta.step) : null;
+          if (r) {
+            originalTrajectory.push(`Step ${r.step}: ${r.instruction || ''}`);
+            if (r.step <= fromStep) kept.push(r);
+          }
+        }
+      } else {
+        // Fallback if idx.steps is missing
+        for (let s = 1; s <= fromStep; s++) {
+          const r = await rewindGetRecord(payload.sessionId, s);
+          if (r) kept.push(r);
+        }
       }
     }
 
-    // Original goal lives in the session index; combine it with the steer redirection.
-    let goal = '';
-    try {
-      if (typeof rewindGetIndex === 'function') {
-        const idx = await rewindGetIndex(payload.sessionId);
-        if (idx && idx.goal) goal = idx.goal;
-      }
-    } catch (e) {}
-    const question = payload.newGoal
-      ? `${goal}\nUSER REDIRECTION — redo step ${redoStep} differently: ${payload.newGoal || ''}`.trim()
-      : String(goal || '').trim();
+    // Always use the pure original goal as the core question
+    const question = String(goal || '').trim();
 
     const captureEnabled = await _gv2IsCaptureEnabled();
     const autoMode = await _gv2IsAutoMode();
@@ -768,6 +799,9 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     window._guidev2 = {
       active: true,
       question,
+      _steerRedirection: payload.newGoal || null,
+      _steerRedoStep: redoStep,
+      _originalTrajectory: originalTrajectory,
       previousSteps: kept.map(r => `Step ${r.step}: ${r.instruction || ''}`),
       tutorialRef: match?.tutorial || null,
       tutorialReason: match?.reason || null,
@@ -778,10 +812,10 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       lowConfidenceCount: 0,
       // Seed the loop-detection key list from the kept steps so L_t keeps counting
       // correctly after a rewind/steer. One entry per prior action (the loop denominator
-      // counts ALL previous actions), using the same text-based action key.
+      // counts ALL previous actions), using the same action+text key.
       _mechKeys: kept
         .map(r => (typeof gv2ElementKey === 'function'
-          ? gv2ElementKey({ element: { text: r.target?.text }, instruction: r.instruction })
+          ? gv2ElementKey({ action: r.action, element: { text: r.target?.text }, instruction: r.instruction })
           : '')),
       currentPlanStep: fromStep + 1,
       _lastActionStepNumber: fromStep || null,
@@ -889,13 +923,18 @@ async function _gv2GenerateAndDispatchSteer() {
  * let the agent continue from the branch step with the new instruction. Invoked from the
  * content-script message router on `confirmSteerRestore`.
  */
-async function gv2ConfirmSteerRestore() {
+async function gv2ConfirmSteerRestore(reason, mode, isFixed) {
   const g = window._guidev2;
   if (!g || !g._awaitingRestoreConfirm) {
     console.warn('[guidev2] confirmSteerRestore: nothing awaiting confirmation');
     return;
   }
   g._awaitingRestoreConfirm = false;
+  
+  g._steerReason = reason || null;
+  g._steerMode = mode || 'wrong';
+  g._steerFixed = !!isFixed;
+  
   try {
     const sid = g._restoreContext && g._restoreContext.sessionId;
     if (sid && typeof rewindUpdateSessionMeta === 'function') {
@@ -1145,6 +1184,8 @@ async function _gv2ReplayOne(r) {
   if (action === 'type') {
     if (r.typeText == null) return true; // no stored value (e.g. a secret) — nothing to refill
     _gv2ReplayType(el, r.typeText);
+  } else if (action === 'clear_text') {
+    _gv2ReplayType(el, '');
   } else if (action === 'select') {
     // Set the dropdown to the recorded option (by visible text), then fire change.
     const field = el.matches('select') ? el : el.querySelector('select');
@@ -1186,7 +1227,7 @@ function _gv2ReplayType(el, text) {
     ? el : el.querySelector('input,textarea,[contenteditable]');
   if (!input) return;
   input.focus();
-  if (input.isContentEditable) {
+  if ((typeof _gv2IsContentEditable === 'function' ? _gv2IsContentEditable(input) : input.isContentEditable)) {
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, text);
     input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1242,6 +1283,7 @@ async function _gv2SetState(pendingResume) {
     autoMode: s.autoMode,
     paused: !!s.paused,
     lowConfidenceCount: s.lowConfidenceCount || 0,
+    predictedGoalState: s.predictedGoalState || null,
     // Mechanical confidence: carry the loop-detection key list across navigations.
     mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : []
   };
@@ -1337,6 +1379,143 @@ async function _gv2ConfidenceSource() {
   }
 }
 
+// Debug-only target-region capture: 'legacy' crops the carried before-shot using immediate
+// element bounds; 'aligned' scrolls the highlight into view, takes a fresh screenshot, then crops.
+const _GV2_REGION_CAPTURE_KEY = 'guideDebugRegionCapture';
+
+async function _gv2IsAlignedRegionCapture() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_REGION_CAPTURE_KEY);
+    return r[_GV2_REGION_CAPTURE_KEY] === 'aligned';
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Auto runs always use aligned capture (fresh pre-action screenshot of the target region). */
+async function _gv2ShouldUseAlignedRegionCapture(g) {
+  if (g?.autoMode) return true;
+  return _gv2IsAlignedRegionCapture();
+}
+if (typeof window !== 'undefined') window._gv2ShouldUseAlignedRegionCapture = _gv2ShouldUseAlignedRegionCapture;
+
+const _GV2_PASS_HISTORY_KEY = 'guideDebugPassHistory';
+
+async function _gv2IsPassHistory() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_PASS_HISTORY_KEY);
+    return r[_GV2_PASS_HISTORY_KEY] !== 'not_passing'; // default true
+  } catch (e) {
+    return true;
+  }
+}
+
+async function _gv2WaitForLayoutSettle() {
+  await new Promise((resolve) => {
+    try {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    } catch (e) {
+      resolve();
+    }
+  });
+}
+
+/** Ask the LLM once per guide session what the final page state should look like. */
+async function _gv2PredictFinalGoalState(question, url) {
+  const prompt = (typeof gv2BuildPredictFinalGoalPrompt === 'function')
+    ? gv2BuildPredictFinalGoalPrompt(question, url)
+    : `Predict the final goal state for: ${question}`;
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: 'callLLM',
+      systemPrompt: '',
+      messages: [{ role: 'user', content: prompt }],
+      metadata: { kind: 'predictFinalGoalState' }
+    });
+    const text = (resp?.content || '').trim();
+    return text || null;
+  } catch (e) {
+    console.warn('[guidev2] predictFinalGoalState failed:', e);
+    return null;
+  }
+}
+
+async function _gv2CacheGoalEmbedding(g) {
+  if (!g?.predictedGoalState) return;
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: 'callEmbed',
+      texts: [g.predictedGoalState]
+    });
+    if (resp?.error || !resp?.embeddings?.[0]?.length) return;
+    g._goalEmbedVector = resp.embeddings[0];
+  } catch (e) { /* best-effort */ }
+}
+
+async function _gv2GoalRelevanceScore(g, instruction) {
+  if (!g?._goalEmbedVector || !instruction || typeof gv2CosineSimilarity !== 'function') return null;
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: 'callEmbed',
+      texts: [String(instruction)]
+    });
+    if (resp?.error || !resp?.embeddings?.[0]?.length) return null;
+    return gv2CosineSimilarity(resp.embeddings[0], g._goalEmbedVector);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function _gv2ElementStepSimilarity(instruction, elementText, hasIndex) {
+  if (!hasIndex) return null;
+  const instr = String(instruction || '').trim();
+  const elem = String(elementText || '').trim();
+  if (!instr || !elem) return 0.0;
+  if (typeof gv2CosineSimilarity !== 'function') return null;
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: 'callEmbed',
+      texts: [instr, elem]
+    });
+    if (resp?.error || !Array.isArray(resp.embeddings) || resp.embeddings.length < 2) return null;
+    return gv2CosineSimilarity(resp.embeddings[0], resp.embeddings[1]);
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Predict + persist the LLM's final-state sentence and pre-embed it for per-step cosine
+ * goal-relevance scoring (g_goal_relevance_score on each step record).
+ */
+async function _gv2InitPredictedGoalState(g) {
+  if (!g?.question) return;
+  const predicted = await _gv2PredictFinalGoalState(g.question, window.location.href);
+  if (!predicted) return;
+  g.predictedGoalState = predicted;
+  if (g.sessionId && typeof rewindUpdateSessionMeta === 'function') {
+    try {
+      await rewindUpdateSessionMeta(g.sessionId, {
+        predictedGoalState: predicted,
+        spec_goal_text: predicted
+      });
+    } catch (e) { /* non-fatal */ }
+  }
+  await _gv2CacheGoalEmbedding(g);
+}
+
+async function _gv2HydratePredictedGoalFromIndex(g) {
+  if (!g?.sessionId || g.predictedGoalState) return;
+  if (typeof rewindGetIndex !== 'function') return;
+  try {
+    const idx = await rewindGetIndex(g.sessionId);
+    if (idx?.predictedGoalState) {
+      g.predictedGoalState = idx.predictedGoalState;
+      await _gv2CacheGoalEmbedding(g);
+    }
+  } catch (e) { /* best-effort */ }
+}
+
 // Keep the live session's mode in sync when the user toggles it mid-session.
 try {
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -1377,20 +1556,52 @@ function _gv2ShouldAutoExecute(step) {
  * after the element is gone). `screenshotBase64` is the just-taken viewport screenshot, reused
  * so we don't capture twice.
  */
-async function gv2CaptureRegion(screenshotBase64) {
-  const out = { targetRect: null, regionShot: null, regionDom: '' };
+async function _gv2ScrollRegionTargetIntoView(el) {
+  if (!el || typeof el.scrollIntoView !== 'function') return;
+  let evalMode = false;
   try {
-    const g = window._guidev2;
-    let el = (g && g.currentTargetEl && document.contains(g.currentTargetEl)) ? g.currentTargetEl : null;
-    if (!el) el = document.querySelector('[data-pageguide-styled]');
+    const r = await chrome.storage.local.get('guideEvalMode');
+    evalMode = r.guideEvalMode === true;
+  } catch (e) { /* best-effort */ }
+  const instant = evalMode || window._guidev2?.autoMode === true;
+  const scrollEl = el.closest('a, button, [role="button"], [role="link"], [role="menuitem"], li, summary, nav') || el;
+  scrollEl.scrollIntoView({ behavior: instant ? 'instant' : 'smooth', block: 'center', inline: 'nearest' });
+  await new Promise((resolve) => setTimeout(resolve, instant ? 200 : 550));
+}
+
+async function gv2CaptureRegion(screenshotBase64, options = {}) {
+  const aligned = options.aligned === true;
+  const out = { targetRect: null, regionShot: null, regionDom: '', regionCaptureMode: aligned ? 'aligned' : 'legacy' };
+  try {
+    const resolveTarget = (typeof gv2ResolveRegionTarget === 'function')
+      ? gv2ResolveRegionTarget
+      : ((typeof gv2ResolveRegionElement === 'function') ? gv2ResolveRegionElement : () => null);
+
+    let el = resolveTarget();
     if (!el || !el.getBoundingClientRect) return out;
+
+    // New Target Captured: scroll the click target into view, take a fresh screenshot, then
+    // crop — the screenshot and getBoundingClientRect() must come from the same viewport.
+    // Legacy crops the carried before-shot and can misalign when scroll/layout changed.
+    if (aligned) {
+      await _gv2ScrollRegionTargetIntoView(el);
+      await _gv2WaitForLayoutSettle();
+      try {
+        if (typeof captureScreenshot === 'function') {
+          const fresh = await captureScreenshot();
+          if (fresh) screenshotBase64 = fresh;
+        }
+      } catch (e) { /* best-effort */ }
+      el = resolveTarget();
+      if (!el || !el.getBoundingClientRect) return out;
+    }
 
     const r = el.getBoundingClientRect();
     out.targetRect = { left: r.left, top: r.top, width: r.width, height: r.height };
 
     // Scoped DOM snapshot of the element's surrounding container (not the whole page).
     try {
-      const container = el.closest('form, section, article, [role], main, li, fieldset') || el.parentElement || el;
+      const container = el.closest('form, section, article, [role], main, li, fieldset, nav') || el.parentElement || el;
       if (typeof gv2SerializeDom === 'function') out.regionDom = gv2SerializeDom(container);
     } catch (e) { /* best-effort */ }
 
@@ -1493,6 +1704,13 @@ async function gv2CaptureStepRecord(data) {
     return;
   }
 
+  let goalRelevance = null;
+  if (GV2_GOAL_RELEVANCE_ENABLED && (data.instruction || '').trim()) {
+    if (!g._goalEmbedVector && g.predictedGoalState) await _gv2CacheGoalEmbedding(g);
+    if (!g.predictedGoalState) await _gv2HydratePredictedGoalFromIndex(g);
+    goalRelevance = await _gv2GoalRelevanceScore(g, data.instruction);
+  }
+
   // ANNOUNCE THE STEP FIRST (lightweight meta, no heavy captures) so the timeline dot, journey
   // accumulation, and the "View journey" button (added on step 1) appear immediately.
   try {
@@ -1515,13 +1733,16 @@ async function gv2CaptureStepRecord(data) {
         confidenceFormula: data.confidenceFormula || null,
         mechConfidence: data.mechConfidence != null ? data.mechConfidence : null,
         mechGrounding: data.mechGrounding != null ? data.mechGrounding : null,
+        elementStepSimilarity: data.elementStepSimilarity != null ? data.elementStepSimilarity : null,
+        element_step_similarity: data.element_step_similarity != null ? data.element_step_similarity : null,
         mechLoop: data.mechLoop != null ? data.mechLoop : null,
         confidenceSource: data.confidenceSource || null,
         confirmation: data.confirmation || null,
         llmStep: data.llmStep != null ? data.llmStep : null,
         expectedStep: data.expectedStep != null ? data.expectedStep : null,
         stepNumberCorrected: !!data.stepNumberCorrected,
-        hasShot: true
+        hasShot: true,
+        g_goal_relevance_score: goalRelevance
       }
     });
   } catch (e) { /* panel may be closed */ }
@@ -1537,10 +1758,11 @@ async function gv2CaptureStepRecord(data) {
     try { if (typeof gv2CaptureRestoreState === 'function') restore = gv2CaptureRestoreState(); }
     catch (e) { /* restore capture is best-effort */ }
 
-    // Region around the highlighted target, cropped from the BEFORE-shot (same page as now).
-    // Best-effort and time-boxed inside gv2CaptureRegion — never blocks the record store.
-    let region = { targetRect: null, regionShot: null, regionDom: '' };
-    try { region = await gv2CaptureRegion(beforeShot); } catch (e) { /* best-effort */ }
+    // Region around the highlighted target. Auto mode always uses aligned capture (scroll target
+    // into view, fresh screenshot, crop) so regionShot reflects the page BEFORE the action runs.
+    let region = { targetRect: null, regionShot: null, regionDom: '', regionCaptureMode: 'legacy' };
+    const alignedRegion = await _gv2ShouldUseAlignedRegionCapture(g);
+    try { region = await gv2CaptureRegion(beforeShot, { aligned: alignedRegion }); } catch (e) { /* best-effort */ }
 
     const record = {
       sessionId: g.sessionId,
@@ -1561,6 +1783,8 @@ async function gv2CaptureStepRecord(data) {
       confidenceFormula: data.confidenceFormula || null,
       mechConfidence: data.mechConfidence != null ? data.mechConfidence : null,
       mechGrounding: data.mechGrounding != null ? data.mechGrounding : null,
+      elementStepSimilarity: data.elementStepSimilarity != null ? data.elementStepSimilarity : null,
+      element_step_similarity: data.element_step_similarity != null ? data.element_step_similarity : null,
       mechLoop: data.mechLoop != null ? data.mechLoop : null,
       confidenceSource: data.confidenceSource || null,
       confirmation: data.confirmation || null,
@@ -1578,6 +1802,9 @@ async function gv2CaptureStepRecord(data) {
       targetRect: region.targetRect,
       regionShot: region.regionShot,
       regionDom: region.regionDom,
+      regionCaptureMode: region.regionCaptureMode || (alignedRegion ? 'aligned' : 'legacy'),
+      predictedGoalState: g.predictedGoalState || null,
+      g_goal_relevance_score: goalRelevance,
       tutorialMatch: data.tutorialMatch || null,
       rawLlmJson: data.rawLlmJson || '',
       systemPrompt: data.systemPrompt || '',
@@ -1733,7 +1960,16 @@ async function _handleStepByStepGuideV2(question) {
 
   // Phase 1: capture the Initial State (node 0) before the first step, so the timeline shows
   // where the journey began (screenshot + URL + title + restorable state).
-  try { await gv2CaptureInitialState(); } catch (e) { /* non-fatal */ }
+  // In parallel, predict the LLM final goal state for goal-relevance embedding.
+  try {
+    const phase1 = [
+      gv2CaptureInitialState().catch((e) => console.warn('[guidev2] initial state capture failed:', e)),
+    ];
+    if (GV2_GOAL_RELEVANCE_ENABLED) {
+      phase1.push(_gv2InitPredictedGoalState(window._guidev2).catch((e) => console.warn('[guidev2] goal prediction failed:', e)));
+    }
+    await Promise.all(phase1);
+  } catch (e) { /* non-fatal */ }
 
   // Not pending resume on first step — we're already on the right page
   await _gv2SetState(false);
@@ -1803,6 +2039,68 @@ Use these as a reference guide but map each step to the actual elements visible 
 `;
   }
 
+  const passHistory = await _gv2IsPassHistory();
+
+  let completedStepsSection = '';
+  let activeQuestion = g.question;
+
+  if (g._steerRedoStep && g._steerMode === 'intent') {
+    // Mode 2: Updating goal
+    // Replace original goal with new intent
+    activeQuestion = g._steerReason || activeQuestion;
+    
+    if (passHistory && Number(g._steerRedoStep) === stepNumber) {
+      const originalTraj = g._originalTrajectory && g._originalTrajectory.length > 0 
+        ? g._originalTrajectory.join('\n') 
+        : 'None';
+      completedStepsSection = `
+=== ORIGINAL TRAJECTORY (Before Steering) ===
+${originalTraj}
+
+=== STEERING ===
+The user restored the page to the state before Step ${g._steerRedoStep} and provided a completely new goal for the rest of the journey.
+You must now abandon the old goal and fulfill the new USER GOAL, starting from Step ${stepNumber}.
+
+=== COMPLETED STEPS (New Trajectory) ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+`;
+    } else {
+      completedStepsSection = `
+=== COMPLETED STEPS ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+`;
+    }
+
+  } else if (passHistory && g._steerRedoStep && Number(g._steerRedoStep) === stepNumber) {
+    // Mode 1: Fixing an error (and pass history is true)
+    const originalTraj = g._originalTrajectory && g._originalTrajectory.length > 0 
+      ? g._originalTrajectory.join('\n') 
+      : 'None';
+    
+    let steerInstruction = `\nThe user restored the page to the state before Step ${g._steerRedoStep} because: "${g._steerReason || g._steerRedirection || 'The previous step was incorrect'}"`;
+    
+    if (g._steerFixed) {
+      steerInstruction += `\nNOTE: The user has already manually corrected the error on the page. You should proceed with the next step as normal to fulfill the original goal.`;
+    } else {
+      steerInstruction += `\nYou must now generate Step ${stepNumber} to correct this error and fulfill the original goal.`;
+    }
+      
+    completedStepsSection = `
+=== ORIGINAL TRAJECTORY (Before Steering) ===
+${originalTraj}
+
+=== STEERING ===${steerInstruction}
+
+=== COMPLETED STEPS (New Trajectory) ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+`;
+  } else {
+    completedStepsSection = `
+=== COMPLETED STEPS ===
+${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
+`;
+  }
+
   const systemPrompt = GUIDE_V2_PROMPT;
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
@@ -1811,15 +2109,12 @@ CURRENT URL: ${window.location.href}
 ${pageIndex.indexText}
 
 === USER GOAL ===
-${g.question}
+${activeQuestion}
 ${tutorialSection}
 === CURRENT STEP ===
 Step ${stepNumber}
-
-=== COMPLETED STEPS ===
-${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is the first step'}
-
-Return JSON for Step ${stepNumber}; the "step" field must be ${stepNumber}.`;
+${completedStepsSection}
+Return JSON for Step ${stepNumber}`;
 
   try {
 
@@ -1932,6 +2227,40 @@ function gv2FindElementByText(searchText) {
 }
 
 /**
+ * Choose the indexed element for highlight + click. Prefer a text search hit, but when
+ * the LLM index also matches the search text, keep the LLM index (avoids filter chips /
+ * duplicate labels stealing the target from the intended sidebar link).
+ */
+function gv2PickTargetIndex(searchText, llmIndex) {
+  const textIdx = gv2FindElementByText(searchText);
+  if (textIdx == null) return llmIndex ?? null;
+  if (llmIndex == null || textIdx === llmIndex) return textIdx;
+
+  const indexMap = window._pageguideIndex;
+  const el = indexMap?.[llmIndex];
+  if (!el) return textIdx;
+
+  const normalize = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const needle = normalize(searchText);
+  if (needle.length < 2) return textIdx;
+
+  let name;
+  try {
+    name = normalize(typeof getAccessibleName === 'function' ? (getAccessibleName(el) || '') : (el.textContent || ''));
+  } catch (e) {
+    return textIdx;
+  }
+  if (!name) return textIdx;
+
+  const llmMatches = name === needle || name.includes(needle) || (name.length >= 5 && needle.includes(name));
+  if (llmMatches) {
+    console.log('[guidev2] Keeping LLM index', llmIndex, 'over text-match index', textIdx, 'for', searchText);
+    return llmIndex;
+  }
+  return textIdx;
+}
+
+/**
  * Parse LLM JSON, apply highlight, schedule the appropriate action.
  */
 async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
@@ -1979,19 +2308,16 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       : ((typeof step.confidence === 'number' && isFinite(step.confidence))
           ? Math.max(0, Math.min(1, step.confidence)) : null);
 
-    // Mechanical ("no-LLM") confidence: rule-based grounding × loop penalty, from execution
-    // signals only. Resolve the element up front so we know whether the LLM's exact index was
-    // valid (G=1.0), only the text fallback matched (G=0.7), or nothing resolved (G=0.0). The
-    // loop score counts prior target-bearing steps that targeted the same element.
-    const hasTarget = !!(step.element?.index != null || step.element?.text);
+    // Mechanical ("no-LLM") confidence: element-step cosine grounding × loop penalty.
+    const action = String(step.action || (step.isLastStep ? 'done' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
+    const hasIndex = step.element?.index != null && step.element?.index !== '';
+    const hasText = !!(step.element?.text && String(step.element.text).trim());
     const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
-    const indexValid = step.element?.index != null
-      && typeof getIndexedElement === 'function'
-      && !!getIndexedElement(step.element.index);
+    const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, step.element?.text, hasIndex);
     const currentKey = (typeof gv2ElementKey === 'function') ? gv2ElementKey(step) : '';
     const priorKeys = Array.isArray(g._mechKeys) ? g._mechKeys : (g._mechKeys = []);
     const mech = (typeof gv2ComputeMechanicalConfidence === 'function')
-      ? gv2ComputeMechanicalConfidence({ hasTarget, indexValid, textFound: textMatchIdx !== null, priorKeys, currentKey })
+      ? gv2ComputeMechanicalConfidence({ action, hasIndex, hasText, elementStepSimilarity, priorKeys, currentKey })
       : { confidence: null, grounding: null, loop: null };
     // Record this step's action key for future loop detection. Every action is pushed
     // (not just target-bearing ones) so the loop denominator counts ALL previous actions,
@@ -2026,16 +2352,19 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
             ? getRandomHighlightStyle(pageBg.isDark)
             : { color: '#2ed573', animation: 'pulse' });
 
-      const idxToUse = textMatchIdx !== null ? textMatchIdx : step.element.index;
+      const idxToUse = gv2PickTargetIndex(step.element?.text, step.element?.index) ?? step.element?.index;
 
-      if (textMatchIdx !== null && textMatchIdx !== step.element.index) {
+      if (textMatchIdx !== null && idxToUse === step.element.index && textMatchIdx !== step.element.index) {
+        console.log(`[guidev2] Kept LLM index ${step.element.index} over text-match index ${textMatchIdx} for "${step.element.text}"`);
+      } else if (textMatchIdx !== null && idxToUse === textMatchIdx && textMatchIdx !== step.element.index) {
         console.log(`[guidev2] Text-match override: LLM index ${step.element.index} → matched index ${textMatchIdx} for "${step.element.text}"`);
       } else if (textMatchIdx === null) {
         console.log(`[guidev2] No text match for "${step.element.text}", using LLM index ${step.element.index}`);
       }
 
       highlightCount = applyIndexedHighlight(idxToUse, step.element.text, style);
-      if (window._pageguideHighlights?.length > 0) {
+      const alignedRegionCapture = await _gv2ShouldUseAlignedRegionCapture(g);
+      if (window._pageguideHighlights?.length > 0 && !alignedRegionCapture && !g.autoMode) {
         setTimeout(() => { if (typeof scrollToHighlight === 'function') scrollToHighlight(0); }, 300);
       }
 
@@ -2056,8 +2385,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     g._activeStepNumber = Number(step.step) || (g.previousSteps.length + 1);
     g.previousSteps.push(`Step ${step.step}: ${step.instruction}${isLast ? ' ✓' : ''}`);
 
-    // Simple dispatch: click | type | done.
-    const action = String(step.action || (isLast ? 'done' : 'click')).toLowerCase();
+    // Simple dispatch: click | type | clear_text | done. (`action` computed above for G_ground.)
     const risk = (typeof gv2AssessRisk === 'function') ? gv2AssessRisk(step) : 'low';
     const isHighRisk = risk === 'high';
     g._lastAction = action;
@@ -2083,15 +2411,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
 
     if (isLast || action === 'done') {
       // Clear state after capture runs at end of function
-    } else if (action === 'type') {
+    } else if (action === 'type' || action === 'clear_text') {
       await _gv2SetState(false);
-      if (autoPerform) {
-        _gv2ClearActionTimers();
-        g._autoTypeTimer = setTimeout(() => {
-          g._autoTypeTimer = null;
-          if (!_gv2IsStopped()) _gv2AutoType(step);
-        }, 200);
-      } else {
+      if (!autoPerform) {
         if (willPause) {
           if (needsConfirmation) {
             pauseAfterCaptureMessage = 'Confirmation needed. Please verify and press Resume.';
@@ -2109,18 +2431,10 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
         }
       }
     } else {
-      // click — save state with pendingResume=true BEFORE wiring the listener so there's no
-      // race with fast navigation.
-      await _gv2SetState(true);
-      if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
-      if (autoPerform) {
-        console.log('[guidev2] Auto mode: auto-performing low-risk click step', step.step);
-        _gv2ClearActionTimers();
-        g._autoClickTimer = setTimeout(() => {
-          g._autoClickTimer = null;
-          if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
-        }, 900);
-      } else {
+      // click — defer pendingResume + listener until after capture when auto-performing
+      if (!autoPerform) {
+        await _gv2SetState(true);
+        if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
         if (willPause) {
           if (needsConfirmation) {
             pauseAfterCaptureMessage = 'Confirmation needed. Please verify and press Resume.';
@@ -2139,8 +2453,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
 
     _gv2HideIndicator();
 
-    // Rewind (Slice 1): capture this step (screenshot + DOM snapshot + reasoning).
-    // Fire-and-forget so it never delays showing the step to the user.
+    // Rewind: capture screenshot + target region + DOM snapshot BEFORE auto-performing the action.
     await gv2CaptureStepRecord({
       step: step.step,
       planStep: step.step,
@@ -2152,6 +2465,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       // Mechanical ("no-LLM") confidence stored side-by-side with the LLM self-report.
       mechConfidence: mech.confidence,
       mechGrounding: mech.grounding,
+      elementStepSimilarity,
+      element_step_similarity: elementStepSimilarity,
       mechLoop: mech.loop,
       confidenceSource: confSource,
       confirmation: step.confirmation || null,
@@ -2173,6 +2488,15 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
         reason: g.tutorialReason
       } : null
     });
+
+    // Auto-perform only after pre-action capture completes (regionShot + before-shot are stored).
+    if (autoPerform && !isLast && action !== 'done') {
+      if (action !== 'type') {
+        await _gv2SetState(true);
+        if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
+      }
+      _gv2ScheduleAutoPerformAfterCapture(g, step, action);
+    }
 
     if (pauseAfterCaptureMessage && !isLast && action !== 'done') {
       await gv2PauseGuide(pauseAfterCaptureMessage);
@@ -2389,7 +2713,110 @@ async function _gv2WaitForNavOrSettle(startUrl) {
   }
 }
 
-// ===== AUTO-TYPING =====
+// ===== AUTO-PERFORM (after pre-action capture) =====
+
+/**
+ * Schedule the agent to perform the current step AFTER gv2CaptureStepRecord finishes,
+ * so target-region screenshots always reflect the highlighted DOM before the action.
+ */
+function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
+  if (!g || !step) return;
+  _gv2ClearActionTimers();
+  if (action === 'type' || action === 'clear_text') {
+    g._autoTypeTimer = setTimeout(() => {
+      g._autoTypeTimer = null;
+      if (_gv2IsStopped()) return;
+      if (action === 'clear_text') _gv2AutoClearText(step);
+      else _gv2AutoType(step);
+    }, 200);
+    return;
+  }
+  console.log('[guidev2] Auto mode: auto-performing low-risk click step', step.step);
+  g._autoClickTimer = setTimeout(() => {
+    g._autoClickTimer = null;
+    if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
+  }, 900);
+}
+if (typeof window !== 'undefined') window._gv2ScheduleAutoPerformAfterCapture = _gv2ScheduleAutoPerformAfterCapture;
+
+// ===== AUTO FORM EDITING =====
+
+function _gv2EditableTarget() {
+  const stored = window._guidev2?.currentTargetEl;
+  const root = (stored && document.contains(stored))
+    ? stored
+    : document.querySelector('[data-pageguide-styled]');
+  if (!root) return null;
+  if (root.matches && root.matches('input,textarea,[contenteditable]')) return root;
+  return root.querySelector ? root.querySelector('input,textarea,[contenteditable]') : null;
+}
+
+function _gv2IsContentEditable(el) {
+  const hasAttr = !!(el?.hasAttribute && el.hasAttribute('contenteditable'));
+  const attr = hasAttr ? String(el.getAttribute('contenteditable') || '').toLowerCase() : null;
+  return !!(el && (el.isContentEditable || attr === '' || attr === 'true'));
+}
+
+function _gv2SetEditableValue(input, text) {
+  if (!input) return false;
+  try { input.focus(); } catch (e) {}
+  if (_gv2IsContentEditable(input)) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(input);
+      const sel = window.getSelection && window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      document.execCommand('insertText', false, text);
+      if (text === '' && input.textContent !== '') {
+        input.textContent = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    } catch (e) {
+      input.textContent = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+  try { input.select(); } catch (e) {}
+  if (typeof gv2SetFieldValue === 'function') {
+    gv2SetFieldValue(input, text);
+  }
+  if (input.value !== text) {
+    const proto = input.tagName === 'TEXTAREA'
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(input, text);
+    else input.value = text;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  return true;
+}
+
+async function _gv2ContinueAfterFormEdit(label) {
+  try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) { /* non-fatal */ }
+
+  console.log(`[guidev2] ${label} done, generating next step...`);
+  if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+  if (_guidev2Resuming) return;
+  _guidev2Resuming = true;
+  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
+  try {
+    const result = await gv2GenerateNextStep();
+    if (!_guidev2Stopped && result && result.success !== false) {
+      try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
+      return { success: true, progressed: true, result };
+    }
+    try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
+    return { success: false, progressed: false, error: result?.error || `${label} did not continue` };
+  } finally {
+    _guidev2Resuming = false;
+  }
+}
 
 /**
  * Agent fills a text field automatically using native input setters
@@ -2403,60 +2830,38 @@ async function _gv2AutoType(step) {
   if (!typeText) {
     console.warn('[guidev2] autoType: no text to type in step');
   } else {
-    const highlighted = document.querySelector('[data-pageguide-styled]');
-    const input = highlighted
-      ? (highlighted.matches('input,textarea,[contenteditable]')
-          ? highlighted
-          : highlighted.querySelector('input,textarea,[contenteditable]'))
-      : null;
+    const input = _gv2EditableTarget();
 
     if (!input) {
       console.warn('[guidev2] autoType: no input element found in highlighted area');
     } else {
       console.log('[guidev2] Auto-typing:', typeText);
-      input.focus();
-
-      if (input.isContentEditable) {
-        // Select all existing content and replace it in one execCommand call
-        // so rich-text frameworks (Draft.js, ProseMirror, etc.) see proper events.
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, typeText);
-        // execCommand already fires 'input'; fire 'change' for good measure.
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      } else {
-        // Select all existing text first (visual feedback + clean slate).
-        input.select();
-        const proto = input.tagName === 'TEXTAREA'
-          ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (setter) setter.call(input, typeText);
-        else input.value = typeText;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      }
+      _gv2SetEditableValue(input, typeText);
       await new Promise(r => setTimeout(r, 400));
       if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
     }
   }
 
-  // Rewind: patch the just-completed TYPE step with the post-fill state.
-  try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) { /* non-fatal */ }
+  return _gv2ContinueAfterFormEdit('Auto-type');
+}
 
-  console.log('[guidev2] Auto-type done, generating next step...');
+async function _gv2AutoClearText(step) {
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
-  if (_guidev2Resuming) return;
-  _guidev2Resuming = true;
-  try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
-  try {
-    const result = await gv2GenerateNextStep();
-    if (!_guidev2Stopped && result && result.success !== false) {
-      try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
-    } else {
-      try { chrome.runtime.sendMessage({ action: 'hideTyping' }); } catch (e) {}
-    }
-  } finally {
-    _guidev2Resuming = false;
+  const input = _gv2EditableTarget();
+  if (!input) {
+    console.warn('[guidev2] autoClearText: no editable element found in highlighted area');
+  } else {
+    console.log('[guidev2] Auto-clearing text for step', step?.step);
+    _gv2SetEditableValue(input, '');
+    await new Promise(r => setTimeout(r, 250));
+    if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
   }
+  return _gv2ContinueAfterFormEdit('Auto-clear text');
+}
+if (typeof window !== 'undefined') {
+  window._gv2EditableTarget = _gv2EditableTarget;
+  window._gv2SetEditableValue = _gv2SetEditableValue;
+  window._gv2AutoClearText = _gv2AutoClearText;
 }
 
 // ===== CLICK SIMULATION =====
@@ -2542,9 +2947,17 @@ window.gv2NextStep = async function (options = {}) {
     return continueGuide();
   }
 
-  // Synthetic/internal type continuation: low-risk known text can be typed by
-  // the agent, while high-risk or missing text just continues after hand-back.
-  if (cur && cur.action === 'type') {
+  // Synthetic/internal form-edit continuation: low-risk known text can be typed by
+  // the agent, clear_text can be performed by the agent, while high-risk or missing
+  // text just continues after hand-back.
+  if (cur && (cur.action === 'type' || cur.action === 'clear_text')) {
+    if (cur.action === 'clear_text') {
+      if (!cur.highRisk) {
+        if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+        return _gv2AutoClearText(cur);
+      }
+      return continueGuide();
+    }
     const text = (cur.typeText != null) ? cur.typeText : cur.value;
     if (text && !cur.highRisk) {
       if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
@@ -2662,6 +3075,7 @@ async function _gv2HydrateResumeState() {
     autoMode: saved.autoMode === true,
     paused: !!saved.paused,
     lowConfidenceCount: saved.lowConfidenceCount || 0,
+    predictedGoalState: saved.predictedGoalState || null,
     _lastActionStepNumber: saved.lastActionStepNumber || saved.activeStepNumber || (saved.previousSteps || []).length || null,
     _activeStepNumber: saved.activeStepNumber || null
   };

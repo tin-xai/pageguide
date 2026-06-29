@@ -736,6 +736,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initGuideModeToggle();
   initConfidenceFormulaToggle();
   initConfidenceSourceToggle();
+  initRegionCaptureToggle();
+  initPassHistoryToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -905,14 +907,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load debugEnabled setting initially
   try {
-    const settings = await chrome.storage.sync.get(['debugEnabled']);
-    updateDebugButtonVisibility(settings.debugEnabled === true);
+    const settings = await chrome.storage.sync.get(['debugEnabled', 'alwaysShowPromptBtn']);
+    updateDebugButtonVisibility(settings.debugEnabled === true, settings.alwaysShowPromptBtn === true);
   } catch (e) {}
 
   // Listen for sync storage changes to update debug button visibility
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'sync' && 'debugEnabled' in changes) {
-      updateDebugButtonVisibility(changes.debugEnabled.newValue === true);
+    if (namespace === 'sync' && ('debugEnabled' in changes || 'alwaysShowPromptBtn' in changes)) {
+      chrome.storage.sync.get(['debugEnabled', 'alwaysShowPromptBtn']).then(s => {
+        updateDebugButtonVisibility(s.debugEnabled === true, s.alwaysShowPromptBtn === true);
+      });
     }
   });
 });
@@ -1399,7 +1403,7 @@ function _steerActionLabel(e) {
     case 'scroll':         return 'Restored scroll position';
     case 'form':           return `Refilled ${e.sel || 'a field'}`;
     case 'replay': {
-      const verb = ({ type: 'Typed into', select: 'Selected', check: 'Toggled', toggle: 'Toggled' })[e.action] || 'Clicked';
+      const verb = ({ type: 'Typed into', clear_text: 'Cleared text in', select: 'Selected', check: 'Toggled', toggle: 'Toggled' })[e.action] || 'Clicked';
       return `${verb} "${t}"`;
     }
     default:               return e.kind;
@@ -1508,6 +1512,17 @@ function addSteerRestoreCard(message) {
     ${message.url ? `<div class="pageguide-step-meta">🔗 ${escapeHtml(message.url)}</div>` : ''}
     <ul class="pageguide-steer-restore-log">${lines}</ul>
     ${errHtml}
+    <div class="pageguide-steer-reason-wrap" style="margin: 8px 12px; display: flex; flex-direction: column; gap: 8px;">
+      <textarea id="pageguide-steer-reason-input" class="pageguide-input" placeholder="Why did you restore at this step?" style="min-height: 50px; resize: vertical; margin: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--pg-border); background: var(--pg-bg-input); color: var(--pg-fg); font-family: inherit; font-size: 13px;"></textarea>
+      <div style="display: flex; gap: 6px; margin-bottom: 4px;">
+        <button type="button" class="pageguide-mode-btn active" id="pageguide-steer-mode-wrong" style="flex: 1; padding: 4px; font-size: 11px; border-radius: 4px; border: 1px solid var(--pg-border); background: var(--pg-bg); color: var(--pg-fg); cursor: pointer; text-align: center;">Fixing an error</button>
+        <button type="button" class="pageguide-mode-btn" id="pageguide-steer-mode-intent" style="flex: 1; padding: 4px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; background: transparent; color: var(--pg-fg-muted); cursor: pointer; text-align: center;">Updating goal</button>
+      </div>
+      <label id="pageguide-steer-fixed-wrap" style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; color: var(--pg-fg-muted);">
+        <input type="checkbox" id="pageguide-steer-fixed-cb" style="margin: 0; cursor: pointer;">
+        I already corrected the error manually
+      </label>
+    </div>
     <div class="pageguide-step-btn-row">
       <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-confirm">Confirm</button>
       <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-manual">Do it yourself</button>
@@ -1527,11 +1542,48 @@ function addSteerRestoreCard(message) {
     errEl.textContent = msg;
   };
 
+  const btnWrong = card.querySelector('#pageguide-steer-mode-wrong');
+  const btnIntent = card.querySelector('#pageguide-steer-mode-intent');
+  const fixedWrap = card.querySelector('#pageguide-steer-fixed-wrap');
+  let selectedMode = 'wrong';
+
+  if (btnWrong && btnIntent) {
+    btnWrong.addEventListener('click', () => {
+      selectedMode = 'wrong';
+      btnWrong.style.borderColor = 'var(--pg-border)';
+      btnWrong.style.background = 'var(--pg-bg)';
+      btnWrong.style.color = 'var(--pg-fg)';
+      btnIntent.style.borderColor = 'transparent';
+      btnIntent.style.background = 'transparent';
+      btnIntent.style.color = 'var(--pg-fg-muted)';
+      if (fixedWrap) fixedWrap.style.display = 'flex';
+    });
+    btnIntent.addEventListener('click', () => {
+      selectedMode = 'intent';
+      btnIntent.style.borderColor = 'var(--pg-border)';
+      btnIntent.style.background = 'var(--pg-bg)';
+      btnIntent.style.color = 'var(--pg-fg)';
+      btnWrong.style.borderColor = 'transparent';
+      btnWrong.style.background = 'transparent';
+      btnWrong.style.color = 'var(--pg-fg-muted)';
+      if (fixedWrap) fixedWrap.style.display = 'none';
+    });
+  }
+
   card.querySelector('.pageguide-steer-restore-confirm')?.addEventListener('click', (e) => {
     e.stopPropagation();
+    
+    const reasonText = card.querySelector('#pageguide-steer-reason-input')?.value || '';
+    const isFixed = card.querySelector('#pageguide-steer-fixed-cb')?.checked || false;
+
     card.querySelectorAll('button').forEach(b => { b.disabled = true; });
     showTyping();
-    sendToContentScript({ action: 'confirmSteerRestore' });
+    sendToContentScript({ 
+      action: 'confirmSteerRestore',
+      reason: reasonText,
+      mode: selectedMode,
+      isFixed: isFixed
+    });
     card.remove();
   });
   card.querySelector('.pageguide-steer-restore-journey')?.addEventListener('click', async (e) => {
@@ -2316,6 +2368,108 @@ function initConfidenceSourceToggle() {
     const source = _normalizeConfSource(option.dataset.source);
     try { await chrome.storage.local.set({ [GUIDE_CONF_SOURCE_KEY]: source }); } catch (e) {}
     _renderConfSource(btn, source);
+    menu.style.display = 'none';
+  });
+}
+
+// Target-region capture mode (debug-only): legacy vs scroll+aligned fresh crop.
+const GUIDE_REGION_CAPTURE_KEY = 'guideDebugRegionCapture';
+const GUIDE_REGION_CAPTURE_MODES = {
+  legacy: {
+    label: 'Legacy',
+    title: 'Crop the carried before-shot using immediate element bounds.',
+  },
+  aligned: {
+    label: 'Aligned',
+    title: 'Scroll the target into view, capture a fresh screenshot, then crop (before action).',
+  },
+};
+
+function _normalizeRegionCaptureMode(v) {
+  return v === 'aligned' ? 'aligned' : 'legacy';
+}
+
+function _renderRegionCaptureMode(btn, mode) {
+  mode = _normalizeRegionCaptureMode(mode);
+  const spec = GUIDE_REGION_CAPTURE_MODES[mode];
+  btn.innerHTML = `${UI_ICONS.image}Target: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-regioncap-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === mode);
+  });
+}
+
+function initRegionCaptureToggle() {
+  const btn = document.getElementById('pageguide-regioncap-toggle');
+  const menu = document.getElementById('pageguide-regioncap-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_REGION_CAPTURE_KEY)
+    .then(r => _renderRegionCaptureMode(btn, _normalizeRegionCaptureMode(r[GUIDE_REGION_CAPTURE_KEY])))
+    .catch(() => _renderRegionCaptureMode(btn, 'legacy'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizeRegionCaptureMode(option.dataset.mode);
+    try { await chrome.storage.local.set({ [GUIDE_REGION_CAPTURE_KEY]: mode }); } catch (err) {}
+    _renderRegionCaptureMode(btn, mode);
+    menu.style.display = 'none';
+  });
+}
+
+// Pass History mode (debug-only): whether to include previous steps in LLM prompt.
+const GUIDE_PASS_HISTORY_KEY = 'guideDebugPassHistory';
+const GUIDE_PASS_HISTORY_MODES = {
+  not_passing: {
+    label: 'No',
+    title: 'Do not pass history to LLM (default).',
+  },
+  passing: {
+    label: 'Yes',
+    title: 'Pass past observed number of steps and user redirection to LLM.',
+  },
+};
+
+function _normalizePassHistoryMode(v) {
+  return v === 'not_passing' ? 'not_passing' : 'passing'; // passing is default
+}
+
+function _renderPassHistoryMode(btn, mode) {
+  mode = _normalizePassHistoryMode(mode);
+  const spec = GUIDE_PASS_HISTORY_MODES[mode];
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>History: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-passhistory-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === mode);
+  });
+}
+
+function initPassHistoryToggle() {
+  const btn = document.getElementById('pageguide-passhistory-toggle');
+  const menu = document.getElementById('pageguide-passhistory-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_PASS_HISTORY_KEY)
+    .then(r => _renderPassHistoryMode(btn, _normalizePassHistoryMode(r[GUIDE_PASS_HISTORY_KEY])))
+    .catch(() => _renderPassHistoryMode(btn, 'passing'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizePassHistoryMode(option.dataset.mode);
+    try { await chrome.storage.local.set({ [GUIDE_PASS_HISTORY_KEY]: mode }); } catch (err) {}
+    _renderPassHistoryMode(btn, mode);
     menu.style.display = 'none';
   });
 }
@@ -3701,7 +3855,15 @@ function _saveTabSession(tabId) {
     html: container ? container.innerHTML : '',
     visibleJourneySessionId,
     visibleJourneyTitle,
-    visibleJourneyRecalled
+    visibleJourneyRecalled,
+    activeGuideRecords: [...currentGuideRecords],
+    activeGuideInitial: currentGuideInitial,
+    activeGuidePlan: [...currentGuidePlan],
+    activeGuideStep: currentGuideStep,
+    activeSessionId: typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.getSessionId === 'function' ? RewindTimeline.getSessionId() : null,
+    currentGoal: currentGoal,
+    currentGuideTitle: currentGuideTitle,
+    guidePaused: guidePaused
   });
 }
 
@@ -3742,6 +3904,27 @@ function _restoreTabSession(session) {
     showStoredJourney(visibleJourneySessionId);
   } else {
     clearGoalAndStepPanel();
+    if (session.activeSessionId && session.activeGuideRecords && typeof RewindTimeline !== 'undefined') {
+      currentGuideRecords = [...session.activeGuideRecords];
+      currentGuideInitial = session.activeGuideInitial;
+      currentGuidePlan = session.activeGuidePlan ? [...session.activeGuidePlan] : [];
+      currentGuideStep = session.activeGuideStep || 0;
+      currentGoal = session.currentGoal || null;
+      currentGuideTitle = session.currentGuideTitle || '';
+      guidePaused = session.guidePaused || false;
+      
+      RewindTimeline.clear();
+      if (currentGuideInitial) RewindTimeline.addStep(currentGuideInitial);
+      for (const rec of currentGuideRecords) {
+        RewindTimeline.addStep(rec);
+      }
+      if (currentGuidePlan.length > 0) RewindTimeline.setPlan(currentGuidePlan);
+      
+      if (currentGoal) {
+        renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
+      }
+      updateGuidePauseButton();
+    }
   }
 }
 
@@ -4654,13 +4837,13 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
   handleSessionChange();
 }
 
-function updateDebugButtonVisibility(enabled) {
+function updateDebugButtonVisibility(enabled, alwaysShowPromptBtn = false) {
   // Publish a global flag so other in-panel modules (e.g. the rewind inspector) can show
   // debug-only details like the confidence breakdown without re-reading storage.
   window.__pgDebugEnabled = !!enabled;
   const btn = document.getElementById('pageguide-debug-prompt-btn');
   if (btn) {
-    btn.style.display = enabled ? 'inline-flex' : 'none';
+    btn.style.display = (enabled || alwaysShowPromptBtn) ? 'inline-flex' : 'none';
   }
   // The confidence-formula and confidence-source toggles are debug/research controls —
   // only surface them in debug mode.
@@ -4671,5 +4854,13 @@ function updateDebugButtonVisibility(enabled) {
   const confSrcWrap = document.querySelector('.pageguide-confsrc-wrap');
   if (confSrcWrap) {
     confSrcWrap.style.display = enabled ? '' : 'none';
+  }
+  const regionCapWrap = document.querySelector('.pageguide-regioncap-wrap');
+  if (regionCapWrap) {
+    regionCapWrap.style.display = enabled ? '' : 'none';
+  }
+  const passHistoryWrap = document.querySelector('.pageguide-passhistory-wrap');
+  if (passHistoryWrap) {
+    passHistoryWrap.style.display = enabled ? '' : 'none';
   }
 }

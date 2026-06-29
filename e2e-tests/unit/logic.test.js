@@ -1180,9 +1180,12 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     expect(branch.branchFromStep).toBe(3);
     expect(branch.redoStep).toBe(4);
     expect(branch.branchStatus).toBe('pending_restore');
+    expect(branch.goal).toBe('original');
+    expect(branch.branchLabel).toBe('View journey before Step 4');
     expect(branch.steps.map(s => s.step)).toEqual([0, 1, 2, 3]);
 
     const parent = await window.rewindGetIndex('parent');
+    expect(parent.goal).toBe('original');
     expect(parent.steps.map(s => s.step)).toEqual([0, 1, 2, 3, 4, 5]);
     expect((await window.rewindGetRecord('branch', 3)).sessionId).toBe('branch');
     expect(await window.rewindGetRecord('branch', 4)).toBeNull();
@@ -1283,6 +1286,34 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     expect(await window.rewindGetIndex('B')).toBeNull();
     expect(await window.rewindGetIndex()).toBeNull();
     expect(await window.rewindGetSessions()).toEqual([]);
+  });
+});
+
+describe('_gv2BuildSteerQuestion (content/tasks/guidev2.js)', () => {
+  test('uses the original goal without debug steer context', () => {
+    const prompt = window._gv2BuildSteerQuestion('original user goal', {
+      newGoal: '',
+      parentObservedStepCount: 4,
+      redoInstruction: 'wrong next action'
+    }, 2, false);
+
+    expect(prompt).toBe('original user goal');
+    expect(prompt).not.toContain('Before Step 2');
+    expect(prompt).not.toContain('=== STEER CONTEXT ===');
+  });
+
+  test('adds steer context when debug experiment is enabled', () => {
+    const prompt = window._gv2BuildSteerQuestion('original user goal', {
+      newGoal: '',
+      parentObservedStepCount: 4,
+      redoInstruction: 'Click the wrong tab'
+    }, 2, true);
+
+    expect(prompt).toContain('original user goal');
+    expect(prompt).toContain('=== STEER CONTEXT ===');
+    expect(prompt).toContain('Original journey had 4 observed steps');
+    expect(prompt).toContain('Step 2: Click the wrong tab');
+    expect(prompt).not.toContain('Before Step 2');
   });
 });
 

@@ -19,7 +19,10 @@ async function loadSettings() {
     'openaiApiKey', 'openaiModel',
     'visionEnabled',
     'somEnabled',
-    'debugEnabled'
+    'debugEnabled',
+    'debugSteerContextEnabled',
+    'alwaysShowPromptBtn',
+    'maxSteps'
   ]);
 
   // Set current provider
@@ -44,9 +47,14 @@ async function loadSettings() {
   // Load SoM setting (default: disabled)
   document.getElementById('somEnabled').checked = settings.somEnabled === true;
 
+  // Load Max Steps setting (default: 20)
+  document.getElementById('maxSteps').value = settings.maxSteps || 20;
+
   // Load Debug setting (default: disabled)
   const debugEnabled = settings.debugEnabled === true;
   document.getElementById('debugEnabled').checked = debugEnabled;
+  document.getElementById('debugSteerContextEnabled').checked = settings.debugSteerContextEnabled === true;
+  document.getElementById('alwaysShowPromptBtn').checked = settings.alwaysShowPromptBtn === true;
   if (debugEnabled) {
     document.getElementById('debugCode').value = 'PAGEGUIDE2026';
     document.getElementById('debugToggleGroup').style.display = 'block';
@@ -96,7 +104,10 @@ async function saveSettings() {
     openaiModel: document.getElementById('openaiModel').value,
     visionEnabled: document.getElementById('visionEnabled').checked,
     somEnabled: document.getElementById('somEnabled').checked,
-    debugEnabled: document.getElementById('debugEnabled').checked
+    maxSteps: parseInt(document.getElementById('maxSteps').value, 10) || 20,
+    debugEnabled: document.getElementById('debugEnabled').checked,
+    debugSteerContextEnabled: document.getElementById('debugSteerContextEnabled').checked,
+    alwaysShowPromptBtn: document.getElementById('alwaysShowPromptBtn').checked
   };
 
   await chrome.storage.sync.set(settings);
@@ -280,6 +291,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const debugCodeInput = document.getElementById('debugCode');
   const debugToggleGroup = document.getElementById('debugToggleGroup');
   const debugEnabledToggle = document.getElementById('debugEnabled');
+  const debugSteerContextToggle = document.getElementById('debugSteerContextEnabled');
   if (debugCodeInput && debugToggleGroup && debugEnabledToggle) {
     debugCodeInput.addEventListener('input', () => {
       if (debugCodeInput.value.trim() === 'PAGEGUIDE2026') {
@@ -287,6 +299,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         debugToggleGroup.style.display = 'none';
         debugEnabledToggle.checked = false;
+        if (debugSteerContextToggle) debugSteerContextToggle.checked = false;
       }
     });
   }

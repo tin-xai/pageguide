@@ -205,6 +205,32 @@
             </div>
           </div>
 
+          <!-- Target-region capture mode (debug-only): legacy carried-shot crop vs aligned scroll+fresh crop. -->
+          <div class="pageguide-mode-wrap pageguide-regioncap-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-regioncap-toggle" title="How target-region screenshots are captured"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>Target: Legacy ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-regioncap-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-mode="legacy">
+                <span class="pageguide-mode-opt-text"><b>Legacy crop</b><small>Crop the carried before-shot using immediate element bounds (may misalign).</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-mode="aligned">
+                <span class="pageguide-mode-opt-text"><b>Aligned crop (debug)</b><small>Scroll target into view, take a fresh screenshot, then crop before the action.</small></span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Pass History mode (debug-only): whether to include previous steps in LLM prompt. -->
+          <div class="pageguide-mode-wrap pageguide-passhistory-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-passhistory-toggle" title="Whether to pass observed steps and redirection history to LLM"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>History: No ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-passhistory-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-mode="passing">
+                <span class="pageguide-mode-opt-text"><b>Include History</b><small>Pass past observed number of steps and user redirection to LLM.</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-mode="not_passing">
+                <span class="pageguide-mode-opt-text"><b>Not Include History</b><small>Do not pass history to LLM (default).</small></span>
+              </button>
+            </div>
+          </div>
+
           <div class="pageguide-menu-wrap" id="pageguide-more-wrap">
             <button class="pageguide-quick-btn pageguide-more-btn" id="pageguide-more-btn" title="More">⋯</button>
             <div class="pageguide-menu" id="pageguide-more-menu" style="display:none;">

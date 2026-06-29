@@ -155,7 +155,9 @@
       branchStatus: 'pending_restore',
       branchLabel: 'View journey before Step ' + (n + 1)
     }, meta || {});
-    const goal = branchMeta.goal || parent.goal || '';
+    // Keep the agent-facing goal from the parent journey. Branch display text belongs in
+    // branchLabel/metadata and must not replace the original user task.
+    const goal = parent.goal || '';
     const branchIndex = Object.assign({
       sessionId: branchSessionId,
       goal,
