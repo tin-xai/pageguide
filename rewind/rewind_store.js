@@ -97,6 +97,8 @@
       element_step_similarity: record.element_step_similarity,
       mechLoop: record.mechLoop,
       confidenceSource: record.confidenceSource,
+      warningInjected: !!record.warningInjected,
+      warningTypes: Array.isArray(record.warningTypes) ? record.warningTypes : [],
       risk: record.risk,
       mode: record.mode,
       verification: record.verification,

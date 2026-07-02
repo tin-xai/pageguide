@@ -21,6 +21,7 @@ from eval_tool.scoring import (
     task_outcome,
 )
 from eval_tool.step_confidence import (
+    SpecProgressClient,
     backfill_computed_loop,
     backfill_element_step_similarity,
     backfill_g_progress,
@@ -117,20 +118,26 @@ class EvalToolTest(unittest.TestCase):
         self.assertEqual(summary["steps_skipped"], 1)
         self.assertNotIn("grounded_llm_labels", trajectory["steps"][0])
 
-    def test_compute_confidence_matches_extension_formula(self):
+    def test_full_confidence_uses_grounding_and_loop_penalty(self):
+        # Full Confidence = clip(G_grounding * (1 - 0.5 * L_t_u), 0, 1): cosine element-step
+        # grounding (bucketed) times the loop penalty, no progress term.
+        step = {"action": "click", "target": {"llmIndex": 3}, "element_step_similarity": 0.9, "computed_loop_updated": 0.2}
+        self.assertAlmostEqual(compute_confidence(step, "full"), 0.9)  # 1.0 * (1 - 0.5*0.2)
+        # Legacy LLM-self-report families are unchanged.
         parts = {"grounded": 0.8, "loop": 0.1, "progress": 0.5}
         self.assertAlmostEqual(compute_confidence(parts, "reduced"), 0.736)
-        self.assertAlmostEqual(compute_confidence(parts, "full"), 0.8464)
         self.assertAlmostEqual(compute_confidence(parts, "noloop"), 0.92)
 
-    def test_compute_confidence_three_point_progress_scale(self):
-        base = {"grounded": 0.8, "loop": 0.1}  # reduced base = 0.736
-        # 1.0 = clear progress -> full boost; 0.5 = neutral; 0.0 = regression floor.
-        self.assertAlmostEqual(compute_confidence({**base, "progress": 1.0}, "full"), 0.9568)
-        self.assertAlmostEqual(compute_confidence({**base, "progress": 0.5}, "full"), 0.8464)
-        self.assertAlmostEqual(compute_confidence({**base, "progress": 0.0}, "full"), 0.736)
-        # Legacy -1..1 traces: a negative value clamps up to the 0.0 floor (no penalty).
-        self.assertAlmostEqual(compute_confidence({**base, "progress": -1.0}, "full"), 0.736)
+    def test_full_confidence_ignores_progress_and_buckets_grounding(self):
+        def step(sim, loop=0.0, **extra):
+            return {"action": "click", "target": {"llmIndex": 1}, "element_step_similarity": sim, "computed_loop_updated": loop, **extra}
+        self.assertAlmostEqual(compute_confidence(step(0.90), "full"), 1.0)   # >= 0.84 -> 1.0
+        self.assertAlmostEqual(compute_confidence(step(0.80), "full"), 0.5)   # >= 0.78 -> 0.5
+        self.assertAlmostEqual(compute_confidence(step(0.50), "full"), 0.1)   # below -> 0.1
+        self.assertAlmostEqual(compute_confidence(step(0.90, loop=0.5), "full"), 0.75)  # 1.0 * (1 - 0.25)
+        # Progress no longer affects Full Confidence.
+        self.assertEqual(compute_confidence(step(0.90, progress=1.0), "full"),
+                         compute_confidence(step(0.90, progress=0.0), "full"))
 
     def test_g_grounding_uses_element_step_similarity_thresholds(self):
         self.assertEqual(g_grounding({"action": "click", "target": {"llmIndex": 7, "text": "Go"}}), 1.0)
@@ -209,6 +216,18 @@ class EvalToolTest(unittest.TestCase):
         self.assertNotIn("element_step_similarity", result["steps"][3])
         self.assertNotIn("element_step_similarity", result["steps"][4])
         client.embed.assert_called_once_with(["Click Search", "Search"])
+
+    def test_spec_progress_client_default_embed_model(self):
+        # The backfill must request a model OpenRouter actually serves on /v1/embeddings
+        # (text-embedding-ada-002 is hosted there); otherwise embeds return no vectors and
+        # element_step_similarity stays null. Keep this in sync with EMBED_MODEL in
+        # background/service-worker.js so live and backfill scores agree.
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(SpecProgressClient().embed_model, "openai/text-embedding-ada-002")
+
+    def test_spec_progress_client_embed_model_env_override(self):
+        with patch.dict("os.environ", {"PAGEGUIDE_EVAL_EMBED_MODEL": "openai/text-embedding-3-small"}, clear=True):
+            self.assertEqual(SpecProgressClient().embed_model, "openai/text-embedding-3-small")
 
     def test_low_grounding_summary_flags_steps_below_one(self):
         steps = [
@@ -344,6 +363,7 @@ class EvalToolTest(unittest.TestCase):
             steps.append({"step": i, "action": "click", "target": {"text": "Search"}})
         summary = loop_metrics_summary(steps)
         self.assertEqual(summary["loop_steps_updated"], 3)  # steps 7, 8, 9 (L_t_u values: 0.6, 0.7, 0.8)
+        self.assertEqual(summary["loop_task_updated"], 1)
         self.assertAlmostEqual(summary["min_loop_updated"], 0.0)
         self.assertAlmostEqual(summary["max_loop_updated"], 0.8)
 
@@ -355,7 +375,16 @@ class EvalToolTest(unittest.TestCase):
             steps.append({"step": i, "action": "click", "target": {"text": "Select My Car"}})
         summary = loop_metrics_summary(steps)
         self.assertEqual(summary["loop_steps_updated"], 0)  # max loop score is 5/10 = 0.5, which is not > 0.5
+        self.assertEqual(summary["loop_task_updated"], 1)
         self.assertAlmostEqual(summary["max_loop_updated"], 0.5)
+
+    def test_loop_metrics_summary_task_flag_uses_point_three_threshold(self):
+        steps = [{"step": 0, "isInitial": True}]
+        for i in range(1, 5):
+            steps.append({"step": i, "action": "click", "target": {"text": "Search"}})
+        summary = loop_metrics_summary(steps)
+        self.assertEqual(summary["loop_task_updated"], 1)
+        self.assertAlmostEqual(summary["max_loop_updated"], 0.3)
 
     def test_mind2web_difficulty_buckets(self):
         self.assertEqual(infer_difficulty_from_reference_length(5), "easy")
@@ -395,6 +424,56 @@ class EvalToolTest(unittest.TestCase):
         task = {"reference_steps": "1. Open site\n2. Type Austin 3. Click Search 4. Filter"}
         self.assertEqual(reference_step_count(task), 4)
 
+    def test_task_set_options_and_labels_include_annotated_dataset(self):
+        from eval_tool.storage import task_set_options, normalize_task_set, task_set_label
+        ids = {opt["id"] for opt in task_set_options()}
+        self.assertIn("annotated", ids)
+        self.assertEqual(normalize_task_set("annotated"), "annotated")
+        self.assertEqual(task_set_label("annotated"), "Annotated Dataset")
+        self.assertEqual(task_set_label("online_mind2web"), "Online-Mind2Web")
+        # Unknown / missing sources degrade gracefully instead of mislabeling.
+        self.assertEqual(task_set_label(""), "Unknown")
+        self.assertEqual(task_set_label("something_else"), "something_else")
+
+    def test_load_annotated_json_dataset(self):
+        from eval_tool.tasks import _load_json_tasks
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "AnnotatedDataset.json"
+            path.write_text(json.dumps([
+                {
+                    "index": 0,
+                    "task": "Find the closest store",
+                    "key_nodes": [
+                        {"content": {"url": None}},
+                        {"content": {"url": "https://www.example.com/"}, "match_function_name": "url_included_match"},
+                        {"content": {"url": "https://www.example.com/search?q=store"}, "match_function_name": "url_exactly_match"},
+                    ],
+                    "subgoals": ["Visit the site.", "Search for the store."],
+                },
+                # No usable URL -> skipped.
+                {"index": 1, "task": "No url task", "key_nodes": [{"content": {"url": None}}], "subgoals": []},
+                # No task text -> skipped.
+                {"index": 2, "task": "", "key_nodes": [{"content": {"url": "https://x.com/"}}]},
+            ]), encoding="utf-8")
+            tasks = _load_json_tasks(path)
+        self.assertEqual(len(tasks), 1)
+        task = tasks[0]
+        self.assertEqual(task.task_id, "annotated-0")
+        self.assertEqual(task.task, "Find the closest store")
+        self.assertEqual(task.website_url, "https://www.example.com/")
+        self.assertEqual(task.reference_steps, "Visit the site.\nSearch for the store.")
+        self.assertEqual(task.success_criteria, "Visit the site.\nSearch for the store.")
+        self.assertEqual(task.annotated_subgoals, ["Visit the site.", "Search for the store."])
+        self.assertEqual(task.annotated_reference_urls, ["", "https://www.example.com/", "https://www.example.com/search?q=store"])
+        self.assertEqual(task.annotated_match_functions, ["", "url_included_match", "url_exactly_match"])
+
+    def test_load_tasks_dispatches_annotated_dataset_to_json_loader(self):
+        # The real dataset file ships with the repo; the "annotated" task set must resolve to it.
+        tasks = load_tasks("annotated")
+        self.assertTrue(tasks)
+        self.assertTrue(all(t.website_url for t in tasks))
+        self.assertTrue(all(t.task_id.startswith("annotated-") for t in tasks))
+
     def test_eval_server_dashboard_filters_no_login_by_reference_steps(self):
         from eval_server.app import app as server_app
 
@@ -428,6 +507,124 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b'data-difficulty=\"hard\"', response.data)
         self.assertNotIn(b'data-difficulty=\"medium\"', response.data)
         self.assertNotIn(b'data-difficulty=\"easy\"', response.data)
+
+    def test_run_detail_renders_per_task_sparkline_with_metric_series(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "r1", "status": "completed", "task_ids": ["t1"], "task_set": "no_login"}
+        result = {
+            "task_id": "t1", "task": {"task": "Do thing"}, "session_id": "s1",
+            "judge": {"success": True},
+            "steps": [
+                {"step": 1, "action": "click", "target": {"llmIndex": 1},
+                 "element_step_similarity": 0.9, "computed_loop_updated": 0.0},
+                {"step": 2, "action": "click", "target": {"llmIndex": 2},
+                 "element_step_similarity": 0.6, "computed_loop_updated": 0.7},
+            ],
+        }
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.list_task_results", return_value=[result]), \
+             patch("eval_server.app.is_running", return_value=False), \
+             patch("eval_server.app.load_stars", return_value={}):
+            response = server_app.test_client().get("/runs/r1")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'class="task-sparkline"', response.data)
+        self.assertIn(b"toggleSparkMetric(", response.data)
+        # The metric is presented as Step Uncertainty (inverted), not Confidence.
+        self.assertIn(b"Step Uncertainty", response.data)
+        self.assertNotIn(b"Full Confidence", response.data)
+        # The serialized per-step series feeding the sparkline carries the three metrics.
+        self.assertIn(b"step_uncertainty", response.data)
+        self.assertIn(b"element_step_similarity", response.data)
+        self.assertIn(b"computed_loop_updated", response.data)
+
+    def test_step_metrics_emits_step_uncertainty_as_one_minus_confidence(self):
+        from eval_server.app import _step_metrics, _to_uncertainty
+        steps = [
+            {"step": 1, "action": "click", "target": {"llmIndex": 1},
+             "element_step_similarity": 0.9, "computed_loop_updated": 0.0},
+            {"step": 2, "action": "click", "target": {"llmIndex": 2},
+             "element_step_similarity": 0.6, "computed_loop_updated": 0.7},
+        ]
+        metrics, _ = _step_metrics(steps)
+        for m in metrics:
+            self.assertIn("step_uncertainty", m)
+            if m["mech_confidence"] is None:
+                self.assertIsNone(m["step_uncertainty"])
+            else:
+                self.assertAlmostEqual(m["step_uncertainty"], 1.0 - m["mech_confidence"])
+        # Helper clamps and passes None through.
+        self.assertIsNone(_to_uncertainty(None))
+        self.assertEqual(_to_uncertainty(0.0), 1.0)
+        self.assertEqual(_to_uncertainty(1.0), 0.0)
+        self.assertEqual(_to_uncertainty(1.5), 0.0)
+
+    def test_grounding_metrics_counts_mid_trajectory_tasks_by_outcome(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "rG", "status": "completed", "task_ids": ["p1", "f1"], "task_model": "openai/gpt-4.1-nano"}
+
+        def steps(target_sims):
+            # Loop (L_t_u) is recomputed from action+target text by backfill_computed_loop, so we
+            # drive it via repeated targets. target_sims is a list of (target_text, similarity).
+            out = [{"step": 0, "isInitial": True}]
+            for i, (tgt, sim) in enumerate(target_sims, start=1):
+                out.append({"step": i, "action": "click", "target": {"text": tgt, "llmIndex": i},
+                            "instruction": "click " + tgt, "element_step_similarity": sim})
+            return out
+
+        # Passed task: same target every step -> interior L_t_u = 1.0 (>=0.3), and interior step 3
+        # is misgrounded (0.5 < 0.8). First & last are excluded but here interior alone qualifies.
+        passed = {"task_id": "p1", "task": {"task": "p"}, "judge": {"success": True},
+                  "steps": steps([("Watch", 0.9), ("Watch", 0.9), ("Watch", 0.5), ("Watch", 0.9), ("Watch", 0.9)])}
+        # Failed task: distinct targets (no loop) and only the FIRST and LAST steps misgrounded;
+        # the interior is clean -> neither mid flag should trip.
+        failed = {"task_id": "f1", "task": {"task": "f"}, "judge": {"success": False},
+                  "steps": steps([("A", 0.5), ("B", 0.9), ("C", 0.9), ("D", 0.9), ("E", 0.5)])}
+
+        with TemporaryDirectory() as tmp:
+            import eval_server.app as sapp
+            tasks_dir = Path(tmp) / "rG" / "tasks"
+            tasks_dir.mkdir(parents=True)
+            for r in (passed, failed):
+                (tasks_dir / (r["task_id"] + ".json")).write_text(json.dumps(r), encoding="utf-8")
+            with patch("eval_server.app.load_run", return_value=run), \
+                 patch.object(sapp, "RUNS_DIR", tmp):
+                resp = server_app.test_client().post("/api/grounding_metrics", json={
+                    "run_ids": ["rG"], "threshold": 0.8, "label_source": "human", "outcome_filter": "all",
+                })
+        self.assertEqual(resp.status_code, 200)
+        model = sapp._grounding_display_model_name("openai/gpt-4.1-nano")
+        groups = resp.get_json()["__summary"]["models"][model]["groups"]
+        # Passed task has an interior misgrounded + loop(>=0.3) step; failed task does not.
+        self.assertEqual(groups["success"]["tasks_with_mid_misgrounding"], 1)
+        self.assertEqual(groups["success"]["tasks_with_mid_loop"], 1)
+        self.assertEqual(groups["failed"]["tasks_with_mid_misgrounding"], 0)
+        self.assertEqual(groups["failed"]["tasks_with_mid_loop"], 0)
+
+    def test_dashboard_runs_included_carries_feature_filter_flags(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        runs = [{
+            "run_id": "run-abc", "status": "completed", "task_ids": ["t1"],
+            "task_model": "openai/gpt-4.1-nano",
+            "automatic_planning_mode": True,
+            "inject_grounding_warning": True,
+            "inject_looping_warning": False,
+        }]
+        with patch("eval_server.app.list_auto_runs", return_value=runs), \
+             patch("eval_server.app.collect_starred_tasks", return_value=[]):
+            response = server_app.test_client().get("/?tab=automatic")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'class="run-feature-filter"', response.data)
+        self.assertIn(b'applyRunFeatureFilter()', response.data)
+        # Flags surface as data-attributes the client filter reads (planning/grounding on, loop off).
+        self.assertIn(b'data-planning="1"', response.data)
+        self.assertIn(b'data-grounding="1"', response.data)
+        self.assertIn(b'data-loop="0"', response.data)
 
     def test_score_step_dispatches_by_family(self):
         step = {"action": "click", "target": {"llmIndex": 1}, "grounded": 0.8, "loop": 0.1, "progress": 0.5}
@@ -637,13 +834,13 @@ class EvalToolTest(unittest.TestCase):
             "task": {"task": "Do thing"},
             "judge": {"success": True},
             "steps": enrich_step_scores([
-                {"step": 1, "grounded": 0.8, "loop": 0.0, "progress": 0.0},
-                {"step": 2, "grounded": 0.5, "loop": 0.5, "progress": -0.5},
+                {"step": 1, "action": "click", "target": {"llmIndex": 1}, "element_step_similarity": 0.9, "computed_loop_updated": 0.0},
+                {"step": 2, "action": "click", "target": {"llmIndex": 2}, "element_step_similarity": 0.9, "computed_loop_updated": 0.5},
             ]),
         }
         payload = chart_payload([result])
         self.assertEqual(payload["aggregate"][0]["step"], 1)
-        self.assertAlmostEqual(payload["aggregate"][0]["full"], 0.8)
+        self.assertAlmostEqual(payload["aggregate"][0]["full"], 1.0)  # G_grounding 1.0 * (1 - 0.5*0.0)
         self.assertEqual(payload["tasks"][0]["task_id"], "t1")
 
     def test_chart_payload_accepts_full_ground_truth_formula(self):
@@ -842,6 +1039,7 @@ class EvalToolTest(unittest.TestCase):
             "task_ids": ["t1"],
             "task_model": "google/gemini-2.5-pro",
             "judge_model": "openai/gpt-4o",
+            "temperature": 0.3,
         }
         result = {
             "task_id": "t1",
@@ -870,6 +1068,8 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"google/gemini-2.5-pro", response.data)
         self.assertIn(b"Judge model:", response.data)
         self.assertIn(b"openai/gpt-4o", response.data)
+        self.assertIn(b"Temperature:", response.data)
+        self.assertIn(b"0.3", response.data)
         self.assertIn(b"Total Steps", response.data)
         self.assertIn(b">2</div>", response.data)
         self.assertIn(b"Rerun Goal Relevance", response.data)
@@ -881,10 +1081,8 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"Grounding Similarity", response.data)
         self.assertIn(b"Steps Below Threshold", response.data)
         self.assertIn(b"Tasks With Low Similarity", response.data)
-        self.assertIn(b"Human Label Boundary Check", response.data)
-        self.assertIn(b"Pred Grounded", response.data)
-        self.assertIn(b"precision", response.data)
-        self.assertIn(b"Youden Index", response.data)
+        # The "Human Label Boundary Check" panel was removed to streamline the run detail page.
+        self.assertNotIn(b"Human Label Boundary Check", response.data)
         self.assertIn(b"oninput=\"updateGroundingThresholdSummary()\"", response.data)
         self.assertIn(b"similarity &lt; 0.80", response.data)
         self.assertIn(b"Step 1: 0.42", response.data)
@@ -958,6 +1156,9 @@ class EvalToolTest(unittest.TestCase):
                     "instruction": "Click Search",
                     "target": {"llmIndex": 4, "text": "Search"},
                     "element_step_similarity": 0.79,
+                    "completedPlanStep": 4,
+                    "plan": [{"n": n, "goal": f"Step {n}", "status": "complete" if n <= 4 else "pending"} for n in range(1, 9)],
+                    "progress": 1.0,
                     "grounded_llm_labels": {"openai/gpt-4o": {"label": "not_grounded", "reason": "wrong element"}},
                 },
                 {
@@ -973,8 +1174,44 @@ class EvalToolTest(unittest.TestCase):
                     "instruction": "Select date range again",
                     "target": {"llmIndex": 5, "text": long_element_text},
                     "element_step_similarity": 0.55,
+                    "warningInjected": True,
+                    "warningTypes": ["grounding", "loop"],
+                    "warningPrompt": "GROUNDING WARNING\nLOOP WARNING",
+                    "firstRawResponse": json.dumps({
+                        "action": "click",
+                        "instruction": "Select date range again",
+                        "element": {"index": 5, "text": long_element_text},
+                    }),
+                    "retryRawResponse": json.dumps({
+                        "action": "click",
+                        "instruction": "Select another date",
+                        "element": {"index": 7, "text": "June 24"},
+                    }),
+                    "firstGroundingSimilarity": 0.55,
+                    "firstLoopScore": 0.4,
+                    "warningGroundingThreshold": 0.8,
+                    "warningLoopThreshold": 0.3,
+                    "firstResolvedElementText": long_element_text,
+                    "retryResolvedElementText": "June 24",
+                    "retryGroundingSimilarity": 0.86,
+                    "retryLoopScore": 0.0,
                 },
-                {"step": 5, "action": "click", "instruction": "Click missing", "target": {"llmIndex": 6, "text": "Missing"}},
+                {
+                    "step": 5,
+                    "action": "click",
+                    "instruction": "Click missing",
+                    "target": {"llmIndex": 6, "text": "Missing"},
+                    "element_step_similarity": 0.75,
+                    "warningChecked": True,
+                    "warningInjected": False,
+                    "warningSkipReason": "grounding_similarity_unavailable:embed_error; loop_below_threshold",
+                    "firstGroundingSimilarity": None,
+                    "firstGroundingSimilarityReason": "embed_error",
+                    "firstGroundingSimilarityDetail": "Embedding timeout before retry decision",
+                    "firstLoopScore": 0.1,
+                    "warningGroundingThreshold": 0.8,
+                    "warningLoopThreshold": 0.3,
+                },
             ],
         }
         with TemporaryDirectory() as tmp:
@@ -989,6 +1226,13 @@ class EvalToolTest(unittest.TestCase):
                 response = server_app.test_client().get("/trajectory/grounding-similarity-badges")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Grounding Similarity", response.data)
+        self.assertIn(b"Original Similarity", response.data)
+        self.assertIn(b"Retry Similarity", response.data)
+        self.assertIn(b"Plan Progress", response.data)
+        self.assertIn(b"Show LLM Progress", response.data)
+        self.assertIn(b"Show Subgoal Progress", response.data)
+        self.assertIn(b"metric-col-llmprog metric-col-hidden", response.data)
+        self.assertIn(b"metric-col-subgoalprog metric-col-hidden", response.data)
         self.assertIn(b"Show Grounded_Human_Label", response.data)
         self.assertIn(b"Grounded_Human_Label", response.data)
         self.assertIn(b"Show Grounded_LLM_Label", response.data)
@@ -1003,9 +1247,22 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"Youden Index", response.data)
         self.assertIn(b">0.82</span>", response.data)
         self.assertIn(b">0.79</span>", response.data)
+        self.assertIn(b"Original pre-retry cosine similarity: 0.55", response.data)
+        self.assertIn(b"Retry cosine similarity: 0.86", response.data)
+        self.assertIn(b"4/8", response.data)
+        self.assertIn(b"No retry", response.data)
+        self.assertIn(b"grounding_similarity_unavailable:embed_error; loop_below_threshold", response.data)
+        self.assertIn(b"Score unavailable: embed_error", response.data)
+        self.assertIn(b"Embedding timeout before retry decision", response.data)
         self.assertIn(b"#a16207", response.data)
         self.assertIn(b"Raw cosine similarity: 0.82", response.data)
         self.assertIn(long_element_text.encode(), response.data)
+        self.assertIn(b"Warning Retry Evidence", response.data)
+        self.assertIn(b"Step 4.1 warning retry", response.data)
+        self.assertIn(b"Original action JSON", response.data)
+        self.assertIn(b"Retry agent JSON response", response.data)
+        self.assertIn(b"firstResolvedElementText", response.data)
+        self.assertIn(b"retryResolvedElementText", response.data)
         self.assertIn(b"max-width: 260px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.25", response.data)
         self.assertNotIn(b"max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;", response.data)
 
@@ -1087,9 +1344,10 @@ class EvalToolTest(unittest.TestCase):
         run = {"run_id": "run-youdens", "task_model": "google/gemini-2.5-flash", "status": "completed"}
         task_result = {
             "session_id": "s-youdens",
+            # Normal runs no longer default to grounded; grounded steps must be labeled explicitly.
             "steps": [
-                {"step": 1, "element_step_similarity": 0.9},
-                {"step": 2, "element_step_similarity": 0.7},
+                {"step": 1, "element_step_similarity": 0.9, "grounded_human_label": "grounded"},
+                {"step": 2, "element_step_similarity": 0.7, "grounded_human_label": "grounded"},
                 {"step": 3, "element_step_similarity": 0.4, "grounded_human_label": "non_grounded"},
                 {"step": 4, "element_step_similarity": 0.2, "grounded_human_label": "non_grounded"},
             ],
@@ -1110,6 +1368,77 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn("Gemini", data)
         self.assertAlmostEqual(data["Gemini"]["optimal_threshold"], 0.7)
         self.assertAlmostEqual(data["Gemini"]["youden_j"], 1.0)
+
+    def test_grounding_metrics_normal_run_has_no_default_human_ground_truth(self):
+        # Normal runs must NOT default unlabeled steps to "grounded"; only the
+        # human-annotated-task-set gets a default-grounded (editable) ground truth.
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-nolabels", "task_model": "google/gemini-2.5-flash", "status": "completed"}
+        task_result = {
+            "session_id": "s-nolabels",
+            "steps": [
+                {"step": 1, "element_step_similarity": 0.9},
+                {"step": 2, "element_step_similarity": 0.4},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            task_dir = runs_dir / "run-nolabels" / "tasks"
+            task_dir.mkdir(parents=True)
+            (task_dir / "t1.json").write_text(json.dumps(task_result), encoding="utf-8")
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run):
+                response = server_app.test_client().post(
+                    "/api/grounding_metrics",
+                    json={"run_ids": ["run-nolabels"], "threshold": 0.8},
+                )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        # With no explicit human labels, there is no ground truth: no scored pairs.
+        gemini = data.get("Gemini", {})
+        self.assertEqual(gemini.get("tp", 0) + gemini.get("tn", 0) + gemini.get("fp", 0) + gemini.get("fn", 0), 0)
+
+    def test_grounding_metrics_annotation_set_defaults_unlabeled_to_grounded(self):
+        # The human-annotated-task-set keeps the default-grounded ground truth so a
+        # reviewer can start from "grounded" and flip individual steps.
+        from eval_server.app import app as server_app
+        from eval_server.app import HUMAN_ANNOTATION_RUN_ID
+
+        server_app.config.update(TESTING=True)
+        run = {
+            "run_id": HUMAN_ANNOTATION_RUN_ID,
+            "source_task_model": "google/gemini-2.5-flash",
+            "status": "completed",
+        }
+        task_result = {
+            "session_id": "s-annot",
+            "source_task_model": "google/gemini-2.5-flash",
+            "steps": [
+                {"step": 1, "element_step_similarity": 0.9},
+                {"step": 2, "element_step_similarity": 0.4},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            task_dir = runs_dir / HUMAN_ANNOTATION_RUN_ID / "tasks"
+            task_dir.mkdir(parents=True)
+            (task_dir / "t1.json").write_text(json.dumps(task_result), encoding="utf-8")
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run):
+                response = server_app.test_client().post(
+                    "/api/grounding_metrics",
+                    json={"run_ids": [HUMAN_ANNOTATION_RUN_ID], "threshold": 0.8},
+                )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        gemini = data.get("Gemini", {})
+        # Both steps default to grounded truth: step1 (0.9>=0.8) is a true positive,
+        # step2 (0.4<0.8) is predicted non-grounded against a grounded truth (false negative).
+        self.assertEqual(gemini.get("tp", 0) + gemini.get("tn", 0) + gemini.get("fp", 0) + gemini.get("fn", 0), 2)
+        self.assertEqual(gemini.get("tp"), 1)
+        self.assertEqual(gemini.get("fn"), 1)
 
     def test_grounding_metrics_api_can_compare_similarity_to_llm_labels(self):
         from eval_server.app import app as server_app
@@ -1150,6 +1479,98 @@ class EvalToolTest(unittest.TestCase):
         self.assertEqual(data["Gpt-4.1-nano"]["tp"], 1)
         self.assertEqual(data["Gpt-4.1-nano"]["fn"], 1)
         self.assertEqual(data["Gpt-4.1-nano"]["tn"], 1)
+
+    def test_grounding_metrics_api_returns_selected_run_task_step_summary(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-selected-summary", "task_model": "google/gemini-2.5-flash", "status": "completed"}
+        passed_task = {
+            "session_id": "passed-task",
+            "judge": {"success": True},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {"step": 1, "action": "click", "instruction": "Click Search", "target": {"text": "Search"}, "element_step_similarity": 0.79},
+                {"step": 2, "action": "click", "instruction": "Click Search again", "target": {"text": "Search"}, "element_step_similarity": 0.80},
+            ],
+        }
+        failed_task = {
+            "session_id": "failed-task",
+            "judge": {"success": False},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {"step": 1, "action": "click", "instruction": "Click wrong", "target": {"text": "Wrong"}, "element_step_similarity": 0.40},
+            ],
+        }
+        failed_unscored_task = {
+            "session_id": "failed-unscored-task",
+            "judge": {"success": False},
+            "steps": [
+                {"step": 0, "isInitial": True},
+                {"step": 1, "action": "click", "instruction": "Click missing similarity", "target": {"text": "Missing"}},
+            ],
+        }
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp)
+            task_dir = runs_dir / "run-selected-summary" / "tasks"
+            task_dir.mkdir(parents=True)
+            (task_dir / "passed.json").write_text(json.dumps(passed_task), encoding="utf-8")
+            (task_dir / "failed.json").write_text(json.dumps(failed_task), encoding="utf-8")
+            (task_dir / "failed-unscored.json").write_text(json.dumps(failed_unscored_task), encoding="utf-8")
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value=run):
+                all_response = server_app.test_client().post(
+                    "/api/grounding_metrics",
+                    json={"run_ids": ["run-selected-summary"], "threshold": 0.8, "outcome_filter": "all"},
+                )
+                failed_response = server_app.test_client().post(
+                    "/api/grounding_metrics",
+                    json={"run_ids": ["run-selected-summary"], "threshold": 0.8, "outcome_filter": "failed"},
+                )
+
+        self.assertEqual(all_response.status_code, 200)
+        all_summary = all_response.get_json()["__summary"]["models"]["Gemini"]
+        self.assertEqual(all_summary["total_tasks"], 3)
+        self.assertEqual(all_summary["passed_tasks"], 1)
+        self.assertEqual(all_summary["failed_tasks"], 2)
+        self.assertAlmostEqual(all_summary["unsuccessful_task_rate"], 2 / 3)
+        self.assertEqual(all_summary["total_steps"], 3)
+        self.assertEqual(all_summary["misgrounded_steps"], 2)
+        self.assertEqual(all_summary["tasks_with_misgrounding"], 2)
+        self.assertEqual(all_summary["loop_steps"], 1)
+        self.assertEqual(all_summary["tasks_with_loop"], 1)
+        all_group = all_summary["groups"]["all"]
+        self.assertEqual(all_group["task_count"], 3)
+        self.assertEqual(all_group["total_steps"], 3)
+        self.assertAlmostEqual(all_group["misgrounded_step_rate"], 2 / 3)
+        self.assertAlmostEqual(all_group["loop_step_rate"], 1 / 3)
+        self.assertAlmostEqual(all_group["misgrounded_task_rate_mean"], 0.75)
+        self.assertAlmostEqual(all_group["misgrounded_task_rate_std"], 0.25)
+        self.assertAlmostEqual(all_group["loop_task_rate_mean"], 0.25)
+        self.assertAlmostEqual(all_group["loop_task_rate_std"], 0.25)
+        success_group = all_summary["groups"]["success"]
+        self.assertEqual(success_group["task_count"], 1)
+        self.assertAlmostEqual(success_group["misgrounded_task_rate_mean"], 0.5)
+        self.assertAlmostEqual(success_group["misgrounded_task_rate_std"], 0.0)
+        self.assertAlmostEqual(success_group["loop_task_rate_mean"], 0.5)
+        self.assertAlmostEqual(success_group["loop_task_rate_std"], 0.0)
+
+        self.assertEqual(failed_response.status_code, 200)
+        failed_payload = failed_response.get_json()
+        self.assertEqual(failed_payload["__summary"]["outcome_filter"], "failed")
+        failed_summary = failed_payload["__summary"]["models"]["Gemini"]
+        self.assertEqual(failed_summary["total_tasks"], 2)
+        self.assertEqual(failed_summary["passed_tasks"], 0)
+        self.assertEqual(failed_summary["failed_tasks"], 2)
+        self.assertEqual(failed_summary["total_steps"], 1)
+        self.assertEqual(failed_summary["misgrounded_steps"], 1)
+        failed_group = failed_summary["groups"]["failed"]
+        self.assertEqual(failed_group["task_count"], 2)
+        self.assertEqual(failed_group["total_steps"], 1)
+        self.assertAlmostEqual(failed_group["misgrounded_task_rate_mean"], 1.0)
+        self.assertAlmostEqual(failed_group["misgrounded_task_rate_std"], 0.0)
+        self.assertAlmostEqual(failed_group["loop_task_rate_mean"], 0.0)
+        self.assertAlmostEqual(failed_group["loop_task_rate_std"], 0.0)
 
     def test_grounding_llm_labels_api_annotates_selected_runs(self):
         from eval_server.app import app as server_app
@@ -1389,6 +1810,130 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b"metric-col-refmeta metric-col-hidden", response.data)
         self.assertIn(b"4-8 ref steps", response.data)
         self.assertIn(b"Easy 1 / Medium 1", response.data)
+
+    def test_eval_server_dashboard_renders_warning_and_planning_toggles(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        with patch("eval_server.app.list_auto_runs", return_value=[]), \
+             patch("eval_server.app.collect_starred_tasks", return_value=[]):
+            response = server_app.test_client().get("/?tab=automatic")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'name="inject_grounding_warning"', response.data)
+        self.assertIn(b"Inject Grounding Warning", response.data)
+        self.assertIn(b'name="inject_looping_warning"', response.data)
+        self.assertIn(b"Inject Looping Warning", response.data)
+        self.assertIn(b'name="automatic_planning_mode"', response.data)
+        self.assertIn(b"Planning Mode", response.data)
+        self.assertIn(b'name="temperature"', response.data)
+        self.assertIn(b'value="0"', response.data)
+        self.assertIn(b'name="grounding_warning_threshold"', response.data)
+        self.assertIn(b'value="0.8"', response.data)
+        self.assertIn(b'name="loop_warning_threshold"', response.data)
+        self.assertIn(b'value="0.3"', response.data)
+        self.assertIn(b'name="workers" value="10"', response.data)
+        self.assertIn(b'id="grounding-eval-outcome-filter"', response.data)
+        self.assertIn(b"Selected Runs Task/Step Summary", response.data)
+        self.assertIn(b"setSelectedRunsOutcomeFilter", response.data)
+        self.assertIn(b"M_Steps", response.data)
+        self.assertIn(b"M_Mean", response.data)
+        self.assertIn(b"M_Std", response.data)
+        self.assertIn(b"L_steps", response.data)
+        self.assertIn(b"L_Mean", response.data)
+        self.assertIn(b"L_Std", response.data)
+        self.assertIn(b"Fail Rate", response.data)
+        self.assertIn(b"Failed Tasks", response.data)
+        self.assertIn(b"Total Tasks", response.data)
+
+    def test_grounding_run_groups_defaults_to_three_eighty_task_runs(self):
+        from eval_server.app import _grounding_run_groups
+
+        def run(run_id, model, task_count, started):
+            return {
+                "run_id": run_id,
+                "task_model": model,
+                "task_ids": [f"{run_id}-task-{idx}" for idx in range(task_count)],
+                "started_at": started,
+                "status": "completed",
+            }
+
+        auto_runs = [
+            run("new-small-gemini", "gemini", 6, "2026-06-28T10:00:00+00:00"),
+            run("eighty-gemini", "gemini", 80, "2026-06-27T10:00:00+00:00"),
+            run("new-small-qwen", "qwen", 4, "2026-06-28T09:00:00+00:00"),
+            run("eighty-qwen", "qwen", 80, "2026-06-26T10:00:00+00:00"),
+            run("eighty-gpt", "gpt", 80, "2026-06-25T10:00:00+00:00"),
+            run("small-claude", "claude", 3, "2026-06-28T11:00:00+00:00"),
+        ]
+
+        groups, default_ids = _grounding_run_groups(auto_runs)
+
+        self.assertEqual(default_ids, {"eighty-gemini", "eighty-qwen", "eighty-gpt"})
+        self.assertEqual(groups[0]["model"], "claude")
+
+    def test_eval_server_automatic_defaults_to_annotated_dataset(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        with patch("eval_server.app.list_auto_runs", return_value=[]), \
+             patch("eval_server.app.collect_starred_tasks", return_value=[]):
+            response = server_app.test_client().get("/?tab=automatic")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'<input type="hidden" name="task_set" value="annotated">', response.data)
+        self.assertIn(b'<option value="annotated" selected>Annotated Dataset</option>', response.data)
+        self.assertIn(b'All Step URLs Differ', response.data)
+        self.assertIn(b'id="random-n-input"', response.data)
+        self.assertIn(b'value="50"', response.data)
+        self.assertIn(b'id="random-seed-input"', response.data)
+        self.assertIn(b'value="1"', response.data)
+
+    def test_eval_server_create_run_persists_warning_and_planning_toggles(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        task = load_tasks("no_login")[0]
+        fake_run = {"run_id": "run-warning-options", "created_at": "now", "status": "queued", "task_ids": []}
+        saved_runs = []
+        with patch("eval_server.app.create_run", return_value=fake_run), \
+             patch("eval_server.app.save_run", side_effect=lambda run: saved_runs.append(run) or run), \
+             patch("eval_server.app.start_run"):
+            response = server_app.test_client().post("/runs", data={
+                "task_set": "no_login",
+                "task_ids": [task.task_id],
+                "inject_grounding_warning": "1",
+                "inject_looping_warning": "1",
+                "automatic_planning_mode": "1",
+                "temperature": "0.7",
+                "grounding_warning_threshold": "0.76",
+                "loop_warning_threshold": "0.35",
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(saved_runs[-1]["inject_grounding_warning"])
+        self.assertTrue(saved_runs[-1]["inject_looping_warning"])
+        self.assertTrue(saved_runs[-1]["automatic_planning_mode"])
+        self.assertEqual(saved_runs[-1]["temperature"], 0.7)
+        self.assertEqual(saved_runs[-1]["grounding_warning_threshold"], 0.76)
+        self.assertEqual(saved_runs[-1]["loop_warning_threshold"], 0.35)
+
+    def test_eval_server_create_run_persists_force_ground_truth_mode(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        task = load_tasks("annotated")[0]
+        fake_run = {"run_id": "run-force-gt", "created_at": "now", "status": "queued", "task_ids": []}
+        saved_runs = []
+        with patch("eval_server.app.create_run", return_value=fake_run), \
+             patch("eval_server.app.save_run", side_effect=lambda run: saved_runs.append(run) or run), \
+             patch("eval_server.app.start_run"):
+            response = server_app.test_client().post("/runs", data={
+                "task_set": "annotated",
+                "task_ids": [task.task_id],
+                "force_ground_truth_mode": "1",
+                "force_ground_truth_retries": "1",
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(saved_runs[-1]["force_ground_truth_mode"])
+        self.assertEqual(saved_runs[-1]["force_ground_truth_retries"], 1)
 
     def test_eval_server_run_detail_can_show_reference_steps_and_difficulty(self):
         from eval_server.app import app as server_app
@@ -1647,6 +2192,103 @@ class EvalRunnerAutoLoginTest(unittest.IsolatedAsyncioTestCase):
         await runner._set_ground_truth_steps(extension_page, task)
         self.assertEqual(extension_page.evaluate.await_args.args[1], {"steps": ""})
 
+    async def test_guide_query_includes_oracle_plan_when_enabled(self):
+        runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
+        task = Mock(task="Find store", reference_steps="Open site\nSearch zip\nSet home store")
+
+        runner.include_oracle_plan = True
+        query = runner._guide_query_for_task(task)
+        self.assertIn("Find store", query)
+        self.assertIn("ORACLE PLAN FROM THE ANNOTATED DATASET", query)
+        self.assertIn("1. Open site", query)
+        self.assertIn("3. Set home store", query)
+
+        runner.include_oracle_plan = False
+        self.assertEqual(runner._guide_query_for_task(task), "Find store")
+
+    async def test_attach_oracle_plan_to_steps_for_inspection(self):
+        runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
+        steps = [{"step": 1, "action": "click"}, {"step": 2, "action": "type"}]
+
+        runner._attach_oracle_plan_to_steps(steps, "1. Open\n2. Search", "Task\n\nORACLE PLAN...")
+
+        self.assertTrue(steps[0]["oraclePlanIncluded"])
+        self.assertEqual(steps[0]["oraclePlan"], "1. Open\n2. Search")
+        self.assertIn("ORACLE PLAN", steps[1]["guideQueryWithOraclePlan"])
+
+    async def test_force_ground_truth_plan_starts_at_second_annotated_url(self):
+        runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
+        runner.force_ground_truth_mode = True
+        runner.force_ground_truth_retries = 1
+        task = Mock(
+            annotated_subgoals=["Visit site", "Open search results", "Open details"],
+            annotated_reference_urls=["https://example.com/", "https://example.com/search", "https://example.com/details"],
+            annotated_match_functions=["url_included_match", "url_exactly_match", "url_exactly_match"],
+        )
+
+        plan = runner._force_ground_truth_plan_for_task(task)
+
+        self.assertEqual([item["step"] for item in plan], [2, 3])
+        self.assertEqual(plan[0]["subgoal"], "Open search results")
+        self.assertEqual(plan[0]["expectedUrl"], "https://example.com/search")
+
+    async def test_set_force_ground_truth_plan_writes_storage_payload(self):
+        runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
+        runner.force_ground_truth_mode = True
+        runner.force_ground_truth_retries = 2
+        task = Mock(
+            annotated_subgoals=["Visit site", "Search"],
+            annotated_reference_urls=["https://example.com/", "https://example.com/search"],
+            annotated_match_functions=["url_included_match", "url_exactly_match"],
+        )
+        extension_page = Mock()
+        extension_page.evaluate = AsyncMock()
+
+        await runner._set_force_ground_truth_plan(extension_page, task)
+
+        payload = extension_page.evaluate.await_args.args[1]
+        self.assertTrue(payload["enabled"])
+        self.assertEqual(payload["retries"], 2)
+        self.assertEqual(payload["plan"][0]["step"], 2)
+        self.assertEqual(payload["plan"][0]["expectedUrl"], "https://example.com/search")
+
+    async def test_set_eval_prefs_writes_warning_and_planning_options(self):
+        run = {
+            "run_id": "run-test",
+            "max_steps": 12,
+            "task_model": "openai/gpt-4.1-nano",
+            "inject_grounding_warning": True,
+            "inject_looping_warning": True,
+            "automatic_planning_mode": True,
+            "region_capture_mode": "aligned",
+            "temperature": 0.4,
+            "grounding_warning_threshold": 0.76,
+            "loop_warning_threshold": 0.35,
+        }
+        with patch("eval_tool.runner.load_run", return_value=run), \
+             patch("eval_tool.runner._env_value", return_value="test-key"):
+            runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
+        extension_page = Mock()
+        extension_page.evaluate = AsyncMock()
+
+        await runner._set_eval_prefs(extension_page)
+
+        payload = extension_page.evaluate.await_args.args[1]
+        self.assertTrue(payload["groundingWarning"])
+        self.assertTrue(payload["loopingWarning"])
+        self.assertEqual(payload["planningMode"], "planning")
+        self.assertEqual(payload["regionCaptureMode"], "aligned")
+        self.assertEqual(payload["temperature"], 0.4)
+        self.assertEqual(payload["groundingThreshold"], 0.76)
+        self.assertEqual(payload["loopThreshold"], 0.35)
+        script = extension_page.evaluate.await_args.args[0]
+        self.assertIn("guideEvalGroundingWarningEnabled", script)
+        self.assertIn("guideEvalLoopWarningEnabled", script)
+        self.assertIn("guideDebugPlanningMode", script)
+        self.assertIn("guideEvalTemperature", script)
+        self.assertIn("guideEvalGroundingWarningThreshold: groundingThreshold", script)
+        self.assertIn("guideEvalLoopWarningThreshold: loopThreshold", script)
+
     async def test_clear_task_storage_removes_stale_rewind_and_debug_keys(self):
         runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
         extension_page = Mock()
@@ -1669,6 +2311,39 @@ class EvalRunnerAutoLoginTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(steps, {"steps": [], "spec_goal_text": None, "predictedGoalState": None})
         extension_page.evaluate.assert_not_called()
+
+    async def test_load_rewind_steps_prepends_planning_step(self):
+        runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
+        extension_page = Mock()
+        extension_page.evaluate = AsyncMock(return_value={
+            "steps": [{"step": 1, "instruction": "Click Search", "action": "click"}],
+            "spec_goal_text": None,
+            "predictedGoalState": None,
+            "planning": {
+                "planTitle": "Search task",
+                "plan": [
+                    {"n": 1, "goal": "Open search", "status": "complete"},
+                    {"n": 2, "goal": "Submit query", "status": "pending"},
+                ],
+                "planningPromptTimestamp": 123,
+                "planningSystemPrompt": "planning system",
+                "planningPrompt": "planning user prompt",
+                "planningRawResponse": "{\"planTitle\":\"Search task\"}",
+                "planningMode": "planning",
+            },
+        })
+
+        loaded = await runner._load_rewind_steps(extension_page, "session-1", "task-1")
+
+        self.assertEqual(loaded["steps"][0]["step"], -1)
+        self.assertEqual(loaded["steps"][0]["action"], "plan")
+        self.assertTrue(loaded["steps"][0]["isPlanningStep"])
+        self.assertIn("Search task", loaded["steps"][0]["instruction"])
+        self.assertIn("1. Open search [complete]", loaded["steps"][0]["instruction"])
+        self.assertEqual(loaded["steps"][0]["systemPrompt"], "planning system")
+        self.assertEqual(loaded["steps"][0]["userPrompt"], "planning user prompt")
+        self.assertEqual(loaded["steps"][0]["rawLlmJson"], "{\"planTitle\":\"Search task\"}")
+        self.assertEqual(loaded["steps"][1]["step"], 1)
 
     async def test_navigate_to_task_uses_commit_and_treats_domcontentloaded_as_best_effort(self):
         runner = PlaywrightGuideRunner("run-test", Mock(), Mock())
@@ -1852,6 +2527,55 @@ class GroundTruthToggleTest(unittest.TestCase):
         })
         self.assertFalse(saved["ground_truth_mode"])
 
+    def test_annotated_run_can_enable_oracle_plan(self):
+        task = load_tasks("annotated")[0]
+        saved = self._post_run({
+            "task_set": "annotated",
+            "task_ids": [task.task_id],
+            "include_oracle_plan": "1",
+        })
+        self.assertTrue(saved["include_oracle_plan"])
+
+    def test_non_annotated_run_cannot_enable_oracle_plan(self):
+        task = load_tasks("no_login")[0]
+        saved = self._post_run({
+            "task_set": "no_login",
+            "task_ids": [task.task_id],
+            "include_oracle_plan": "1",
+        })
+        self.assertFalse(saved["include_oracle_plan"])
+
+    def test_annotated_run_can_enable_force_ground_truth_mode(self):
+        task = load_tasks("annotated")[0]
+        saved = self._post_run({
+            "task_set": "annotated",
+            "task_ids": [task.task_id],
+            "force_ground_truth_mode": "1",
+            "force_ground_truth_retries": "2",
+        })
+        self.assertTrue(saved["force_ground_truth_mode"])
+        self.assertEqual(saved["force_ground_truth_retries"], 2)
+
+    def test_force_ground_truth_retry_count_is_clamped(self):
+        task = load_tasks("annotated")[0]
+        saved = self._post_run({
+            "task_set": "annotated",
+            "task_ids": [task.task_id],
+            "force_ground_truth_mode": "1",
+            "force_ground_truth_retries": "8",
+        })
+        self.assertEqual(saved["force_ground_truth_retries"], 2)
+
+    def test_non_annotated_run_cannot_enable_force_ground_truth_mode(self):
+        task = load_tasks("no_login")[0]
+        saved = self._post_run({
+            "task_set": "no_login",
+            "task_ids": [task.task_id],
+            "force_ground_truth_mode": "1",
+            "force_ground_truth_retries": "2",
+        })
+        self.assertFalse(saved["force_ground_truth_mode"])
+
 
 class WebJudgeTest(unittest.TestCase):
     def test_parse_screenshot_score(self):
@@ -1896,6 +2620,37 @@ class WebJudgeTest(unittest.TestCase):
         self.assertIsNone(result["failureCategory"])
         self.assertEqual(result["method"], "webjudge")
         self.assertIn("screenshot_scores", result)
+
+    def test_judge_trajectory_always_includes_final_screenshot(self):
+        from eval_tool.webjudge import WebJudge, REPO_ROOT
+        judge = WebJudge(api_key="test", max_screenshots=2)
+        shot_dir = REPO_ROOT / "eval_tool"
+        step1 = shot_dir / "_wj_step_1.png"
+        step2 = shot_dir / "_wj_step_2.png"
+        final = shot_dir / "_wj_final.png"
+        for path in (step1, step2, final):
+            path.write_bytes(b"fakepng")
+        steps = [
+            {"action": "click", "screenshot": str(step1.relative_to(REPO_ROOT))},
+            {"action": "click", "screenshot": str(step2.relative_to(REPO_ROOT))},
+        ]
+        captured = {}
+        try:
+            def fake_outcome(task, key_points, images, history):
+                captured["images"] = images
+                return {"success": True, "failureCategory": None, "reason": "ok", "confidence": 1}
+
+            with patch.object(judge, "identify_key_points", return_value="1. Done"), \
+                 patch.object(judge, "score_screenshot", return_value=5), \
+                 patch("eval_tool.webjudge._encode_image", side_effect=lambda path: str(path.relative_to(REPO_ROOT))), \
+                 patch.object(judge, "judge_outcome", side_effect=fake_outcome):
+                result = judge.judge_trajectory({"task": "Do thing"}, steps, final)
+        finally:
+            for path in (step1, step2, final):
+                path.unlink(missing_ok=True)
+        self.assertTrue(result["success"])
+        self.assertIn(str(final.relative_to(REPO_ROOT)), captured["images"])
+        self.assertEqual(result["selected_screenshot_count"], 3)
 
     def test_judge_trajectory_without_api_key_is_non_fatal(self):
         from eval_tool.webjudge import WebJudge
@@ -2350,6 +3105,357 @@ class ProgressSelfReportJudgeTest(unittest.TestCase):
         self.assertIn('"score": 1', trajectory["steps"][0]["self_progress_gt_raw_response"])
         self.assertEqual(summary["details"][0]["variant"], "GT")
         self.assertEqual(summary["details"][0]["prompt"], "GT PROMPT TEXT")
+
+
+class LoadDomSnapshotTest(unittest.TestCase):
+    """DOM snapshots are externalized to files by the runner to keep task JSON small;
+    load_dom_snapshot resolves inline (older runs) or file-referenced (newer runs) DOM."""
+
+    def test_prefers_inline_after_then_before(self):
+        from eval_tool.storage import load_dom_snapshot
+        step = {"domSnapshot": "<before>", "domSnapshotAfter": "<after>"}
+        self.assertEqual(load_dom_snapshot(step, prefer_after=True), "<after>")
+        self.assertEqual(load_dom_snapshot(step, prefer_after=False), "<before>")
+
+    def test_falls_back_to_before_when_after_missing(self):
+        from eval_tool.storage import load_dom_snapshot
+        self.assertEqual(load_dom_snapshot({"domSnapshot": "<before>"}, prefer_after=True), "<before>")
+
+    def test_reads_externalized_file_by_relative_path(self):
+        from eval_tool import storage
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rel = "runs/r1/screenshots/t1/step-2-domSnapshotAfter.html"
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("<html>after</html>", encoding="utf-8")
+            with patch.object(storage, "REPO_ROOT", root):
+                step = {"domSnapshotAfterPath": rel}
+                self.assertEqual(storage.load_dom_snapshot(step, prefer_after=True), "<html>after</html>")
+
+    def test_inline_wins_over_path(self):
+        from eval_tool.storage import load_dom_snapshot
+        step = {"domSnapshotAfter": "<inline>", "domSnapshotAfterPath": "does/not/exist.html"}
+        self.assertEqual(load_dom_snapshot(step, prefer_after=True), "<inline>")
+
+    def test_missing_returns_empty_string(self):
+        from eval_tool.storage import load_dom_snapshot
+        self.assertEqual(load_dom_snapshot({"url": "x"}, prefer_after=True), "")
+
+    def test_unreadable_path_returns_empty_string(self):
+        from eval_tool.storage import load_dom_snapshot
+        self.assertEqual(load_dom_snapshot({"domSnapshotPath": "no/such/file.html"}), "")
+
+    def test_subgoal_page_state_resolves_externalized_dom(self):
+        from eval_tool import subgoal_progress
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rel = "runs/r1/screenshots/t1/step-1-domSnapshotAfter.html"
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("<html><body>state marker</body></html>", encoding="utf-8")
+            with patch("eval_tool.storage.REPO_ROOT", root):
+                state = subgoal_progress._step_page_state({"url": "http://x", "domSnapshotAfterPath": rel})
+        self.assertEqual(state.url, "http://x")
+        self.assertIn("state marker", state.visible_text)
+
+
+class AnnotatedUrlFixerTest(unittest.TestCase):
+    def _sample(self):
+        return [
+            {"index": 0, "task": "T0", "key_nodes": [
+                {"content": {"url": "https://example.com/"}},
+            ], "subgoals": ["visit"]},
+            {"index": 1, "task": "Compare AeroAPI plans", "key_nodes": [
+                {"content": {"url": "https://www.flightaware.com/"}},
+                {"content": {"url": "https://www.flightaware.com/commercial/aeroapi/"}},
+                {"content": {"url": "https://www.flightaware.com/commercial/aeroapi/#compare-plans-section"}},
+            ], "subgoals": ["a", "b", "c"]},
+            {"index": 2, "task": "blank url task", "key_nodes": [
+                {"content": {"url": None}},
+                {"content": {}},
+            ], "subgoals": []},
+        ]
+
+    def test_iter_reference_urls_yields_index_step_url(self):
+        from eval_tool.annotated_urls import iter_reference_urls
+        rows = list(iter_reference_urls(self._sample()))
+        self.assertEqual(rows[0], (0, 1, "https://example.com/"))
+        self.assertEqual(rows[3], (1, 3, "https://www.flightaware.com/commercial/aeroapi/#compare-plans-section"))
+        self.assertEqual(rows[-1], (2, 2, None))
+
+    def test_check_url_flags_blank_without_network(self):
+        from eval_tool.annotated_urls import check_url
+        self.assertEqual(check_url("")[0], False)
+        self.assertEqual(check_url(None)[0], False)
+        self.assertEqual(check_url("   ")[2], "blank url")
+
+    def test_scan_structural_flags_only_blank_urls(self):
+        from eval_tool.annotated_urls import scan
+        flagged = scan(self._sample(), live=False)
+        keys = {(f["index"], f["step"]) for f in flagged}
+        self.assertEqual(keys, {(2, 1), (2, 2)})
+        self.assertTrue(all(f["detail"] == "blank url" for f in flagged))
+
+    def test_update_url_sets_reference_and_reports_missing(self):
+        from eval_tool.annotated_urls import update_url
+        records = self._sample()
+        self.assertTrue(update_url(records, 1, 3, "https://www.flightaware.com/commercial/aeroapi/#compare-tiers"))
+        self.assertEqual(
+            records[1]["key_nodes"][2]["content"]["url"],
+            "https://www.flightaware.com/commercial/aeroapi/#compare-tiers",
+        )
+        # Fills a missing content dict rather than crashing.
+        self.assertTrue(update_url(records, 2, 2, "https://new.example/"))
+        self.assertEqual(records[2]["key_nodes"][1]["content"]["url"], "https://new.example/")
+        self.assertFalse(update_url(records, 99, 1, "https://x/"))
+        self.assertFalse(update_url(records, 0, 5, "https://x/"))
+
+    def test_save_dataset_writes_backup_once(self):
+        from eval_tool.annotated_urls import load_dataset, save_dataset, update_url
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "AnnotatedDataset.json"
+            path.write_text(json.dumps(self._sample()), encoding="utf-8")
+            records = load_dataset(path)
+            update_url(records, 1, 3, "https://updated/")
+            save_dataset(records, path)
+            backup = path.with_name(path.name + ".bak")
+            self.assertTrue(backup.exists())
+            self.assertEqual(json.loads(path.read_text())[1]["key_nodes"][2]["content"]["url"], "https://updated/")
+            # A second save keeps the original backup (does not overwrite it).
+            original_backup = backup.read_text()
+            update_url(records, 1, 3, "https://updated-again/")
+            save_dataset(records, path)
+            self.assertEqual(backup.read_text(), original_backup)
+
+    def test_dashboard_app_lists_blank_urls_and_saves_updates(self):
+        from scripts.annotated_url_fixer import build_app
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "AnnotatedDataset.json"
+            path.write_text(json.dumps(self._sample()), encoding="utf-8")
+            app = build_app(path, live=False)
+            client = app.test_client()
+            page = client.get("/")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b"row-2-1", page.data)
+            self.assertIn(b"saveManual", page.data)
+            resp = client.post("/update", json={"index": 1, "step": 3, "url": "https://www.flightaware.com/commercial/aeroapi/#compare-tiers"})
+            self.assertEqual(resp.status_code, 200)
+            self.assertTrue(resp.get_json()["ok"])
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved[1]["key_nodes"][2]["content"]["url"], "https://www.flightaware.com/commercial/aeroapi/#compare-tiers")
+            missing = client.post("/update", json={"index": 99, "step": 1, "url": "https://x/"})
+            self.assertEqual(missing.status_code, 404)
+
+    def test_anchor_present_matches_id_and_name_targets(self):
+        from eval_tool.annotated_urls import anchor_present
+        html = '<section id="compare-tiers"></section><a name="foo"></a><div id=bar></div>'
+        self.assertTrue(anchor_present(html, "compare-tiers"))
+        self.assertTrue(anchor_present(html, "foo"))
+        self.assertTrue(anchor_present(html, "bar"))
+        self.assertFalse(anchor_present(html, "compare-plans-section"))
+        # No fragment to verify -> always considered present.
+        self.assertTrue(anchor_present(html, ""))
+        # Must be an exact target, not a substring of another id.
+        self.assertFalse(anchor_present('<div id="compare-tiers-extra"></div>', "compare-tiers"))
+
+    def test_extract_anchors_and_suggestion_ranking(self):
+        from eval_tool.annotated_urls import extract_anchors, suggest_anchors
+        html = ('<div id="compare-tiers"></div><section id="comparison-section"></section>'
+                '<a name="toggle-answer-section"></a><div id=hero></div>')
+        anchors = extract_anchors(html)
+        self.assertIn("compare-tiers", anchors)
+        self.assertIn("comparison-section", anchors)
+        self.assertIn("hero", anchors)
+        # Distinctive token "compare" should beat the generic "section" overlap.
+        ranked = suggest_anchors("compare-plans-section", anchors)
+        self.assertEqual(ranked[0], "compare-tiers")
+        # Unrelated anchors are not suggested.
+        self.assertNotIn("hero", ranked)
+
+    def test_scan_attaches_fix_suggestions_for_missing_anchor(self):
+        import eval_tool.annotated_urls as au
+
+        class _Resp:
+            def __init__(self, body): self._body = body
+            def getcode(self): return 200
+            def read(self, n=-1): return self._body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        records = [{"index": 7, "task": "Compare plans", "subgoals": ["a"], "key_nodes": [
+            {"content": {"url": "https://x/aeroapi/#compare-plans-section"}},
+        ]}]
+        page = b'<div id="compare-tiers"></div><div id="comparison-section"></div>'
+        with patch.object(au, "urlopen", return_value=_Resp(page)):
+            flagged = au.scan(records, live=True, timeout=5, verify_anchor=True)
+        self.assertEqual(len(flagged), 1)
+        row = flagged[0]
+        self.assertIn("not found on page", row["detail"])
+        self.assertEqual(row["suggested_url"], "https://x/aeroapi/#compare-tiers")
+        self.assertTrue(row["suggestions"])
+
+    def test_check_url_flags_missing_section_anchor(self):
+        from unittest.mock import MagicMock
+        import eval_tool.annotated_urls as au
+
+        class _Resp:
+            def __init__(self, body):
+                self._body = body
+            def getcode(self):
+                return 200
+            def read(self, n=-1):
+                return self._body
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        page = b'<html><body><section id="compare-tiers">Tiers</section></body></html>'
+        with patch.object(au, "urlopen", return_value=_Resp(page)):
+            # Fragment present on the page -> OK.
+            ok, status, detail = au.check_url("https://x/aeroapi/#compare-tiers", verify_anchor=True)
+            self.assertTrue(ok)
+            self.assertEqual(status, 200)
+            # Outdated fragment missing from the page -> flagged despite HTTP 200.
+            ok2, status2, detail2 = au.check_url("https://x/aeroapi/#compare-plans-section", verify_anchor=True)
+            self.assertFalse(ok2)
+            self.assertIn("compare-plans-section", detail2)
+            # Without verify_anchor the same URL is treated as reachable.
+            ok3, _, _ = au.check_url("https://x/aeroapi/#compare-plans-section", verify_anchor=False)
+            self.assertTrue(ok3)
+
+    def test_check_url_treats_read_timeout_as_inconclusive_not_dead(self):
+        import socket
+        import eval_tool.annotated_urls as au
+
+        with patch.object(au, "urlopen", side_effect=socket.timeout("The read operation timed out")):
+            ok, status, detail = au.check_url("https://slow.example/page", timeout=1)
+
+        self.assertTrue(ok)
+        self.assertIsNone(status)
+        self.assertIn("inconclusive", detail)
+
+    def test_browse_rows_expose_steps_and_blank_counts(self):
+        from eval_tool.annotated_urls import browse_rows, blank_url_count
+        rows = browse_rows(self._sample())
+        self.assertEqual(len(rows), 3)
+        flight = next(r for r in rows if r["index"] == 1)
+        self.assertEqual(len(flight["steps"]), 3)
+        self.assertEqual(flight["steps"][2]["step"], 3)
+        self.assertEqual(flight["steps"][2]["subgoal"], "c")
+        self.assertFalse(flight["steps"][2]["blank"])
+        blank_task = next(r for r in rows if r["index"] == 2)
+        self.assertEqual(blank_task["blank_count"], 2)
+        self.assertEqual(blank_url_count(self._sample()), 2)
+
+    def test_eval_server_annotated_urls_page_and_update(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "AnnotatedDataset.json"
+            path.write_text(json.dumps(self._sample()), encoding="utf-8")
+            with patch("eval_server.app.ANNOTATED_DATASET_PATH", path), \
+                 patch("eval_tool.annotated_urls.DATASET_PATH", path):
+                client = server_app.test_client()
+                page = client.get("/annotated-urls")
+                self.assertEqual(page.status_code, 200)
+                self.assertIn(b"Reference URL Fixer", page.data)
+                self.assertIn(b"step-1-3", page.data)
+                self.assertIn(b"Compare AeroAPI plans", page.data)
+                resp = client.post("/api/annotated-urls/update",
+                                   json={"index": 1, "step": 3, "url": "https://www.flightaware.com/commercial/aeroapi/#compare-tiers"})
+                self.assertEqual(resp.status_code, 200)
+                self.assertTrue(resp.get_json()["ok"])
+                saved = json.loads(path.read_text())
+                self.assertEqual(saved[1]["key_nodes"][2]["content"]["url"],
+                                 "https://www.flightaware.com/commercial/aeroapi/#compare-tiers")
+                missing = client.post("/api/annotated-urls/update", json={"index": 99, "step": 1, "url": "https://x/"})
+                self.assertEqual(missing.status_code, 404)
+
+    def test_eval_server_annotated_urls_check_one_resolves_step_and_suggests(self):
+        import eval_server.app as server_module
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+
+        class _Resp:
+            def __init__(self, body): self._body = body
+            def getcode(self): return 200
+            def read(self, n=-1): return self._body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        page = b'<div id="compare-tiers"></div>'
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "AnnotatedDataset.json"
+            path.write_text(json.dumps(self._sample()), encoding="utf-8")
+            with patch("eval_tool.annotated_urls.DATASET_PATH", path), \
+                 patch("eval_tool.annotated_urls.urlopen", return_value=_Resp(page)):
+                client = server_app.test_client()
+                # Resolves the URL from (index, step) and deep-checks its anchor.
+                resp = client.post("/api/annotated-urls/check-one", json={"index": 1, "step": 3})
+                self.assertEqual(resp.status_code, 200)
+                data = resp.get_json()
+                self.assertFalse(data["ok"])
+                self.assertIn("compare-plans-section", data["detail"])
+                self.assertEqual(data["suggested_url"], "https://www.flightaware.com/commercial/aeroapi/#compare-tiers")
+
+
+class ResolveTrajectoryPathTest(unittest.TestCase):
+    def test_session_id_prefix_match_mismatch_and_miss(self):
+        import eval_server.app as server_module
+        with TemporaryDirectory() as tmp:
+            match = Path(tmp) / "m.json"
+            match.write_text('{"task_id": "t", "session_id": "s1", "steps": []}', encoding="utf-8")
+            self.assertIs(server_module._session_id_in_file_prefix(match, "s1"), True)
+            self.assertIs(server_module._session_id_in_file_prefix(match, "other"), False)
+            # Session id past the prefix window -> None (caller falls back to a full parse).
+            self.assertIsNone(server_module._session_id_in_file_prefix(match, "s1", chunk=8))
+
+    def test_resolve_trajectory_uses_run_id_and_prefix_without_full_parse(self):
+        import eval_server.app as server_module
+        with TemporaryDirectory() as tmp:
+            runs = Path(tmp) / "runs"
+            (runs / "run-x" / "tasks").mkdir(parents=True)
+            (runs / "run-y" / "tasks").mkdir(parents=True)
+            # Prefix has the session id, but the JSON is intentionally truncated/invalid:
+            # a match must be found via the prefix read, never a full json.load.
+            (runs / "run-x" / "tasks" / "t1.json").write_text(
+                '{\n  "task_id": "t1",\n  "session_id": "sess-x",\n  "steps": [ {broken', encoding="utf-8")
+            (runs / "run-y" / "tasks" / "t2.json").write_text(
+                '{"task_id": "t2", "session_id": "sess-y", "steps": []}', encoding="utf-8")
+            with patch.object(server_module, "RUNS_DIR", str(runs)), \
+                 patch.object(server_module, "SAVED_DIR", str(Path(tmp) / "saved")):
+                # Fast path: the known run id resolves directly.
+                path, run_id = server_module._resolve_trajectory_path("sess-x", run_id="run-x")
+                self.assertEqual(run_id, "run-x")
+                self.assertTrue(path.endswith("run-x/tasks/t1.json"))
+                # A wrong run id does not return another run's file from that dir...
+                path2, run_id2 = server_module._resolve_trajectory_path("sess-x", run_id="run-y")
+                # ...but the global fallback still finds it in run-x.
+                self.assertEqual(run_id2, "run-x")
+                self.assertTrue(path2.endswith("run-x/tasks/t1.json"))
+                # No run id given -> scans all runs via prefix read.
+                path3, run_id3 = server_module._resolve_trajectory_path("sess-y")
+                self.assertEqual(run_id3, "run-y")
+
+    def test_resolve_trajectory_full_parse_fallback_when_prefix_misses(self):
+        import eval_server.app as server_module
+        with TemporaryDirectory() as tmp:
+            runs = Path(tmp) / "runs"
+            (runs / "run-z" / "tasks").mkdir(parents=True)
+            # Valid JSON, but the session id sits past the 256 KB prefix window, so the prefix
+            # read returns None and the resolver must fall back to a full parse.
+            filler = "x" * 300000
+            (runs / "run-z" / "tasks" / "big.json").write_text(
+                json.dumps({"filler": filler, "session_id": "deep"}), encoding="utf-8")
+            with patch.object(server_module, "RUNS_DIR", str(runs)), \
+                 patch.object(server_module, "SAVED_DIR", str(Path(tmp) / "saved")):
+                path, run_id = server_module._resolve_trajectory_path("deep", run_id="run-z")
+                self.assertEqual(run_id, "run-z")
+                self.assertTrue(path.endswith("run-z/tasks/big.json"))
 
 
 if __name__ == "__main__":

@@ -50,6 +50,11 @@ DEFAULT_CHROMIUM_PROFILE = str(Path.home() / ".pageguide-eval-chromium")
 DEFAULT_MAX_STEPS = 15
 MIN_MAX_STEPS = 1
 MAX_MAX_STEPS = 100
+DEFAULT_TEMPERATURE = 0.0
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 2.0
+DEFAULT_GROUNDING_WARNING_THRESHOLD = 0.8
+DEFAULT_LOOP_WARNING_THRESHOLD = 0.3
 
 # Mirrors extension key `guideDebugRegionCapture` (side panel debug toggle).
 GUIDE_REGION_CAPTURE_KEY = "guideDebugRegionCapture"
@@ -74,6 +79,30 @@ def configured_region_capture_mode() -> str:
 
 def configured_task_model() -> str:
     return normalize_model(os.environ.get("PAGEGUIDE_EVAL_LLM_MODEL"))
+
+
+def normalize_temperature(value: Any, default: float = DEFAULT_TEMPERATURE) -> float:
+    try:
+        temperature = float(value)
+    except (TypeError, ValueError):
+        temperature = default
+    if temperature < MIN_TEMPERATURE:
+        return MIN_TEMPERATURE
+    if temperature > MAX_TEMPERATURE:
+        return MAX_TEMPERATURE
+    return temperature
+
+
+def normalize_unit_threshold(value: Any, default: float) -> float:
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        threshold = default
+    if threshold < 0.0:
+        return 0.0
+    if threshold > 1.0:
+        return 1.0
+    return threshold
 
 
 def _id_from_path(path: str) -> str:
@@ -316,10 +345,27 @@ class PlaywrightGuideRunner:
         self.max_steps = normalize_max_steps(os.environ.get("PAGEGUIDE_EVAL_MAX_STEPS") or run.get("max_steps"))
         self.workers = int(run.get("workers") or 1)
         self.task_model = str(run.get("task_model") or configured_task_model())
+        self.temperature = normalize_temperature(os.environ.get("PAGEGUIDE_EVAL_TEMPERATURE") or run.get("temperature"))
         self.judge_model = str(run.get("judge_model") or configured_judge_model())
         self.judge_method = normalize_judge_method(run.get("judge_method"))
         # Opt-in: inject each task's reference_steps into the guide prompt (Plot B).
         self.ground_truth_mode = bool(run.get("ground_truth_mode"))
+        self.include_oracle_plan = bool(run.get("include_oracle_plan"))
+        self.force_ground_truth_mode = bool(run.get("force_ground_truth_mode"))
+        try:
+            self.force_ground_truth_retries = int(run.get("force_ground_truth_retries") or 0)
+        except (TypeError, ValueError):
+            self.force_ground_truth_retries = 0
+        self.force_ground_truth_retries = max(0, min(2, self.force_ground_truth_retries))
+        self.inject_grounding_warning = bool(run.get("inject_grounding_warning"))
+        self.inject_looping_warning = bool(run.get("inject_looping_warning"))
+        self.grounding_warning_threshold = normalize_unit_threshold(
+            run.get("grounding_warning_threshold"), DEFAULT_GROUNDING_WARNING_THRESHOLD
+        )
+        self.loop_warning_threshold = normalize_unit_threshold(
+            run.get("loop_warning_threshold"), DEFAULT_LOOP_WARNING_THRESHOLD
+        )
+        self.automatic_planning_mode = bool(run.get("automatic_planning_mode"))
         self.region_capture_mode = normalize_region_capture_mode(
             run.get("region_capture_mode") or os.environ.get("PAGEGUIDE_EVAL_REGION_CAPTURE")
         )
@@ -541,7 +587,7 @@ class PlaywrightGuideRunner:
         openrouter_key = _env_value("OPENROUTER_API_KEY", "OPEN_REUTER_API_KEY", "open-reuter-api-key")
         openrouter_model = self.task_model
         await extension_page.evaluate(
-            """async ({ openrouterKey, openrouterModel, maxSteps, regionCaptureMode }) => {
+            """async ({ openrouterKey, openrouterModel, maxSteps, temperature, regionCaptureMode, groundingWarning, loopingWarning, groundingThreshold, loopThreshold, planningMode }) => {
               const syncPrefs = {};
               if (openrouterKey) {
                 syncPrefs.provider = 'openrouter';
@@ -557,11 +603,35 @@ class PlaywrightGuideRunner:
                 guideEvalMode: true,
                 guideConfidenceFormula: 'full',
                 guideEvalMaxSteps: maxSteps,
-                guideDebugRegionCapture: regionCaptureMode
+                guideEvalTemperature: temperature,
+                guideDebugRegionCapture: regionCaptureMode,
+                guideEvalGroundingWarningEnabled: groundingWarning,
+                guideEvalLoopWarningEnabled: loopingWarning,
+                guideDebugPlanningMode: planningMode,
+                guideEvalGroundingWarningThreshold: groundingThreshold,
+                guideEvalLoopWarningThreshold: loopThreshold
               });
-              await chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']);
+              await chrome.storage.local.remove([
+                'debugPrompts',
+                'lastDebugPrompt',
+                'guideForceGroundTruthFailure',
+                'guideForceGroundTruthMode',
+                'guideForceGroundTruthRetries',
+                'guideForceGroundTruthPlan'
+              ]);
             }""",
-            {"openrouterKey": openrouter_key or "", "openrouterModel": openrouter_model, "maxSteps": self.max_steps, "regionCaptureMode": self.region_capture_mode},
+            {
+                "openrouterKey": openrouter_key or "",
+                "openrouterModel": openrouter_model,
+                "maxSteps": self.max_steps,
+                "temperature": self.temperature,
+                "regionCaptureMode": self.region_capture_mode,
+                "groundingWarning": self.inject_grounding_warning,
+                "loopingWarning": self.inject_looping_warning,
+                "groundingThreshold": self.grounding_warning_threshold,
+                "loopThreshold": self.loop_warning_threshold,
+                "planningMode": "planning" if self.automatic_planning_mode else "direct",
+            },
         )
 
     async def _apply_region_capture_mode(self, extension_page: Any) -> None:
@@ -627,11 +697,17 @@ class PlaywrightGuideRunner:
             progress(0, "starting guide")
             # Inject (or clear) this task's ground-truth reference steps before starting.
             await self._set_ground_truth_steps(extension_page, task)
+            await self._set_force_ground_truth_plan(extension_page, task)
+            guide_query = self._guide_query_for_task(task)
+            oracle_plan = self._oracle_plan_for_task(task)
             # Drive the guide the way the side panel does: message the content script. The
             # content script lives in an isolated world, so page.evaluate(window.*) can't reach
             # it. forcedRoute='guide' skips LLM routing; guideEvalMode/guideAutoMode auto-run it.
-            await self._start_guide(extension_page, tab_id, task.task)
+            await self._start_guide(extension_page, tab_id, guide_query)
             diagnostics["guide_start_sent"] = True
+            diagnostics["include_oracle_plan"] = bool(oracle_plan)
+            diagnostics["force_ground_truth_mode"] = self.force_ground_truth_mode
+            diagnostics["force_ground_truth_retries"] = self.force_ground_truth_retries
 
             status = await self._poll_task(extension_page, progress)
             terminal_reason = status.get("reason", terminal_reason)
@@ -676,6 +752,12 @@ class PlaywrightGuideRunner:
         if diagnostics["step_count"] == 0:
             diagnostics["zero_step_explanation"] = _zero_step_explanation(diagnostics, terminal_reason)
 
+        oracle_plan = self._oracle_plan_for_task(task)
+        guide_query = self._guide_query_for_task(task)
+        self._attach_oracle_plan_to_steps(steps, oracle_plan, guide_query)
+        if oracle_plan:
+            task_data["oracle_plan"] = oracle_plan
+            task_data["guide_query_with_oracle_plan"] = guide_query
         enriched_steps = enrich_step_scores(steps)
         if self.judge_method == "webjudge":
             judge = WebJudge(
@@ -785,7 +867,8 @@ class PlaywrightGuideRunner:
                 key.startsWith('RW_IDX::') ||
                 key.startsWith('RW_REC::') ||
                 key === 'debugPrompts' ||
-                key === 'lastDebugPrompt'
+                key === 'lastDebugPrompt' ||
+                key === 'guideForceGroundTruthFailure'
               );
               if (keys.length) await chrome.storage.local.remove(keys);
             }"""
@@ -818,6 +901,82 @@ class PlaywrightGuideRunner:
             {"steps": steps},
         )
 
+    def _oracle_plan_for_task(self, task: EvalTask) -> str:
+        if not self.include_oracle_plan:
+            return ""
+        steps = [line.strip() for line in (task.reference_steps or "").splitlines() if line.strip()]
+        if not steps:
+            return ""
+        return "\n".join(f"{i}. {step}" for i, step in enumerate(steps, start=1))
+
+    def _force_ground_truth_plan_for_task(self, task: EvalTask) -> list[dict[str, Any]]:
+        if not self.force_ground_truth_mode:
+            return []
+        subgoals = list(task.annotated_subgoals or [])
+        urls = list(task.annotated_reference_urls or [])
+        matchers = list(task.annotated_match_functions or [])
+        plan: list[dict[str, Any]] = []
+        # Step 1 is the loaded start URL. The first action should make the browser match step 2.
+        for zero_idx in range(1, min(len(subgoals), len(urls))):
+            expected_url = (urls[zero_idx] or "").strip()
+            subgoal = (subgoals[zero_idx] or "").strip()
+            if not expected_url or not subgoal:
+                continue
+            plan.append({
+                "step": zero_idx + 1,
+                "subgoal": subgoal,
+                "expectedUrl": expected_url,
+                "matchFunction": matchers[zero_idx] if zero_idx < len(matchers) else "",
+            })
+        return plan
+
+    async def _set_force_ground_truth_plan(self, extension_page: Any, task: EvalTask) -> None:
+        plan = self._force_ground_truth_plan_for_task(task)
+        await extension_page.evaluate(
+            """async ({ enabled, retries, plan }) => {
+              if (enabled && Array.isArray(plan) && plan.length) {
+                await chrome.storage.local.set({
+                  guideForceGroundTruthMode: true,
+                  guideForceGroundTruthRetries: retries,
+                  guideForceGroundTruthPlan: plan
+                });
+              } else {
+                await chrome.storage.local.remove([
+                  'guideForceGroundTruthMode',
+                  'guideForceGroundTruthRetries',
+                  'guideForceGroundTruthPlan'
+                ]);
+              }
+            }""",
+            {
+                "enabled": self.force_ground_truth_mode and bool(plan),
+                "retries": self.force_ground_truth_retries,
+                "plan": plan,
+            },
+        )
+
+    def _guide_query_for_task(self, task: EvalTask) -> str:
+        query = task.task
+        oracle_plan = self._oracle_plan_for_task(task)
+        if oracle_plan:
+            query += (
+                "\n\nORACLE PLAN FROM THE ANNOTATED DATASET:\n"
+                f"{oracle_plan}\n\n"
+                "Use this as a reference plan for the intended task trajectory. "
+                "Still inspect the current page and choose actions that are valid in the live UI."
+            )
+        return query
+
+    def _attach_oracle_plan_to_steps(self, steps: list[dict[str, Any]], oracle_plan: str, guide_query: str) -> None:
+        if not oracle_plan:
+            return
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            step["oraclePlanIncluded"] = True
+            step["oraclePlan"] = oracle_plan
+            step["guideQueryWithOraclePlan"] = guide_query
+
     async def _start_guide(self, extension_page: Any, tab_id: int, query: str) -> None:
         # Fire-and-forget: the guide persists across navigations via chrome.storage and would
         # otherwise reject this message the moment the task page reloads.
@@ -849,10 +1008,13 @@ class PlaywrightGuideRunner:
                   const debugPrompts = Array.isArray(all.debugPrompts) ? all.debugPrompts : [];
                   const lastDebugPrompt = debugPrompts.length ? debugPrompts[debugPrompts.length - 1] : null;
                   const last = steps.length ? steps[steps.length - 1] : null;
+                  const forceFailure = all.guideForceGroundTruthFailure || null;
                   return {
                     sessionId: current,
                     stepCount: steps.length,
                     lastIsDone: !!(last && (last.isLastStep || last.action === 'done')),
+                    forceGroundTruthFailed: !!forceFailure,
+                    forceGroundTruthFailure: forceFailure,
                     debugPromptCount: debugPrompts.length,
                     lastDebugPromptAction: lastDebugPrompt && lastDebugPrompt.action,
                     lastDebugPromptTimestamp: lastDebugPrompt && lastDebugPrompt.timestamp,
@@ -869,6 +1031,8 @@ class PlaywrightGuideRunner:
 
             if state.get("lastIsDone"):
                 return {**state, "reason": "done", "sessionId": last_session_id}
+            if state.get("forceGroundTruthFailed"):
+                return {**state, "reason": "force_ground_truth_verifier_failed", "sessionId": last_session_id}
             if step_count >= self.max_steps:
                 return {**state, "reason": "max_steps", "sessionId": last_session_id}
             if asyncio.get_running_loop().time() >= idle_deadline:
@@ -893,16 +1057,66 @@ class PlaywrightGuideRunner:
                 out.push(rec);
               }
               const predicted = index?.predictedGoalState || index?.spec_goal_text || null;
-              return { steps: out, spec_goal_text: predicted, predictedGoalState: predicted };
+              const planning = index ? {
+                plan: Array.isArray(index.plan) ? index.plan : [],
+                planTitle: index.planTitle || '',
+                planningPromptTimestamp: index.planningPromptTimestamp || null,
+                planningSystemPrompt: index.planningSystemPrompt || '',
+                planningPrompt: index.planningPrompt || '',
+                planningRawResponse: index.planningRawResponse || '',
+                planningResponseError: index.planningResponseError || '',
+                planningMode: index.planningMode || ''
+              } : null;
+              return { steps: out, spec_goal_text: predicted, predictedGoalState: predicted, planning };
             }""",
             session_id,
         )
         out = []
+        planning = (data or {}).get("planning") or {}
+        if planning.get("planningPrompt") or planning.get("planningRawResponse") or planning.get("plan"):
+            plan_lines = []
+            for item in planning.get("plan") or []:
+                if not isinstance(item, dict):
+                    continue
+                n = item.get("n") or len(plan_lines) + 1
+                goal = str(item.get("goal") or "").strip()
+                status = str(item.get("status") or "pending").strip()
+                if goal:
+                    suffix = f" [{status}]" if status else ""
+                    plan_lines.append(f"{n}. {goal}{suffix}")
+            instruction = "\n".join(plan_lines) or "Planning step"
+            title = str(planning.get("planTitle") or "Plan").strip()
+            out.append({
+                "step": -1,
+                "planStep": -1,
+                "isInitial": True,
+                "isPlanningStep": True,
+                "action": "plan",
+                "instruction": f"{title}\n{instruction}" if title and instruction else (title or instruction),
+                "timestamp": planning.get("planningPromptTimestamp"),
+                "systemPrompt": planning.get("planningSystemPrompt") or "",
+                "userPrompt": planning.get("planningPrompt") or "",
+                "rawLlmJson": planning.get("planningRawResponse") or planning.get("planningResponseError") or "",
+                "plan": planning.get("plan") or [],
+                "planTitle": title,
+                "planningMode": planning.get("planningMode") or "",
+            })
         for rec in (data or {}).get("steps") or []:
             cleaned = dict(rec)
             for key in ("screenshot", "screenshotBefore", "screenshotAfter", "regionShot"):
                 if cleaned.get(key):
                     cleaned[key] = self._save_base64(task_id, cleaned["step"], key, cleaned[key])
+            # Full-page DOM snapshots can be tens of MB each; inlining them makes the task
+            # result JSON huge and the inspector/task pages slow to load (the whole trajectory
+            # is embedded into the page). Write them to sibling files and reference by path so
+            # the JSON stays small; consumers (restore/state-progress) resolve them lazily via
+            # load_dom_snapshot(). See eval_tool/storage.py.
+            for key in ("domSnapshot", "domSnapshotAfter"):
+                if cleaned.get(key):
+                    saved = self._save_text(task_id, cleaned["step"], key, cleaned[key])
+                    if saved:
+                        cleaned[f"{key}Path"] = saved
+                        cleaned.pop(key, None)
             out.append(cleaned)
         predicted = (data or {}).get("spec_goal_text") or (data or {}).get("predictedGoalState")
         return {"steps": out, "spec_goal_text": predicted, "predictedGoalState": predicted}
@@ -925,6 +1139,15 @@ class PlaywrightGuideRunner:
             path.write_bytes(base64.b64decode(payload))
         except Exception:
             return value
+        return _rel(path)
+
+    def _save_text(self, task_id: str, step: Any, name: str, value: str) -> str | None:
+        path = screenshot_dir(self.run_id, task_id) / f"step-{step}-{name}.html"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.write_text(value, encoding="utf-8")
+        except Exception:
+            return None
         return _rel(path)
 
 

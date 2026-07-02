@@ -435,6 +435,227 @@ function _gv2CheckStepCap(g = window._guidev2) {
   return null;
 }
 
+function _gv2NormalizeForceUrl(url) {
+  try {
+    const u = new URL(String(url || ''), window.location.href);
+    u.hash = u.hash || '';
+    if ((u.protocol === 'https:' && u.port === '443') || (u.protocol === 'http:' && u.port === '80')) u.port = '';
+    u.hostname = u.hostname.toLowerCase();
+    u.pathname = decodeURIComponent(u.pathname).replace(/\/+$/, '') || '/';
+    return u.toString().replace(/\/(?=[?#]?$)/, '');
+  } catch (e) {
+    return String(url || '').trim().replace(/\/+$/, '');
+  }
+}
+
+function _gv2ForceUrlsMatch(actual, expected) {
+  return _gv2NormalizeForceUrl(actual) === _gv2NormalizeForceUrl(expected);
+}
+
+async function _gv2LoadForceGroundTruthConfig() {
+  try {
+    const r = await chrome.storage.local.get([
+      'guideForceGroundTruthMode',
+      'guideForceGroundTruthRetries',
+      'guideForceGroundTruthPlan'
+    ]);
+    const plan = Array.isArray(r.guideForceGroundTruthPlan)
+      ? r.guideForceGroundTruthPlan.filter(item => item && item.subgoal && item.expectedUrl)
+      : [];
+    if (!r.guideForceGroundTruthMode || !plan.length) return null;
+    const retries = Math.max(0, Math.min(2, Number(r.guideForceGroundTruthRetries) || 0));
+    return { enabled: true, retries, plan, cursor: 0, attempts: {}, pendingVerification: null };
+  } catch (e) {
+    return null;
+  }
+}
+
+function _gv2ForceStateFromSaved(saved) {
+  const fg = saved?.forceGroundTruth;
+  if (!fg?.enabled || !Array.isArray(fg.plan) || !fg.plan.length) return null;
+  return {
+    enabled: true,
+    retries: Math.max(0, Math.min(2, Number(fg.retries) || 0)),
+    plan: fg.plan,
+    cursor: Math.max(0, Number(fg.cursor) || 0),
+    attempts: fg.attempts && typeof fg.attempts === 'object' ? fg.attempts : {},
+    pendingVerification: fg.pendingVerification || null
+  };
+}
+
+function _gv2ForceTarget(g = window._guidev2) {
+  const fg = g?.forceGroundTruth;
+  if (!fg?.enabled || !Array.isArray(fg.plan)) return null;
+  return fg.plan[fg.cursor] || null;
+}
+
+function _gv2ForceAttemptHistory(fg, step) {
+  const key = String(step);
+  const attempts = Array.isArray(fg?.attempts?.[key]) ? fg.attempts[key] : [];
+  if (!attempts.length) return 'None';
+  return attempts.map((a, i) => {
+    return `${i + 1}. action=${a.action || 'unknown'}, index=${a.index ?? 'none'}, expected=${a.expectedUrl || ''}, actual=${a.actualUrl || ''}`;
+  }).join('\n');
+}
+
+async function _gv2ForceMarkFailure(message, pending, attempts) {
+  try {
+    await chrome.storage.local.set({
+      guideForceGroundTruthFailure: {
+        message,
+        expectedUrl: pending?.expectedUrl || '',
+        actualUrl: window.location.href,
+        oracleStep: pending?.step || null,
+        attempts: attempts || [],
+        timestamp: Date.now()
+      }
+    });
+  } catch (e) {}
+  _gv2StopInternal();
+  _gv2HidePanelTyping();
+  try { chrome.runtime.sendMessage({ action: 'addMessage', content: message, type: 'error' }); } catch (e) {}
+  return { success: false, progressed: false, error: message, forceGroundTruthFailed: true };
+}
+
+async function _gv2ForceVerifyPending() {
+  const g = window._guidev2;
+  const fg = g?.forceGroundTruth;
+  const pending = fg?.pendingVerification;
+  if (!fg?.enabled || !pending) return { ok: true };
+  const actualUrl = window.location.href;
+  const passed = _gv2ForceUrlsMatch(actualUrl, pending.expectedUrl);
+  const stepNumber = pending.generatedStep || _gv2CompletedStepNumber();
+  const attempt = {
+    attempt: pending.attempt,
+    action: pending.action,
+    index: pending.index,
+    expectedUrl: pending.expectedUrl,
+    actualUrl,
+    passed,
+    timestamp: Date.now()
+  };
+  const key = String(pending.step);
+  fg.attempts[key] = Array.isArray(fg.attempts[key]) ? fg.attempts[key] : [];
+  fg.attempts[key].push(attempt);
+  try {
+    if (typeof rewindPatchRecord === 'function' && g.sessionId && stepNumber) {
+      await rewindPatchRecord(g.sessionId, stepNumber, {
+        forceGroundTruth: true,
+        oracleStep: pending.step,
+        oracleSubgoal: pending.subgoal,
+        expectedUrl: pending.expectedUrl,
+        actualUrl,
+        verificationPassed: passed,
+        attempt: pending.attempt,
+        attemptHistory: fg.attempts[key]
+      });
+    }
+  } catch (e) {}
+  fg.pendingVerification = null;
+  if (passed) {
+    fg.cursor = (Number(fg.cursor) || 0) + 1;
+    await _gv2SetState(false);
+    return { ok: true };
+  }
+  if ((Number(pending.attempt) || 1) <= (Number(fg.retries) || 0)) {
+    await _gv2SetState(false);
+    return { ok: true, retrying: true };
+  }
+  const message = `ForceGroundTruth verifier failed for oracle step ${pending.step}: expected ${pending.expectedUrl}, got ${actualUrl}`;
+  return { ok: false, result: await _gv2ForceMarkFailure(message, pending, fg.attempts[key]) };
+}
+
+function _gv2BuildForceGroundTruthPrompt(target, pageIndex, stepNumber, attemptNumber, attemptHistory) {
+  return `You are PageGuide ForceGroundTruth mode.
+
+You are NOT choosing the next task step. The next task step is fixed by the annotated dataset.
+Your job is only to map that fixed oracle step to the best live DOM action.
+
+Return JSON only:
+{
+  "thought": "brief reasoning summary",
+  "instruction": "short action instruction for this oracle step",
+  "element": {"index": N, "text": "visible element text"},
+  "action": "click" | "type" | "clear_text" | "done",
+  "typeText": "text to type when action=type, otherwise null",
+  "isLastStep": false,
+  "risk": "low" | "high",
+  "riskReason": "short reason",
+  "confirmation": "no need"
+}
+
+CURRENT URL:
+${window.location.href}
+
+EXPECTED URL AFTER THIS ACTION:
+${target.expectedUrl}
+
+ORACLE STEP:
+Step ${target.step}: ${target.subgoal}
+
+PAGE INDEX:
+${pageIndex.indexText}
+
+PREVIOUS FAILED ATTEMPTS FOR THIS SAME ORACLE STEP:
+${attemptHistory}
+
+Rules:
+1. Do not create a new plan.
+2. Do not skip to a later oracle step.
+3. Choose an action that should make the browser reach EXPECTED URL AFTER THIS ACTION.
+4. This is attempt ${attemptNumber} for this oracle step. If this is not the first attempt, choose a different DOM index/action from the failed attempts.
+5. Return corrected JSON for PageGuide step ${stepNumber}.`;
+}
+
+async function gv2GenerateForceGroundTruthStep(pageIndex, stepNumber) {
+  const g = window._guidev2;
+  const fg = g?.forceGroundTruth;
+  if (!fg?.enabled) return null;
+  const verify = await _gv2ForceVerifyPending();
+  if (!verify.ok) return verify.result;
+  const target = _gv2ForceTarget(g);
+  if (!target) {
+    return gv2ProcessResponse(JSON.stringify({
+      thought: 'All annotated oracle URL targets have been verified.',
+      instruction: 'Done.',
+      element: { index: null, text: '' },
+      action: 'done',
+      typeText: null,
+      isLastStep: true,
+      risk: 'low',
+      riskReason: 'No further action is needed.',
+      confirmation: 'no need'
+    }), GUIDE_V2_PROMPT, 'ForceGroundTruth completed all oracle URL targets.');
+  }
+  const priorAttempts = Array.isArray(fg.attempts?.[String(target.step)]) ? fg.attempts[String(target.step)] : [];
+  const attemptNumber = priorAttempts.length + 1;
+  const systemPrompt = GUIDE_V2_PROMPT;
+  const userPrompt = _gv2BuildForceGroundTruthPrompt(
+    target,
+    pageIndex,
+    stepNumber,
+    attemptNumber,
+    _gv2ForceAttemptHistory(fg, target.step)
+  );
+  const response = await safeSendMessage({
+    action: 'callLLM',
+    systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+    metadata: {
+      mode: 'force_ground_truth',
+      step: stepNumber,
+      oracleStep: target.step,
+      attempt: attemptNumber,
+      expectedUrl: target.expectedUrl,
+      url: window.location.href
+    }
+  });
+  if (response?.error) return { success: false, error: response.error };
+  if (!response?.content) return { success: false, error: 'No response from AI' };
+  g._forceGroundTruthPromptTarget = { ...target, attempt: attemptNumber, attemptHistory: priorAttempts };
+  return gv2ProcessResponse(response.content, systemPrompt, userPrompt);
+}
+
 // ===== SESSION-STORAGE FALLBACK (for when SW was killed) =====
 
 async function gv2SaveFallback(extra = {}) {
@@ -457,6 +678,7 @@ async function gv2SaveFallback(extra = {}) {
         paused: !!s.paused,
         lowConfidenceCount: s.lowConfidenceCount || 0,
         predictedGoalState: s.predictedGoalState || null,
+        forceGroundTruth: s.forceGroundTruth || null,
         mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
         lastActionStepNumber: s._lastActionStepNumber || null,
         activeStepNumber: s._activeStepNumber || null,
@@ -649,6 +871,7 @@ async function _gv2ResumeFromState(state) {
     autoMode: state.autoMode === true,
     paused: false,
     lowConfidenceCount: state.lowConfidenceCount || 0,
+    forceGroundTruth: _gv2ForceStateFromSaved(state),
     _mechKeys: Array.isArray(state.mechKeys) ? state.mechKeys : [],
     _lastActionStepNumber: state.lastActionStepNumber || state.activeStepNumber || (state.previousSteps || []).length || null,
     _activeStepNumber: state.activeStepNumber || null
@@ -1310,6 +1533,7 @@ async function _gv2SetState(pendingResume) {
     paused: !!s.paused,
     lowConfidenceCount: s.lowConfidenceCount || 0,
     predictedGoalState: s.predictedGoalState || null,
+    forceGroundTruth: s.forceGroundTruth || null,
     // Mechanical confidence: carry the loop-detection key list across navigations.
     mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : []
   };
@@ -1402,6 +1626,41 @@ async function _gv2ConfidenceSource() {
     return r[_GV2_CONF_SOURCE_KEY] === 'mechanical' ? 'mechanical' : 'llm'; // default llm
   } catch (e) {
     return 'llm';
+  }
+}
+
+const _GV2_EVAL_GROUNDING_WARNING_KEY = 'guideEvalGroundingWarningEnabled';
+const _GV2_EVAL_LOOP_WARNING_KEY = 'guideEvalLoopWarningEnabled';
+const _GV2_EVAL_GROUNDING_WARNING_THRESHOLD_KEY = 'guideEvalGroundingWarningThreshold';
+const _GV2_EVAL_LOOP_WARNING_THRESHOLD_KEY = 'guideEvalLoopWarningThreshold';
+
+async function _gv2EvalWarningPrefs() {
+  try {
+    const r = await chrome.storage.local.get([
+      _GV2_EVAL_GROUNDING_WARNING_KEY,
+      _GV2_EVAL_LOOP_WARNING_KEY,
+      _GV2_EVAL_GROUNDING_WARNING_THRESHOLD_KEY,
+      _GV2_EVAL_LOOP_WARNING_THRESHOLD_KEY
+    ]);
+    return {
+      groundingEnabled: r[_GV2_EVAL_GROUNDING_WARNING_KEY] === true,
+      loopEnabled: r[_GV2_EVAL_LOOP_WARNING_KEY] === true,
+      groundingThreshold: Number.isFinite(Number(r[_GV2_EVAL_GROUNDING_WARNING_THRESHOLD_KEY]))
+        ? Number(r[_GV2_EVAL_GROUNDING_WARNING_THRESHOLD_KEY]) : 0.8,
+      loopThreshold: Number.isFinite(Number(r[_GV2_EVAL_LOOP_WARNING_THRESHOLD_KEY]))
+        ? Number(r[_GV2_EVAL_LOOP_WARNING_THRESHOLD_KEY]) : 0.3
+    };
+  } catch (e) {
+    return { groundingEnabled: false, loopEnabled: false, groundingThreshold: 0.8, loopThreshold: 0.3 };
+  }
+}
+
+async function _gv2IsEvalMode() {
+  try {
+    const r = await chrome.storage.local.get('guideEvalMode');
+    return r.guideEvalMode === true;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -1585,6 +1844,7 @@ Return JSON for the task plan.`;
     return false;
   }
 }
+if (typeof window !== 'undefined') window._gv2GenerateInitialPlan = _gv2GenerateInitialPlan;
 
 async function _gv2WaitForLayoutSettle() {
   await new Promise((resolve) => {
@@ -1616,13 +1876,123 @@ async function _gv2PredictFinalGoalState(question, url) {
   }
 }
 
+// ===== Embedding request plumbing =====
+// Grounding/goal-relevance scoring needs an embedding computed every step, before the action
+// is applied. Routing that through the service worker is unreliable: during an active guide
+// the SW does not receive callEmbed messages (the guide's own heavy SW traffic — screenshots,
+// vision LLM calls, state updates — starves them), so the reply resolves `undefined` →
+// reason:'no_response'. We therefore embed DIRECTLY from the content script (which is alive
+// and running the guide), reading the API key from chrome.storage; the SW sendMessage path is
+// only a fallback for the rare case the direct fetch is blocked. Calls are SERIALIZED through
+// a single in-flight chain and MEMOIZED per text (embeddings are a pure function of the text).
+let _gv2EmbedChain = Promise.resolve();
+const _gv2EmbedCache = new Map(); // text -> number[] (embedding vector)
+const GV2_EMBED_CACHE_MAX = 128;
+
+function _gv2EmbedCacheSet(text, vec) {
+  if (!Array.isArray(vec) || !vec.length) return;
+  if (_gv2EmbedCache.has(text)) _gv2EmbedCache.delete(text);
+  _gv2EmbedCache.set(text, vec);
+  while (_gv2EmbedCache.size > GV2_EMBED_CACHE_MAX) {
+    _gv2EmbedCache.delete(_gv2EmbedCache.keys().next().value); // FIFO evict oldest
+  }
+}
+
+/** Reset embed serialization + cache. Test/diagnostic helper. */
+function _gv2ResetEmbedState() {
+  _gv2EmbedCache.clear();
+  _gv2EmbedChain = Promise.resolve();
+}
+
+/**
+ * Embed `texts`, SERIALIZED (one request in flight at a time) and MEMOIZED per text. Returns
+ * `{ embeddings: number[][] }` aligned to `texts` on success, or the raw failure response
+ * (`{ error }` / undefined) so callers keep their graceful handling. Never throws.
+ */
+async function _gv2CallEmbed(texts, attempts = 2) {
+  const input = Array.isArray(texts) ? texts.map(t => String(t ?? '')) : [];
+  if (!input.length) return { embeddings: [] };
+  // Chain after any in-flight embed; keep the chain alive even if this call rejects so a
+  // single failure can't wedge the queue.
+  const run = _gv2EmbedChain.then(() => _gv2CallEmbedInner(input, attempts));
+  _gv2EmbedChain = run.then(() => {}, () => {});
+  return run;
+}
+
+const GV2_EMBED_MSG_TIMEOUT_MS = 6000;
+const GV2_EMBED_MODEL = 'openai/text-embedding-ada-002';
+
+/**
+ * Embed `texts` directly from the content script (bypassing the SW), reading the key from
+ * chrome.storage. This is the reliable path during an active guide. Returns
+ * `{ embeddings }` / `{ error }`, or undefined if the fetch itself is blocked (e.g. page CSP)
+ * so the caller can fall back to the SW.
+ */
+async function _gv2DirectEmbed(texts) {
+  try {
+    const s = await chrome.storage.sync.get(['provider', 'openrouterApiKey', 'openaiApiKey']);
+    const provider = s.provider || 'openrouter';
+    let endpoint, apiKey;
+    if (provider === 'openai') {
+      endpoint = 'https://api.openai.com/v1/embeddings';
+      apiKey = (s.openaiApiKey || '').trim();
+    } else {
+      endpoint = 'https://openrouter.ai/api/v1/embeddings';
+      apiKey = (s.openrouterApiKey || '').trim() || (s.openaiApiKey || '').trim();
+    }
+    if (!apiKey) return { error: 'Embedding API key not configured.' };
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: GV2_EMBED_MODEL, input: texts })
+    });
+    if (!resp.ok) return { error: `Embedding HTTP ${resp.status}` };
+    const data = await resp.json();
+    const rows = Array.isArray(data.data) ? data.data.slice().sort((a, b) => (a.index || 0) - (b.index || 0)) : [];
+    return { embeddings: rows.map(r => r.embedding || []) };
+  } catch (e) {
+    return undefined; // fall back to the SW transport
+  }
+}
+
+/**
+ * Transport for a single embed of `texts`: direct content-script fetch (primary), falling back
+ * to one-shot sendMessage to the SW if the direct fetch is blocked. Returns the response object
+ * or undefined.
+ */
+async function _gv2SendEmbed(texts) {
+  const direct = await _gv2DirectEmbed(texts);
+  if (direct && (direct.error || Array.isArray(direct.embeddings))) return direct;
+  return (typeof safeSendMessage === 'function')
+    ? await safeSendMessage({ action: 'callEmbed', texts }, GV2_EMBED_MSG_TIMEOUT_MS)
+    : await chrome.runtime.sendMessage({ action: 'callEmbed', texts });
+}
+
+async function _gv2CallEmbedInner(input, attempts) {
+  const missing = input.filter(t => !_gv2EmbedCache.has(t));
+  if (missing.length) {
+    let resp = null;
+    for (let i = 0; i < attempts; i++) {
+      resp = await _gv2SendEmbed(missing);
+      if (resp && !resp.error && Array.isArray(resp.embeddings) && resp.embeddings.length === missing.length) break;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 250));
+    }
+    if (!resp || resp.error || !Array.isArray(resp.embeddings) || resp.embeddings.length !== missing.length) {
+      return resp; // propagate failure unchanged — callers handle no_response / embed_error
+    }
+    missing.forEach((t, k) => _gv2EmbedCacheSet(t, resp.embeddings[k]));
+  }
+  return { embeddings: input.map(t => _gv2EmbedCache.get(t) || []) };
+}
+if (typeof window !== 'undefined') {
+  window._gv2CallEmbed = _gv2CallEmbed;
+  window._gv2ResetEmbedState = _gv2ResetEmbedState;
+}
+
 async function _gv2CacheGoalEmbedding(g) {
   if (!g?.predictedGoalState) return;
   try {
-    const resp = await chrome.runtime.sendMessage({
-      action: 'callEmbed',
-      texts: [g.predictedGoalState]
-    });
+    const resp = await _gv2CallEmbed([g.predictedGoalState]);
     if (resp?.error || !resp?.embeddings?.[0]?.length) return;
     g._goalEmbedVector = resp.embeddings[0];
   } catch (e) { /* best-effort */ }
@@ -1631,10 +2001,7 @@ async function _gv2CacheGoalEmbedding(g) {
 async function _gv2GoalRelevanceScore(g, instruction) {
   if (!g?._goalEmbedVector || !instruction || typeof gv2CosineSimilarity !== 'function') return null;
   try {
-    const resp = await chrome.runtime.sendMessage({
-      action: 'callEmbed',
-      texts: [String(instruction)]
-    });
+    const resp = await _gv2CallEmbed([String(instruction)]);
     if (resp?.error || !resp?.embeddings?.[0]?.length) return null;
     return gv2CosineSimilarity(resp.embeddings[0], g._goalEmbedVector);
   } catch (e) {
@@ -1642,22 +2009,207 @@ async function _gv2GoalRelevanceScore(g, instruction) {
   }
 }
 
-async function _gv2ElementStepSimilarity(instruction, elementText, hasIndex) {
-  if (!hasIndex) return null;
+async function _gv2ElementStepSimilarityResult(instruction, elementText, hasIndex) {
+  if (!hasIndex) return { value: null, reason: 'no_index', detail: 'The agent response did not include a resolved element index.' };
   const instr = String(instruction || '').trim();
   const elem = String(elementText || '').trim();
-  if (!instr || !elem) return 0.0;
-  if (typeof gv2CosineSimilarity !== 'function') return null;
-  try {
-    const resp = await chrome.runtime.sendMessage({
-      action: 'callEmbed',
-      texts: [instr, elem]
-    });
-    if (resp?.error || !Array.isArray(resp.embeddings) || resp.embeddings.length < 2) return null;
-    return gv2CosineSimilarity(resp.embeddings[0], resp.embeddings[1]);
-  } catch (e) {
-    return null;
+  if (!instr) return { value: null, reason: 'empty_instruction', detail: 'The agent response instruction was empty.' };
+  if (!elem) return { value: null, reason: 'empty_element_text', detail: 'The resolved DOM element text was empty.' };
+  if (typeof gv2CosineSimilarity !== 'function') {
+    return { value: null, reason: 'cosine_unavailable', detail: 'gv2CosineSimilarity was not available in the page context.' };
   }
+  try {
+    const resp = await _gv2CallEmbed([instr, elem]);
+    if (!resp) {
+      return { value: null, reason: 'no_response', detail: 'Embedding request returned no response (service worker unavailable).' };
+    }
+    if (resp.error) {
+      return { value: null, reason: 'embed_error', detail: String(resp.error || 'Embedding request failed.') };
+    }
+    if (!Array.isArray(resp.embeddings) || resp.embeddings.length < 2) {
+      return { value: null, reason: 'bad_embeddings', detail: 'Embedding response did not include two embedding vectors.' };
+    }
+    const value = gv2CosineSimilarity(resp.embeddings[0], resp.embeddings[1]);
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+      return { value: null, reason: 'cosine_null', detail: 'Cosine similarity could not be computed from the returned vectors.' };
+    }
+    return { value: Number(value), reason: 'ok', detail: '' };
+  } catch (e) {
+    console.warn('[guidev2] element-step embed failed:', e);
+    return { value: null, reason: 'exception', detail: String(e?.message || e || 'Embedding request threw an exception.') };
+  }
+}
+
+async function _gv2ElementStepSimilarity(instruction, elementText, hasIndex) {
+  const result = await _gv2ElementStepSimilarityResult(instruction, elementText, hasIndex);
+  return result.value;
+}
+if (typeof window !== 'undefined') window._gv2ElementStepSimilarityResult = _gv2ElementStepSimilarityResult;
+
+function _gv2NormalizeCandidateStep(raw) {
+  const step = raw ? { ...raw } : null;
+  if (!step) throw new Error('Could not parse step JSON');
+  if (!step.instruction) throw new Error('LLM response JSON is missing instruction field');
+  const g = window._guidev2;
+  const stepNumberInfo = (typeof gv2NormalizeStepNumber === 'function')
+    ? gv2NormalizeStepNumber(step, g?.previousSteps || [])
+    : {
+        expectedStep: (Array.isArray(g?.previousSteps) ? g.previousSteps.length : 0) + 1,
+        llmStep: Number.isFinite(Number(step.step)) ? Number(step.step) : null,
+        stepNumberCorrected: Number(step.step) !== ((Array.isArray(g?.previousSteps) ? g.previousSteps.length : 0) + 1)
+      };
+  step.llmStep = stepNumberInfo.llmStep;
+  step.expectedStep = stepNumberInfo.expectedStep;
+  step.stepNumberCorrected = stepNumberInfo.stepNumberCorrected;
+  step.step = stepNumberInfo.expectedStep;
+  return step;
+}
+
+function _gv2ResolvedElementText(step) {
+  const idx = step?.element?.index;
+  const hasIndex = idx != null && idx !== '';
+  if (hasIndex) {
+    const el = window._pageguideIndex?.[idx];
+    if (el) {
+      try {
+        const name = (typeof getAccessibleName === 'function' ? getAccessibleName(el) : '') || el.innerText || el.textContent || '';
+        const cleaned = String(name || '').replace(/\s+/g, ' ').trim();
+        if (cleaned) return cleaned;
+      } catch (e) {}
+    }
+  }
+  return String(step?.element?.text || '').replace(/\s+/g, ' ').trim();
+}
+
+async function _gv2ScoreCandidate(content) {
+  const raw = (typeof gv2ExtractJsonObject === 'function')
+    ? gv2ExtractJsonObject(content)
+    : JSON.parse(content);
+  const step = _gv2NormalizeCandidateStep(raw);
+  const action = String(step.action || (step.isLastStep ? 'done' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
+  const hasIndex = step.element?.index != null && step.element?.index !== '';
+  const resolvedElementText = _gv2ResolvedElementText(step);
+  const reportedElementText = String(step.element?.text || '').replace(/\s+/g, ' ').trim();
+  const similarityResult = await _gv2ElementStepSimilarityResult(step.instruction, resolvedElementText || reportedElementText, hasIndex);
+  const elementStepSimilarity = similarityResult.value;
+  const currentKey = (typeof gv2ElementKey === 'function')
+    ? gv2ElementKey({ ...step, action, element: { ...(step.element || {}), text: resolvedElementText || reportedElementText } })
+    : '';
+  const priorKeys = Array.isArray(window._guidev2?._mechKeys) ? window._guidev2._mechKeys : [];
+  const loopScore = (typeof gv2LoopScore === 'function') ? gv2LoopScore(priorKeys, currentKey) : 0;
+  const loopMatchCount = currentKey ? priorKeys.filter(k => k === currentKey).length : 0;
+  return {
+    rawContent: content,
+    step,
+    action,
+    hasIndex,
+    reportedElementText,
+    resolvedElementText,
+    elementStepSimilarity,
+    elementStepSimilarityReason: similarityResult.reason,
+    elementStepSimilarityDetail: similarityResult.detail,
+    currentKey,
+    loopScore,
+    loopMatchCount
+  };
+}
+
+function _gv2FormatScore(value) {
+  if (value === null || value === undefined || value === '') return 'unknown';
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(2) : 'unknown';
+}
+
+function _gv2WarningPromptBlock(candidate, decision) {
+  // Diagnostic sentence(s) describing why the previous attempt failed. Folded into the
+  // reflector-style Reflection section of the retry prompt (see _gv2WarningRetryPrompt).
+  const blocks = [];
+  if (decision.types.includes('grounding')) {
+    const described = String(candidate.step?.instruction || candidate.reportedElementText || 'Unknown instruction').replace(/\s+/g, ' ').trim();
+    const resolved = String(candidate.resolvedElementText || 'Unknown element').replace(/\s+/g, ' ').trim();
+    blocks.push(`It failed grounding (similarity ${_gv2FormatScore(candidate.elementStepSimilarity)}): you described "${described}" but the page resolved "${resolved}". Only reference SoM labels that are actually visible, and choose an element/index whose DOM text matches the instruction.`);
+  }
+  if (decision.types.includes('loop')) {
+    blocks.push(`It repeated the target "${candidate.currentKey || 'this target'}" in ${candidate.loopMatchCount} previous step(s) without progress. Choose a completely different element or approach.`);
+  }
+  return blocks.join(' ');
+}
+if (typeof window !== 'undefined') window._gv2WarningPromptBlock = _gv2WarningPromptBlock;
+
+// Build the reflector-style retry user prompt (BacktrackAgent Table 10 format). Reuses the
+// original userPrompt (which already carries the page index / action space, user goal / task,
+// and completed steps / history), then appends a Reflection that folds in the grounding/loop
+// diagnostic, lists the previously generated (failed) action, and asks for a NEW action that
+// differs from all previous ones.
+function _gv2WarningRetryPrompt(userPrompt, diagnostic, previousResponse, stepNumber) {
+  const reflectionLead = 'Reflection: This is not your first attempt to generate the next action. The previous attempt to generate the next action has failed.';
+  const diag = String(diagnostic || '').trim();
+  return `${userPrompt}
+
+${diag ? `${reflectionLead} ${diag}` : reflectionLead}
+Here are some previously generated next actions:
+${previousResponse}
+
+Please note that you are currently in the middle stage of the trajectory. First, analyze the current state, completed actions, and task, and compare them with the previous attempt at the next action. Then, generate a new action that is DIFFERENT from all previously generated next actions. Return corrected JSON for Step ${stepNumber}.`;
+}
+if (typeof window !== 'undefined') window._gv2WarningRetryPrompt = _gv2WarningRetryPrompt;
+
+function _gv2WarningSkipReason(candidate, decision, warningPrefs) {
+  const reasons = [];
+  if (!warningPrefs?.groundingEnabled) {
+    reasons.push('grounding_disabled');
+  } else if (candidate?.elementStepSimilarity === null || candidate?.elementStepSimilarity === undefined) {
+    reasons.push(`grounding_similarity_unavailable:${candidate?.elementStepSimilarityReason || 'unknown'}`);
+  } else if (Number(candidate.elementStepSimilarity) >= Number(warningPrefs.groundingThreshold)) {
+    reasons.push('grounding_similarity_above_threshold');
+  } else if (!decision?.types?.includes('grounding')) {
+    reasons.push('grounding_not_selected');
+  }
+
+  if (!warningPrefs?.loopEnabled) {
+    reasons.push('loop_disabled');
+  } else if (candidate?.loopScore === null || candidate?.loopScore === undefined) {
+    reasons.push('loop_score_unavailable');
+  } else if (Number(candidate.loopScore) < Number(warningPrefs.loopThreshold)) {
+    reasons.push('loop_below_threshold');
+  } else if (!decision?.types?.includes('loop')) {
+    reasons.push('loop_not_selected');
+  }
+
+  return reasons.join('; ');
+}
+
+function _gv2WarningMetaBase({ firstCandidate, warningPrefs, decision, warningInjected, warningPrompt = '', warningSystemPrompt = '', warningDiagnostic = '', retryRawResponse = '' }) {
+  return {
+    warningChecked: true,
+    warningInjected: !!warningInjected,
+    warningSkipReason: warningInjected ? '' : _gv2WarningSkipReason(firstCandidate, decision || { types: [] }, warningPrefs || {}),
+    warningTypes: Array.isArray(decision?.types) ? decision.types : [],
+    // Full user prompt sent for the retry (user goal + current page index + completed steps +
+    // the reflection). warningSystemPrompt is the system prompt used; warningDiagnostic is just
+    // the grounding/loop reflection sentence for a compact summary.
+    warningPrompt,
+    warningSystemPrompt,
+    warningDiagnostic,
+    firstRawResponse: firstCandidate?.rawContent || '',
+    retryRawResponse,
+    firstGroundingSimilarity: firstCandidate?.elementStepSimilarity ?? null,
+    firstGroundingSimilarityReason: firstCandidate?.elementStepSimilarityReason || '',
+    firstGroundingSimilarityDetail: firstCandidate?.elementStepSimilarityDetail || '',
+    firstLoopScore: firstCandidate?.loopScore ?? null,
+    warningGroundingThreshold: decision?.groundingThreshold ?? warningPrefs?.groundingThreshold ?? null,
+    warningLoopThreshold: decision?.loopThreshold ?? warningPrefs?.loopThreshold ?? null,
+    firstReportedElementText: firstCandidate?.reportedElementText || '',
+    firstResolvedElementText: firstCandidate?.resolvedElementText || '',
+    firstActionKey: firstCandidate?.currentKey || '',
+    retryGroundingSimilarity: null,
+    retryGroundingSimilarityReason: '',
+    retryGroundingSimilarityDetail: '',
+    retryLoopScore: null,
+    retryReportedElementText: '',
+    retryResolvedElementText: '',
+    retryActionKey: ''
+  };
 }
 
 /**
@@ -1920,6 +2472,16 @@ async function gv2CaptureStepRecord(data) {
         llmStep: data.llmStep != null ? data.llmStep : null,
         expectedStep: data.expectedStep != null ? data.expectedStep : null,
         stepNumberCorrected: !!data.stepNumberCorrected,
+        warningChecked: !!data.warningChecked,
+        warningInjected: !!data.warningInjected,
+        warningSkipReason: data.warningSkipReason || '',
+        warningTypes: Array.isArray(data.warningTypes) ? data.warningTypes : [],
+        forceGroundTruth: !!data.forceGroundTruth,
+        oracleStep: data.oracleStep != null ? data.oracleStep : null,
+        expectedUrl: data.expectedUrl || '',
+        actualUrl: data.actualUrl || '',
+        verificationPassed: data.verificationPassed != null ? data.verificationPassed : null,
+        attempt: data.attempt != null ? data.attempt : null,
         hasShot: true,
         g_goal_relevance_score: goalRelevance
       }
@@ -1973,6 +2535,39 @@ async function gv2CaptureStepRecord(data) {
       llmStep: data.llmStep != null ? data.llmStep : null,
       expectedStep: data.expectedStep != null ? data.expectedStep : null,
       stepNumberCorrected: !!data.stepNumberCorrected,
+      warningChecked: !!data.warningChecked,
+      warningInjected: !!data.warningInjected,
+      warningSkipReason: data.warningSkipReason || '',
+      warningTypes: Array.isArray(data.warningTypes) ? data.warningTypes : [],
+      forceGroundTruth: !!data.forceGroundTruth,
+      oracleStep: data.oracleStep != null ? data.oracleStep : null,
+      oracleSubgoal: data.oracleSubgoal || '',
+      expectedUrl: data.expectedUrl || '',
+      actualUrl: data.actualUrl || '',
+      verificationPassed: data.verificationPassed != null ? data.verificationPassed : null,
+      attempt: data.attempt != null ? data.attempt : null,
+      attemptHistory: Array.isArray(data.attemptHistory) ? data.attemptHistory : [],
+      warningPrompt: data.warningPrompt || '',
+      warningSystemPrompt: data.warningSystemPrompt || '',
+      warningDiagnostic: data.warningDiagnostic || '',
+      firstRawResponse: data.firstRawResponse || '',
+      retryRawResponse: data.retryRawResponse || '',
+      firstGroundingSimilarity: data.firstGroundingSimilarity != null ? data.firstGroundingSimilarity : null,
+      firstGroundingSimilarityReason: data.firstGroundingSimilarityReason || '',
+      firstGroundingSimilarityDetail: data.firstGroundingSimilarityDetail || '',
+      firstLoopScore: data.firstLoopScore != null ? data.firstLoopScore : null,
+      warningGroundingThreshold: data.warningGroundingThreshold != null ? data.warningGroundingThreshold : null,
+      warningLoopThreshold: data.warningLoopThreshold != null ? data.warningLoopThreshold : null,
+      firstReportedElementText: data.firstReportedElementText || '',
+      firstResolvedElementText: data.firstResolvedElementText || '',
+      firstActionKey: data.firstActionKey || '',
+      retryGroundingSimilarity: data.retryGroundingSimilarity != null ? data.retryGroundingSimilarity : null,
+      retryGroundingSimilarityReason: data.retryGroundingSimilarityReason || '',
+      retryGroundingSimilarityDetail: data.retryGroundingSimilarityDetail || '',
+      retryLoopScore: data.retryLoopScore != null ? data.retryLoopScore : null,
+      retryReportedElementText: data.retryReportedElementText || '',
+      retryResolvedElementText: data.retryResolvedElementText || '',
+      retryActionKey: data.retryActionKey || '',
       durationMs: Date.now() - startedAt,
       // BEFORE-action screenshot (carried from the previous step's after-shot). The timeline shows
       // this. `screenshot` mirrors it for back-compat. The AFTER-action shot is added later by
@@ -2105,6 +2700,15 @@ async function gv2CaptureInitialState() {
 
 // ===== CORE GUIDANCE =====
 
+// The eval runner's "Include Oracle Plan" option appends this marker plus the annotated
+// ground-truth plan to the task query. When present we use ONLY the annotated ground truth
+// and skip the (separately sourced, often unrelated) tutorial reference — see _handleStepByStepGuideV2.
+const _GV2_ORACLE_PLAN_MARKER = 'ORACLE PLAN FROM THE ANNOTATED DATASET';
+function _gv2QuestionHasOraclePlan(question) {
+  return typeof question === 'string' && question.includes(_GV2_ORACLE_PLAN_MARKER);
+}
+if (typeof window !== 'undefined') window._gv2QuestionHasOraclePlan = _gv2QuestionHasOraclePlan;
+
 /**
  * Start guidance for a new question (called by the router override at bottom of file).
  */
@@ -2112,8 +2716,12 @@ async function _handleStepByStepGuideV2(question) {
   _guidev2Stopped = false;
   await _gv2ClearStopMark(); // a fresh guide overrides any prior Stop tombstone
   // Look up a pre-verified tutorial ONCE at the start. Result is cached in
-  // window._guidev2.tutorialRef so intermediate steps reuse it for free.
-  const match = await _gv2FindTutorial(question, window.location.href);
+  // window._guidev2.tutorialRef so intermediate steps reuse it for free. Skip the lookup
+  // entirely when the annotated oracle plan is already in the query — that ground truth
+  // supersedes the tutorial reference (and skipping avoids the tutorial-matching LLM call).
+  const match = _gv2QuestionHasOraclePlan(question)
+    ? null
+    : await _gv2FindTutorial(question, window.location.href);
 
   // Rewind (Slice 1): start a fresh capture session. sessionId rides along in the
   // persisted state so the resumed page on the next navigation keeps writing to it.
@@ -2121,6 +2729,7 @@ async function _handleStepByStepGuideV2(question) {
   const captureEnabled = await _gv2IsCaptureEnabled();
   const autoMode = await _gv2IsAutoMode();
   const planningMode = await _gv2PlanningMode();
+  const forceGroundTruth = await _gv2LoadForceGroundTruthConfig();
 
   window._guidev2 = {
     active: true,
@@ -2136,6 +2745,7 @@ async function _handleStepByStepGuideV2(question) {
     planTitle: '',
     paused: false,
     lowConfidenceCount: 0,
+    forceGroundTruth,
     _mechKeys: [],
     currentPlanStep: 1
   };
@@ -2214,6 +2824,10 @@ async function gv2GenerateNextStep() {
 
   const stepNumber = g.previousSteps.length + 1;
   console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
+
+  if (g.forceGroundTruth?.enabled) {
+    return gv2GenerateForceGroundTruthStep(pageIndex, stepNumber);
+  }
 
   if (stepNumber === 1 && g.planningMode === 'planning' && (!Array.isArray(g.plan) || !g.plan.length)) {
     _gv2ShowIndicator('Planning task…');
@@ -2334,7 +2948,99 @@ Return JSON for Step ${stepNumber}`;
       return { success: false, error: response.error };
     }
     if (response?.content) {
-      const result = await gv2ProcessResponse(response.content, systemPrompt, userPrompt);
+      let chosenContent = response.content;
+      let warningMeta = null;
+      const warningPrefs = await _gv2EvalWarningPrefs();
+      const shouldCheckWarnings = g.autoMode && await _gv2IsEvalMode() && (warningPrefs.groundingEnabled || warningPrefs.loopEnabled);
+      if (shouldCheckWarnings) {
+        const firstCandidate = await _gv2ScoreCandidate(response.content);
+        const decision = (typeof gv2WarningDecision === 'function')
+          ? gv2WarningDecision({
+              groundingEnabled: warningPrefs.groundingEnabled,
+              loopEnabled: warningPrefs.loopEnabled,
+              groundingThreshold: warningPrefs.groundingThreshold,
+              loopThreshold: warningPrefs.loopThreshold,
+              elementStepSimilarity: firstCandidate.elementStepSimilarity,
+              loopScore: firstCandidate.loopScore
+            })
+          : { inject: false, types: [] };
+        warningMeta = _gv2WarningMetaBase({
+          firstCandidate,
+          warningPrefs,
+          decision,
+          warningInjected: false
+        });
+        if (decision.inject) {
+          const warningBlock = _gv2WarningPromptBlock(firstCandidate, decision);
+          const retryUserPrompt = _gv2WarningRetryPrompt(userPrompt, warningBlock, response.content, stepNumber);
+          console.warn('[guidev2] Eval warning injected before auto action:', decision.types);
+          const retryResponse = await safeSendMessage({
+            action: 'callLLM',
+            systemPrompt,
+            messages: [{ role: 'user', content: retryUserPrompt }],
+            metadata: {
+              mode: 'guide_warning_retry',
+              step: stepNumber,
+              url: window.location.href,
+              warningTypes: decision.types
+            }
+          });
+          if (retryResponse?.error || !retryResponse?.content) {
+            console.warn('[guidev2] Warning retry failed; using first response:', retryResponse?.error || 'No retry response');
+            warningMeta = _gv2WarningMetaBase({
+              firstCandidate,
+              warningPrefs,
+              decision,
+              warningInjected: true,
+              warningPrompt: retryUserPrompt,
+              warningSystemPrompt: systemPrompt,
+              warningDiagnostic: warningBlock,
+              retryRawResponse: ''
+            });
+          } else {
+            let retryCandidate = null;
+            try {
+              retryCandidate = await _gv2ScoreCandidate(retryResponse.content);
+            } catch (retryScoreErr) {
+              console.warn('[guidev2] Could not score warning retry response:', retryScoreErr);
+            }
+            if (!retryCandidate) {
+              warningMeta = _gv2WarningMetaBase({
+                firstCandidate,
+                warningPrefs,
+                decision,
+                warningInjected: true,
+                warningPrompt: retryUserPrompt,
+                warningSystemPrompt: systemPrompt,
+                warningDiagnostic: warningBlock,
+                retryRawResponse: retryResponse.content
+              });
+            } else {
+              chosenContent = retryResponse.content;
+              warningMeta = {
+                ..._gv2WarningMetaBase({
+                  firstCandidate,
+                  warningPrefs,
+                  decision,
+                  warningInjected: true,
+                  warningPrompt: retryUserPrompt,
+                  warningSystemPrompt: systemPrompt,
+                  warningDiagnostic: warningBlock,
+                  retryRawResponse: retryResponse.content
+                }),
+                retryGroundingSimilarity: retryCandidate.elementStepSimilarity,
+                retryGroundingSimilarityReason: retryCandidate.elementStepSimilarityReason || '',
+                retryGroundingSimilarityDetail: retryCandidate.elementStepSimilarityDetail || '',
+                retryLoopScore: retryCandidate.loopScore,
+                retryReportedElementText: retryCandidate.reportedElementText,
+                retryResolvedElementText: retryCandidate.resolvedElementText,
+                retryActionKey: retryCandidate.currentKey
+              };
+            }
+          }
+        }
+      }
+      const result = await gv2ProcessResponse(chosenContent, systemPrompt, userPrompt, warningMeta);
       if (_guidev2Stopped) return null;
       // On step 1 only, attach tutorial match info so the panel can show it in Details
       if (result?.success && g.tutorialRef && stepNumber === 1) {
@@ -2456,7 +3162,7 @@ function gv2PickTargetIndex(searchText, llmIndex) {
 /**
  * Parse LLM JSON, apply highlight, schedule the appropriate action.
  */
-async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
+async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '', warningMeta = null) {
   const g = window._guidev2;
   try {
     if (_gv2IsStopped()) return null;
@@ -2506,8 +3212,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const hasIndex = step.element?.index != null && step.element?.index !== '';
     const hasText = !!(step.element?.text && String(step.element.text).trim());
     const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
-    const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, step.element?.text, hasIndex);
-    const currentKey = (typeof gv2ElementKey === 'function') ? gv2ElementKey(step) : '';
+    const resolvedElementText = _gv2ResolvedElementText(step);
+    const metricElementText = resolvedElementText || step.element?.text || '';
+    const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, metricElementText, hasIndex);
+    const currentKey = (typeof gv2ElementKey === 'function')
+      ? gv2ElementKey({ ...step, action, element: { ...(step.element || {}), text: metricElementText } })
+      : '';
     const priorKeys = Array.isArray(g._mechKeys) ? g._mechKeys : (g._mechKeys = []);
     const mech = (typeof gv2ComputeMechanicalConfidence === 'function')
       ? gv2ComputeMechanicalConfidence({ action, hasIndex, hasText, elementStepSimilarity, priorKeys, currentKey })
@@ -2604,6 +3314,20 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Remember the live step so the panel "Next →" (manual mode) can perform it and advance.
     g._currentStep = { action, typeText: step.typeText, value: step.value, instruction: step.instruction, highRisk: isHighRisk };
 
+    const forceTarget = g._forceGroundTruthPromptTarget || null;
+    if (forceTarget && !isLast && action !== 'done') {
+      g.forceGroundTruth = g.forceGroundTruth || { enabled: true, retries: 0, plan: [], cursor: 0, attempts: {}, pendingVerification: null };
+      g.forceGroundTruth.pendingVerification = {
+        step: forceTarget.step,
+        subgoal: forceTarget.subgoal,
+        expectedUrl: forceTarget.expectedUrl,
+        attempt: forceTarget.attempt,
+        generatedStep: g._activeStepNumber,
+        action,
+        index: step.element?.index ?? null
+      };
+    }
+
     // Pause conditions: 3 low-confidence actions, high risk (JSON), or confirmation needed (JSON)
     const isHighRiskJson = step.risk === 'high';
     const needsConfirmation = step.confirmation === 'needed';
@@ -2690,10 +3414,42 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       action,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,
       isLastStep: isLast,
-      target: { text: step.element?.text || null, llmIndex: step.element?.index ?? null },
+      target: { text: metricElementText || step.element?.text || null, llmIndex: step.element?.index ?? null },
       rawLlmJson: content,
       systemPrompt,
       userPrompt,
+      warningChecked: !!warningMeta?.warningChecked,
+      warningInjected: !!warningMeta?.warningInjected,
+      warningSkipReason: warningMeta?.warningSkipReason || '',
+      warningTypes: Array.isArray(warningMeta?.warningTypes) ? warningMeta.warningTypes : [],
+      warningPrompt: warningMeta?.warningPrompt || '',
+      warningSystemPrompt: warningMeta?.warningSystemPrompt || '',
+      warningDiagnostic: warningMeta?.warningDiagnostic || '',
+      firstRawResponse: warningMeta?.firstRawResponse || '',
+      retryRawResponse: warningMeta?.retryRawResponse || '',
+      firstGroundingSimilarity: warningMeta?.firstGroundingSimilarity ?? null,
+      firstGroundingSimilarityReason: warningMeta?.firstGroundingSimilarityReason || '',
+      firstGroundingSimilarityDetail: warningMeta?.firstGroundingSimilarityDetail || '',
+      firstLoopScore: warningMeta?.firstLoopScore ?? null,
+      warningGroundingThreshold: warningMeta?.warningGroundingThreshold ?? null,
+      warningLoopThreshold: warningMeta?.warningLoopThreshold ?? null,
+      firstReportedElementText: warningMeta?.firstReportedElementText || '',
+      firstResolvedElementText: warningMeta?.firstResolvedElementText || '',
+      firstActionKey: warningMeta?.firstActionKey || '',
+      retryGroundingSimilarity: warningMeta?.retryGroundingSimilarity ?? null,
+      retryGroundingSimilarityReason: warningMeta?.retryGroundingSimilarityReason || '',
+      retryGroundingSimilarityDetail: warningMeta?.retryGroundingSimilarityDetail || '',
+      retryLoopScore: warningMeta?.retryLoopScore ?? null,
+      retryReportedElementText: warningMeta?.retryReportedElementText || '',
+      retryResolvedElementText: warningMeta?.retryResolvedElementText || '',
+      retryActionKey: warningMeta?.retryActionKey || '',
+      forceGroundTruth: !!forceTarget,
+      oracleStep: forceTarget?.step ?? null,
+      oracleSubgoal: forceTarget?.subgoal || '',
+      expectedUrl: forceTarget?.expectedUrl || '',
+      verificationPassed: null,
+      attempt: forceTarget?.attempt ?? null,
+      attemptHistory: forceTarget?.attemptHistory || [],
       tutorialMatch: (step.step === 1 && g.tutorialRef) ? {
         task: g.tutorialRef.task,
         website: g.tutorialRef.website,
@@ -2701,6 +3457,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
         reason: g.tutorialReason
       } : null
     });
+    g._forceGroundTruthPromptTarget = null;
 
     // Auto-perform only after pre-action capture completes (regionShot + before-shot are stored).
     if (autoPerform && !isLast && action !== 'done') {
@@ -3295,6 +4052,7 @@ async function _gv2HydrateResumeState() {
     paused: !!saved.paused,
     lowConfidenceCount: saved.lowConfidenceCount || 0,
     predictedGoalState: saved.predictedGoalState || null,
+    forceGroundTruth: _gv2ForceStateFromSaved(saved),
     _lastActionStepNumber: saved.lastActionStepNumber || saved.activeStepNumber || (saved.previousSteps || []).length || null,
     _activeStepNumber: saved.activeStepNumber || null
   };

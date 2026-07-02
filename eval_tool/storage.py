@@ -15,6 +15,7 @@ NO_LOGIN_DATA_CSV = DATA_GUIDE_DIR / "Copy of GuideTaskData - guide_task_no_log_
 LOGIN_DATA_CSV = DATA_GUIDE_DIR / "Copy of GuideTaskData - guide_task-log-in.csv"
 MIND2WEB_DATA_CSV = DATA_GUIDE_DIR / "mind2web_tasks.csv"
 ONLINE_MIND2WEB_DATA_CSV = DATA_GUIDE_DIR / "online_mind2web_tasks.csv"
+ANNOTATED_DATA_JSON = DATA_GUIDE_DIR / "AnnotatedDataset.json"
 RUNS_DIR = REPO_ROOT / "eval_tool" / "runs"
 
 
@@ -24,7 +25,21 @@ def task_set_options() -> list[dict[str, str]]:
         {"id": "login", "label": "Login", "path": str(LOGIN_DATA_CSV)},
         {"id": "mind2web", "label": "Mind2Web", "path": str(MIND2WEB_DATA_CSV)},
         {"id": "online_mind2web", "label": "Online-Mind2Web", "path": str(ONLINE_MIND2WEB_DATA_CSV)},
+        {"id": "annotated", "label": "Annotated Dataset", "path": str(ANNOTATED_DATA_JSON)},
     ]
+
+
+def task_set_label(value: str | None) -> str:
+    """Human-friendly label for a run's dataset source id (no lossy normalization)."""
+    if not value:
+        return "Unknown"
+    key = str(value).strip().lower().replace("-", "_")
+    for option in task_set_options():
+        if option["id"] == key:
+            return option["label"]
+    if key == "human_annotation":
+        return "Human Annotation Set"
+    return str(value)
 
 
 def normalize_task_set(value: str | None) -> str:
@@ -32,6 +47,7 @@ def normalize_task_set(value: str | None) -> str:
     if value == "login": return "login"
     if value == "mind2web": return "mind2web"
     if value == "online_mind2web": return "online_mind2web"
+    if value == "annotated": return "annotated"
     return "no_login"
 
 
@@ -45,6 +61,8 @@ def current_data_csv(task_set: str | None = None) -> Path:
         return MIND2WEB_DATA_CSV
     if task_set == "online_mind2web" and ONLINE_MIND2WEB_DATA_CSV.exists():
         return ONLINE_MIND2WEB_DATA_CSV
+    if task_set == "annotated" and ANNOTATED_DATA_JSON.exists():
+        return ANNOTATED_DATA_JSON
 
     preferred = [
         DATA_CSV,
@@ -81,6 +99,10 @@ class EvalTask:
     success_criteria: str = ""
     required_test_inputs: str = ""
     allowed_stop_before_destructive_action: str = ""
+    annotated_subgoals: list[str] = field(default_factory=list)
+    annotated_key_nodes: list[dict[str, Any]] = field(default_factory=list)
+    annotated_reference_urls: list[str] = field(default_factory=list)
+    annotated_match_functions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -112,6 +134,34 @@ def screenshot_dir(run_id: str, task_id: str) -> Path:
 
 def ensure_runs_dir() -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_dom_snapshot(step: dict[str, Any], prefer_after: bool = True) -> str:
+    """Return a step's DOM snapshot HTML, resolving externalized snapshots.
+
+    Newer runs store DOM snapshots as sibling files (referenced by ``domSnapshotPath`` /
+    ``domSnapshotAfterPath``) instead of inlining them in the task JSON, to keep the JSON
+    small. This reads the inline value if present (older runs) and otherwise reads the
+    referenced file. ``prefer_after`` picks the post-action snapshot first (used for
+    page-state / subgoal progress); pass ``False`` to prefer the pre-action snapshot.
+    Returns "" if none is available.
+    """
+    if prefer_after:
+        order = (("domSnapshotAfter", "domSnapshotAfterPath"), ("domSnapshot", "domSnapshotPath"))
+    else:
+        order = (("domSnapshot", "domSnapshotPath"), ("domSnapshotAfter", "domSnapshotAfterPath"))
+    for inline_key, path_key in order:
+        inline = step.get(inline_key)
+        if inline:
+            return inline
+        rel = step.get(path_key)
+        if rel:
+            path = REPO_ROOT / rel
+            try:
+                return path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+    return ""
 
 
 import threading

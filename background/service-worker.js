@@ -527,6 +527,28 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
 // Prefers Gemini 2.5 Flash for fast routing. If no Gemini key is set (e.g. an
 // OpenRouter-only or OpenAI-only user), falls back to the user's selected provider
 // so routing still works without requiring a separate Gemini key.
+function normalizeTemperature(value) {
+  const temperature = Number(value);
+  if (!Number.isFinite(temperature)) return 0;
+  return Math.max(0, Math.min(2, temperature));
+}
+
+async function getLlmTemperature() {
+  try {
+    const local = await chrome.storage.local.get(['guideEvalTemperature']);
+    if (local.guideEvalTemperature !== undefined) {
+      return normalizeTemperature(local.guideEvalTemperature);
+    }
+  } catch (e) { /* ignore */ }
+  try {
+    const sync = await chrome.storage.sync.get(['llmTemperature']);
+    if (sync.llmTemperature !== undefined) {
+      return normalizeTemperature(sync.llmTemperature);
+    }
+  } catch (e) { /* ignore */ }
+  return 0;
+}
+
 async function callRouterLLM(messages, systemPrompt) {
   const config = CONFIG.providers.gemini;
   const routerModel = 'gemini-2.5-flash';
@@ -552,6 +574,7 @@ async function callRouterLLM(messages, systemPrompt) {
   const url = `${config.endpoint}/${routerModel}:generateContent?key=${apiKey}`;
   
   try {
+    const temperature = await getLlmTemperature();
     let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
     if (messages?.length > 0) {
       userContent += messages[messages.length - 1].content;
@@ -565,7 +588,7 @@ async function callRouterLLM(messages, systemPrompt) {
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: userContent }] }],
         generationConfig: { 
-          temperature: 0.1, 
+          temperature: temperature,
           maxOutputTokens: 256 // Router responses are short
         }
       })
@@ -635,7 +658,11 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
 
 const EMBED_MODEL = 'openai/text-embedding-ada-002';
 
-/** OpenAI-compatible embeddings (OpenRouter or OpenAI) for goal-relevance scoring. */
+/**
+ * OpenAI-compatible embeddings (OpenRouter or OpenAI). Fallback path only — the guide embeds
+ * directly from the content script (see _gv2DirectEmbed) because the SW does not reliably
+ * receive callEmbed messages during an active guide session.
+ */
 async function callEmbed(texts) {
   startKeepAlive();
   const input = Array.isArray(texts) ? texts.map(t => String(t ?? '')) : [];
@@ -707,6 +734,7 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
   const url = `${config.endpoint}/${model}:generateContent?key=${apiKey}`;
   
   try {
+    const temperature = await getLlmTemperature();
     let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
     if (messages?.length > 0) {
       userContent += messages[messages.length - 1].content;
@@ -734,7 +762,7 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
       body: JSON.stringify({
         contents: [{ role: 'user', parts: parts }],
         generationConfig: { 
-          temperature: 0.1, 
+          temperature: temperature,
           maxOutputTokens: 4096 
         },
         // Be more permissive with safety to avoid unnecessary blocks
@@ -793,6 +821,7 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
   const model = settings.openrouterModel || config.defaultModel;
   
   try {
+    const temperature = await getLlmTemperature();
     // Build single-turn message (no conversation history)
     let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
     if (messages?.length > 0) {
@@ -824,7 +853,7 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        temperature: 0.1,
+        temperature: temperature,
         max_tokens: 1024
       })
     });
@@ -858,6 +887,7 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
   const model = settings.openaiModel || config.defaultModel;
   
   try {
+    const temperature = await getLlmTemperature();
     // Build single-turn message (no conversation history)
     let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
     if (messages?.length > 0) {
@@ -889,7 +919,7 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
         messages: chatMessages,
         max_completion_tokens: 1024,
         // o-series models (o1, o3, o4-mini, …) don't support temperature
-        ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
+        ...(/^o\d/.test(model) ? {} : { temperature: temperature })
       })
     });
 
@@ -923,6 +953,7 @@ async function callGeminiMultiImage(messages, systemPrompt, settings, images = [
   const url = `${config.endpoint}/${model}:generateContent?key=${apiKey}`;
   
   try {
+    const temperature = await getLlmTemperature();
     let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
     if (messages?.length > 0) {
       userContent += messages[messages.length - 1].content;
@@ -956,7 +987,7 @@ async function callGeminiMultiImage(messages, systemPrompt, settings, images = [
       body: JSON.stringify({
         contents: [{ role: 'user', parts: parts }],
         generationConfig: { 
-          temperature: 0.1, 
+          temperature: temperature,
           maxOutputTokens: 4096 
         },
         safetySettings: [
@@ -1004,6 +1035,7 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
   const model = settings.openrouterModel || config.defaultModel;
   
   try {
+    const temperature = await getLlmTemperature();
     let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
     if (messages?.length > 0) {
       userContent += messages[messages.length - 1].content;
@@ -1038,7 +1070,7 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        temperature: 0.1,
+        temperature: temperature,
         max_tokens: 1024
       })
     });
@@ -1072,6 +1104,7 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
   const model = settings.openaiModel || config.defaultModel;
   
   try {
+    const temperature = await getLlmTemperature();
     let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
     if (messages?.length > 0) {
       userContent += messages[messages.length - 1].content;
@@ -1106,7 +1139,7 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
         messages: chatMessages,
         max_completion_tokens: 1024,
         // o-series models (o1, o3, o4-mini, …) don't support temperature
-        ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
+        ...(/^o\d/.test(model) ? {} : { temperature: temperature })
       })
     });
 

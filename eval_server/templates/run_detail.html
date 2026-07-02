@@ -159,6 +159,36 @@
       border-color: rgba(124, 58, 237, 0.35);
     }
     .metric-col-hidden { display: none; }
+    .spark-toggle-btn {
+      border: 1px solid var(--card-border);
+      background: var(--badge-neutral-bg);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 5px 10px 5px 22px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      position: relative;
+    }
+    .spark-toggle-btn::before {
+      content: "";
+      position: absolute;
+      left: 9px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      background: var(--spark-color, #888);
+      opacity: 0.35;
+    }
+    .spark-toggle-btn.active {
+      color: var(--text);
+      border-color: var(--spark-color, var(--card-border));
+      background: color-mix(in srgb, var(--spark-color, #888) 12%, transparent);
+    }
+    .spark-toggle-btn.active::before { opacity: 1; }
+    .task-sparkline { display: block; overflow: visible; }
     .predicted-cell-text {
       color: var(--text-muted);
       font-size: 12px;
@@ -286,6 +316,7 @@
     const savedTheme = localStorage.getItem('theme') || 'light';
     document.documentElement.setAttribute('data-theme', savedTheme);
   </script>
+  <script src="/static/dashboard_ui.js"></script>
 </head>
 <body>
   <div class="container">
@@ -315,6 +346,14 @@
             <span class="badge neutral" style="text-transform: none; letter-spacing: 0; max-width: 100%; white-space: normal;">
               Judge model: <code style="font-family: monospace; color: var(--text); overflow-wrap: anywhere;">{{ run.judge_model or 'Unknown' }}</code>
             </span>
+            <span class="badge neutral" style="text-transform: none; letter-spacing: 0; max-width: 100%; white-space: normal;">
+              Temperature: <code style="font-family: monospace; color: var(--text);">{{ run.temperature if run.temperature is defined and run.temperature is not none else 'Unknown' }}</code>
+            </span>
+            {% if run.force_ground_truth_mode %}
+            <span class="badge neutral" style="text-transform: none; letter-spacing: 0; max-width: 100%; white-space: normal;">
+              ForceGroundTruth: <code style="font-family: monospace; color: var(--text);">{{ run.force_ground_truth_retries or 0 }} retries</code>
+            </span>
+            {% endif %}
           </div>
           {% if timing.duration %}
           <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;">
@@ -588,14 +627,16 @@
           <div class="stat-sub">steps with cosine values</div>
         </div>
       </div>
-      <div id="grounding-task-breakdown" style="margin-top: 16px; display: grid; gap: 8px;">
+      <details style="margin-top: 16px;">
+        <summary style="cursor: pointer; color: var(--text-muted); font-weight: 800; font-size: 13px;">Show tasks with misgrounded steps</summary>
+        <div id="grounding-task-breakdown" style="margin-top: 12px; display: grid; gap: 8px;">
         {% set default_low_tasks = results | selectattr('grounding_similarity_low_count') | list %}
         {% if default_low_tasks %}
           {% for res in default_low_tasks %}
             <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
               <div style="min-width: 220px;">
                 {% if res.session_id %}
-                  <a href="/trajectory/{{ res.session_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
+                  <a href="/trajectory/{{ res.session_id }}?run_id={{ run.run_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
                 {% else %}
                   <strong>{{ task_display_name(res.task) }}</strong>
                 {% endif %}
@@ -614,12 +655,8 @@
         {% else %}
           <div style="color: var(--text-muted); font-size: 13px; padding: 10px 0;">No scored steps are below {{ '%.2f'|format(stats.grounding_similarity_default_threshold) }}.</div>
         {% endif %}
-      </div>
-      <div style="margin-top: 20px; border-top: 1px solid var(--card-border); padding-top: 16px;">
-        <h3>Human Label Boundary Check</h3>
-        <p style="margin-top: 6px; color: var(--text-muted); font-size: 13px;">Compares the current grounding threshold against Grounded_Human_Label annotations. Missing labels default to Grounded; steps without similarity are excluded.</p>
-        <div id="run-grounding-boundary-summary" style="margin-top: 12px;"></div>
-      </div>
+        </div>
+      </details>
     </section>
 
     <section class="error-breakdown review-diagnostic-panel" style="margin-bottom: 40px; {% if stats.is_human_annotation_set %}display: none;{% endif %}">
@@ -644,14 +681,16 @@
           <div class="stat-sub">non-initial steps checked</div>
         </div>
       </div>
-      <div style="margin-top: 16px; display: grid; gap: 8px;">
+      <details style="margin-top: 16px;">
+        <summary style="cursor: pointer; color: var(--text-muted); font-weight: 800; font-size: 13px;">Show tasks with looping steps</summary>
+        <div style="margin-top: 12px; display: grid; gap: 8px;">
         {% set loop_positive_tasks = results | selectattr('loop_updated_positive_count') | list %}
         {% if loop_positive_tasks %}
           {% for res in loop_positive_tasks %}
             <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
               <div style="min-width: 220px;">
                 {% if res.session_id %}
-                  <a href="/trajectory/{{ res.session_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
+                  <a href="/trajectory/{{ res.session_id }}?run_id={{ run.run_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
                 {% else %}
                   <strong>{{ task_display_name(res.task) }}</strong>
                 {% endif %}
@@ -670,7 +709,8 @@
         {% else %}
           <div style="color: var(--text-muted); font-size: 13px; padding: 10px 0;">No task has a positive updated loop score.</div>
         {% endif %}
-      </div>
+        </div>
+      </details>
     </section>
 
     <!-- Error breakdown summary -->
@@ -695,13 +735,13 @@
           <!-- Chart Header & Filters -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 1.2em;">📈</span> Mean Confidence Trend
+              <span style="font-size: 1.2em;">📈</span> Mean Step Uncertainty Trend
             </h3>
           </div>
 
           <div style="display: flex; gap: 12px; margin-bottom: 12px; font-size: 0.85em; flex-wrap: wrap;">
             <div style="display: flex; gap: 8px;">
-              <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
+              <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Step Uncertainty</button>
               <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">LLM Progress</button>
               <button type="button" class="tab-btn active" id="btn-conf-subgoalProgress" onclick="toggleConfLine('subgoalProgress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #10b981;">Subgoal Progress</button>
               <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
@@ -747,6 +787,12 @@
         </div>
       </div>
       {% if results %}
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 4px 12px;">
+        <span style="font-size: 12px; color: var(--text-muted); font-weight: 700;">Trend lines:</span>
+        <button type="button" class="spark-toggle-btn active" data-metric="grounding" style="--spark-color: #0ea5e9;" onclick="toggleSparkMetric('grounding', this)">Grounding</button>
+        <button type="button" class="spark-toggle-btn active" data-metric="loop" style="--spark-color: #1bbf9c;" onclick="toggleSparkMetric('loop', this)">Loop</button>
+        <button type="button" class="spark-toggle-btn active" data-metric="uncertainty" style="--spark-color: #7857ff;" onclick="toggleSparkMetric('uncertainty', this)">Step Uncertainty</button>
+      </div>
       <div style="overflow-x: auto;">
       <table style="width: 100%;">
         <thead>
@@ -763,6 +809,7 @@
             <th class="metric-col-gtprog metric-col-hidden" title="Avg self-reported progress WITH reference ground truth">GT Progress</th>
             <th class="metric-col-gtprog metric-col-hidden" title="Avg self-reported progress WITHOUT reference ground truth">No-GT Progress</th>
             <th class="metric-col-llmground metric-col-hidden" title="LLM grounding labels for {{ llm_grounding_model }}">Grounded_LLM_Label</th>
+            <th title="Per-step trend of grounding, loop, and step uncertainty across this task">Trend</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -838,13 +885,13 @@
               {% endif %}
             </td>
             <td>
-              {% if res.loop_steps_updated and res.loop_steps_updated > 0 %}
-                <span class="badge" style="background: rgba(27, 191, 156, 0.16); color: #0f766e; border: 1px solid rgba(27, 191, 156, 0.45);" title="{{ res.loop_steps_updated }} step(s) with L_t_u &gt; 0.5">{{ '%.2f'|format(res.min_loop_updated) }} → {{ '%.2f'|format(res.max_loop_updated) }}</span>
-                <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">🔁 {{ res.loop_steps_updated }} step{% if res.loop_steps_updated != 1 %}s{% endif %}</div>
+              {% if res.loop_task_updated %}
+                <span class="badge" style="background: rgba(27, 191, 156, 0.16); color: #0f766e; border: 1px solid rgba(27, 191, 156, 0.45);" title="Max L_t_u {{ '%.2f'|format(res.max_loop_updated) }} >= {{ '%.1f'|format(res.loop_task_updated_threshold or 0.3) }}; {{ res.loop_steps_updated }} step(s) with L_t_u &gt; 0.5">1</span>
+                <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">{{ '%.2f'|format(res.min_loop_updated) }} → {{ '%.2f'|format(res.max_loop_updated) }}</div>
               {% else %}
                 <span style="color: var(--text-muted);">0</span>
               {% endif %}
-              {% if res.loop_metric_disagrees and res.loop_steps_updated > 0 %}
+              {% if res.loop_metric_disagrees and res.loop_task_updated %}
                 <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);" title="Old L_t range for comparison">L_t {{ '%.2f'|format(res.min_loop) }} → {{ '%.2f'|format(res.max_loop) }}</div>
               {% endif %}
             </td>
@@ -882,9 +929,16 @@
               {% endif %}
             </td>
             <td>
+              {% if res.sparkline_steps %}
+                <svg class="task-sparkline" width="84" height="24" data-steps='{{ res.sparkline_steps|tojson }}'></svg>
+              {% else %}
+                <span style="color: var(--text-muted);">—</span>
+              {% endif %}
+            </td>
+            <td>
               <div style="display: flex; gap: 8px; align-items: center;">
                 {% if res.session_id %}
-                  <a href="/trajectory/{{ res.session_id }}" class="btn">Inspect Trajectory</a>
+                  <a href="/trajectory/{{ res.session_id }}?run_id={{ run.run_id }}" class="btn">Inspect Trajectory</a>
                 {% else %}
                   <span class="badge neutral" title="{{ res.diagnostics.zero_step_explanation if res.diagnostics and res.diagnostics.zero_step_explanation else 'No PageGuide session was recorded — the task failed before any step (e.g. navigation/DNS error or block).' }}" style="font-style: italic; cursor: help;">No trajectory</span>
                 {% endif %}
@@ -900,7 +954,7 @@
         <p style="color: var(--text-muted); margin-bottom: 16px; font-size: 16px;">Tasks are currently running or no tasks finished yet.</p>
         {% if run.status == 'running' %}
         <script>
-          setTimeout(() => window.location.reload(), 3000);
+          setTimeout(() => window.location.reload(), 5 * 60 * 1000);
         </script>
         {% endif %}
       </div>
@@ -942,156 +996,6 @@
       return Math.max(0, Math.min(1, raw));
     }
 
-    function fmtBoundaryMetric(value) {
-      return Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—';
-    }
-
-    const IS_HUMAN_ANNOTATION_SET = {{ 'true' if stats.is_human_annotation_set else 'false' }};
-
-    function cohenKappa(tp, tn, fp, fn) {
-      const total = tp + tn + fp + fn;
-      if (!total) return null;
-      const observed = (tp + tn) / total;
-      const predictedGrounded = (tp + fp) / total;
-      const predictedNotGrounded = (fn + tn) / total;
-      const actualGrounded = (tp + fn) / total;
-      const actualNotGrounded = (fp + tn) / total;
-      const expected = predictedGrounded * actualGrounded + predictedNotGrounded * actualNotGrounded;
-      if (Math.abs(1 - expected) < 1e-12) return Math.abs(observed - 1) < 1e-12 ? 1 : null;
-      return (observed - expected) / (1 - expected);
-    }
-
-    function humanGroundingLabel(step) {
-      if (!step) return IS_HUMAN_ANNOTATION_SET ? null : 'grounded';
-      if (step.grounded_human_label === 'non_grounded') return 'non_grounded';
-      if (IS_HUMAN_ANNOTATION_SET) {
-        if (step.grounded_human_label === 'grounded' || step.grounded_human_label_explicit) return 'grounded';
-        return null;
-      }
-      return 'grounded';
-    }
-
-    function labelText(label) {
-      return label === 'non_grounded' ? 'Non-Grounded' : 'Grounded';
-    }
-
-    function emptyBoundaryMetrics(threshold) {
-      return { threshold, tp: 0, tn: 0, fp: 0, fn: 0, total: 0, correct: 0, incorrect: 0, accuracy: null, precision: null, recall: null, f1: null, cohen_kappa: null, mismatches: [] };
-    }
-
-    function finalizeBoundaryMetrics(metrics) {
-      metrics.total = metrics.tp + metrics.tn + metrics.fp + metrics.fn;
-      metrics.correct = metrics.tp + metrics.tn;
-      metrics.incorrect = metrics.fp + metrics.fn;
-      metrics.accuracy = metrics.total ? metrics.correct / metrics.total : null;
-      metrics.precision = (metrics.tp + metrics.fp) ? metrics.tp / (metrics.tp + metrics.fp) : null;
-      metrics.recall = (metrics.tp + metrics.fn) ? metrics.tp / (metrics.tp + metrics.fn) : null;
-      metrics.f1 = (metrics.precision !== null && metrics.recall !== null && (metrics.precision + metrics.recall))
-        ? 2 * metrics.precision * metrics.recall / (metrics.precision + metrics.recall)
-        : null;
-      metrics.cohen_kappa = cohenKappa(metrics.tp, metrics.tn, metrics.fp, metrics.fn);
-      return metrics;
-    }
-
-    function boundaryMetricsForSteps(steps, threshold) {
-      const metrics = emptyBoundaryMetrics(threshold);
-      (steps || []).forEach(step => {
-        if (!step || step.element_step_similarity === null || step.element_step_similarity === undefined) return;
-        const sim = Number(step.element_step_similarity);
-        if (!Number.isFinite(sim)) return;
-        const predicted = sim >= threshold ? 'grounded' : 'non_grounded';
-        const human = humanGroundingLabel(step);
-        if (!human) return;
-        if (human === 'grounded' && predicted === 'grounded') metrics.tp++;
-        else if (human === 'grounded' && predicted === 'non_grounded') metrics.fn++;
-        else if (human === 'non_grounded' && predicted === 'grounded') metrics.fp++;
-        else metrics.tn++;
-        if (predicted !== human) {
-          metrics.mismatches.push({
-            step: step.step,
-            similarity: sim,
-            predicted,
-            human,
-            action: step.action || '',
-            instruction: step.instruction || ''
-          });
-        }
-      });
-      return finalizeBoundaryMetrics(metrics);
-    }
-
-    function youdenForSteps(steps) {
-      const scored = [];
-      (steps || []).forEach(step => {
-        const sim = Number(step && step.element_step_similarity);
-        if (!Number.isFinite(sim)) return;
-        const human = humanGroundingLabel(step);
-        if (!human) return;
-        scored.push({ sim: Math.max(0, Math.min(1, sim)), human: human === 'grounded' });
-      });
-      if (scored.length === 0) return { threshold: null, youden_j: null, tpr: null, fpr: null, total: 0 };
-      const candidates = Array.from(new Set([0, 1, ...scored.map(s => s.sim)])).sort((a, b) => a - b);
-      let best = { threshold: candidates[0], youden_j: -2, tpr: 0, fpr: 0, total: scored.length };
-      candidates.forEach(threshold => {
-        const tp = scored.filter(s => s.human && s.sim >= threshold).length;
-        const fn = scored.filter(s => s.human && s.sim < threshold).length;
-        const fp = scored.filter(s => !s.human && s.sim >= threshold).length;
-        const tn = scored.filter(s => !s.human && s.sim < threshold).length;
-        const tpr = (tp + fn) ? tp / (tp + fn) : 0;
-        const fpr = (fp + tn) ? fp / (fp + tn) : 0;
-        const j = tpr - fpr;
-        if (j > best.youden_j || (Math.abs(j - best.youden_j) < 1e-12 && threshold > best.threshold)) {
-          best = { threshold, youden_j: j, tpr, fpr, total: scored.length };
-        }
-      });
-      return best;
-    }
-
-    function renderBoundarySummary(overall, taskRows) {
-      const el = document.getElementById('run-grounding-boundary-summary');
-      if (!el) return;
-      const allSteps = [];
-      (trajectoriesData || []).forEach(traj => {
-        if (Array.isArray(traj.steps)) allSteps.push(...traj.steps);
-      });
-      const youden = youdenForSteps(allSteps);
-      const youdenText = youden.threshold !== null && youden.threshold !== undefined
-        ? `Best threshold ${Number(youden.threshold).toFixed(2)} · Youden J ${fmtBoundaryMetric(youden.youden_j)}`
-        : 'Best threshold — · Youden J —';
-      const taskHtml = taskRows.length
-        ? taskRows.map(row => {
-            const href = row.sessionId ? `/trajectory/${encodeURIComponent(row.sessionId)}` : '';
-            const name = href ? `<a href="${href}" style="color: var(--accent); font-weight: 800; text-decoration: none;">${escapeHtml(row.name)}</a>` : `<strong>${escapeHtml(row.name)}</strong>`;
-            const samples = row.metrics.mismatches.slice(0, 3).map(m => `<span class="badge" title="${escapeHtml((m.action || '') + ' · ' + (m.instruction || ''))}" style="background: rgba(239, 68, 68, 0.12); color: var(--failure); border: 1px solid rgba(239, 68, 68, 0.3);">Step ${escapeHtml(String(m.step ?? '?'))}: ${m.similarity.toFixed(2)} predicted ${labelText(m.predicted)}, human ${labelText(m.human)}</span>`).join(' ');
-            const more = row.metrics.mismatches.length > 3 ? `<span style="color: var(--text-muted); font-size: 12px;">+${row.metrics.mismatches.length - 3} more</span>` : '';
-            return `<div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
-              <div style="min-width: 220px;">${name}<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Accuracy ${fmtBoundaryMetric(row.metrics.accuracy)} · ${row.metrics.correct}/${row.metrics.total} correct · ${row.metrics.incorrect} mismatch${row.metrics.incorrect === 1 ? '' : 'es'}</div></div>
-              <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">${samples || '<span style="color: var(--text-muted); font-size: 12px;">No mismatches</span>'}${more}</div>
-            </div>`;
-          }).join('')
-        : '<div style="color: var(--text-muted); font-size: 13px; padding: 10px 0;">No scored steps with human-label comparison data.</div>';
-      el.innerHTML = `
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 12px;">
-          ${['accuracy', 'precision', 'recall', 'f1', 'cohen_kappa'].map(key => `<div style="border: 1px solid var(--card-border); border-radius: 8px; padding: 8px; background: var(--badge-neutral-bg);"><div style="font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase;">${key === 'cohen_kappa' ? "Cohen's Kappa" : key}</div><div style="font-size: 18px; font-weight: 800;">${fmtBoundaryMetric(overall[key])}</div></div>`).join('')}
-          <div style="border: 1px solid var(--card-border); border-radius: 8px; padding: 8px; background: rgba(14, 165, 233, 0.08);"><div style="font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase;">Youden Index</div><div style="font-size: 13px; font-weight: 800;">${youdenText}</div></div>
-        </div>
-        <div style="display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr); gap: 12px; margin-bottom: 12px;">
-          <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-            <thead><tr><th></th><th>Pred Grounded</th><th>Pred Non-Grounded</th></tr></thead>
-            <tbody>
-              <tr><th>Human Grounded</th><td>${overall.tp}</td><td>${overall.fn}</td></tr>
-              <tr><th>Human Non-Grounded</th><td>${overall.fp}</td><td>${overall.tn}</td></tr>
-            </tbody>
-          </table>
-          <div style="font-size: 12px; color: var(--text-muted);">
-            <strong style="color: var(--text);">Correct:</strong> ${overall.correct} ·
-            <strong style="color: var(--text);">Incorrect:</strong> ${overall.incorrect} ·
-            <strong style="color: var(--text);">Total scored:</strong> ${overall.total}
-          </div>
-        </div>
-        <div style="display: grid; gap: 8px;">${taskHtml}</div>`;
-    }
-
     function updateGroundingThresholdSummary() {
       const threshold = groundingThresholdValue();
       const input = document.getElementById('grounding-threshold-input');
@@ -1100,8 +1004,6 @@
       let lowSteps = 0;
       let scoredSteps = 0;
       const taskRows = [];
-      const boundaryOverall = emptyBoundaryMetrics(threshold);
-      const boundaryTaskRows = [];
 
       (trajectoriesData || []).forEach((traj, idx) => {
         const steps = Array.isArray(traj.steps) ? traj.steps : [];
@@ -1132,22 +1034,7 @@
             minVal
           });
         }
-        const taskMetrics = boundaryMetricsForSteps(steps, threshold);
-        if (taskMetrics.total > 0) {
-          boundaryTaskRows.push({
-            name: traj.task_name || traj.goal || `Task ${idx + 1}`,
-            sessionId: traj.sessionId,
-            metrics: taskMetrics
-          });
-          boundaryOverall.tp += taskMetrics.tp;
-          boundaryOverall.tn += taskMetrics.tn;
-          boundaryOverall.fp += taskMetrics.fp;
-          boundaryOverall.fn += taskMetrics.fn;
-          boundaryOverall.mismatches.push(...taskMetrics.mismatches);
-        }
       });
-      finalizeBoundaryMetrics(boundaryOverall);
-      renderBoundarySummary(boundaryOverall, boundaryTaskRows);
 
       const taskCount = taskRows.length;
       const stepEl = document.getElementById('grounding-low-step-count');
@@ -1167,7 +1054,7 @@
       }
       taskRows.sort((a, b) => b.low.length - a.low.length || a.minVal - b.minVal);
       breakdown.innerHTML = taskRows.map(row => {
-        const href = row.sessionId ? `/trajectory/${encodeURIComponent(row.sessionId)}` : '';
+        const href = row.sessionId ? `/trajectory/${encodeURIComponent(row.sessionId)}?run_id={{ run.run_id }}` : '';
         const name = href ? `<a href="${href}" style="color: var(--accent); font-weight: 800; text-decoration: none;">${escapeHtml(row.name)}</a>` : `<strong>${escapeHtml(row.name)}</strong>`;
         const samples = row.low.slice(0, 3).map(s => {
           const label = `Step ${escapeHtml(String(s.step ?? '?'))}: ${s.value.toFixed(2)}`;
@@ -1327,7 +1214,7 @@
           const l = (step.computed_loop_updated !== undefined && step.computed_loop_updated !== null)
             ? step.computed_loop_updated
             : 0;
-          const fullVal = step.mech_confidence;
+          const fullVal = step.step_uncertainty;
           if (fullVal !== undefined && fullVal !== null) {
             fullSum += fullVal;
             fullCount++;
@@ -1515,7 +1402,7 @@
         }
       }
       
-      if (activeConfLines.full) drawLine("full", "#7857ff", "Full confidence");
+      if (activeConfLines.full) drawLine("full", "#7857ff", "Step Uncertainty");
       if (activeConfLines.progress) drawLine("progress", "#ff8a3d", "LLM Progress");
       if (activeConfLines.subgoalProgress) drawLine("subgoalProgress", "#10b981", "Subgoal Progress");
       if (activeConfLines.loop) drawLine("loop", "#1bbf9c", "Loop");
@@ -1528,6 +1415,7 @@
     window.addEventListener('resize', drawMeanGraph);
     document.addEventListener('DOMContentLoaded', () => {
       drawMeanGraph();
+      renderTaskSparklines();
       updateGroundingThresholdSummary();
       const thresholdInput = document.getElementById('grounding-threshold-input');
       if (thresholdInput) {
@@ -1567,9 +1455,78 @@
       el.classList.toggle('is-expanded');
     }
 
-    // Active run auto-reload polling (Task 4)
+    // Per-task sparklines: a tiny 3-line SVG per task showing how grounding, loop and step
+    // uncertainty moved across the task's steps, with a dot at every timestep. A dot is drawn
+    // yellow when that metric is bad at that step (grounding < 0.8, loop >= 0.3, uncertainty
+    // > 0.5). Lines can be toggled via the buttons above the table. Data comes from each row's
+    // data-steps (see _step_metrics in app.py).
+    const SPARK_SVG_NS = 'http://www.w3.org/2000/svg';
+    const SPARK_YELLOW = '#f5c518';
+    const sparkEnabled = { grounding: true, loop: true, uncertainty: true };
+    const SPARK_METRICS = {
+      grounding: { key: 'element_step_similarity', color: '#0ea5e9', flag: 'grounding', label: 'grounding' },
+      loop: { key: 'computed_loop_updated', color: '#1bbf9c', flag: 'loop', label: 'loop' },
+      uncertainty: { key: 'step_uncertainty', color: '#7857ff', flag: 'uncertainty', label: 'uncertainty' },
+    };
+
+    function renderTaskSparklines() {
+      const helper = window.DashboardUI;
+      if (!helper) return;
+      document.querySelectorAll('.task-sparkline').forEach(svg => {
+        let steps;
+        try { steps = JSON.parse(svg.getAttribute('data-steps') || '[]'); }
+        catch (e) { steps = []; }
+        const w = Number(svg.getAttribute('width')) || 84;
+        const h = Number(svg.getAttribute('height')) || 24;
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        Object.keys(SPARK_METRICS).forEach(metric => {
+          if (!sparkEnabled[metric]) return;
+          const { key, color, flag, label } = SPARK_METRICS[metric];
+          const values = steps.map(s => {
+            const v = s ? s[key] : null;
+            return (v === null || v === undefined) ? null : Number(v);
+          });
+          const points = helper.sparklinePoints(values, w, h, 2);
+          if (points) {
+            const line = document.createElementNS(SPARK_SVG_NS, 'polyline');
+            line.setAttribute('points', points);
+            line.setAttribute('fill', 'none');
+            line.setAttribute('stroke', color);
+            line.setAttribute('stroke-width', '1.5');
+            line.setAttribute('stroke-linejoin', 'round');
+            line.setAttribute('stroke-linecap', 'round');
+            svg.appendChild(line);
+          }
+          // A dot at every timestep, yellow when the metric is bad at that step.
+          const dots = helper.sparklineDots(values, w, h, 2);
+          dots.forEach(d => {
+            const yellow = helper.isYellowDot(flag, d.v);
+            const dot = document.createElementNS(SPARK_SVG_NS, 'circle');
+            dot.setAttribute('cx', String(d.x));
+            dot.setAttribute('cy', String(d.y));
+            dot.setAttribute('r', yellow ? '2.2' : '1.8');
+            dot.setAttribute('fill', yellow ? SPARK_YELLOW : color);
+            if (yellow) { dot.setAttribute('stroke', '#a16207'); dot.setAttribute('stroke-width', '0.6'); }
+            const stepNo = steps[d.i] && steps[d.i].step != null ? steps[d.i].step : d.i + 1;
+            const title = document.createElementNS(SPARK_SVG_NS, 'title');
+            title.textContent = `Step ${stepNo} · ${label}: ${d.v.toFixed(2)}${yellow ? ' ⚠' : ''}`;
+            dot.appendChild(title);
+            svg.appendChild(dot);
+          });
+        });
+      });
+    }
+
+    function toggleSparkMetric(metric, button) {
+      sparkEnabled[metric] = !sparkEnabled[metric];
+      if (button) button.classList.toggle('active', sparkEnabled[metric]);
+      renderTaskSparklines();
+    }
+
+    // Active run auto-reload polling. Keep this slow so the page does not
+    // interrupt launch/dashboard workflows while a long eval is running.
     {% if run.status == 'running' %}
-    setTimeout(() => window.location.reload(), 3000);
+    setTimeout(() => window.location.reload(), 5 * 60 * 1000);
     {% endif %}
 
     // Theme Toggle Handler

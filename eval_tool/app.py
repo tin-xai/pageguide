@@ -185,6 +185,13 @@ def create_app() -> Flask:
         judge_method = normalize_judge_method(request.form.get("judge_method"))
         # Only the curated no_login set has reliable reference_steps to inject.
         ground_truth_mode = task_set == "no_login" and bool(request.form.get("ground_truth_mode"))
+        include_oracle_plan = task_set == "annotated" and bool(request.form.get("include_oracle_plan"))
+        force_ground_truth_mode = task_set == "annotated" and bool(request.form.get("force_ground_truth_mode"))
+        try:
+            force_ground_truth_retries = int(request.form.get("force_ground_truth_retries") or 0)
+        except (TypeError, ValueError):
+            force_ground_truth_retries = 0
+        force_ground_truth_retries = max(0, min(2, force_ground_truth_retries))
         region_capture_mode = normalize_region_capture_mode(
             request.form.get("region_capture_mode") or configured_region_capture_mode()
         )
@@ -198,6 +205,9 @@ def create_app() -> Flask:
             "judge_model": judge_model,
             "judge_method": judge_method,
             "ground_truth_mode": ground_truth_mode,
+            "include_oracle_plan": include_oracle_plan,
+            "force_ground_truth_mode": force_ground_truth_mode,
+            "force_ground_truth_retries": force_ground_truth_retries,
             "region_capture_mode": region_capture_mode,
         })
         start_run(run, tasks)

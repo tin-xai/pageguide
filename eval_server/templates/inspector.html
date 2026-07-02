@@ -1194,8 +1194,13 @@
           <button type="button" class="step-chip done {% if step_loop_u >= 0.5 %}loop-hot{% endif %} {% if loop.first %}active{% endif %}" data-step-id="{{ step.step }}" onclick="selectStep({{ step.step }})" {% if step_loop_u >= 0.5 %}title="L_t_u >= 0.5"{% endif %}>
             <span class="step-dot"></span>
             <div style="min-width: 0;">
-              <span class="step-label">Step {{ step.step }}</span>
-              <span class="step-text">{{ step.instruction or 'Initial State' }}</span>
+              <span class="step-label">{% if step.isPlanningStep %}Step -1: Plan{% else %}Step {{ step.step }}{% endif %}</span>
+              <span class="step-text">{{ step.instruction or ('Plan' if step.isPlanningStep else 'Initial State') }}</span>
+              {% if step.warningInjected %}
+                <span style="display: inline-flex; margin-top: 6px; padding: 3px 7px; border-radius: 999px; background: rgba(245, 158, 11, 0.14); color: var(--badge-warning-text); border: 1px solid var(--badge-warning-border); font-size: 10px; font-weight: 800;">
+                  Step {{ step.step }}.1 warning retry · {{ (step.warningTypes or [])|join(' + ') }}
+                </span>
+              {% endif %}
             </div>
           </button>
           {% endfor %}
@@ -1312,11 +1317,11 @@
           </form>
         </section>
 
-        <!-- Confidence Score Trend Card -->
+        <!-- Step Uncertainty Trend Card -->
         <section class="eval-card" id="conf-graph-section">
-          <h2>📈 Confidence Score Trend</h2>
+          <h2>📈 Step Uncertainty Trend</h2>
           <div style="display:flex; gap:10px; margin-bottom:16px; flex-wrap: wrap;">
-            <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
+            <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Step Uncertainty</button>
             <button type="button" class="tab-btn active" id="btn-conf-llmProgress" onclick="toggleConfLine('llmProgress')" style="background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">LLM Progress</button>
             <button type="button" class="tab-btn active" id="btn-conf-subgoalProgress" onclick="toggleConfLine('subgoalProgress')" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #10b981;">Subgoal Progress</button>
             <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
@@ -1333,14 +1338,14 @@
           </div>
         </section>
 
-        <!-- Step Confidence Breakdown Table -->
+        <!-- Step Uncertainty Breakdown Table -->
         <details class="eval-card" open style="cursor: default;">
           <summary style="font-size: 18px; font-weight: 600; cursor: pointer; outline: none; margin-bottom: 8px;">
-            📊 Step Confidence Breakdown
+            📊 Step Uncertainty Breakdown
           </summary>
           <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px; margin-top: 8px;">
             <div style="margin-bottom: 12px;">
-              Step Confidence (C_t = clip(internal grounding × (1 - 0.5 × L_t_u), 0, 1)) <br/>
+              Step Uncertainty (U_t = clip(1 − internal grounding × (1 - 0.5 × L_t_u), 0, 1); higher = more uncertain) <br/>
               <span style="opacity: 0.8;">Scroll steps (scroll_down, scroll_up) are excluded — they return None and are omitted from aggregations.</span>
             </div>
             <details style="background: var(--badge-neutral-bg); border: 1px solid var(--badge-neutral-border); border-radius: 8px; padding: 10px 14px;">
@@ -1352,7 +1357,7 @@
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">L_t_u (Updated Loop Penalty):</strong> Same denominator as L_t, but a match requires the same normalized <em>action type</em> and the same <em>element/action text</em>. For example, click Search and type Search are no longer treated as the same loop.</div>
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">LLM Progress:</strong> The agent's own <em>LLM-self-reported</em> progress for the step — three-point: <code>1.0</code> clear progress, <code>0.5</code> no net / exploratory movement, <code>0.0</code> regression. Shown for insight; not factored into C_t.</div>
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Subgoal Progress:</strong> <em>Deterministic.</em> The LLM authors an ordered subgoal rubric once per task; the system then verifies each subgoal from page state (URL/DOM) every step. <code>1.0</code> = verified count increased, <code>0.5</code> = unchanged, <code>0.0</code> = decreased or returned to a previously-seen state without a new subgoal.</div>
-                <div><strong style="color: var(--text);">C_t (Step Confidence):</strong> clip(internal grounding × (1 − 0.5 × L_t_u), 0, 1). Progress signals are informational and not part of this formula.</div>
+                <div><strong style="color: var(--text);">U_t (Step Uncertainty):</strong> clip(1 − internal grounding × (1 − 0.5 × L_t_u), 0, 1); higher = more uncertain (low grounding / high loop). Progress signals are informational and not part of this formula.</div>
               </div>
             </details>
           </div>
@@ -1416,6 +1421,8 @@
             <button type="button" class="metric-toggle-btn" data-metric-column="groundllm" onclick="toggleMetricColumn('groundllm', this)">Show Grounded_LLM_Label</button>
             {% set show_goalrel = (goalrel_rerun_summary is not none) %}
             <button type="button" class="metric-toggle-btn{% if show_goalrel %} active{% endif %}" data-metric-column="goalrel" onclick="toggleMetricColumn('goalrel', this)">{{ 'Hide' if show_goalrel else 'Show' }} Goal Relevance</button>
+            <button type="button" class="metric-toggle-btn" data-metric-column="llmprog" onclick="toggleMetricColumn('llmprog', this)">Show LLM Progress</button>
+            <button type="button" class="metric-toggle-btn" data-metric-column="subgoalprog" onclick="toggleMetricColumn('subgoalprog', this)">Show Subgoal Progress</button>
             <button type="button" class="metric-toggle-btn" data-metric-column="gtprog" onclick="toggleMetricColumn('gtprog', this)">Show GT / No-GT Progress</button>
             {% if trajectory.has_self_report %}
             <button type="button" class="metric-toggle-btn" data-metric-column="agentresp" onclick="toggleMetricColumn('agentresp', this)">Show Agent Response</button>
@@ -1430,15 +1437,18 @@
                   <th>Type</th>
                   <th>Instruction</th>
                   <th>Grounding Similarity</th>
+                  <th title="Live pre-retry grounding similarity from the original agent response, plus the no-retry reason when retry was skipped">Original Similarity</th>
+                  <th title="Live grounding similarity from the retry agent response, when available">Retry Similarity</th>
                   <th class="metric-col-groundhuman metric-col-hidden">Grounded_Human_Label</th>
                   <th class="metric-col-groundllm metric-col-hidden">Grounded_LLM_Label</th>
                   <th class="metric-col-llm metric-col-hidden">LLM grounded</th>
                   <th class="metric-col-lt metric-col-hidden">L_t</th>
                   <th class="metric-col-goalrel{% if not show_goalrel %} metric-col-hidden{% endif %}">Goal Relevance</th>
                   <th>L_t_u</th>
-                  <th>LLM Progress</th>
-                  <th>Subgoal Progress</th>
-                  <th>C_t</th>
+                  <th title="Completed plan steps / total plan steps">Plan Progress</th>
+                  <th class="metric-col-llmprog metric-col-hidden">LLM Progress</th>
+                  <th class="metric-col-subgoalprog metric-col-hidden">Subgoal Progress</th>
+                  <th>U_t</th>
                   <th class="metric-col-gtprog metric-col-hidden" title="Self-reported progress WITH reference ground truth (−1 regression / 0 no change / 1 progress)">GT Progress</th>
                   <th class="metric-col-gtprog metric-col-hidden" title="Self-reported progress WITHOUT reference ground truth (−1 / 0 / 1)">No-GT Progress</th>
                   <th class="metric-col-agentresp metric-col-hidden" title="The judge LLM's reasoning behind the GT / No-GT progress score">Agent Response</th>
@@ -1454,12 +1464,22 @@
                 {% set is_high_loop = loop_val >= 0.5 and not is_scroll %}
                 <tr onclick="selectStep({{ step.step }})" style="cursor: pointer; {% if is_high_loop %}background: rgba(250, 204, 21, 0.1);{% endif %}">
                   <td style="color: var(--text-muted);">
-                    {% if is_high_loop %}<span class="loop-step-indicator" title="L_t_u >= 0.5"></span>{% endif %}{{ step.step }}
+                    {% if is_high_loop %}<span class="loop-step-indicator" title="L_t_u >= 0.5"></span>{% endif %}{% if step.isPlanningStep %}-1: Plan{% else %}{{ step.step }}{% endif %}
                   </td>
                   <td>
                     <span class="badge purple">
                       {{ action_type }}
                     </span>
+                    {% if step.warningInjected %}
+                      <div style="margin-top: 6px;">
+                        <span class="badge warning" title="Warning retry injected before execution: {{ (step.warningTypes or [])|join(' + ') }}">Step {{ step.step }}.1 retry</span>
+                      </div>
+                    {% elif step.warningChecked and step.warningSkipReason %}
+                      <div style="margin-top: 6px; max-width: 180px;">
+                        <span class="badge" style="background: rgba(100, 116, 139, 0.12); color: #475569; border: 1px solid rgba(100, 116, 139, 0.25);" title="No warning retry: {{ step.warningSkipReason }}">No retry</span>
+                        <div style="font-size: 10px; margin-top: 4px; color: var(--text-muted); overflow-wrap: anywhere; word-break: break-word;">{{ step.warningSkipReason }}</div>
+                      </div>
+                    {% endif %}
                     {% if step.typeText %}
                       <div style="font-size: 11px; margin-top: 6px; color: var(--text-primary); max-width: 200px; word-break: break-word; white-space: normal;">
                         <strong style="color: var(--text-muted);">Typed Value:</strong> {{ step.typeText }}
@@ -1490,7 +1510,56 @@
                       <span style="color: var(--text-muted);">—</span>
                     {% endif %}
                   </td>
+                  <td>
+                    {% if step.firstGroundingSimilarity is defined and step.firstGroundingSimilarity is not none %}
+                      {% if step.firstGroundingSimilarity >= 0.80 %}
+                        <span class="badge green" title="Original pre-retry cosine similarity: {{ step.firstGroundingSimilarity }}">{{ "%.2f"|format(step.firstGroundingSimilarity) }}</span>
+                      {% else %}
+                        <span class="badge" style="background: rgba(234, 179, 8, 0.14); color: #a16207; border: 1px solid rgba(234, 179, 8, 0.35);" title="Original pre-retry cosine similarity: {{ step.firstGroundingSimilarity }}">{{ "%.2f"|format(step.firstGroundingSimilarity) }}</span>
+                      {% endif %}
+                      {% if step.warningChecked and not step.warningInjected and step.warningSkipReason %}
+                        <div style="font-size: 10px; margin-top: 4px; color: var(--text-muted); max-width: 190px; overflow-wrap: anywhere; word-break: break-word;" title="No warning retry: {{ step.warningSkipReason }}">No retry: {{ step.warningSkipReason }}</div>
+                      {% endif %}
+                      {% if step.firstGroundingSimilarityReason and step.firstGroundingSimilarityReason != 'ok' %}
+                        <div style="font-size: 10px; margin-top: 4px; color: var(--text-muted); max-width: 190px; overflow-wrap: anywhere; word-break: break-word;" title="{{ step.firstGroundingSimilarityDetail or step.firstGroundingSimilarityReason }}">{{ step.firstGroundingSimilarityReason }}</div>
+                      {% endif %}
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                      {% if step.firstGroundingSimilarityReason %}
+                        <div style="font-size: 10px; margin-top: 4px; color: #a16207; max-width: 190px; overflow-wrap: anywhere; word-break: break-word;" title="{{ step.firstGroundingSimilarityDetail or step.firstGroundingSimilarityReason }}">Score unavailable: {{ step.firstGroundingSimilarityReason }}</div>
+                        {% if step.firstGroundingSimilarityDetail and step.firstGroundingSimilarityDetail != step.firstGroundingSimilarityReason %}
+                          <div style="font-size: 9px; margin-top: 2px; color: var(--text-muted); max-width: 190px; overflow-wrap: anywhere; word-break: break-word;">{{ step.firstGroundingSimilarityDetail }}</div>
+                        {% endif %}
+                      {% endif %}
+                      {% if step.warningChecked and not step.warningInjected and step.warningSkipReason %}
+                        <div style="font-size: 10px; margin-top: 4px; color: var(--text-muted); max-width: 190px; overflow-wrap: anywhere; word-break: break-word;" title="No warning retry: {{ step.warningSkipReason }}">No retry: {{ step.warningSkipReason }}</div>
+                      {% endif %}
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if step.retryGroundingSimilarity is defined and step.retryGroundingSimilarity is not none %}
+                      {% if step.retryGroundingSimilarity >= 0.80 %}
+                        <span class="badge green" title="Retry cosine similarity: {{ step.retryGroundingSimilarity }}">{{ "%.2f"|format(step.retryGroundingSimilarity) }}</span>
+                      {% else %}
+                        <span class="badge" style="background: rgba(234, 179, 8, 0.14); color: #a16207; border: 1px solid rgba(234, 179, 8, 0.35);" title="Retry cosine similarity: {{ step.retryGroundingSimilarity }}">{{ "%.2f"|format(step.retryGroundingSimilarity) }}</span>
+                      {% endif %}
+                      {% if step.retryGroundingSimilarityReason and step.retryGroundingSimilarityReason != 'ok' %}
+                        <div style="font-size: 10px; margin-top: 4px; color: var(--text-muted); max-width: 190px; overflow-wrap: anywhere; word-break: break-word;" title="{{ step.retryGroundingSimilarityDetail or step.retryGroundingSimilarityReason }}">{{ step.retryGroundingSimilarityReason }}</div>
+                      {% endif %}
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                      {% if step.retryGroundingSimilarityReason %}
+                        <div style="font-size: 10px; margin-top: 4px; color: #a16207; max-width: 190px; overflow-wrap: anywhere; word-break: break-word;" title="{{ step.retryGroundingSimilarityDetail or step.retryGroundingSimilarityReason }}">Score unavailable: {{ step.retryGroundingSimilarityReason }}</div>
+                        {% if step.retryGroundingSimilarityDetail and step.retryGroundingSimilarityDetail != step.retryGroundingSimilarityReason %}
+                          <div style="font-size: 9px; margin-top: 2px; color: var(--text-muted); max-width: 190px; overflow-wrap: anywhere; word-break: break-word;">{{ step.retryGroundingSimilarityDetail }}</div>
+                        {% endif %}
+                      {% endif %}
+                    {% endif %}
+                  </td>
                   <td class="metric-col-groundhuman metric-col-hidden" onclick="event.stopPropagation();">
+                    {% if step.isPlanningStep %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% else %}
                     {% set human_label = step.grounded_human_label if step.grounded_human_label is defined else none %}
                     {% set human_reviewed = (human_label is not none) or step.grounded_human_label_explicit %}
                     <div style="display: inline-flex; border: 1px solid var(--card-border); border-radius: 8px; overflow: hidden; background: var(--badge-neutral-bg);" data-grounding-label-wrap="{{ step.step }}">
@@ -1500,8 +1569,12 @@
                     {% if trajectory.is_human_annotation_task and not human_reviewed %}
                       <div data-grounding-review-state="{{ step.step }}" style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Unreviewed</div>
                     {% endif %}
+                    {% endif %}
                   </td>
                   <td class="metric-col-groundllm metric-col-hidden">
+                    {% if step.isPlanningStep %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% else %}
                     {% set llm_entry = (step.grounded_llm_labels or {}).get(llm_grounding_model) if step.grounded_llm_labels is defined else none %}
                     {% if llm_entry and llm_entry.label == 'grounded' %}
                       <span class="badge green" title="{{ llm_entry.reason or '' }}">Grounded</span>
@@ -1509,6 +1582,7 @@
                       <span class="badge" title="{{ llm_entry.reason or '' }}" style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.28);">Not Grounded</span>
                     {% else %}
                       <span style="color: var(--text-muted);" title="Run 'Rerun LLM Grounding Labels' for {{ llm_grounding_model }}">—</span>
+                    {% endif %}
                     {% endif %}
                   </td>
                   <td class="metric-col-llm metric-col-hidden">
@@ -1550,6 +1624,26 @@
                     {% endif %}
                   </td>
                   <td>
+                    {% set step_plan = step.plan if step.plan is defined and step.plan else (trajectory.plan if trajectory.plan is defined and trajectory.plan else []) %}
+                    {% set plan_total = step_plan|length %}
+                    {% if step.completedPlanStep is defined and step.completedPlanStep is not none %}
+                      {% set plan_completed = step.completedPlanStep %}
+                    {% elif step.completed_plan_step is defined and step.completed_plan_step is not none %}
+                      {% set plan_completed = step.completed_plan_step %}
+                    {% elif plan_total %}
+                      {% set plan_completed = step_plan|selectattr('status', 'equalto', 'complete')|list|length %}
+                    {% else %}
+                      {% set plan_completed = none %}
+                    {% endif %}
+                    {% if plan_completed is not none and plan_total %}
+                      <span class="badge neutral" title="Completed plan steps / total plan steps">{{ plan_completed }}/{{ plan_total }}</span>
+                    {% elif plan_total %}
+                      <span class="badge neutral" title="Total plan steps">0/{{ plan_total }}</span>
+                    {% else %}
+                      <span style="color: var(--text-muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td class="metric-col-llmprog metric-col-hidden">
                     {% if is_scroll %}
                       <span style="color: var(--text-muted);">—</span>
                     {% elif step.progress is defined and step.progress is not none %}
@@ -1558,7 +1652,7 @@
                       <span style="color: var(--text-muted);">—</span>
                     {% endif %}
                   </td>
-                  <td>
+                  <td class="metric-col-subgoalprog metric-col-hidden">
                     {% if step.subgoal_progress is defined and step.subgoal_progress is not none %}
                       {% set sp = step.subgoal_progress %}
                       <span class="badge {{ 'green' if sp >= 1.0 else ('neutral' if sp >= 0.5 else 'red') }}"
@@ -1610,13 +1704,13 @@
                     {% if is_scroll or step.mech_confidence is not defined or step.mech_confidence is none %}
                       <span style="color: var(--text-muted);">—</span>
                     {% else %}
-                      {% set final_c = step.mech_confidence %}
-                      {% if final_c >= 0.8 %}
-                        <span class="badge success">{{ "%.3f"|format(final_c) }}</span>
-                      {% elif final_c >= 0.4 %}
-                        <span class="badge warning">{{ "%.3f"|format(final_c) }}</span>
+                      {% set final_u = 1 - step.mech_confidence %}
+                      {% if final_u <= 0.2 %}
+                        <span class="badge success">{{ "%.3f"|format(final_u) }}</span>
+                      {% elif final_u <= 0.6 %}
+                        <span class="badge warning">{{ "%.3f"|format(final_u) }}</span>
                       {% else %}
-                        <span class="badge failed">{{ "%.3f"|format(final_c) }}</span>
+                        <span class="badge failed">{{ "%.3f"|format(final_u) }}</span>
                       {% endif %}
                     {% endif %}
                   </td>
@@ -1702,7 +1796,7 @@
               <div class="meta-value" id="details-meta-spec-grounding">—</div>
             </div>
             <div class="meta-item">
-              <div class="meta-label">Spec Full</div>
+              <div class="meta-label">Step Uncertainty</div>
               <div class="meta-value" id="details-meta-spec-full">—</div>
             </div>
             <div class="meta-item" style="grid-column: span 2;">
@@ -1717,6 +1811,42 @@
               <div class="meta-label">Target Capture</div>
               <div class="meta-value" id="details-meta-capture-mode">—</div>
             </div>
+          </div>
+
+          <div id="warning-evidence-panel" style="display: none; margin: 16px 0; padding: 14px; border-radius: 10px; border: 1px solid var(--badge-warning-border); background: var(--badge-warning-bg);">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+              <div>
+                <div style="font-size: 12px; font-weight: 900; color: var(--badge-warning-text); text-transform: uppercase; letter-spacing: 0.04em;">Warning Retry Evidence</div>
+                <div id="warning-evidence-title" style="font-size: 14px; font-weight: 800; color: var(--text-primary); margin-top: 4px;">—</div>
+              </div>
+              <div id="warning-evidence-types" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
+            </div>
+            <div id="warning-evidence-summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 12px;"></div>
+            <details style="margin-top: 12px;" open>
+              <summary><strong>Full retry request — everything sent to the model</strong></summary>
+              <div style="font-size: 12px; color: var(--text-muted); margin: 6px 0;">Three parts: (1) system prompt, (2) user prompt = SoM/page index (<code>=== PAGE INDEX ===</code>) + user goal + history, (3) reflection prompt appended to the user message. Text-only call — no image is sent.</div>
+              <pre id="pre-warning-full-request"></pre>
+            </details>
+            <details style="margin-top: 12px;">
+              <summary>Original action JSON</summary>
+              <pre id="pre-warning-first-response"></pre>
+            </details>
+            <details style="margin-top: 8px;">
+              <summary>Reflection (grounding / loop diagnostic)</summary>
+              <pre id="pre-warning-diagnostic"></pre>
+            </details>
+            <details style="margin-top: 8px;">
+              <summary>Retry system prompt</summary>
+              <pre id="pre-warning-system-prompt"></pre>
+            </details>
+            <details style="margin-top: 8px;">
+              <summary>Retry user prompt (full — user goal, current page, completed steps + reflection)</summary>
+              <pre id="pre-warning-prompt"></pre>
+            </details>
+            <details style="margin-top: 8px;">
+              <summary>Retry agent JSON response (Step <span id="warning-retry-step-label">N.1</span>)</summary>
+              <pre id="pre-warning-retry-response"></pre>
+            </details>
           </div>
 
           <!-- Tabs View -->
@@ -1769,6 +1899,14 @@
           <details>
             <summary>User Prompt / Context</summary>
             <pre id="pre-user-prompt"></pre>
+          </details>
+          <details id="oracle-plan-details" style="display: none;">
+            <summary>Oracle Plan / Augmented Task Prompt</summary>
+            <pre id="pre-oracle-plan"></pre>
+          </details>
+          <details id="force-gt-details" style="display: none;">
+            <summary>ForceGroundTruth Verification</summary>
+            <pre id="pre-force-gt"></pre>
           </details>
           <details>
             <summary>Raw Agent JSON Response</summary>
@@ -1935,6 +2073,111 @@
         .replace(/'/g, '&#39;');
     }
 
+    function parseAgentJson(raw) {
+      const text = String(raw || '').trim();
+      if (!text) return null;
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        const start = text.indexOf('{');
+        const end = text.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+          try {
+            return JSON.parse(text.slice(start, end + 1));
+          } catch (innerErr) {
+            return null;
+          }
+        }
+      }
+      return null;
+    }
+
+    function formatScore(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n.toFixed(2) : '—';
+    }
+
+    function warningTypeBadge(type) {
+      const label = type === 'loop' ? 'Looping Warning' : type === 'grounding' ? 'Grounding Warning' : String(type || 'Warning');
+      return `<span class="badge warning">${escapeHtml(label)}</span>`;
+    }
+
+    function evidenceCard(label, value) {
+      return `<div style="padding: 8px 10px; border-radius: 8px; background: var(--card-bg); border: 1px solid var(--card-border);">
+        <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 800; letter-spacing: 0.04em;">${escapeHtml(label)}</div>
+        <div style="margin-top: 4px; color: var(--text-primary); font-weight: 800; overflow-wrap: anywhere; white-space: normal;">${escapeHtml(value || '—')}</div>
+      </div>`;
+    }
+
+    function renderWarningEvidence(stepData) {
+      const panel = document.getElementById('warning-evidence-panel');
+      if (!panel) return;
+      if (!stepData || !stepData.warningInjected) {
+        panel.style.display = 'none';
+        return;
+      }
+
+      const types = Array.isArray(stepData.warningTypes) ? stepData.warningTypes : [];
+      const first = parseAgentJson(stepData.firstRawResponse);
+      const retry = parseAgentJson(stepData.retryRawResponse);
+      const firstElement = first?.element || {};
+      const retryElement = retry?.element || {};
+      const firstDom = stepData.firstResolvedElementText || firstElement.text || '';
+      const retryDom = stepData.retryResolvedElementText || retryElement.text || '';
+      const firstAction = first?.action || stepData.action || '—';
+      const retryAction = retry?.action || '—';
+      const firstIndex = firstElement.index ?? '—';
+      const retryIndex = retryElement.index ?? '—';
+
+      document.getElementById('warning-evidence-title').textContent = `Step ${stepData.step}.1 retry was requested before executing Step ${stepData.step}`;
+      document.getElementById('warning-evidence-types').innerHTML = types.map(warningTypeBadge).join('') || warningTypeBadge('warning');
+      document.getElementById('warning-retry-step-label').textContent = `${stepData.step}.1`;
+      document.getElementById('pre-warning-first-response').textContent = stepData.firstRawResponse || '(none)';
+      // New runs store the diagnostic, the retry system prompt, and the full retry user prompt
+      // separately. Older runs only stored the diagnostic snippet in `warningPrompt`, so fall
+      // back to the step's own system/user prompt and reconstruct the full reflector prompt so
+      // the panel stays meaningful (marked as reconstructed).
+      const isNewWarningFormat = stepData.warningDiagnostic != null && stepData.warningDiagnostic !== '';
+      const warningDiagnostic = stepData.warningDiagnostic || stepData.warningPrompt || '';
+      const retrySystemPrompt = stepData.warningSystemPrompt || stepData.systemPrompt || '';
+      let retryUserPrompt = stepData.warningPrompt || '';
+      if (!isNewWarningFormat && (stepData.userPrompt || warningDiagnostic)) {
+        retryUserPrompt = reconstructRetryUserPrompt(stepData.userPrompt || '', warningDiagnostic, stepData.firstRawResponse || '', stepData.step);
+      }
+      document.getElementById('pre-warning-diagnostic').textContent = warningDiagnostic || '(none)';
+      document.getElementById('pre-warning-system-prompt').textContent =
+        (retrySystemPrompt || '(none)') + (stepData.warningSystemPrompt ? '' : (retrySystemPrompt ? '\n\n[reconstructed from this step\'s system prompt]' : ''));
+      document.getElementById('pre-warning-prompt').textContent =
+        (retryUserPrompt || '(none)') + (isNewWarningFormat || !retryUserPrompt ? '' : '\n\n[reconstructed from this step\'s user prompt + reflection]');
+      document.getElementById('pre-warning-retry-response').textContent = stepData.retryRawResponse || '(none)';
+
+      // Consolidated view: everything the model received on retry, broken into the three parts
+      // — system prompt, the user prompt (SoM/page index + user goal + history), and the
+      // reflection prompt appended to the user message. Works for old runs too since the step
+      // always stored its own systemPrompt/userPrompt.
+      const somGoalHistory = stepData.userPrompt || '';
+      const reflectionBlock = buildReflectionBlock(warningDiagnostic, stepData.firstRawResponse || '', stepData.step);
+      const reconstructedNote = isNewWarningFormat ? '' : '\n\n[note: reassembled from this step\'s stored system/user prompt for a run captured before full-prompt logging]';
+      document.getElementById('pre-warning-full-request').textContent =
+        '=== 1. SYSTEM PROMPT ===\n' + (retrySystemPrompt || '(none)') +
+        '\n\n=== 2. USER PROMPT (SoM / page index + user goal + history) ===\n' + (somGoalHistory || '(none)') +
+        '\n\n=== 3. REFLECTION PROMPT (appended to the user message) ===\n' + reflectionBlock +
+        reconstructedNote;
+
+      const scoreSummary = [
+        evidenceCard('Original action', firstAction),
+        evidenceCard('Original DOM', `DOM [${firstIndex}]: ${firstDom || '—'}`),
+        evidenceCard('Original similarity', `${formatScore(stepData.firstGroundingSimilarity)}${stepData.warningGroundingThreshold != null ? ` / threshold ${formatScore(stepData.warningGroundingThreshold)}` : ''}`),
+        evidenceCard('Original loop score', `${formatScore(stepData.firstLoopScore)}${stepData.warningLoopThreshold != null ? ` / threshold ${formatScore(stepData.warningLoopThreshold)}` : ''}`),
+        evidenceCard('Retry action', retryAction),
+        evidenceCard('Retry DOM', `DOM [${retryIndex}]: ${retryDom || '—'}`),
+        evidenceCard('Retry similarity', formatScore(stepData.retryGroundingSimilarity)),
+        evidenceCard('Retry loop score', formatScore(stepData.retryLoopScore))
+      ];
+      document.getElementById('warning-evidence-summary').innerHTML = scoreSummary.join('');
+      panel.style.display = 'block';
+    }
+
     function renderBoundaryMetrics(metrics, targetId) {
       const el = document.getElementById(targetId);
       if (!el) return;
@@ -2038,6 +2281,23 @@
       wrap.innerHTML = `<div class="dom-snap-wrap"><div class="dom-snap-banner">${banner}</div><iframe sandbox="" title="${banner}"></iframe></div>`;
       const frame = wrap.querySelector('iframe');
       if (frame) frame.srcdoc = html;
+    }
+
+    // Mount a DOM snapshot that may be inline (older runs) OR externalized to a file
+    // (newer runs store `domSnapshotPath`/`domSnapshotAfterPath` to keep the trajectory
+    // JSON small). Fetches the file lazily on demand and returns whether content exists.
+    function mountDomSnapshotSource(wrap, inline, path, banner) {
+      if (!wrap) return false;
+      if (inline) { mountDomSnapshot(wrap, inline, banner); return true; }
+      if (path) {
+        wrap.innerHTML = '<div class="empty-tab">Loading DOM snapshot…</div>';
+        fetch(`/artifacts/${path}`)
+          .then(r => r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`)))
+          .then(html => mountDomSnapshot(wrap, html, banner))
+          .catch(() => { wrap.innerHTML = '<div class="empty-tab">Failed to load DOM snapshot.</div>'; });
+        return true;
+      }
+      return false;
     }
 
     function init() {
@@ -2149,8 +2409,9 @@
       });
 
       // Update text details
-      document.getElementById('details-step-badge').textContent = `Step ${stepId}`;
-      document.getElementById('details-step-instruction').textContent = stepData.instruction || 'Initial State';
+      const displayStepLabel = stepData.isPlanningStep ? 'Step -1: Plan' : `Step ${stepId}`;
+      document.getElementById('details-step-badge').textContent = displayStepLabel;
+      document.getElementById('details-step-instruction').textContent = stepData.instruction || (stepData.isPlanningStep ? 'Plan' : 'Initial State');
       document.getElementById('details-meta-action').textContent = stepData.action || 'N/A';
       
       const conf = stepData.confidence;
@@ -2178,7 +2439,9 @@
       const specG = stepData.element_step_similarity;
       document.getElementById('details-meta-spec-grounding').textContent =
         (specG !== undefined && specG !== null) ? specG.toFixed(2) : '—';
-      const specFull = stepData.mech_confidence;
+      const specFull = (stepData.step_uncertainty !== undefined && stepData.step_uncertainty !== null)
+        ? stepData.step_uncertainty
+        : ((stepData.mech_confidence !== undefined && stepData.mech_confidence !== null) ? 1 - stepData.mech_confidence : null);
       document.getElementById('details-meta-spec-full').textContent =
         (specFull !== undefined && specFull !== null) ? specFull.toFixed(3) : '—';
         
@@ -2206,6 +2469,8 @@
       const captureMode = stepData.regionCaptureMode || (stepData.regionShot ? 'legacy' : null);
       document.getElementById('details-meta-capture-mode').textContent =
         captureMode ? captureModeLabel(captureMode) : '—';
+
+      renderWarningEvidence(stepData);
 
       // Update base64 screenshots
       const shotBefore = stepData.screenshotBefore || stepData.screenshot || null;
@@ -2247,11 +2512,11 @@
         if (currentActiveTab === 'after') switchTab('before');
       }
 
-      // Update DOM Snapshot HTML (rendered read-only iframe, same as live inspector)
-      const domContent = stepData.domSnapshot || null;
+      // Update DOM Snapshot HTML (rendered read-only iframe, same as live inspector).
+      // The snapshot may be inline (older runs) or externalized to a file (domSnapshotPath).
       const iframeWrap = document.getElementById('dom-iframe-wrap');
-      if (domContent) {
-        mountDomSnapshot(iframeWrap, domContent, 'Read-only page snapshot — before action');
+      const hasDom = mountDomSnapshotSource(iframeWrap, stepData.domSnapshot || null, stepData.domSnapshotPath || null, 'Read-only page snapshot — before action');
+      if (hasDom) {
         document.getElementById('btn-tab-dom').disabled = false;
       } else {
         iframeWrap.innerHTML = '<div class="empty-tab">No DOM Snapshot available for this step.</div>';
@@ -2284,6 +2549,34 @@
       // Prompts
       document.getElementById('pre-system-prompt').textContent = stepData.systemPrompt || '(none)';
       document.getElementById('pre-user-prompt').textContent = stepData.userPrompt || '(none)';
+      const oracleDetails = document.getElementById('oracle-plan-details');
+      const oraclePre = document.getElementById('pre-oracle-plan');
+      if (stepData.oraclePlanIncluded || stepData.oraclePlan || stepData.guideQueryWithOraclePlan) {
+        oracleDetails.style.display = '';
+        oraclePre.textContent =
+          '=== ORACLE PLAN ===\n' + (stepData.oraclePlan || '(none)') +
+          '\n\n=== EXACT TASK PROMPT SENT TO PAGEGUIDE ===\n' + (stepData.guideQueryWithOraclePlan || '(not captured)');
+      } else {
+        oracleDetails.style.display = 'none';
+        oraclePre.textContent = '';
+      }
+      const forceDetails = document.getElementById('force-gt-details');
+      const forcePre = document.getElementById('pre-force-gt');
+      if (stepData.forceGroundTruth) {
+        forceDetails.style.display = '';
+        const verdict = stepData.verificationPassed === true ? 'passed'
+          : (stepData.verificationPassed === false ? 'failed' : 'pending');
+        forcePre.textContent =
+          'Oracle step: ' + (stepData.oracleStep ?? '(none)') +
+          '\nOracle subgoal: ' + (stepData.oracleSubgoal || '(none)') +
+          '\nExpected URL: ' + (stepData.expectedUrl || '(none)') +
+          '\nActual URL: ' + (stepData.actualUrl || stepData.url || '(not verified yet)') +
+          '\nAttempt: ' + (stepData.attempt ?? 1) +
+          '\nVerification: ' + verdict;
+      } else {
+        forceDetails.style.display = 'none';
+        forcePre.textContent = '';
+      }
       document.getElementById('pre-raw-llm').textContent = stepData.rawLlmJson || '(none)';
 
       // Sync Lightbox index
@@ -2509,8 +2802,9 @@
       document.getElementById('dot-after').classList.toggle('active', currentLightboxView === 'after');
 
       const viewLabel = currentLightboxView === 'before' ? 'Before Action' : (currentLightboxView === 'target' ? 'Target Region' : 'After Action');
-      label.textContent = `Step ${currentItem.step} (${viewLabel})`;
-      instruction.textContent = currentItem.instruction || 'Initial state';
+      const itemStepLabel = currentItem.isPlanningStep ? 'Step -1: Plan' : `Step ${currentItem.step}`;
+      label.textContent = `${itemStepLabel} (${viewLabel})`;
+      instruction.textContent = currentItem.instruction || (currentItem.isPlanningStep ? 'Plan' : 'Initial state');
       renderLightboxMeta(currentItem);
 
       if (shot) {
@@ -2572,6 +2866,33 @@
       return Math.max(0, Math.min(1, n));
     }
 
+    // The reflection prompt appended to the user message on retry (diagnostic + previously
+    // generated action + the "generate a different action" instruction). Mirrors the reflection
+    // portion of _gv2WarningRetryPrompt in content/tasks/guidev2.js.
+    function buildReflectionBlock(diagnostic, previousResponse, stepNumber) {
+      const lead = 'Reflection: This is not your first attempt to generate the next action. The previous attempt to generate the next action has failed.';
+      const diag = (diagnostic || '').trim();
+      return `${diag ? `${lead} ${diag}` : lead}\nHere are some previously generated next actions:\n${previousResponse || '(previous response not recorded)'}\n\nPlease note that you are currently in the middle stage of the trajectory. First, analyze the current state, completed actions, and task, and compare them with the previous attempt at the next action. Then, generate a new action that is DIFFERENT from all previously generated next actions. Return corrected JSON for Step ${stepNumber}.`;
+    }
+
+    // Full retry user message = original user prompt (SoM/page index + user goal + history)
+    // followed by the reflection block. Used to reconstruct older runs that stored only the diagnostic.
+    function reconstructRetryUserPrompt(userPrompt, diagnostic, previousResponse, stepNumber) {
+      return `${userPrompt}\n\n${buildReflectionBlock(diagnostic, previousResponse, stepNumber)}`;
+    }
+
+    // Step uncertainty U_t = 1 - C_t (mechanical confidence). Prefers the precomputed
+    // step_uncertainty; falls back to inverting mech_confidence for older payloads.
+    function stepUncertaintyOf(step) {
+      if (step.step_uncertainty !== undefined && step.step_uncertainty !== null) {
+        return Math.max(0, Math.min(1, Number(step.step_uncertainty)));
+      }
+      if (step.mech_confidence !== undefined && step.mech_confidence !== null) {
+        return Math.max(0, Math.min(1, 1 - Number(step.mech_confidence)));
+      }
+      return null;
+    }
+
     function selfReportProgressOf(value) {
       if (value === undefined || value === null) return null;
       const n = Number(value);
@@ -2628,7 +2949,7 @@
       const allVals = [];
       steps.forEach(step => {
         const push = v => { if (v !== undefined && v !== null && isFinite(v)) allVals.push(v); };
-        if (activeConfLines.full) push(step.mech_confidence);
+        if (activeConfLines.full) push(stepUncertaintyOf(step));
         if (activeConfLines.llmProgress) push(llmProgressOf(step));
         if (activeConfLines.subgoalProgress) push(subgoalProgressOf(step));
         if (activeConfLines.loop) push(step.computed_loop_updated);
@@ -2748,7 +3069,7 @@
       // Each line plots its real metric (no products). Null/undefined points are skipped.
       const metric = v => (v !== undefined && v !== null && isFinite(v)) ? v : null;
       if (activeConfLines.full) {
-        drawLine(s => metric(s.mech_confidence), "#7857ff");        // Full = mechanical C_t
+        drawLine(s => metric(stepUncertaintyOf(s)), "#7857ff");     // Step Uncertainty U_t = 1 - C_t
       }
       if (activeConfLines.llmProgress) {
         drawLine(s => metric(llmProgressOf(s)), "#ff8a3d");         // Agent self-reported progress

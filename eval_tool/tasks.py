@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -71,12 +72,76 @@ def _task_id(norm: dict[str, str], row_number: int) -> str:
     return "csv-" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
 
 
+def _json_task_url(record: dict) -> str:
+    """First usable URL among a record's key_nodes."""
+    for node in record.get("key_nodes") or []:
+        url = ((node or {}).get("content") or {}).get("url")
+        if url:
+            return str(url).strip()
+    return ""
+
+
+def _json_key_nodes(record: dict) -> list[dict]:
+    return [node for node in (record.get("key_nodes") or []) if isinstance(node, dict)]
+
+
+def _json_reference_urls(key_nodes: list[dict]) -> list[str]:
+    urls: list[str] = []
+    for node in key_nodes:
+        url = ((node or {}).get("content") or {}).get("url")
+        urls.append(str(url).strip() if url else "")
+    return urls
+
+
+def _json_match_functions(key_nodes: list[dict]) -> list[str]:
+    return [str((node or {}).get("match_function_name") or "").strip() for node in key_nodes]
+
+
+def _load_json_tasks(json_path: Path) -> list[EvalTask]:
+    """Load the annotated JSON dataset (task/key_nodes/subgoals) into EvalTask rows."""
+    try:
+        records = json.loads(json_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    if not isinstance(records, list):
+        return []
+    tasks = []
+    for row_number, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        task_text = (record.get("task") or "").strip()
+        website_url = _json_task_url(record)
+        if not task_text or not website_url:
+            continue
+        subgoals = [str(s).strip() for s in (record.get("subgoals") or []) if str(s).strip()]
+        key_nodes = _json_key_nodes(record)
+        reference_steps = "\n".join(subgoals)
+        index = record.get("index")
+        task_id = f"annotated-{index}" if index is not None else f"annotated-row-{row_number}"
+        tasks.append(EvalTask(
+            name=task_text,
+            task_id=task_id,
+            task=task_text,
+            website_url=website_url,
+            reference_steps=reference_steps,
+            success_criteria=reference_steps,
+            annotated_subgoals=subgoals,
+            annotated_key_nodes=key_nodes,
+            annotated_reference_urls=_json_reference_urls(key_nodes),
+            annotated_match_functions=_json_match_functions(key_nodes),
+        ))
+    return tasks
+
+
 def load_tasks(csv_path: Path | str | None = None) -> list[EvalTask]:
     if isinstance(csv_path, str):
         csv_path = current_data_csv(csv_path)
     csv_path = csv_path or current_data_csv()
     if not csv_path.exists():
         return []
+
+    if csv_path.suffix.lower() == ".json":
+        return _load_json_tasks(csv_path)
 
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)

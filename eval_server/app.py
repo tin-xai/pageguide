@@ -11,9 +11,21 @@ import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(BASE_DIR))
 
-from eval_tool.storage import list_runs as list_auto_runs, load_run, task_set_options, normalize_task_set, list_task_results, save_task_result, clear_run, utc_now, RUNS_DIR, REPO_ROOT
+from eval_tool.storage import list_runs as list_auto_runs, load_run, task_set_options, normalize_task_set, task_set_label, list_task_results, save_task_result, clear_run, utc_now, RUNS_DIR, REPO_ROOT, load_dom_snapshot
 from eval_tool.tasks import load_tasks, tasks_by_id, display_task_name
-from eval_tool.runner import create_run, save_run, start_run, DEFAULT_MAX_STEPS, configured_task_model, is_running, stop_run, configured_region_capture_mode, normalize_region_capture_mode, region_capture_mode_label
+from eval_tool.annotated_urls import (
+    DATASET_PATH as ANNOTATED_DATASET_PATH,
+    blank_url_count as annotated_blank_url_count,
+    browse_rows as annotated_browse_rows,
+    evaluate_url as evaluate_annotated_url,
+    iter_reference_urls as iter_annotated_urls,
+    load_dataset as load_annotated_dataset,
+    reference_url as annotated_reference_url,
+    save_dataset as save_annotated_dataset,
+    scan as scan_annotated_urls,
+    update_url as update_annotated_url,
+)
+from eval_tool.runner import create_run, save_run, start_run, DEFAULT_MAX_STEPS, configured_task_model, is_running, stop_run, configured_region_capture_mode, normalize_region_capture_mode, region_capture_mode_label, normalize_temperature, normalize_unit_threshold, DEFAULT_GROUNDING_WARNING_THRESHOLD, DEFAULT_LOOP_WARNING_THRESHOLD
 from eval_tool.judge import configured_judge_model, MODEL_OPTIONS, DEFAULT_JUDGE_METHOD, judge_method_options, normalize_judge_method, normalize_model, LlmJudge
 from eval_tool.mind2web_levels import (
     DIFFICULTY_LABELS,
@@ -124,16 +136,75 @@ def _run_display_time(run):
     return ""
 
 
+def _run_task_count(run):
+    task_ids = run.get("task_ids")
+    if isinstance(task_ids, list):
+        return len(task_ids)
+    for key in ("task_count", "tasks_count"):
+        try:
+            return int(run.get(key))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _annotated_reference_url_summary() -> dict:
+    records = load_annotated_dataset()
+    summary = {
+        "available": bool(records),
+        "total": len(records),
+        "single_step": 0,
+        "all_same": 0,
+        "all_different": 0,
+        "mixed": 0,
+        "with_blank": 0,
+        "all_different_task_ids": [],
+    }
+    for record in records:
+        urls = [
+            str(((node or {}).get("content") or {}).get("url") or "").strip()
+            for node in (record.get("key_nodes") or [])
+        ]
+        non_blank = [url for url in urls if url]
+        if len(non_blank) != len(urls):
+            summary["with_blank"] += 1
+        if len(non_blank) <= 1:
+            summary["single_step"] += 1
+        elif len(set(non_blank)) == 1:
+            summary["all_same"] += 1
+        elif len(set(non_blank)) == len(non_blank):
+            summary["all_different"] += 1
+            index = record.get("index")
+            if index is not None:
+                summary["all_different_task_ids"].append(f"annotated-{index}")
+        else:
+            summary["mixed"] += 1
+    return summary
+
+
 def _grounding_run_groups(auto_runs):
     groups = {}
-    default_ids = []
     for run in sorted(auto_runs, key=lambda r: (-_run_chrono_key(r), str(r.get("run_id") or ""))):
         model = run.get("task_model") or "Unknown"
         groups.setdefault(model, []).append(run)
     ordered_models = sorted(groups, key=lambda model: (-_run_chrono_key(groups[model][0]), model))
+
+    default_ids = []
     for model in ordered_models:
-        if len(default_ids) < 3 and groups[model]:
-            default_ids.append(groups[model][0].get("run_id"))
+        for run in groups[model]:
+            if _run_task_count(run) == 80:
+                default_ids.append(run.get("run_id"))
+                break
+        if len(default_ids) >= 3:
+            break
+    for model in ordered_models:
+        if len(default_ids) >= 3:
+            break
+        for run in groups[model]:
+            run_id = run.get("run_id")
+            if run_id and run_id not in default_ids:
+                default_ids.append(run_id)
+                break
     return [
         {"model": model, "runs": groups[model]}
         for model in ordered_models
@@ -143,6 +214,11 @@ def _grounding_run_groups(auto_runs):
 @app.template_global('task_display_name')
 def task_display_name(task):
     return display_task_name(task)
+
+
+@app.template_global('task_set_source_label')
+def task_set_source_label(task_set):
+    return task_set_label(task_set)
 
 
 @app.template_global('spec_grounding')
@@ -171,6 +247,7 @@ os.makedirs(SAVED_DIR, exist_ok=True)
 # per-trajectory `star` field that was split across saved_trajectories/ and runs/.
 STARS_FILE = os.path.join(BASE_DIR, 'stars.json')
 DASHBOARD_CACHE_FILE = os.path.join(BASE_DIR, '.dashboard_summary_cache.json')
+ANNOTATED_URL_CHECK_CACHE_FILE = os.path.join(BASE_DIR, 'annotated_url_check_cache.json')
 DASHBOARD_CACHE_VERSION = 2
 DEFAULT_GROUNDING_LLM_LABEL_MODEL = "openai/gpt-4o"
 GROUNDING_LABEL_SKIP_ACTIONS = {"scroll", "scroll_up", "scroll_down", "done"}
@@ -193,6 +270,103 @@ def _save_dashboard_cache(cache):
         pass
 
 
+def _annotated_dataset_meta():
+    try:
+        stat = os.stat(ANNOTATED_DATASET_PATH)
+        return {"path": str(ANNOTATED_DATASET_PATH), "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+    except OSError:
+        return {"path": str(ANNOTATED_DATASET_PATH), "mtime_ns": None, "size": None}
+
+
+def _load_annotated_url_check_cache():
+    try:
+        with open(ANNOTATED_URL_CHECK_CACHE_FILE, 'r', encoding='utf-8') as f:
+            cache = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(cache, dict):
+        return {}
+    if cache.get("dataset") != _annotated_dataset_meta():
+        return {}
+    return cache.get("result") if isinstance(cache.get("result"), dict) else {}
+
+
+def _save_annotated_url_check_cache(result):
+    try:
+        with open(ANNOTATED_URL_CHECK_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({"dataset": _annotated_dataset_meta(), "result": result}, f, indent=2)
+    except Exception:
+        pass
+
+
+def _cache_annotated_url_check_result(result, *, mode, verify_anchor=False, strict=False, timeout=None):
+    payload = copy.deepcopy(result)
+    payload.update({
+        "mode": mode,
+        "verify_anchor": bool(verify_anchor),
+        "strict": bool(strict),
+        "timeout": timeout,
+        "checked_at": utc_now(),
+    })
+    _save_annotated_url_check_cache(payload)
+    return payload
+
+
+def _merge_annotated_url_check_one(index, step, url, result):
+    records = load_annotated_dataset()
+    total = sum(1 for _ in iter_annotated_urls(records))
+    cache = _load_annotated_url_check_cache()
+    flagged = [
+        f for f in (cache.get("flagged") or [])
+        if not (f.get("index") == index and int(f.get("step") or 0) == int(step))
+    ]
+    if not result.get("ok"):
+        task, subgoal = "", ""
+        for record in records:
+            if isinstance(record, dict) and record.get("index") == index:
+                task = (record.get("task") or "").strip()
+                subgoals = record.get("subgoals") or []
+                subgoal = subgoals[int(step) - 1] if 1 <= int(step) <= len(subgoals) else ""
+                break
+        suggestions = result.get("suggestions") or []
+        flagged.append({
+            "index": index,
+            "step": int(step),
+            "url": url or "",
+            "status": result.get("status"),
+            "detail": result.get("detail"),
+            "task": task,
+            "subgoal": (subgoal or "").strip(),
+            "suggestions": suggestions,
+            "suggested_url": suggestions[0] if suggestions else None,
+        })
+    flagged.sort(key=lambda f: (str(f.get("index")), int(f.get("step") or 0)))
+    return _cache_annotated_url_check_result(
+        {"flagged": flagged, "total": total, "dead_count": len(flagged)},
+        mode="partial",
+        verify_anchor=True,
+        timeout=20.0,
+    )
+
+
+def _annotated_task_subgoal(records, index, step):
+    for record in records:
+        if isinstance(record, dict) and record.get("index") == index:
+            task = (record.get("task") or "").strip()
+            subgoals = record.get("subgoals") or []
+            subgoal = subgoals[step - 1] if 1 <= step <= len(subgoals) else ""
+            return task, (subgoal or "").strip()
+    return "", ""
+
+
+def _section_targets_from_records(records):
+    targets = []
+    for index, step, url in iter_annotated_urls(records):
+        if url and "#" in str(url):
+            targets.append({"index": index, "step": int(step), "url": str(url).strip()})
+    return targets
+
+
 def _cache_meta(filepath):
     stat = os.stat(filepath)
     return {'mtime_ns': stat.st_mtime_ns, 'size': stat.st_size, 'version': DASHBOARD_CACHE_VERSION}
@@ -212,6 +386,21 @@ def _cached_file_summary(cache, filepath, builder):
     return summary
 
 
+def _to_uncertainty(confidence):
+    """Step uncertainty U_t = 1 - C_t (clamped to [0,1]); None passes through.
+
+    The grounding-based mechanical confidence C_t (higher = better grounded) is presented to
+    users as "Step Uncertainty" (higher = more uncertain). Inversion happens only at this
+    display boundary; the underlying compute_spec_confidence keeps returning C_t.
+    """
+    if confidence is None:
+        return None
+    try:
+        return max(0.0, min(1.0, 1.0 - float(confidence)))
+    except (TypeError, ValueError):
+        return None
+
+
 def _step_metrics(steps, high_threshold=None, medium_threshold=None):
     payload = {"steps": steps or []}
     backfill_computed_loop(payload)
@@ -223,10 +412,12 @@ def _step_metrics(steps, high_threshold=None, medium_threshold=None):
         loop_u = s.get("computed_loop_updated")
         if loop_u is not None and loop_u > 0.5:
             loop_count += 1
+        _mech_conf = compute_spec_confidence(s, formula="spec_noprogress", high_threshold=high_threshold, medium_threshold=medium_threshold)
         step_metrics.append({
             "step": s.get("step"),
             "action": s.get("action"),
-            "mech_confidence": compute_spec_confidence(s, formula="spec_noprogress", high_threshold=high_threshold, medium_threshold=medium_threshold),
+            "mech_confidence": _mech_conf,
+            "step_uncertainty": _to_uncertainty(_mech_conf),
             "rule_grounding": g_grounding(s, high_threshold=high_threshold, medium_threshold=medium_threshold),
             "element_step_similarity": s.get("element_step_similarity"),
             "grounded_human_label": s.get("grounded_human_label"),
@@ -482,6 +673,39 @@ def _human_annotation_run(run):
 
 def _human_annotation_task(data):
     return bool(data and (data.get("human_annotation_review_task") or data.get("source_run_id")))
+
+
+def _grounding_display_model_name(model):
+    raw = str(model or "Unknown")
+    lower = raw.lower()
+    if "gpt-4o" in lower:
+        return "GPT4o"
+    if "gpt-4.1" in lower:
+        return "Gpt-4.1-nano"
+    if "gemini" in lower:
+        return "Gemini"
+    if "qwen" in lower:
+        return "Qwen"
+    return raw.split("/")[-1].capitalize() if "/" in raw else raw.capitalize()
+
+
+def _numeric_step_value(step, *keys):
+    for key in keys:
+        if step.get(key) is None:
+            continue
+        try:
+            return float(step.get(key))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _mean_std(values):
+    if not values:
+        return None, None
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return mean, variance ** 0.5
 
 
 def grounding_boundary_metrics(steps, threshold=0.8, explicit_only=False):
@@ -816,7 +1040,7 @@ def _subgoal_check_label(check):
 
 
 def _step_page_state(step):
-    dom = step.get("domSnapshotAfter") or step.get("domSnapshot") or ""
+    dom = load_dom_snapshot(step, prefer_after=True)
     return PageState(step.get("url", ""), dom)
 
 
@@ -1128,32 +1352,82 @@ def load_stars():
     _save_stars(stars)
     return stars
 
-def _resolve_trajectory_path(session_id):
+_SESSION_ID_PREFIX_RE = re.compile(r'"(?:session_id|sessionId)"\s*:\s*"([^"]+)"')
+
+
+def _session_id_in_file_prefix(path, session_id, chunk=262144):
+    """Cheaply test whether a task JSON belongs to ``session_id``.
+
+    Task files can be huge (inline DOM snapshots push some past 80 MB), so we avoid a
+    full ``json.load``. ``session_id``/``sessionId`` is a top-level key written before
+    the giant ``steps`` array, so it reliably lands in the first ~256 KB. Returns True on
+    a match, False when a session id was found but differs, and None when no session id
+    was seen in the prefix (caller may fall back to a full parse for odd/legacy shapes).
+    """
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            head = f.read(chunk)
+    except Exception:
+        return False
+    match = _SESSION_ID_PREFIX_RE.search(head)
+    if not match:
+        return None
+    return match.group(1) == session_id
+
+
+def _match_trajectory_in_dir(tasks_dir, session_id):
+    """Return the task file in ``tasks_dir`` matching ``session_id`` (prefix read; full
+    parse only as a fallback for files whose prefix had no session id)."""
+    if not os.path.isdir(tasks_dir):
+        return None
+    fallbacks = []
+    for task_file in os.listdir(tasks_dir):
+        if not task_file.endswith('.json'):
+            continue
+        tf_path = os.path.join(tasks_dir, task_file)
+        result = _session_id_in_file_prefix(tf_path, session_id)
+        if result is True:
+            return tf_path
+        if result is None:
+            fallbacks.append(tf_path)
+    for tf_path in fallbacks:
+        try:
+            with open(tf_path, 'r', encoding='utf-8') as f:
+                tdata = json.load(f)
+        except Exception:
+            continue
+        if tdata.get('session_id') == session_id or tdata.get('sessionId') == session_id:
+            return tf_path
+    return None
+
+
+def _resolve_trajectory_path(session_id, run_id=None):
     """Locate the JSON file backing a session id.
 
     Returns (filepath, run_id). run_id is set only when the file lives under an
     automated run's tasks dir. Both are None when nothing matches.
+
+    When ``run_id`` is provided (the inspect link knows it), only that run's tasks dir
+    is scanned — a lightweight lookup instead of parsing every run's task files.
     """
     saved = os.path.join(SAVED_DIR, f"{session_id}.json")
     if os.path.exists(saved):
         return saved, None
 
+    # Fast path: the caller told us which run this trajectory belongs to.
+    if run_id:
+        tasks_dir = os.path.join(RUNS_DIR, run_id, 'tasks')
+        hit = _match_trajectory_in_dir(tasks_dir, session_id)
+        if hit:
+            return hit, run_id
+
     if os.path.exists(RUNS_DIR):
         for run_dir in os.listdir(RUNS_DIR):
-            tasks_dir = os.path.join(RUNS_DIR, run_dir, 'tasks')
-            if not os.path.exists(tasks_dir):
-                continue
-            for task_file in os.listdir(tasks_dir):
-                if not task_file.endswith('.json'):
-                    continue
-                tf_path = os.path.join(tasks_dir, task_file)
-                try:
-                    with open(tf_path, 'r', encoding='utf-8') as f:
-                        tdata = json.load(f)
-                except Exception:
-                    continue
-                if tdata.get('session_id') == session_id or tdata.get('sessionId') == session_id:
-                    return tf_path, run_dir
+            if run_dir == run_id:
+                continue  # already scanned above
+            hit = _match_trajectory_in_dir(os.path.join(RUNS_DIR, run_dir, 'tasks'), session_id)
+            if hit:
+                return hit, run_dir
     return None, None
 
 
@@ -1370,7 +1644,7 @@ def api_grounding_human_label(session_id):
             json.dump(data, f, indent=2, ensure_ascii=False)
 
         threshold = payload.get("threshold", 0.8)
-        metrics = grounding_boundary_metrics(steps, threshold, explicit_only=explicit_review_label)
+        metrics = grounding_boundary_metrics(steps, threshold, explicit_only=(not explicit_review_label))
         return jsonify({'status': 'success', 'label': label, 'metrics': metrics, 'sync': sync_result, 'explicit': explicit_review_label})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1395,6 +1669,154 @@ def api_generate_human_annotation_set():
         })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
+
+
+@app.route('/annotated-urls')
+def annotated_urls_page():
+    records = load_annotated_dataset()
+    rows = annotated_browse_rows(records)
+    total_urls = sum(1 for _ in iter_annotated_urls(records))
+    return render_template(
+        'annotated_urls.html',
+        dataset_path=str(ANNOTATED_DATASET_PATH),
+        rows=rows,
+        task_count=len(rows),
+        total_urls=total_urls,
+        blank_count=annotated_blank_url_count(records),
+        live_check_cache=_load_annotated_url_check_cache(),
+    )
+
+
+@app.route('/api/annotated-urls/check', methods=['POST', 'OPTIONS'])
+def api_annotated_urls_check():
+    if request.method == 'OPTIONS':
+        return '', 204
+    payload = request.json or {}
+    strict = bool(payload.get("strict"))
+    verify_anchor = bool(payload.get("verify_anchor"))
+    timeout = float(payload.get("timeout", 8.0))
+    records = load_annotated_dataset()
+    flagged = scan_annotated_urls(records, live=True, timeout=timeout, strict=strict, verify_anchor=verify_anchor)
+    total = sum(1 for _ in iter_annotated_urls(records))
+    result = _cache_annotated_url_check_result(
+        {"flagged": flagged, "total": total, "dead_count": len(flagged)},
+        mode="bulk",
+        verify_anchor=verify_anchor,
+        strict=strict,
+        timeout=timeout,
+    )
+    return jsonify(result)
+
+
+@app.route('/api/annotated-urls/check-one', methods=['POST', 'OPTIONS'])
+def api_annotated_urls_check_one():
+    if request.method == 'OPTIONS':
+        return '', 204
+    payload = request.json or {}
+    url = (payload.get("url") or "").strip()
+    index = payload.get("index")
+    step = payload.get("step")
+    if not url and index is not None and step is not None:
+        try:
+            url = annotated_reference_url(load_annotated_dataset(), index, int(step)) or ""
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid index/step"}), 400
+    # A single URL, no concurrency, generous timeout → reliable even for bot-protected sites.
+    timeout = float(payload.get("timeout", 20.0))
+    result = evaluate_annotated_url(url, timeout=timeout, verify_anchor=True)
+    suggestions = result.get("suggestions") or []
+    if index is not None and step is not None:
+        try:
+            _merge_annotated_url_check_one(index, int(step), url, result)
+        except (TypeError, ValueError):
+            pass
+    return jsonify({
+        "ok": result["ok"],
+        "status": result.get("status"),
+        "detail": result.get("detail"),
+        "url": url,
+        "suggestions": suggestions,
+        "suggested_url": suggestions[0] if suggestions else None,
+    })
+
+
+@app.route('/api/annotated-urls/check-sections', methods=['POST', 'OPTIONS'])
+def api_annotated_urls_check_sections():
+    if request.method == 'OPTIONS':
+        return '', 204
+    from concurrent.futures import ThreadPoolExecutor
+
+    payload = request.json or {}
+    timeout = float(payload.get("timeout", 20.0))
+    records = load_annotated_dataset()
+    raw_targets = payload.get("targets")
+    if isinstance(raw_targets, list):
+        targets = []
+        for item in raw_targets:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url or "#" not in url:
+                continue
+            try:
+                step = int(item.get("step"))
+            except (TypeError, ValueError):
+                continue
+            targets.append({"index": item.get("index"), "step": step, "url": url})
+    else:
+        targets = _section_targets_from_records(records)
+
+    def check(target):
+        result = evaluate_annotated_url(target["url"], timeout=timeout, verify_anchor=True)
+        return target, result
+
+    workers = max(1, min(4, len(targets) or 1))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(check, targets))
+
+    flagged = []
+    for target, result in results:
+        if result.get("ok"):
+            continue
+        task, subgoal = _annotated_task_subgoal(records, target["index"], target["step"])
+        suggestions = result.get("suggestions") or []
+        flagged.append({
+            "index": target["index"],
+            "step": target["step"],
+            "url": target["url"],
+            "status": result.get("status"),
+            "detail": result.get("detail"),
+            "task": task,
+            "subgoal": subgoal,
+            "suggestions": suggestions,
+            "suggested_url": suggestions[0] if suggestions else None,
+        })
+    flagged.sort(key=lambda f: (str(f.get("index")), int(f.get("step") or 0)))
+    result = _cache_annotated_url_check_result(
+        {"flagged": flagged, "total": len(targets), "dead_count": len(flagged), "checked_count": len(targets)},
+        mode="sections",
+        verify_anchor=True,
+        timeout=timeout,
+    )
+    return jsonify(result)
+
+
+@app.route('/api/annotated-urls/update', methods=['POST', 'OPTIONS'])
+def api_annotated_urls_update():
+    if request.method == 'OPTIONS':
+        return '', 204
+    payload = request.json or {}
+    try:
+        index = payload["index"]
+        step = int(payload["step"])
+        url = str(payload.get("url", "")).strip()
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"ok": False, "error": "index, step and url are required"}), 400
+    records = load_annotated_dataset()
+    if not update_annotated_url(records, index, step, url):
+        return jsonify({"ok": False, "error": f"no key node at index {index}, step {step}"}), 404
+    save_annotated_dataset(records)
+    return jsonify({"ok": True, "index": index, "step": step, "url": url})
 
 
 @app.route('/api/grounding-llm-labels/rerun', methods=['POST', 'OPTIONS'])
@@ -1516,13 +1938,27 @@ def dashboard():
         'error_stats': error_stats
     }
     
-    # Load data for Automatic Evaluation
-    task_set = normalize_task_set(request.args.get("task_set"))
-    difficulty = normalize_difficulty(request.args.get("difficulty"))
+    # Load data for Automatic Evaluation. The launch panel defaults to the
+    # Annotated Dataset with a deterministic random sample.
+    automatic_tab = request.args.get("tab") == "automatic"
+    explicit_task_set = "task_set" in request.args
+    explicit_difficulty = "difficulty" in request.args
+    task_set = normalize_task_set(request.args.get("task_set") if explicit_task_set else ("annotated" if automatic_tab else None))
+    difficulty = normalize_difficulty(request.args.get("difficulty") if explicit_difficulty else ("easy" if automatic_tab and task_set == "online_mind2web" else None))
+    default_auto_sample_n = 50
+    default_auto_sample_seed = 1
+    auto_apply_default_sample = automatic_tab and (
+        task_set == "annotated" or (not explicit_task_set and not explicit_difficulty)
+    )
     all_tasks = load_tasks(task_set)
     has_difficulty_filter = task_set in {"no_login", "mind2web", "online_mind2web"}
     difficulty_level_counts = difficulty_counts(all_tasks) if has_difficulty_filter else {}
     available_tasks = filter_tasks_by_difficulty(all_tasks, difficulty) if has_difficulty_filter else all_tasks
+    annotated_url_summary = _annotated_reference_url_summary() if task_set == "annotated" else None
+    default_selected_task_ids = (
+        set(annotated_url_summary.get("all_different_task_ids") or [])
+        if annotated_url_summary else None
+    )
     
     def reconcile_run(run: dict) -> dict:
         if run.get("status") == "running" and not is_running(run.get("run_id", "")):
@@ -1539,6 +1975,17 @@ def dashboard():
         run['display_time'] = _run_display_time(run)
         run['is_default_human_annotation_source'] = run.get("run_id") in DEFAULT_HUMAN_ANNOTATION_SOURCE_RUN_IDS
     grounding_run_groups, default_grounding_run_ids = _grounding_run_groups(auto_runs)
+    grounding_run_sources = []
+    _seen_sources = set()
+    for run in auto_runs:
+        source_id = (run.get("task_set") or "").strip() or "unknown"
+        if source_id not in _seen_sources:
+            _seen_sources.add(source_id)
+            grounding_run_sources.append({
+                "id": source_id,
+                "label": task_set_label(run.get("task_set")),
+            })
+    grounding_run_sources.sort(key=lambda s: s["label"].lower())
     human_annotation_sources = [
         run for run in auto_runs
         if run.get("run_id") in DEFAULT_HUMAN_ANNOTATION_SOURCE_RUN_IDS
@@ -1555,6 +2002,7 @@ def dashboard():
         available_tasks=available_tasks,
         auto_runs=auto_runs,
         grounding_run_groups=grounding_run_groups,
+        grounding_run_sources=grounding_run_sources,
         default_grounding_run_ids=default_grounding_run_ids,
         human_annotation_sources=human_annotation_sources,
         human_annotation_default_run_ids=DEFAULT_HUMAN_ANNOTATION_SOURCE_RUN_IDS,
@@ -1566,6 +2014,11 @@ def dashboard():
         difficulty_labels=DIFFICULTY_LABELS,
         difficulty_level_counts=difficulty_level_counts,
         has_difficulty_filter=has_difficulty_filter,
+        default_auto_sample_n=default_auto_sample_n,
+        default_auto_sample_seed=default_auto_sample_seed,
+        auto_apply_default_sample=auto_apply_default_sample,
+        annotated_url_summary=annotated_url_summary,
+        default_selected_task_ids=default_selected_task_ids,
         default_max_steps=DEFAULT_MAX_STEPS,
         model_options=MODEL_OPTIONS,
         default_task_model=configured_task_model(),
@@ -1601,10 +2054,27 @@ def create_eval_run():
     max_steps = request.form.get("max_steps") or DEFAULT_MAX_STEPS
     workers = int(request.form.get("workers") or 1)
     task_model = request.form.get("task_model") or configured_task_model()
+    temperature = normalize_temperature(request.form.get("temperature"))
     judge_model = request.form.get("judge_model") or configured_judge_model()
     judge_method = normalize_judge_method(request.form.get("judge_method"))
     # Only the curated no_login set has reliable reference_steps to inject.
     ground_truth_mode = task_set == "no_login" and bool(request.form.get("ground_truth_mode"))
+    include_oracle_plan = task_set == "annotated" and bool(request.form.get("include_oracle_plan"))
+    force_ground_truth_mode = task_set == "annotated" and bool(request.form.get("force_ground_truth_mode"))
+    try:
+        force_ground_truth_retries = int(request.form.get("force_ground_truth_retries") or 0)
+    except (TypeError, ValueError):
+        force_ground_truth_retries = 0
+    force_ground_truth_retries = max(0, min(2, force_ground_truth_retries))
+    inject_grounding_warning = bool(request.form.get("inject_grounding_warning"))
+    inject_looping_warning = bool(request.form.get("inject_looping_warning"))
+    grounding_warning_threshold = normalize_unit_threshold(
+        request.form.get("grounding_warning_threshold"), DEFAULT_GROUNDING_WARNING_THRESHOLD
+    )
+    loop_warning_threshold = normalize_unit_threshold(
+        request.form.get("loop_warning_threshold"), DEFAULT_LOOP_WARNING_THRESHOLD
+    )
+    automatic_planning_mode = bool(request.form.get("automatic_planning_mode"))
     region_capture_mode = normalize_region_capture_mode(
         request.form.get("region_capture_mode") or configured_region_capture_mode()
     )
@@ -1616,9 +2086,18 @@ def create_eval_run():
         "max_steps": max_steps,
         "workers": workers,
         "task_model": task_model,
+        "temperature": temperature,
         "judge_model": judge_model,
         "judge_method": judge_method,
         "ground_truth_mode": ground_truth_mode,
+        "include_oracle_plan": include_oracle_plan,
+        "force_ground_truth_mode": force_ground_truth_mode,
+        "force_ground_truth_retries": force_ground_truth_retries,
+        "inject_grounding_warning": inject_grounding_warning,
+        "inject_looping_warning": inject_looping_warning,
+        "grounding_warning_threshold": grounding_warning_threshold,
+        "loop_warning_threshold": loop_warning_threshold,
+        "automatic_planning_mode": automatic_planning_mode,
         "region_capture_mode": region_capture_mode,
     })
     start_run(run, tasks)
@@ -1772,8 +2251,8 @@ def run_detail(run_id):
         grounding_similarity_low_steps += len(sim_low_steps)
         if sim_low_steps:
             grounding_similarity_low_tasks += 1
-        res["grounding_boundary_metrics"] = grounding_boundary_metrics(steps, grounding_similarity_default_threshold, explicit_only=is_human_annotation_set)
-        res["grounding_youden"] = grounding_youden_index(steps, explicit_only=is_human_annotation_set)
+        res["grounding_boundary_metrics"] = grounding_boundary_metrics(steps, grounding_similarity_default_threshold, explicit_only=(not is_human_annotation_set))
+        res["grounding_youden"] = grounding_youden_index(steps, explicit_only=(not is_human_annotation_set))
         res["llm_grounding_summary"] = _llm_grounding_summary(steps, llm_grounding_model)
         for key in grounding_boundary_totals:
             grounding_boundary_totals[key] += res["grounding_boundary_metrics"][key]
@@ -1781,7 +2260,10 @@ def run_detail(run_id):
         res["avg_self_progress_gt"] = _avg_metric(steps, "self_progress_gt")
         res["avg_self_progress_no_gt"] = _avg_metric(steps, "self_progress_no_gt")
         step_metrics, loop_count = _step_metrics(steps, high_threshold=high, medium_threshold=medium)
-            
+        # Surface the per-step series (mech_confidence / element_step_similarity /
+        # computed_loop_updated) on the row so the task table can draw a per-task sparkline.
+        res["sparkline_steps"] = step_metrics
+
         chart_trajectories.append({
             "sessionId": session_id,
             "goal": goal,
@@ -1811,12 +2293,12 @@ def run_detail(run_id):
         "grounding_similarity_low_steps": grounding_similarity_low_steps,
         "grounding_similarity_scored_steps": grounding_similarity_scored_steps,
         "grounding_similarity_low_tasks": grounding_similarity_low_tasks,
-        "grounding_boundary_metrics": grounding_boundary_metrics([], grounding_similarity_default_threshold, explicit_only=is_human_annotation_set),
+        "grounding_boundary_metrics": grounding_boundary_metrics([], grounding_similarity_default_threshold, explicit_only=(not is_human_annotation_set)),
         "grounding_youden": grounding_youden_index([
             step
             for res in results
             for step in (res.get("steps") or [])
-        ], explicit_only=is_human_annotation_set),
+        ], explicit_only=(not is_human_annotation_set)),
         "is_human_annotation_set": is_human_annotation_set,
         "loop_updated_positive_steps": loop_updated_positive_steps,
         "loop_updated_positive_tasks": loop_updated_positive_tasks,
@@ -2382,7 +2864,7 @@ def update_trajectory_thresholds(session_id):
 
 @app.route('/trajectory/<session_id>')
 def trajectory_detail(session_id):
-    filepath, run_id = _resolve_trajectory_path(session_id)
+    filepath, run_id = _resolve_trajectory_path(session_id, request.args.get('run_id'))
     if not filepath:
         return (
             "No trajectory was recorded for this task. It most likely failed before "
@@ -2445,6 +2927,7 @@ def trajectory_detail(session_id):
                 continue
             step['rule_grounding'] = g_grounding(step, high_threshold=high_threshold, medium_threshold=medium_threshold)
             step['mech_confidence'] = compute_spec_confidence(step, formula="spec_noprogress", high_threshold=high_threshold, medium_threshold=medium_threshold)
+            step['step_uncertainty'] = _to_uncertainty(step['mech_confidence'])
             step['action_key'] = _action_key(step)
             step['action_key_updated'] = _action_key_updated(step)
             step['dom_element_text'] = _element_text(step)
@@ -2456,9 +2939,9 @@ def trajectory_detail(session_id):
         trajectory['grounding_boundary_metrics'] = grounding_boundary_metrics(
             trajectory.get('steps', []),
             grounding_boundary_threshold,
-            explicit_only=trajectory['is_human_annotation_task'],
+            explicit_only=(not trajectory['is_human_annotation_task']),
         )
-        trajectory['grounding_youden'] = grounding_youden_index(trajectory.get('steps', []), explicit_only=trajectory['is_human_annotation_task'])
+        trajectory['grounding_youden'] = grounding_youden_index(trajectory.get('steps', []), explicit_only=(not trajectory['is_human_annotation_task']))
         trajectory['llm_grounding_model'] = llm_grounding_model
         trajectory['llm_grounding_summary'] = _llm_grounding_summary(trajectory.get('steps', []), llm_grounding_model)
         enrich_subgoal_breakdown(trajectory)
@@ -2529,18 +3012,96 @@ def api_grounding_metrics():
         label_source = (payload.get("label_source") or "human").strip().lower()
         if label_source not in {"human", "llm"}:
             return jsonify({"error": "label_source must be human or llm"}), 400
+        outcome_filter = (payload.get("outcome_filter") or "all").strip().lower()
+        if outcome_filter not in {"all", "success", "failed"}:
+            outcome_filter = "all"
         llm_label_model = _normalize_grounding_label_model(payload.get("llm_label_model"))
         try:
             threshold = float(payload.get("threshold", 0.8))
         except (ValueError, TypeError):
             threshold = 0.8
 
+        def _empty_selected_group():
+            return {
+                "task_count": 0,
+                "total_steps": 0,
+                "misgrounded_steps": 0,
+                "tasks_with_misgrounding": 0,
+                "loop_steps": 0,
+                "tasks_with_loop": 0,
+                # Tasks with at least one INTERIOR ("middle of trajectory") step below the
+                # grounding threshold / with L_t_u >= LOOP threshold. Interior = the task's
+                # non-initial steps excluding the first and the last (see _mid_flags below).
+                "tasks_with_mid_misgrounding": 0,
+                "tasks_with_mid_loop": 0,
+                "_misgrounded_task_rates": [],
+                "_loop_task_rates": [],
+            }
+
+        def _empty_selected_summary():
+            return {
+                "total_tasks_all": 0,
+                "passed_tasks_all": 0,
+                "failed_tasks_all": 0,
+                "unsuccessful_task_rate": None,
+                "groups": {
+                    "all": _empty_selected_group(),
+                    "success": _empty_selected_group(),
+                    "failed": _empty_selected_group(),
+                },
+            }
+
+        MID_LOOP_THRESHOLD = 0.3
+
+        def _mid_flags(steps, threshold):
+            """(mid_misgrounded, mid_loop) for a task: whether any INTERIOR step (non-initial
+            steps excluding the first and last) is below the grounding threshold / has
+            L_t_u >= MID_LOOP_THRESHOLD. Tasks with <= 2 non-initial steps have no interior."""
+            non_initial = [s for s in (steps or []) if not s.get("isInitial")]
+            interior = non_initial[1:-1]
+            mid_misgrounded = False
+            mid_loop = False
+            for step in interior:
+                sim = _numeric_step_value(step, "element_step_similarity")
+                if sim is not None and sim < threshold:
+                    mid_misgrounded = True
+                loop_value = _numeric_step_value(step, "computed_loop_updated")
+                if loop_value is None:
+                    loop_value = _numeric_step_value(step, "computed_loop")
+                if loop_value is not None and loop_value >= MID_LOOP_THRESHOLD:
+                    mid_loop = True
+            return mid_misgrounded, mid_loop
+
+        def _apply_task_to_selected_group(group, scored_steps, misgrounded_steps, loop_steps, mid_misgrounded=False, mid_loop=False):
+            group["task_count"] += 1
+            group["total_steps"] += scored_steps
+            group["misgrounded_steps"] += misgrounded_steps
+            group["loop_steps"] += loop_steps
+            if misgrounded_steps:
+                group["tasks_with_misgrounding"] += 1
+            if loop_steps:
+                group["tasks_with_loop"] += 1
+            if mid_misgrounded:
+                group["tasks_with_mid_misgrounding"] += 1
+            if mid_loop:
+                group["tasks_with_mid_loop"] += 1
+            if scored_steps > 0:
+                group["_misgrounded_task_rates"].append(misgrounded_steps / scored_steps)
+                group["_loop_task_rates"].append(loop_steps / scored_steps)
+
         metrics_by_model = {}
+        selected_summary_by_model = {}
+        # For the ROC card: the GPT-4o (selected LLM label model) operating point vs HUMAN
+        # ground truth. Only accumulated in human mode, for steps that carry both labels.
+        llm_point_by_model = {}
         for run_id in run_ids:
             run = load_run(run_id)
             if not run:
                 continue
-            explicit_human_labels = _human_annotation_run(run)
+            # Only the human-annotated task set carries a DEFAULT human ground truth (every step
+            # defaults to grounded, editable). Normal runs have no default GT: their human labels
+            # count only when explicitly set. `is_annotation_run` also drives model naming below.
+            is_annotation_run = _human_annotation_run(run)
 
             run_tasks_dir = os.path.join(RUNS_DIR, run_id, 'tasks')
             if not os.path.exists(run_tasks_dir):
@@ -2553,20 +3114,43 @@ def api_grounding_metrics():
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                    model = data.get("source_task_model") if explicit_human_labels else run.get("task_model", "Unknown")
-                    # Simplify model name (e.g. openai/gpt-4o -> GPT4o, google/gemini-2.5-flash-lite -> Gemini, qwen/qwen3.6-flash -> Qwen)
-                    if "gpt-4o" in str(model).lower():
-                        model_name = "GPT4o"
-                    elif "gpt-4.1" in str(model).lower():
-                        model_name = "Gpt-4.1-nano"
-                    elif "gemini" in str(model).lower():
-                        model_name = "Gemini"
-                    elif "qwen" in str(model).lower():
-                        model_name = "Qwen"
-                    else:
-                        model_name = str(model).split("/")[-1].capitalize() if "/" in str(model) else str(model).capitalize()
+                    model = data.get("source_task_model") if is_annotation_run else run.get("task_model", "Unknown")
+                    model_name = _grounding_display_model_name(model)
                     if model_name not in metrics_by_model:
                         metrics_by_model[model_name] = []
+
+                    outcome = task_outcome(data)
+                    if model_name not in selected_summary_by_model:
+                        selected_summary_by_model[model_name] = _empty_selected_summary()
+                    summary = selected_summary_by_model[model_name]
+                    summary["total_tasks_all"] += 1
+                    if outcome == "success":
+                        summary["passed_tasks_all"] += 1
+                    elif outcome == "failed":
+                        summary["failed_tasks_all"] += 1
+
+                    task_scored_steps = 0
+                    task_misgrounded = 0
+                    task_loop = 0
+                    backfill_computed_loop(data)
+                    for step in data.get("steps", []):
+                        if step.get("isInitial"):
+                            continue
+                        sim = _numeric_step_value(step, "element_step_similarity")
+                        if sim is None:
+                            continue
+                        task_scored_steps += 1
+                        if sim < threshold:
+                            task_misgrounded += 1
+                        loop_value = _numeric_step_value(step, "computed_loop_updated")
+                        if loop_value is None:
+                            loop_value = _numeric_step_value(step, "computed_loop")
+                        if loop_value is not None and loop_value > 0:
+                            task_loop += 1
+                    mid_misgrounded, mid_loop = _mid_flags(data.get("steps", []), threshold)
+                    _apply_task_to_selected_group(summary["groups"]["all"], task_scored_steps, task_misgrounded, task_loop, mid_misgrounded, mid_loop)
+                    if outcome in {"success", "failed"}:
+                        _apply_task_to_selected_group(summary["groups"][outcome], task_scored_steps, task_misgrounded, task_loop, mid_misgrounded, mid_loop)
                     
                     for step in data.get("steps", []):
                         if step.get("isInitial"):
@@ -2581,13 +3165,51 @@ def api_grounding_metrics():
                                 continue
                             is_grounded = label == "grounded"
                         else:
-                            human_label = _explicit_grounding_human_label(step) if explicit_human_labels else _grounding_human_label(step)
+                            # Annotation set: default-grounded (editable). Normal runs: explicit only.
+                            human_label = _grounding_human_label(step) if is_annotation_run else _explicit_grounding_human_label(step)
                             if human_label is None:
                                 continue
                             is_grounded = human_label == "grounded"
+                            # GPT-4o (selected LLM label model) prediction vs this human truth,
+                            # for the ROC operating point. Only steps with a real LLM label.
+                            llm_lbl = ((step.get("grounded_llm_labels") or {}).get(llm_label_model) or {}).get("label")
+                            if llm_lbl in {"grounded", "not_grounded"}:
+                                llm_point_by_model.setdefault(model_name, []).append((is_grounded, llm_lbl == "grounded"))
                         metrics_by_model[model_name].append((sim, is_grounded))
                 except Exception:
                     pass
+
+        for summary in selected_summary_by_model.values():
+            total_all = summary["total_tasks_all"]
+            summary["unsuccessful_task_rate"] = _ratio(summary["failed_tasks_all"], total_all)
+            for group in summary["groups"].values():
+                group["misgrounded_step_rate"] = _ratio(group["misgrounded_steps"], group["total_steps"])
+                group["loop_step_rate"] = _ratio(group["loop_steps"], group["total_steps"])
+                mean, std = _mean_std(group.pop("_misgrounded_task_rates", []))
+                group["misgrounded_task_rate_mean"] = mean
+                group["misgrounded_task_rate_std"] = std
+                mean, std = _mean_std(group.pop("_loop_task_rates", []))
+                group["loop_task_rate_mean"] = mean
+                group["loop_task_rate_std"] = std
+
+            active_group = summary["groups"].get(outcome_filter, summary["groups"]["all"])
+            summary["total_tasks"] = active_group["task_count"]
+            if outcome_filter == "success":
+                summary["passed_tasks"] = active_group["task_count"]
+                summary["failed_tasks"] = 0
+            elif outcome_filter == "failed":
+                summary["passed_tasks"] = 0
+                summary["failed_tasks"] = active_group["task_count"]
+            else:
+                summary["passed_tasks"] = summary["passed_tasks_all"]
+                summary["failed_tasks"] = summary["failed_tasks_all"]
+            summary["total_steps"] = active_group["total_steps"]
+            summary["misgrounded_steps"] = active_group["misgrounded_steps"]
+            summary["tasks_with_misgrounding"] = active_group["tasks_with_misgrounding"]
+            summary["loop_steps"] = active_group["loop_steps"]
+            summary["tasks_with_loop"] = active_group["tasks_with_loop"]
+            summary["tasks_with_mid_misgrounding"] = active_group["tasks_with_mid_misgrounding"]
+            summary["tasks_with_mid_loop"] = active_group["tasks_with_mid_loop"]
 
         # Create Average pseudo-model
         all_steps = []
@@ -2641,6 +3263,21 @@ def api_grounding_metrics():
             min_grounded = min(grounded_sims) if grounded_sims else None
             max_misgrounded = max(misgrounded_sims) if misgrounded_sims else None
 
+            # GPT-4o (LLM label) operating point vs human ground truth: a single ROC point.
+            llm_point = None
+            llm_pairs = llm_point_by_model.get(m_name) or []
+            if llm_pairs:
+                p_tp = sum(1 for h, p in llm_pairs if h and p)
+                p_fn = sum(1 for h, p in llm_pairs if h and not p)
+                p_fp = sum(1 for h, p in llm_pairs if not h and p)
+                p_tn = sum(1 for h, p in llm_pairs if not h and not p)
+                llm_point = {
+                    "model_label": _grounding_display_model_name(llm_label_model),
+                    "tpr": p_tp / (p_tp + p_fn) if (p_tp + p_fn) > 0 else 0.0,
+                    "fpr": p_fp / (p_fp + p_tn) if (p_fp + p_tn) > 0 else 0.0,
+                    "n": len(llm_pairs),
+                }
+
             response_data[m_name] = {
                 "tp": tp, "tn": tn, "fp": fp, "fn": fn,
                 "total_scored_steps": total_scored,
@@ -2652,12 +3289,18 @@ def api_grounding_metrics():
                 "optimal_threshold": best_t,
                 "youden_j": best_j if best_j >= 0 else None,
                 "min_grounded": min_grounded,
-                "max_misgrounded": max_misgrounded
+                "max_misgrounded": max_misgrounded,
+                "llm_operating_point": llm_point,
             }
 
         response_data["__meta"] = {
             "label_source": label_source,
             "llm_label_model": llm_label_model if label_source == "llm" else None,
+        }
+        response_data["__summary"] = {
+            "threshold": threshold,
+            "outcome_filter": outcome_filter,
+            "models": selected_summary_by_model,
         }
         return jsonify(response_data)
     except Exception as e:

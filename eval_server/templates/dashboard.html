@@ -322,6 +322,26 @@
       background: rgba(15, 23, 42, 0.02);
     }
 
+    /* Compact the wide automated-runs table so all columns fit without clipping. */
+    .runs-table th,
+    .runs-table td {
+      padding-left: 12px;
+      padding-right: 12px;
+    }
+    .runs-table th:first-child,
+    .runs-table td:first-child {
+      padding-left: 24px;
+    }
+    .runs-table th:last-child,
+    .runs-table td:last-child {
+      padding-right: 24px;
+    }
+    .runs-table .col-flag {
+      width: 1%;
+      white-space: nowrap;
+      text-align: center;
+    }
+
     .goal-cell {
       max-width: 400px;
       font-weight: 500;
@@ -513,6 +533,7 @@
     const savedTheme = localStorage.getItem('theme') || 'light';
     document.documentElement.setAttribute('data-theme', savedTheme);
   </script>
+  <script src="/static/dashboard_ui.js"></script>
 </head>
 <body>
   <div class="container">
@@ -577,7 +598,7 @@
           <!-- Chart Header & Filters -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0; display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 1.2em;">📈</span> Mean Confidence Trend
+              <span style="font-size: 1.2em;">📈</span> Mean Step Uncertainty Trend
             </h3>
             
             <select onchange="window.location.href='/?chart_run_id=' + this.value + (window.location.search.includes('tab=automatic') ? '&tab=automatic' : '')" style="padding: 4px 8px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-size: 0.9em; max-width: 250px;">
@@ -590,7 +611,7 @@
 
           <div style="display: flex; gap: 12px; margin-bottom: 12px; font-size: 0.85em; flex-wrap: wrap;">
           <div style="display: flex; gap: 8px;">
-            <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Full Confidence</button>
+            <button type="button" class="tab-btn active" id="btn-conf-full" onclick="toggleConfLine('full')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(120, 87, 255, 0.15); color: #7857ff; border: 1px solid #7857ff;">Step Uncertainty</button>
             <button type="button" class="tab-btn active" id="btn-conf-progress" onclick="toggleConfLine('progress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(255, 138, 61, 0.15); color: #ff8a3d; border: 1px solid #ff8a3d;">LLM Progress</button>
             <button type="button" class="tab-btn active" id="btn-conf-subgoalProgress" onclick="toggleConfLine('subgoalProgress')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid #10b981;">Subgoal Progress</button>
             <button type="button" class="tab-btn active" id="btn-conf-loop" onclick="toggleConfLine('loop')" style="padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(27, 191, 156, 0.15); color: #1bbf9c; border: 1px solid #1bbf9c;">Only Loop</button>
@@ -756,13 +777,55 @@
         </div>
       </div>
 
+      <!-- Annotated Dataset URL Fixer entry point -->
+      <div class="table-container" style="margin-bottom: 40px;">
+        <div class="table-hdr" style="display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap;">
+          <div>
+            <h2>Annotated Dataset · Reference URLs</h2>
+            <p style="margin: 4px 0 0; color: var(--text-muted); font-size: 13px;">Find blank / dead reference URLs in the annotated dataset, search by task &amp; step, and update them.</p>
+          </div>
+          <a class="btn" href="/annotated-urls" style="text-decoration: none;">Open URL Fixer</a>
+        </div>
+      </div>
+
+      <!-- Part 2: per-run task/step summary (shown first; the ROC/alignment card is below) -->
+      <div class="table-container" id="grounding-summary-panel-container" style="margin-bottom: 40px;">
+        <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+          <h2>Part 2 · Selected Runs Task/Step Summary</h2>
+          <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px;">
+              Dataset source:
+              <select id="grounding-summary-source-filter" onchange="setSummarySourceFilter(this.value)"
+                style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                <option value="">All sources</option>
+                {% for source in grounding_run_sources %}
+                  <option value="{{ source.id }}">{{ source.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px;">
+              Model:
+              <select id="grounding-summary-model-filter" onchange="setSummaryModelFilter(this.value)"
+                style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                <option value="all">All models</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div style="padding: 24px; overflow-x: auto;">
+          <div id="grounding-eval-summary-results">
+            <p style="color: var(--text-muted); font-size: 13px; font-style: italic;">Select runs and click Compute Table.</p>
+          </div>
+        </div>
+      </div>
+
       <!-- Grounding Evaluation Panel -->
       <div class="table-container" style="margin-bottom: 40px;" id="grounding-eval-panel-container">
         <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleGroundingEvalPanel()">
-          <h2 style="display: flex; align-items: center; gap: 8px;"><span>🎯</span> Grounding Similarity Evaluation</h2>
-          <button type="button" class="btn" style="background: transparent; box-shadow: none; font-size: 14px;" id="grounding-eval-toggle-btn">▼ Hide</button>
+          <h2 style="display: flex; align-items: center; gap: 8px;"><span>🎯</span> Part 1 · Grounding Similarity ROC (cosine vs GPT-4o vs human)</h2>
+          <button type="button" class="btn" style="background: transparent; box-shadow: none; font-size: 14px;" id="grounding-eval-toggle-btn">▶ Show</button>
         </div>
-        <div id="grounding-eval-panel-content" style="padding: 24px;">
+        <div id="grounding-eval-panel-content" style="padding: 24px; display: none;">
           <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 20px; align-items: flex-start;">
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px;">
               Threshold Value:
@@ -775,8 +838,15 @@
                 style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
                 <option value="1">Mode 1: Metric Alignment (Sim vs Human)</option>
                 <option value="1llm">Mode 1b: Metric Alignment (Sim vs LLM Label)</option>
-                <option value="2a">Mode 2a: Model Performance (vs Human Truth)</option>
-                <option value="2b">Mode 2b: Model Performance (vs Cosine Sim >= Threshold)</option>
+              </select>
+            </label>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 8px;">
+              Task Outcome:
+              <select id="grounding-eval-outcome-filter" onchange="fetchGroundingMetrics()"
+                style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                <option value="all" selected>All tasks</option>
+                <option value="success">Passed tasks</option>
+                <option value="failed">Failed tasks</option>
               </select>
             </label>
             <div style="display: flex; flex-direction: column; gap: 4px;">
@@ -784,16 +854,32 @@
                 <strong style="color: var(--text-muted); font-weight: 500; font-size: 13px;">Runs Included:</strong>
                 <button type="button" onclick="document.querySelectorAll('.grounding-eval-run-checkbox').forEach(cb => cb.checked = false); fetchGroundingMetrics();" style="font-size: 11px; background: transparent; border: none; color: var(--accent); cursor: pointer; text-decoration: underline;">Deselect All</button>
               </div>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted);" title="Show only runs from the selected dataset source.">
+                <span style="font-weight: 700;">Dataset source:</span>
+                <select id="run-source-filter" onchange="applyRunFeatureFilter()" style="padding: 4px 8px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; font-size: 12px;">
+                  <option value="">All sources</option>
+                  {% for source in grounding_run_sources %}
+                    <option value="{{ source.id }}">{{ source.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted);" title="Show only runs that enabled the checked features (all must match). None checked shows all runs.">
+                <span style="font-weight: 700;">Only runs with:</span>
+                <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="planning" onchange="applyRunFeatureFilter()"> Planning</label>
+                <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="grounding" onchange="applyRunFeatureFilter()"> Grounding</label>
+                <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="loop" onchange="applyRunFeatureFilter()"> Loop</label>
+              </div>
               <div style="display: grid; gap: 10px; max-height: 220px; overflow-y: auto; padding: 10px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--bg-default);" id="grounding-eval-runs-container">
                 {% for group in grounding_run_groups %}
-                  <div style="display: grid; gap: 6px;">
+                  <div class="run-inclusion-group" style="display: grid; gap: 6px;">
                     <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">{{ group.model or 'Unknown' }}</div>
                     <div style="display: grid; gap: 4px;">
                       {% for run in group.runs %}
-                        <label style="font-size: 12px; display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 6px; background: var(--task-card-bg);">
+                        <label class="run-inclusion-row" data-source="{{ (run.task_set or '') or 'unknown' }}" data-planning="{{ 1 if run.automatic_planning_mode else 0 }}" data-grounding="{{ 1 if run.inject_grounding_warning else 0 }}" data-loop="{{ 1 if run.inject_looping_warning else 0 }}" style="font-size: 12px; display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto auto; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 6px; background: var(--task-card-bg);">
                           <input type="checkbox" class="grounding-eval-run-checkbox" value="{{ run.run_id }}" {% if run.run_id in default_grounding_run_ids %}checked{% endif %} onchange="fetchGroundingMetrics()">
                           <span style="font-family: monospace; overflow-wrap: anywhere;">{{ run.run_id }}</span>
                           <span style="color: var(--text-muted); white-space: nowrap;">{{ run.display_time or 'no date' }}</span>
+                          <span class="badge neutral" style="font-size: 10px;" title="Dataset source">{{ task_set_source_label(run.task_set) }}</span>
                           <span class="badge neutral" style="font-size: 10px;">{{ run.status or 'unknown' }} · {{ (run.task_ids or [])|length }} task{% if (run.task_ids or [])|length != 1 %}s{% endif %}</span>
                         </label>
                       {% endfor %}
@@ -849,6 +935,41 @@
         </div>
       </div>
 
+      {% if annotated_url_summary %}
+      <div class="table-container" style="margin-bottom: 24px;">
+        <div class="table-hdr">
+          <h2>Annotated Reference URL Dashboard</h2>
+          <p style="margin: 4px 0 0; color: var(--text-muted); font-size: 13px;">Checks whether each task's reference steps point to different URLs or repeat the same URL.</p>
+        </div>
+        <div style="padding: 20px 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px;">
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;">
+            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;">Tasks</div>
+            <div style="font-size: 28px; font-weight: 800; color: var(--text); margin-top: 4px;">{{ annotated_url_summary.total }}</div>
+          </div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;">
+            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;">Every Step Different</div>
+            <div style="font-size: 28px; font-weight: 800; color: var(--success); margin-top: 4px;">{{ annotated_url_summary.all_different }}</div>
+          </div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;">
+            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;">All Steps Same URL</div>
+            <div style="font-size: 28px; font-weight: 800; color: var(--accent); margin-top: 4px;">{{ annotated_url_summary.all_same }}</div>
+          </div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;">
+            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;">Mixed / Repeated</div>
+            <div style="font-size: 28px; font-weight: 800; color: var(--warning); margin-top: 4px;">{{ annotated_url_summary.mixed }}</div>
+          </div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;">
+            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;">Single-Step</div>
+            <div style="font-size: 28px; font-weight: 800; color: var(--text); margin-top: 4px;">{{ annotated_url_summary.single_step }}</div>
+          </div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;">
+            <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;">Contains Blank URL</div>
+            <div style="font-size: 28px; font-weight: 800; color: var(--danger); margin-top: 4px;">{{ annotated_url_summary.with_blank }}</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
       <!-- Launcher Form -->
       <form method="post" action="/runs" class="table-container" style="margin-bottom: 40px;">
         <input type="hidden" name="task_set" value="{{ task_set }}">
@@ -857,11 +978,19 @@
           <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
             <div style="display: flex; gap: 6px; align-items: center;">
               <input type="number" id="random-n-input" min="1" placeholder="N" title="Number of tasks to randomly select"
+                value="{{ default_auto_sample_n }}"
                 style="padding: 8px 10px; border-radius: 8px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 72px;">
+              <input type="number" id="random-seed-input" placeholder="seed" title="Seed for reproducible random task selection"
+                value="{{ default_auto_sample_seed }}"
+                style="padding: 8px 10px; border-radius: 8px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 86px;">
               <button type="button" onclick="randomSelectTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">🎲 Random N</button>
             </div>
+            {% if annotated_url_summary and annotated_url_summary.all_different_task_ids %}
+            <button type="button" id="all-different-url-btn" onclick="toggleAllDifferentUrlTasks()" aria-pressed="false" style="padding: 8px 16px; border-radius: 8px; background: rgba(16, 185, 129, 0.10); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.28); cursor: pointer; font-family: inherit; font-weight: 700;">All Step URLs Differ ({{ annotated_url_summary.all_different }})</button>
+            {% endif %}
             <button type="button" onclick="selectAllTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">Select All</button>
             <button type="button" onclick="deselectAllTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">Deselect All</button>
+            <span id="selected-task-count" style="font-size: 13px; color: var(--text-muted); font-weight: 800; min-width: 112px;">Selected: 0</span>
             <button type="submit" style="padding: 8px 24px; border-radius: 8px; background: var(--success); color: white; border: none; font-weight: bold; cursor: pointer; font-family: inherit;">▶️ Start Evaluation</button>
           </div>
         </div>
@@ -902,7 +1031,7 @@
 
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
               Concurrent Workers:
-              <input type="number" name="workers" value="4" min="1" max="10" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
+              <input type="number" name="workers" value="10" min="1" max="10" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
             </label>
 
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="The LLM that drives the PageGuide agent for this run.">
@@ -912,6 +1041,11 @@
                   <option value="{{ option.id }}" {% if option.id == default_task_model %}selected{% endif %}>{{ option.label }}</option>
                 {% endfor %}
               </select>
+            </label>
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="Sampling temperature for the PageGuide task agent during automatic runs. 0 is deterministic.">
+              Temperature:
+              <input type="number" name="temperature" value="0" min="0" max="2" step="0.1" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
             </label>
 
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="The LLM that judges success / scores progress for this run.">
@@ -938,6 +1072,48 @@
               Inject reference ground-truth steps (calibrates progress)
             </label>
             {% endif %}
+
+            {% if task_set == 'annotated' %}
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="Append the annotated dataset's oracle subgoal plan to the PageGuide task prompt for each task.">
+              <input type="checkbox" name="include_oracle_plan" value="1">
+              Include Oracle Plan
+            </label>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="Use annotated oracle steps as the fixed plan, ask the model only to ground each oracle step to a DOM action, then verify the resulting URL.">
+              <input type="checkbox" id="force-ground-truth-mode" name="force_ground_truth_mode" value="1" onchange="updateForceGroundTruthUi()">
+              ForceGroundTruth
+            </label>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="How many times to retry the same oracle step when URL verification fails.">
+              Retry:
+              <select id="force-ground-truth-retries" name="force_ground_truth_retries" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                <option value="0" selected>No retry</option>
+                <option value="1">1 retry</option>
+                <option value="2">2 retries</option>
+              </select>
+            </label>
+            {% endif %}
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="When a proposed automatic action has low instruction-to-element cosine similarity, ask the agent to correct the target once before executing.">
+              <input type="checkbox" name="inject_grounding_warning" value="1">
+              Inject Grounding Warning
+              <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px;">
+                threshold
+                <input type="number" name="grounding_warning_threshold" value="0.8" min="0" max="1" step="0.01" style="padding: 5px 8px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 74px;">
+              </span>
+            </label>
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="When a proposed automatic action repeats prior targets too often, ask the agent to choose a different approach once before executing.">
+              <input type="checkbox" name="inject_looping_warning" value="1">
+              Inject Looping Warning
+              <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px;">
+                threshold
+                <input type="number" name="loop_warning_threshold" value="0.3" min="0" max="1" step="0.01" style="padding: 5px 8px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 74px;">
+              </span>
+            </label>
+
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="Ask the Guide agent for an initial task plan and record completed plan steps during this automatic run.">
+              <input type="checkbox" name="automatic_planning_mode" value="1">
+              Planning Mode
+            </label>
           </div>
 
           <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
@@ -953,7 +1129,7 @@
           <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; max-height: 400px; overflow-y: auto; padding-right: 10px;">
             {% for task in available_tasks %}
               <label data-difficulty="{{ task_difficulty_level(task) }}" style="display: flex; align-items: flex-start; gap: 12px; padding: 16px; background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 12px; cursor: pointer; transition: background 0.2s;">
-                <input type="checkbox" name="task_ids" value="{{ task.task_id }}" style="margin-top: 4px;" checked>
+                <input type="checkbox" name="task_ids" value="{{ task.task_id }}" style="margin-top: 4px;" {% if default_selected_task_ids is none or task.task_id in default_selected_task_ids %}checked{% endif %}>
                 <div>
                   <strong style="display: block; margin-bottom: 4px; color: var(--text);">{{ task_display_name(task) }}</strong>
                   <small style="color: var(--text-muted); display: block; margin-bottom: 8px; line-height: 1.3;">{{ task.task }}</small>
@@ -979,6 +1155,7 @@
           <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end;">
             <button type="button" class="metric-toggle-btn" onclick="toggleAutoRunColumn('refmeta', this)" aria-pressed="false">Show Ref Steps / Difficulty</button>
             <button type="button" class="metric-toggle-btn" onclick="toggleAutoRunColumn('runmeta', this)" aria-pressed="false">Show Judge / Target</button>
+            <button type="button" class="metric-toggle-btn" onclick="toggleAutoRunColumn('flags', this)" aria-pressed="false">Show Run Flags</button>
             <button type="submit" form="runs-delete-form" id="delete-selected-btn" disabled
               style="background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-family: inherit; font-size: 13px; cursor: pointer; opacity: 0.5;">
               🗑 Delete Selected (<span id="delete-selected-count">0</span>)
@@ -989,7 +1166,7 @@
         {% if auto_runs %}
         <form method="post" action="/runs/delete" id="runs-delete-form"
           onsubmit="return confirm('Delete the selected run(s) and all their task results permanently?');">
-        <table style="width: 100%;">
+        <table style="width: 100%;" class="runs-table">
           <thead>
             <tr>
               <th style="width: 32px;"><input type="checkbox" id="runs-select-all" onclick="toggleAllRuns(this)" title="Select all"></th>
@@ -1001,6 +1178,9 @@
               <th>Task Model</th>
               <th class="metric-col-runmeta metric-col-hidden">Judge Model</th>
               <th class="metric-col-runmeta metric-col-hidden">Target capture</th>
+              <th class="col-flag metric-col-flags metric-col-hidden">Inject Grounding</th>
+              <th class="col-flag metric-col-flags metric-col-hidden">Inject Loop</th>
+              <th class="col-flag metric-col-flags metric-col-hidden">Planning Mode</th>
               <th>Duration</th>
               <th>Action</th>
             </tr>
@@ -1031,6 +1211,9 @@
               <td><code style="font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere;">{{ run.task_model or 'Unknown' }}</code></td>
               <td class="metric-col-runmeta metric-col-hidden"><code style="font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere;">{{ run.judge_model or 'Unknown' }}</code></td>
               <td class="metric-col-runmeta metric-col-hidden"><span class="badge neutral">{{ region_capture_mode_label(run.region_capture_mode) }}</span></td>
+              <td class="col-flag metric-col-flags metric-col-hidden">{% if run.inject_grounding_warning %}<span style="color: var(--success); font-weight: 800;" title="Inject grounding warning enabled">✓</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
+              <td class="col-flag metric-col-flags metric-col-hidden">{% if run.inject_looping_warning %}<span style="color: var(--success); font-weight: 800;" title="Inject loop warning enabled">✓</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
+              <td class="col-flag metric-col-flags metric-col-hidden">{% if run.automatic_planning_mode %}<span style="color: var(--success); font-weight: 800;" title="Automatic planning mode enabled">✓</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
               <td style="color: var(--text-muted);">{% if run.duration %}{{ run.duration }}{% else %}<span style="opacity: 0.5;">—</span>{% endif %}</td>
               <td>
                 <a href="/runs/{{ run.run_id }}" class="btn">View Results</a>
@@ -1080,7 +1263,7 @@
             <td><div style="max-width: 360px; color: var(--text-muted); white-space: normal;">{{ task.reason or '—' }}</div></td>
             <td style="color: var(--text-muted); white-space: nowrap;">{{ task.starredAt[:19] if task.starredAt else '—' }}</td>
             <td class="action-cell">
-              <a href="/trajectory/{{ task.sessionId }}" class="btn">
+              <a href="/trajectory/{{ task.sessionId }}{{ ('?run_id=' + task.run_id) if task.run_id else '' }}" class="btn">
                 <span>Inspect</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M5 12h14M12 5l7 7-7 7"/>
@@ -1115,6 +1298,30 @@
     }
 
     let lastGroundingData = null;
+    let summaryModelFilter = 'all';
+
+    function setSummaryModelFilter(value) {
+      summaryModelFilter = value || 'all';
+      // Re-render from cached data; no refetch needed since this is a display-only filter.
+      renderGroundingData();
+    }
+
+    // Part 2 dataset-source filter: drives the same run selection as the Part 1
+    // "Runs Included" source filter, then refetches so the summary reflects that source.
+    function setSummarySourceFilter(value) {
+      const runSource = document.getElementById('run-source-filter');
+      if (runSource) runSource.value = value || '';
+      applyRunFeatureFilter();
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     function selectedGroundingRunIds() {
       return Array.from(document.querySelectorAll('.grounding-eval-run-checkbox:checked')).map(cb => cb.value);
@@ -1191,17 +1398,58 @@
       }
     }
 
+    // Narrow the model-grouped "Runs Included" list. Filters apply in order: dataset source
+    // first, then the checked features (planning / grounding / loop, AND semantics; none checked
+    // shows all). Hidden runs are unchecked so they drop out of the grounding metrics, and empty
+    // model groups are hidden.
+    function applyRunFeatureFilter() {
+      const helper = window.DashboardUI;
+      const selected = Array.from(document.querySelectorAll('.run-feature-filter:checked')).map(cb => cb.value);
+      const sourceSelect = document.getElementById('run-source-filter');
+      const sourceFilter = sourceSelect ? sourceSelect.value : '';
+      // Keep the Part 2 dataset-source dropdown mirrored with this one.
+      const summarySource = document.getElementById('grounding-summary-source-filter');
+      if (summarySource && summarySource.value !== sourceFilter) summarySource.value = sourceFilter;
+      let changedSelection = false;
+      document.querySelectorAll('.run-inclusion-row').forEach(row => {
+        const flags = {
+          planning: row.getAttribute('data-planning') === '1',
+          grounding: row.getAttribute('data-grounding') === '1',
+          loop: row.getAttribute('data-loop') === '1',
+        };
+        const featureMatch = helper ? helper.runMatchesFeatureFilter(flags, selected)
+          : (selected.length === 0 || selected.every(f => flags[f]));
+        const sourceMatch = !sourceFilter || row.getAttribute('data-source') === sourceFilter;
+        const show = featureMatch && sourceMatch;
+        row.style.display = show ? '' : 'none';
+        if (!show) {
+          const cb = row.querySelector('.grounding-eval-run-checkbox');
+          if (cb && cb.checked) { cb.checked = false; changedSelection = true; }
+        }
+      });
+      document.querySelectorAll('.run-inclusion-group').forEach(group => {
+        const anyVisible = Array.from(group.querySelectorAll('.run-inclusion-row'))
+          .some(row => row.style.display !== 'none');
+        group.style.display = anyVisible ? '' : 'none';
+      });
+      if (changedSelection) fetchGroundingMetrics();
+    }
+
     async function fetchGroundingMetrics() {
       const threshold = document.getElementById('grounding-eval-threshold').value;
       const runIds = selectedGroundingRunIds();
       const mode = document.getElementById('grounding-eval-mode').value;
       const labelSource = mode === '1llm' ? 'llm' : 'human';
       const llmLabelModel = document.getElementById('grounding-llm-label-model').value;
+      const outcomeFilter = document.getElementById('grounding-eval-outcome-filter').value;
       
       const resultsDiv = document.getElementById('grounding-eval-results');
       
+      const summaryResetHtml = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No runs selected.</p>';
       if (runIds.length === 0) {
-        resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No runs selected.</p>';
+        resultsDiv.innerHTML = summaryResetHtml;
+        const sd = document.getElementById('grounding-eval-summary-results');
+        if (sd) sd.innerHTML = summaryResetHtml;
         document.getElementById('grounding-eval-auroc-container').style.display = 'none';
         return;
       }
@@ -1212,7 +1460,7 @@
         const response = await fetch('/api/grounding_metrics', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ run_ids: runIds, threshold: threshold, label_source: labelSource, llm_label_model: llmLabelModel })
+          body: JSON.stringify({ run_ids: runIds, threshold: threshold, label_source: labelSource, llm_label_model: llmLabelModel, outcome_filter: outcomeFilter })
         });
         const data = await response.json();
         
@@ -1259,6 +1507,161 @@
       }
     }
 
+    function syncSummaryModelFilterOptions(allModelNames) {
+      const select = document.getElementById('grounding-summary-model-filter');
+      if (!select) return;
+      if (allModelNames.length && !allModelNames.includes(summaryModelFilter)) {
+        summaryModelFilter = 'all';
+      }
+      const desired = ['all', ...allModelNames];
+      const current = Array.from(select.options).map(o => o.value);
+      const same = desired.length === current.length && desired.every((v, i) => v === current[i]);
+      if (!same) {
+        select.innerHTML = '<option value="all">All models</option>' +
+          allModelNames.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+      }
+      select.value = summaryModelFilter;
+    }
+
+    function renderSelectedRunsTaskStepSummary(data) {
+      const summary = data.__summary || {};
+      const models = summary.models || {};
+      const allModelNames = Object.keys(models);
+      syncSummaryModelFilterOptions(allModelNames);
+      const modelNames = summaryModelFilter === 'all'
+        ? allModelNames
+        : allModelNames.filter(m => m === summaryModelFilter);
+      const activeFilter = summary.outcome_filter || 'all';
+      const filterBtn = (value, label) => {
+        const active = activeFilter === value;
+        return `<button type="button" onclick="setSelectedRunsOutcomeFilter('${value}')" style="padding: 6px 10px; border-radius: 7px; border: 1px solid ${active ? 'var(--accent)' : 'var(--card-border)'}; background: ${active ? 'rgba(124, 58, 237, 0.14)' : 'var(--task-card-bg)'}; color: ${active ? 'var(--accent)' : 'var(--text-muted)'}; cursor: pointer; font-family: inherit; font-weight: 800; font-size: 12px;">${label}</button>`;
+      };
+      if (!modelNames.length) {
+        return `<div style="margin-top: 24px;">
+          <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
+            <h3 style="font-size: 15px; font-weight: 800; color: var(--text);">Selected Runs Task/Step Summary</h3>
+            <div style="display: inline-flex; gap: 6px; flex-wrap: wrap;">${filterBtn('all', 'All tasks')}${filterBtn('success', 'Passed only')}${filterBtn('failed', 'Failed only')}</div>
+          </div>
+          <p style="color: var(--text-muted); font-size: 13px;">No task summaries for the selected runs and outcome filter.</p>
+        </div>`;
+      }
+      const fmtPct = value => (value !== null && value !== undefined && Number.isFinite(Number(value))) ? `${(Number(value) * 100).toFixed(1)}%` : '—';
+      const groupLabel = key => key === 'success' ? 'Passed' : key === 'failed' ? 'Failed' : 'All';
+      const failedTasksFor = (row, group, key) => {
+        if (key === 'success') return 0;
+        if (key === 'failed') return Number(group.task_count || 0);
+        return Number(row.failed_tasks_all ?? row.failed_tasks ?? 0);
+      };
+      const rows = modelNames.map(model => {
+        const row = models[model] || {};
+        const groups = row.groups || {};
+        const activeGroup = groups[activeFilter] || groups.all || row;
+        const totalSteps = Number(activeGroup.total_steps || 0);
+        const misgrounded = Number(activeGroup.misgrounded_steps || 0);
+        const loopSteps = Number(activeGroup.loop_steps || 0);
+        const activeTaskCount = Number(activeGroup.task_count || 0);
+        const activeFailedTasks = failedTasksFor(row, activeGroup, activeFilter);
+        const activeFailRate = activeTaskCount > 0 ? activeFailedTasks / activeTaskCount : null;
+        const groupBreakdown = ['all', 'failed', 'success'].map(key => {
+          const group = groups[key] || {};
+          const taskCount = Number(group.task_count || 0);
+          const failedTasks = failedTasksFor(row, group, key);
+          const failRate = taskCount > 0 ? failedTasks / taskCount : null;
+          return `<tr>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border); font-weight: 800;">${groupLabel(key)}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${group.misgrounded_steps || 0}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${fmtPct(group.misgrounded_task_rate_mean)}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${fmtPct(group.misgrounded_task_rate_std)}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${group.loop_steps || 0}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${fmtPct(group.loop_task_rate_mean)}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${fmtPct(group.loop_task_rate_std)}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${group.total_steps || 0}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${failedTasks}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${fmtPct(failRate)}</td>
+            <td style="padding: 6px 8px; border: 1px solid var(--card-border);">${taskCount}</td>
+          </tr>`;
+        }).join('');
+        return `<tr>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border); font-weight: 800;">${escapeHtml(model)}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${misgrounded}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${fmtPct(activeGroup.misgrounded_task_rate_mean)}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${fmtPct(activeGroup.misgrounded_task_rate_std)}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${loopSteps}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${fmtPct(activeGroup.loop_task_rate_mean)}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${fmtPct(activeGroup.loop_task_rate_std)}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${totalSteps}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${activeFailedTasks}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${fmtPct(activeFailRate)}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${activeTaskCount}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border); border-left: 2px solid var(--accent);">${(groups.success || {}).tasks_with_mid_misgrounding || 0}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${(groups.failed || {}).tasks_with_mid_misgrounding || 0}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${(groups.success || {}).tasks_with_mid_loop || 0}</td>
+          <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${(groups.failed || {}).tasks_with_mid_loop || 0}</td>
+        </tr>
+        <tr>
+          <td colspan="15" style="padding: 8px 12px 14px; border: 1px solid var(--card-border); background: var(--task-card-bg);">
+            <details>
+              <summary style="cursor: pointer; color: var(--text-muted); font-weight: 800;">All / Failed / Passed group stats</summary>
+              <table style="width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 12px;">
+                <thead><tr style="background: var(--badge-neutral-bg);">
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">Group</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">M_Steps</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">M_Mean</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">M_Std</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">L_steps</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">L_Mean</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">L_Std</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">Total Steps</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">Failed Tasks</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">Fail Rate</th>
+                  <th style="padding: 6px 8px; text-align: left; border: 1px solid var(--card-border);">Total Tasks</th>
+                </tr></thead>
+                <tbody>${groupBreakdown}</tbody>
+              </table>
+            </details>
+          </td>
+        </tr>`;
+      }).join('');
+      const outcomeLabel = summary.outcome_filter === 'success'
+        ? 'Passed tasks'
+        : summary.outcome_filter === 'failed'
+          ? 'Failed tasks'
+          : 'All tasks';
+      return `<div style="margin-top: 28px;">
+        <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 6px;">
+          <h3 style="font-size: 15px; font-weight: 800; color: var(--text);">Selected Runs Task/Step Summary</h3>
+          <div style="display: inline-flex; gap: 6px; flex-wrap: wrap;">${filterBtn('all', 'All tasks')}${filterBtn('success', 'Passed only')}${filterBtn('failed', 'Failed only')}</div>
+        </div>
+        <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">${escapeHtml(outcomeLabel)} · misgrounded means grounding similarity &lt; ${Number(summary.threshold ?? 0.8).toFixed(2)} · loop means L_t_u &gt; 0.0. The rightmost columns count Passed/Failed tasks that have &ge;1 <em>interior</em> step (excluding the first &amp; last) below the grounding threshold, or with L_t_u &ge; 0.3 &mdash; independent of the outcome filter above.</p>
+        <table style="width: 100%; min-width: 900px; border-collapse: collapse; border: 1px solid var(--card-border); font-size: 13px;">
+          <thead><tr style="background: var(--badge-neutral-bg);">
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Model</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">M_Steps</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">M_Mean</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">M_Std</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">L_steps</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">L_Mean</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">L_Std</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Total Steps</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Failed Tasks</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Fail Rate</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Total Tasks</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border); border-left: 2px solid var(--accent);" title="Passed tasks with >=1 interior (middle) step below the grounding threshold">Passed · mid-misground</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);" title="Failed tasks with >=1 interior (middle) step below the grounding threshold">Failed · mid-misground</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);" title="Passed tasks with >=1 interior (middle) step with L_t_u >= 0.3">Passed · mid-loop(&ge;0.3)</th>
+            <th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);" title="Failed tasks with >=1 interior (middle) step with L_t_u >= 0.3">Failed · mid-loop(&ge;0.3)</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }
+
+    function setSelectedRunsOutcomeFilter(value) {
+      const select = document.getElementById('grounding-eval-outcome-filter');
+      if (select) select.value = value;
+      fetchGroundingMetrics();
+    }
+
     function renderGroundingData() {
       if (!lastGroundingData) return;
       const data = lastGroundingData;
@@ -1268,11 +1671,13 @@
 
       if (Object.keys(data).length === 0) {
         resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No models found in the selected runs.</p>';
+        const sd0 = document.getElementById('grounding-eval-summary-results');
+        if (sd0) sd0.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No models found in the selected runs.</p>';
         document.getElementById('grounding-eval-auroc-container').style.display = 'none';
         return;
       }
 
-      const models = Object.keys(data).filter(m => m !== 'Average' && m !== '__meta');
+      const models = Object.keys(data).filter(m => m !== 'Average' && m !== '__meta' && m !== '__summary');
       
       const labelInfo = data.__meta && data.__meta.label_source === 'llm'
         ? ` vs LLM labels (${data.__meta.llm_label_model})`
@@ -1327,6 +1732,9 @@
       }
       html += `</tbody></table>`;
       resultsDiv.innerHTML = html;
+      // Part 2 renders into its own card below.
+      const summaryDiv = document.getElementById('grounding-eval-summary-results');
+      if (summaryDiv) summaryDiv.innerHTML = renderSelectedRunsTaskStepSummary(data);
 
       renderAUROCGraph(data, Number(threshold));
     }
@@ -1431,7 +1839,7 @@
       const colors = ["#ff0000", "#000000", "#00ff00", "#0000ff", "#ff00ff", "#00ffff"];
       let colorIdx = 0;
 
-      const models = Object.keys(data).filter(m => m !== 'Average' && m !== '__meta');
+      const models = Object.keys(data).filter(m => m !== 'Average' && m !== '__meta' && m !== '__summary');
 
       for (const model of models) {
         const cData = data[model];
@@ -1476,6 +1884,23 @@
           pathGroup.appendChild(circle);
         }
         
+        // GPT-4o (LLM label) operating point vs human ground truth: a single diamond marker.
+        const op = cData.llm_operating_point;
+        if (op && op.n > 0) {
+          const opx = left + op.fpr * innerWidth;
+          const opy = top + (1 - op.tpr) * innerHeight;
+          const diamond = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          const rr = 6;
+          diamond.setAttribute("d", `M ${opx} ${opy - rr} L ${opx + rr} ${opy} L ${opx} ${opy + rr} L ${opx - rr} ${opy} Z`);
+          diamond.setAttribute("fill", color);
+          diamond.setAttribute("stroke", "black");
+          diamond.setAttribute("stroke-width", "1");
+          const opTitle = document.createElementNS("http://www.w3.org/2000/svg", "title");
+          opTitle.textContent = `${model} · ${op.model_label} label vs human\nTPR: ${op.tpr.toFixed(3)}  FPR: ${op.fpr.toFixed(3)}  (n=${op.n})`;
+          diamond.appendChild(opTitle);
+          pathGroup.appendChild(diamond);
+        }
+
         svg.appendChild(pathGroup);
 
         // Legend inside plot
@@ -1483,8 +1908,9 @@
         legItem.id = `legend-item-${model.replace(/\s+/g, '-')}`;
         legItem.style.display = 'flex';
         legItem.style.alignItems = 'center';
+        const opLegend = (op && op.n > 0) ? ` · ◆ ${op.model_label}` : '';
         legItem.innerHTML = `<span style="display:inline-block; width:20px; height:2px; background:${color}; margin-right:8px;"></span>
-          <span style="white-space: nowrap;">${model} (AUC: ${cData.auc.toFixed(3)})</span>`;
+          <span style="white-space: nowrap;">${model} — cosine (AUC: ${cData.auc.toFixed(3)})${opLegend}</span>`;
         legend.appendChild(legItem);
 
         // Filter Checkbox below plot
@@ -1557,31 +1983,123 @@
       window.location.href = automaticUrl({ difficulty: level || null });
     }
 
+    function taskCheckboxes() {
+      return Array.from(document.querySelectorAll('input[name="task_ids"]'));
+    }
+
+    function updateSelectedTaskUi() {
+      const boxes = taskCheckboxes();
+      const checked = boxes.filter(el => el.checked).length;
+      const count = document.getElementById('selected-task-count');
+      if (count) count.textContent = `Selected: ${checked}/${boxes.length}`;
+      {% if annotated_url_summary and annotated_url_summary.all_different_task_ids %}
+      const selected = new Set(boxes.filter(el => el.checked).map(el => el.value));
+      const active = ALL_DIFFERENT_URL_TASK_IDS.length > 0
+        && selected.size === ALL_DIFFERENT_URL_TASK_IDS.length
+        && ALL_DIFFERENT_URL_TASK_IDS.every(id => selected.has(id));
+      const btn = document.getElementById('all-different-url-btn');
+      if (btn) {
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        btn.style.background = active ? 'var(--success)' : 'rgba(16, 185, 129, 0.10)';
+        btn.style.color = active ? 'white' : 'var(--success)';
+      }
+      {% endif %}
+    }
+
     function selectAllTasks() {
-      document.querySelectorAll('input[name="task_ids"]').forEach(el => el.checked = true);
+      taskCheckboxes().forEach(el => el.checked = true);
+      updateSelectedTaskUi();
     }
     
     function deselectAllTasks() {
-      document.querySelectorAll('input[name="task_ids"]').forEach(el => el.checked = false);
+      taskCheckboxes().forEach(el => el.checked = false);
+      updateSelectedTaskUi();
     }
 
-    function randomSelectTasks() {
-      const boxes = Array.from(document.querySelectorAll('input[name="task_ids"]'));
+    function seededRandom(seed) {
+      let state = (Number(seed) >>> 0) || 1;
+      return function() {
+        state = (state * 1664525 + 1013904223) >>> 0;
+        return state / 4294967296;
+      };
+    }
+
+    function randomSelectTasks(nOverride = null, seedOverride = null) {
+      const boxes = taskCheckboxes();
       const total = boxes.length;
-      let n = parseInt(document.getElementById('random-n-input').value, 10);
+      let n = nOverride != null ? parseInt(nOverride, 10) : parseInt(document.getElementById('random-n-input').value, 10);
+      let seed = seedOverride != null ? parseInt(seedOverride, 10) : parseInt(document.getElementById('random-seed-input').value, 10);
       if (!Number.isInteger(n) || n < 1) {
         alert('Enter a number of tasks to select (N ≥ 1).');
         return;
       }
+      if (!Number.isInteger(seed)) {
+        alert('Enter a numeric random seed.');
+        return;
+      }
       if (n > total) n = total;
-      // Deselect all, then pick n distinct random boxes (Fisher-Yates shuffle).
+      const rng = seededRandom(seed);
+      // Deselect all, then pick n distinct boxes with a seeded Fisher-Yates shuffle.
       boxes.forEach(el => el.checked = false);
       for (let i = boxes.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = Math.floor(rng() * (i + 1));
         [boxes[i], boxes[j]] = [boxes[j], boxes[i]];
       }
       boxes.slice(0, n).forEach(el => el.checked = true);
+      updateSelectedTaskUi();
     }
+
+    function selectTaskIds(taskIds) {
+      const selected = new Set(taskIds || []);
+      taskCheckboxes().forEach(el => {
+        el.checked = selected.has(el.value);
+      });
+      updateSelectedTaskUi();
+    }
+
+    function updateForceGroundTruthUi() {
+      const mode = document.getElementById('force-ground-truth-mode');
+      const retries = document.getElementById('force-ground-truth-retries');
+      if (!mode || !retries) return;
+      retries.disabled = !mode.checked;
+      retries.style.opacity = mode.checked ? '1' : '0.55';
+    }
+
+    {% if annotated_url_summary and annotated_url_summary.all_different_task_ids %}
+    const ALL_DIFFERENT_URL_TASK_IDS = {{ annotated_url_summary.all_different_task_ids|tojson }};
+
+    function selectAllDifferentUrlTasks() {
+      selectTaskIds(ALL_DIFFERENT_URL_TASK_IDS);
+    }
+
+    function toggleAllDifferentUrlTasks() {
+      const boxes = taskCheckboxes();
+      const selected = new Set(boxes.filter(el => el.checked).map(el => el.value));
+      const active = selected.size === ALL_DIFFERENT_URL_TASK_IDS.length
+        && ALL_DIFFERENT_URL_TASK_IDS.every(id => selected.has(id));
+      if (active) {
+        boxes.forEach(el => {
+          if (ALL_DIFFERENT_URL_TASK_IDS.includes(el.value)) el.checked = false;
+        });
+        updateSelectedTaskUi();
+      } else {
+        selectAllDifferentUrlTasks();
+      }
+    }
+    {% endif %}
+
+    document.addEventListener('DOMContentLoaded', function() {
+      {% if annotated_url_summary and annotated_url_summary.all_different_task_ids %}
+      selectAllDifferentUrlTasks();
+      {% else %}
+      {% if auto_apply_default_sample %}
+      randomSelectTasks({{ default_auto_sample_n }}, {{ default_auto_sample_seed }});
+      {% endif %}
+      {% endif %}
+      taskCheckboxes().forEach(el => el.addEventListener('change', updateSelectedTaskUi));
+      updateSelectedTaskUi();
+      updateForceGroundTruthUi();
+    });
 
     function toggleAllRuns(master) {
       document.querySelectorAll('.run-select').forEach(el => el.checked = master.checked);
@@ -1613,6 +2131,7 @@
         const labels = {
           runmeta: 'Judge / Target',
           refmeta: 'Ref Steps / Difficulty',
+          flags: 'Run Flags',
         };
         const label = labels[column] || column;
         button.textContent = `${shouldShow ? 'Hide' : 'Show'} ${label}`;
@@ -1765,7 +2284,7 @@
           const l = (step.computed_loop_updated !== undefined && step.computed_loop_updated !== null)
             ? step.computed_loop_updated
             : 0;
-          const fullVal = step.mech_confidence;
+          const fullVal = step.step_uncertainty;
           if (fullVal !== undefined && fullVal !== null) {
             fullSum += fullVal;
             fullCount++;
@@ -1909,13 +2428,14 @@
     // Initial draw
     document.addEventListener('DOMContentLoaded', drawMeanGraph);
 
-    // Auto-reload if an automated run is running
+    // Auto-reload gently if an automated run is running. Keep this slow so the
+    // launch dashboard remains usable while multiple runs are being started.
     {% if auto_runs and auto_runs|selectattr("status", "equalto", "running")|list|length > 0 %}
     setTimeout(() => {
       const url = new URL(window.location.href);
       url.searchParams.set('tab', 'automatic');
       window.location.href = url.toString();
-    }, 3000);
+    }, 5 * 60 * 1000);
     {% endif %}
 
     // Theme Toggle Handler

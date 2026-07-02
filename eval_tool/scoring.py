@@ -122,6 +122,14 @@ def _num(value: Any, lo: float, hi: float, default: float | None) -> float | Non
 
 
 def compute_confidence(parts: dict[str, Any], formula: str = "full") -> float | None:
+    # "Full Confidence" is the primary metric: C_t = clip(G_grounding * (1 - 0.5 * L_t_u), 0, 1),
+    # where G_grounding is the cosine element-step grounding (bucketed) and L_t_u is the updated
+    # loop score. No progress term. This is identical to the spec_noprogress formula and to the
+    # live extension's mechanical confidence (gv2ComputeMechanicalConfidence).
+    if formula == "full":
+        return compute_spec_confidence(parts, "spec_noprogress")
+
+    # Legacy LLM-self-reported families (kept for comparison lines only).
     grounded = _num(parts.get("grounded"), 0.0, 1.0, None)
     loop = _num(parts.get("loop"), 0.0, 1.0, 0.0)
     progress = _num(parts.get("progress"), 0.0, 1.0, 0.0)

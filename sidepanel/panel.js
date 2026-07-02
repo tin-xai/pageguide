@@ -4959,6 +4959,27 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
     }
   }
 
+  function renderRawAgentResponseBlock(p) {
+    const responseContent = p.responseContent || p.rawResponse || p.response?.content || '';
+    const responseError = p.responseError || p.response?.error || '';
+    const title = isPlanningPromptData(p) ? 'Raw Planning Response' : 'Raw Agent Response';
+    const errorHtml = responseError ? `
+      <div style="margin-bottom: 6px; color: #d32f2f; font-weight: 700;">Error: ${escapeHtml(responseError)}</div>
+    ` : '';
+    const emptyMessage = responseError
+      ? '(no response body)'
+      : '(no raw response captured for this prompt entry)';
+    return `
+      <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+        <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">${title}</summary>
+        <div style="margin-top: 6px;">
+          ${errorHtml}
+          <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin: 0; border: 1px solid var(--pg-border); max-height: 35vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(responseContent || emptyMessage)}</pre>
+        </div>
+      </details>
+    `;
+  }
+
   function renderPromptDetails(p) {
     let html = '';
 
@@ -4977,6 +4998,9 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
         <span style="color: var(--pg-text); word-break: break-all;"><a href="${escapeHtml(p.metadata?.url || '')}" target="_blank" style="color: var(--pg-accent); text-decoration: none;">${escapeHtml(p.metadata?.url || 'N/A')}</a></span>
       </div>
     `;
+
+    // Keep the raw model output near the top so long page indexes do not bury it.
+    html += renderRawAgentResponseBlock(p);
 
     // System Prompt Block
     html += `
@@ -5007,24 +5031,6 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
         </div>
       </details>
     `;
-
-    const responseContent = p.responseContent || p.rawResponse || p.response?.content || '';
-    const responseError = p.responseError || p.response?.error || '';
-    if (responseContent || responseError) {
-      const title = isPlanningPromptData(p) ? 'Planning Response' : 'Agent Response';
-      const errorHtml = responseError ? `
-        <div style="margin-bottom: 6px; color: #d32f2f; font-weight: 700;">Error: ${escapeHtml(responseError)}</div>
-      ` : '';
-      html += `
-        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
-          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">${title}</summary>
-          <div style="margin-top: 6px;">
-            ${errorHtml}
-            <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin: 0; border: 1px solid var(--pg-border); max-height: 35vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(responseContent || '(empty)')}</pre>
-          </div>
-        </details>
-      `;
-    }
 
     // Images / Media Block
     let imagesList = [];

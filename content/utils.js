@@ -1228,6 +1228,32 @@ function gv2ComputeMechanicalConfidence(parts, weights) {
   return { confidence: clip01(grounding * (1 - lamL * loop)), grounding, loop };
 }
 
+function gv2WarningDecision(parts) {
+  const groundingThreshold = Number.isFinite(Number(parts?.groundingThreshold))
+    ? Number(parts.groundingThreshold) : 0.8;
+  const loopThreshold = Number.isFinite(Number(parts?.loopThreshold))
+    ? Number(parts.loopThreshold) : 0.3;
+  const rawSimilarity = parts?.elementStepSimilarity;
+  const rawLoopScore = parts?.loopScore;
+  const similarity = (rawSimilarity === null || rawSimilarity === undefined || rawSimilarity === '')
+    ? null : Number(rawSimilarity);
+  const loopScore = (rawLoopScore === null || rawLoopScore === undefined || rawLoopScore === '')
+    ? null : Number(rawLoopScore);
+  const types = [];
+  if (parts?.groundingEnabled && Number.isFinite(similarity) && similarity < groundingThreshold) {
+    types.push('grounding');
+  }
+  if (parts?.loopEnabled && Number.isFinite(loopScore) && loopScore >= loopThreshold) {
+    types.push('loop');
+  }
+  return {
+    inject: types.length > 0,
+    types,
+    groundingThreshold,
+    loopThreshold
+  };
+}
+
 /**
  * Derive the loop "action key" for a step: normalized action type plus the first
  * non-empty element/action text. When no action is supplied, preserves the older
@@ -1350,6 +1376,7 @@ if (typeof window !== 'undefined') {
   window.gv2GroundingScore = gv2GroundingScore;
   window.gv2LoopScore = gv2LoopScore;
   window.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
+  window.gv2WarningDecision = gv2WarningDecision;
   window.gv2ElementKey = gv2ElementKey;
   window.gv2CropRect = gv2CropRect;
   window.gv2ResolveRegionElement = gv2ResolveRegionElement;
@@ -1363,6 +1390,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2GroundingScore = gv2GroundingScore;
   module.exports.gv2LoopScore = gv2LoopScore;
   module.exports.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
+  module.exports.gv2WarningDecision = gv2WarningDecision;
   module.exports.gv2ElementKey = gv2ElementKey;
   module.exports.GV2_LAMBDA_L = GV2_LAMBDA_L;
   module.exports.GV2_LAMBDA_P = GV2_LAMBDA_P;

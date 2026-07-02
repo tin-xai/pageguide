@@ -773,6 +773,78 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
     });
   });
 
+  describe('gv2WarningDecision', () => {
+    test('grounding warning fires below threshold only when enabled', () => {
+      expect(window.gv2WarningDecision({
+        groundingEnabled: true,
+        loopEnabled: false,
+        elementStepSimilarity: 0.79,
+        loopScore: 0,
+        groundingThreshold: 0.8,
+        loopThreshold: 0.3
+      })).toMatchObject({ inject: true, types: ['grounding'] });
+      expect(window.gv2WarningDecision({
+        groundingEnabled: true,
+        loopEnabled: false,
+        elementStepSimilarity: 0.8,
+        loopScore: 0,
+        groundingThreshold: 0.8,
+        loopThreshold: 0.3
+      })).toMatchObject({ inject: false, types: [] });
+      expect(window.gv2WarningDecision({
+        groundingEnabled: false,
+        loopEnabled: false,
+        elementStepSimilarity: 0.2,
+        loopScore: 0
+      })).toMatchObject({ inject: false, types: [] });
+    });
+
+    test('missing grounding similarity does not coerce to zero or trigger grounding warning', () => {
+      expect(window.gv2WarningDecision({
+        groundingEnabled: true,
+        loopEnabled: false,
+        elementStepSimilarity: null,
+        loopScore: null,
+        groundingThreshold: 0.8,
+        loopThreshold: 0.3
+      })).toMatchObject({ inject: false, types: [] });
+      expect(window.gv2WarningDecision({
+        groundingEnabled: true,
+        loopEnabled: false,
+        elementStepSimilarity: undefined,
+        loopScore: undefined,
+        groundingThreshold: 0.8,
+        loopThreshold: 0.3
+      })).toMatchObject({ inject: false, types: [] });
+      expect(window.gv2WarningDecision({
+        groundingEnabled: true,
+        loopEnabled: true,
+        elementStepSimilarity: null,
+        loopScore: 0.3,
+        groundingThreshold: 0.8,
+        loopThreshold: 0.3
+      })).toMatchObject({ inject: true, types: ['loop'] });
+    });
+
+    test('loop warning fires at threshold and combines with grounding', () => {
+      expect(window.gv2WarningDecision({
+        groundingEnabled: true,
+        loopEnabled: true,
+        elementStepSimilarity: 0.7,
+        loopScore: 0.3,
+        groundingThreshold: 0.8,
+        loopThreshold: 0.3
+      })).toMatchObject({ inject: true, types: ['grounding', 'loop'] });
+      expect(window.gv2WarningDecision({
+        groundingEnabled: false,
+        loopEnabled: true,
+        elementStepSimilarity: 1,
+        loopScore: 0.29,
+        loopThreshold: 0.3
+      })).toMatchObject({ inject: false, types: [] });
+    });
+  });
+
   describe('gv2ElementKey', () => {
     test('uses element.text, stripped and lowercased', () => {
       expect(window.gv2ElementKey({ element: { text: '  Search ' }, instruction: 'x' })).toBe('search');
@@ -856,6 +928,13 @@ describe('gv2PickTargetIndex (content/tasks/guidev2.js)', () => {
     };
     expect(window.gv2PickTargetIndex('High Impact', 10)).toBe(20);
   });
+
+  test('_gv2QuestionHasOraclePlan detects the annotated oracle plan marker', () => {
+    expect(window._gv2QuestionHasOraclePlan(
+      'Buy a gift card\n\nORACLE PLAN FROM THE ANNOTATED DATASET:\n1. Visit site')).toBe(true);
+    expect(window._gv2QuestionHasOraclePlan('Buy a gift card')).toBe(false);
+    expect(window._gv2QuestionHasOraclePlan(null)).toBe(false);
+  });
 });
 
 describe('gv2CosineSimilarity / gv2BuildPredictFinalGoalPrompt (content/utils.js)', () => {
@@ -902,6 +981,177 @@ describe('_gv2ShouldUseAlignedRegionCapture (content/tasks/guidev2.js)', () => {
 
     chrome.storage.local.get.mockResolvedValueOnce({ guideDebugRegionCapture: 'legacy' });
     await expect(window._gv2ShouldUseAlignedRegionCapture({ autoMode: false })).resolves.toBe(false);
+  });
+});
+
+describe('_gv2ElementStepSimilarityResult (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  beforeEach(() => {
+    delete window.safeSendMessage;
+    if (window._gv2ResetEmbedState) window._gv2ResetEmbedState();
+    // Force the direct content-script fetch to fail so these tests exercise the SW fallback
+    // path (the direct path is covered separately).
+    window.chrome = { storage: { sync: { get: jest.fn(() => Promise.reject(new Error('no storage'))) } } };
+  });
+
+  test('returns ok with the cosine value on a successful embed', async () => {
+    window.safeSendMessage = jest.fn(async () => ({ embeddings: [[1, 0, 0], [1, 0, 0]] }));
+    const r = await window._gv2ElementStepSimilarityResult('search location', 'location', true);
+    expect(r.reason).toBe('ok');
+    expect(r.value).toBeCloseTo(1);
+  });
+
+  test('a service-worker error response is classified embed_error, not exception', async () => {
+    window.safeSendMessage = jest.fn(async () => ({ error: '🔄 Connection lost. Please refresh the page (F5).' }));
+    const r = await window._gv2ElementStepSimilarityResult('search location', 'location', true);
+    expect(r.value).toBeNull();
+    expect(r.reason).toBe('embed_error');
+    expect(r.detail).toContain('Connection lost');
+  });
+
+  test('an undefined/no response is classified no_response, not exception', async () => {
+    window.safeSendMessage = jest.fn(async () => undefined);
+    const r = await window._gv2ElementStepSimilarityResult('search location', 'location', true);
+    expect(r.value).toBeNull();
+    expect(r.reason).toBe('no_response');
+  });
+
+  test('short non-empty element text still embeds (length is not the failure cause)', async () => {
+    const send = jest.fn(async () => ({ embeddings: [[1, 0], [0, 1]] }));
+    window.safeSendMessage = send;
+    const r = await window._gv2ElementStepSimilarityResult('Enter the value', 'location', true);
+    expect(send).toHaveBeenCalled();
+    expect(r.reason).toBe('ok');
+  });
+
+  test('retries once on a transient failure then succeeds', async () => {
+    const send = jest.fn()
+      .mockResolvedValueOnce({ error: 'Extension context invalidated' })
+      .mockResolvedValueOnce({ embeddings: [[1, 0, 0], [1, 0, 0]] });
+    window.safeSendMessage = send;
+    const r = await window._gv2ElementStepSimilarityResult('search location', 'location', true);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(r.reason).toBe('ok');
+  });
+
+  test('empty element text short-circuits without attempting an embed', async () => {
+    const send = jest.fn();
+    window.safeSendMessage = send;
+    const r = await window._gv2ElementStepSimilarityResult('search location', '', true);
+    expect(send).not.toHaveBeenCalled();
+    expect(r.reason).toBe('empty_element_text');
+  });
+
+  test('recovers from a transient undefined response within the retry budget', async () => {
+    const send = jest.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ embeddings: [[1, 0, 0], [1, 0, 0]] });
+    window.safeSendMessage = send;
+    const r = await window._gv2ElementStepSimilarityResult('search location', 'location', true);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(r.reason).toBe('ok');
+    expect(r.value).toBeCloseTo(1);
+  });
+
+  test('gives up with no_response only after exhausting all retries', async () => {
+    const send = jest.fn(async () => undefined);
+    window.safeSendMessage = send;
+    const r = await window._gv2ElementStepSimilarityResult('search location', 'location', true);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(r.reason).toBe('no_response');
+  });
+});
+
+describe('_gv2CallEmbed serialization + memoization (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  beforeEach(() => {
+    delete window.safeSendMessage;
+    window._gv2ResetEmbedState();
+    // Force the direct fetch to fail so serialization/memoization is measured on the SW path.
+    window.chrome = { storage: { sync: { get: jest.fn(() => Promise.reject(new Error('no storage'))) } } };
+  });
+
+  test('never sends more than one callEmbed message concurrently', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    window.safeSendMessage = jest.fn(async ({ texts }) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(r => setTimeout(r, 5));
+      inFlight -= 1;
+      return { embeddings: texts.map(() => [1, 0, 0]) };
+    });
+    // Fire several embeds at once, each with distinct texts so the cache can't collapse them.
+    const results = await Promise.all([
+      window._gv2CallEmbed(['a1', 'b1']),
+      window._gv2CallEmbed(['a2', 'b2']),
+      window._gv2CallEmbed(['a3', 'b3']),
+      window._gv2CallEmbed(['a4', 'b4']),
+    ]);
+    expect(maxInFlight).toBe(1);
+    results.forEach(r => expect(r.embeddings).toHaveLength(2));
+  });
+
+  test('memoizes per text — a repeated text is not re-embedded', async () => {
+    const send = jest.fn(async ({ texts }) => ({ embeddings: texts.map(() => [1, 0, 0]) }));
+    window.safeSendMessage = send;
+    await window._gv2CallEmbed(['shared', 'one']);
+    await window._gv2CallEmbed(['shared', 'two']); // 'shared' cached; only 'two' is new
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0][0].texts).toEqual(['shared', 'one']);
+    expect(send.mock.calls[1][0].texts).toEqual(['two']);
+  });
+
+  test('all-cached call makes no service-worker request', async () => {
+    const send = jest.fn(async ({ texts }) => ({ embeddings: texts.map(() => [1, 0, 0]) }));
+    window.safeSendMessage = send;
+    await window._gv2CallEmbed(['x', 'y']);
+    send.mockClear();
+    const r = await window._gv2CallEmbed(['x', 'y']);
+    expect(send).not.toHaveBeenCalled();
+    expect(r.embeddings).toEqual([[1, 0, 0], [1, 0, 0]]);
+  });
+
+  test('a failed embed is not cached — a later call re-embeds the same text', async () => {
+    const send = jest.fn()
+      .mockResolvedValueOnce(undefined)   // attempt 1
+      .mockResolvedValueOnce(undefined);  // attempt 2 → fails, must not cache
+    window.safeSendMessage = send;
+    const failed = await window._gv2CallEmbed(['fresh']);
+    expect(failed).toBeUndefined();
+
+    send.mockResolvedValue({ embeddings: [[1, 0, 0]] });
+    const ok = await window._gv2CallEmbed(['fresh']); // re-embeds because nothing was cached
+    expect(ok.embeddings).toEqual([[1, 0, 0]]);
+    expect(send.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  test('embeds directly from the content script (fetch) without touching the SW', async () => {
+    // Working storage key + fetch → the direct path succeeds and safeSendMessage is never used.
+    window.chrome = { storage: { sync: { get: jest.fn(async () => ({ provider: 'openrouter', openrouterApiKey: 'sk-test' })) } } };
+    const fetchMock = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({ data: [{ index: 0, embedding: [1, 0, 0] }, { index: 1, embedding: [0, 1, 0] }] }),
+    }));
+    global.fetch = fetchMock;
+    window.fetch = fetchMock;
+    const send = jest.fn();
+    window.safeSendMessage = send;
+    const r = await window._gv2CallEmbed(['a', 'b']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain('/v1/embeddings');
+    expect(send).not.toHaveBeenCalled();
+    expect(r.embeddings).toEqual([[1, 0, 0], [0, 1, 0]]);
+    delete global.fetch;
+    delete window.fetch;
   });
 });
 
@@ -1219,6 +1469,142 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
   test('guide prompt teaches clear_text action', () => {
     expect(window.GUIDE_V2_PROMPT).toContain('"clear_text"');
     expect(window.GUIDE_V2_PROMPT).toContain('action="clear_text"');
+  });
+
+  test('initial planning prompt includes matched tutorial reference before asking planner', async () => {
+    window.safeSendMessage = jest.fn(async () => ({
+      content: JSON.stringify({
+        planTitle: 'Disable autoplay',
+        steps: [{ goal: 'Open settings' }, { goal: 'Turn off autoplay' }]
+      })
+    }));
+    window.rewindUpdateSessionMeta = jest.fn(async () => {});
+
+    const g = {
+      active: true,
+      planningMode: 'planning',
+      question: 'How do I turn off autoplay on Spotify?',
+      sessionId: 'planning-tutorial-test',
+      tutorialRef: {
+        task: 'How do I turn off autoplay on Spotify?',
+        website: 'Spotify - Disable autoplay',
+        content: {
+          steps: [
+            'Step 1: Click your profile picture at the top, and select Settings.',
+            'Step 2: Scroll down to Autoplay and switch it off.'
+          ]
+        }
+      }
+    };
+
+    const ok = await window._gv2GenerateInitialPlan(
+      g,
+      { indexText: '[1] Profile\n[2] Settings\n[3] Autoplay' },
+      { isDark: false }
+    );
+
+    expect(ok).toBe(true);
+    expect(window.safeSendMessage).toHaveBeenCalledTimes(1);
+    const request = window.safeSendMessage.mock.calls[0][0];
+    const planningPrompt = request.messages[0].content;
+    expect(request.action).toBe('callLLM');
+    expect(request.systemPrompt).toBe(window.GUIDE_V2_PLANNING_PROMPT);
+    expect(planningPrompt).toContain('=== TUTORIAL REFERENCE ===');
+    expect(planningPrompt).toContain('Pre-verified steps for "How do I turn off autoplay on Spotify?"');
+    expect(planningPrompt).toContain('Step 1: Click your profile picture at the top, and select Settings.');
+    expect(planningPrompt).toContain('Use these as a reference guide but map the plan to the actual elements visible in the PAGE INDEX above.');
+    expect(g.plan).toEqual([
+      { n: 1, goal: 'Open settings', status: 'pending' },
+      { n: 2, goal: 'Turn off autoplay', status: 'pending' }
+    ]);
+
+    const meta = window.rewindUpdateSessionMeta.mock.calls[0][1];
+    expect(meta.planningSystemPrompt).toBe(window.GUIDE_V2_PLANNING_PROMPT);
+    expect(meta.planningPrompt).toContain('=== TUTORIAL REFERENCE ===');
+  });
+
+  test('initial planning continues without tutorial reference when none is matched', async () => {
+    window.safeSendMessage = jest.fn(async () => ({
+      content: JSON.stringify({
+        planTitle: 'Search',
+        steps: [{ goal: 'Enter search query' }]
+      })
+    }));
+    window.rewindUpdateSessionMeta = jest.fn(async () => {});
+
+    const g = {
+      active: true,
+      planningMode: 'planning',
+      question: 'Search for a product',
+      sessionId: 'planning-no-tutorial-test',
+      tutorialRef: null
+    };
+
+    const ok = await window._gv2GenerateInitialPlan(
+      g,
+      { indexText: '[1] Search' },
+      { isDark: true }
+    );
+
+    expect(ok).toBe(true);
+    const planningPrompt = window.safeSendMessage.mock.calls[0][0].messages[0].content;
+    expect(planningPrompt).not.toContain('=== TUTORIAL REFERENCE ===');
+    expect(planningPrompt).toContain('PAGE BACKGROUND: DARK');
+    expect(g.plan).toEqual([{ n: 1, goal: 'Enter search query', status: 'pending' }]);
+  });
+
+  test('grounding warning diagnostic names the step instruction and resolved DOM element', () => {
+    const prompt = window._gv2WarningPromptBlock({
+      step: { instruction: 'Submit button' },
+      reportedElementText: 'Submit',
+      resolvedElementText: 'Cancel',
+      elementStepSimilarity: 0.74
+    }, { types: ['grounding'] });
+
+    expect(prompt).toContain('It failed grounding (similarity 0.74): you described "Submit button" but the page resolved "Cancel".');
+    expect(prompt).toContain('Only reference SoM labels that are actually visible');
+    expect(prompt).not.toContain('You described "Submit"');
+  });
+
+  test('grounding warning diagnostic renders missing similarity as unknown instead of 0.00', () => {
+    const prompt = window._gv2WarningPromptBlock({
+      step: { instruction: 'Click submit' },
+      reportedElementText: 'Submit',
+      resolvedElementText: 'Submit',
+      elementStepSimilarity: null
+    }, { types: ['grounding'] });
+
+    expect(prompt).toContain('It failed grounding (similarity unknown): you described "Click submit" but the page resolved "Submit".');
+    expect(prompt).not.toContain('similarity 0.00');
+  });
+
+  test('reflector retry prompt folds the diagnostic into a Reflection and asks for a different action', () => {
+    const diagnostic = window._gv2WarningPromptBlock({
+      currentKey: 'click: search',
+      loopMatchCount: 3
+    }, { types: ['loop'] });
+    const prompt = window._gv2WarningRetryPrompt('ORIGINAL PROMPT BODY', diagnostic, '{"action":"click"}', 7);
+
+    expect(prompt).toContain('ORIGINAL PROMPT BODY');
+    expect(prompt).toContain('Reflection: This is not your first attempt to generate the next action.');
+    expect(prompt).toContain('It repeated the target "click: search" in 3 previous step(s) without progress.');
+    expect(prompt).toContain('Here are some previously generated next actions:');
+    expect(prompt).toContain('{"action":"click"}');
+    expect(prompt).toContain('generate a new action that is DIFFERENT from all previously generated next actions');
+    expect(prompt).toContain('Return corrected JSON for Step 7.');
+    expect(prompt).not.toContain('WARNING BEFORE EXECUTION');
+  });
+
+  test('live grounding similarity reports why no score was available', async () => {
+    const result = await window._gv2ElementStepSimilarityResult('Click submit', 'Submit', false);
+
+    expect(result).toEqual(expect.objectContaining({
+      value: null,
+      reason: 'no_index'
+    }));
+    expect(window.chrome.runtime.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      action: 'callEmbed'
+    }));
   });
 
   test('clear_text helper empties input and dispatches input/change events', () => {
@@ -1718,7 +2104,95 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     try {
       await window.gv2RetryGuideStep();
     } catch (e) {}
-    
+
     expect(window._guidev2.lowConfidenceCount).toBe(0);
+  });
+});
+
+describe('Dashboard UI helpers (eval_server/static/dashboard_ui.js)', () => {
+  beforeAll(() => {
+    loadScript('eval_server/static/dashboard_ui.js');
+  });
+
+  describe('sparklinePoints', () => {
+    test('maps a 0..1 series to evenly-spaced, y-inverted [0,1] points', () => {
+      const pts = window.DashboardUI.sparklinePoints([0, 0.5, 1], 84, 24, 2);
+      // innerW=80, innerH=20, pad=2: x at 2, 42, 82; y inverted (0 -> 22 bottom, 1 -> 2 top).
+      expect(pts).toBe('2,22 42,12 82,2');
+    });
+
+    test('drops null / non-finite entries but keeps original x spacing', () => {
+      const pts = window.DashboardUI.sparklinePoints([0.5, null, 1], 84, 24, 2);
+      // Two points remain at original indices 0 and 2 -> x at 2 and 82.
+      expect(pts).toBe('2,12 82,2');
+    });
+
+    test('returns "" when fewer than two finite points remain', () => {
+      expect(window.DashboardUI.sparklinePoints([0.5], 84, 24, 2)).toBe('');
+      expect(window.DashboardUI.sparklinePoints([null, undefined], 84, 24, 2)).toBe('');
+      expect(window.DashboardUI.sparklinePoints([], 84, 24, 2)).toBe('');
+    });
+
+    test('clamps values outside [0,1]', () => {
+      const pts = window.DashboardUI.sparklinePoints([-1, 2], 84, 24, 2);
+      // -1 clamps to 0 (y=22), 2 clamps to 1 (y=2).
+      expect(pts).toBe('2,22 82,2');
+    });
+  });
+
+  describe('sparklineDots', () => {
+    test('returns one {x,y,v,i} per finite point, y-inverted and [0,1] scaled', () => {
+      const dots = window.DashboardUI.sparklineDots([0, 0.5, 1], 84, 24, 2);
+      expect(dots).toEqual([
+        { i: 0, v: 0, x: 2, y: 22 },
+        { i: 1, v: 0.5, x: 42, y: 12 },
+        { i: 2, v: 1, x: 82, y: 2 },
+      ]);
+    });
+
+    test('drops null / non-finite entries but keeps original x spacing', () => {
+      const dots = window.DashboardUI.sparklineDots([0.5, null, 1], 84, 24, 2);
+      expect(dots.map(d => d.i)).toEqual([0, 2]);
+      expect(dots.map(d => d.x)).toEqual([2, 82]);
+    });
+  });
+
+  describe('isYellowDot', () => {
+    test('grounding is bad below 0.8', () => {
+      expect(window.DashboardUI.isYellowDot('grounding', 0.79)).toBe(true);
+      expect(window.DashboardUI.isYellowDot('grounding', 0.8)).toBe(false);
+    });
+    test('loop is bad at or above 0.3', () => {
+      expect(window.DashboardUI.isYellowDot('loop', 0.3)).toBe(true);
+      expect(window.DashboardUI.isYellowDot('loop', 0.29)).toBe(false);
+    });
+    test('uncertainty is bad above 0.5', () => {
+      expect(window.DashboardUI.isYellowDot('uncertainty', 0.51)).toBe(true);
+      expect(window.DashboardUI.isYellowDot('uncertainty', 0.5)).toBe(false);
+    });
+    test('null / non-finite / unknown metric are not flagged', () => {
+      expect(window.DashboardUI.isYellowDot('grounding', null)).toBe(false);
+      expect(window.DashboardUI.isYellowDot('loop', undefined)).toBe(false);
+      expect(window.DashboardUI.isYellowDot('mystery', 0.9)).toBe(false);
+    });
+  });
+
+  describe('runMatchesFeatureFilter', () => {
+    test('empty selection matches every run', () => {
+      expect(window.DashboardUI.runMatchesFeatureFilter({}, [])).toBe(true);
+      expect(window.DashboardUI.runMatchesFeatureFilter({ planning: true }, [])).toBe(true);
+    });
+
+    test('AND semantics: all selected features must be present', () => {
+      const flags = { planning: true, grounding: true, loop: false };
+      expect(window.DashboardUI.runMatchesFeatureFilter(flags, ['planning', 'grounding'])).toBe(true);
+      expect(window.DashboardUI.runMatchesFeatureFilter(flags, ['planning', 'loop'])).toBe(false);
+      expect(window.DashboardUI.runMatchesFeatureFilter(flags, ['loop'])).toBe(false);
+    });
+
+    test('missing flag is treated as not-included', () => {
+      expect(window.DashboardUI.runMatchesFeatureFilter({}, ['planning'])).toBe(false);
+      expect(window.DashboardUI.runMatchesFeatureFilter(undefined, ['grounding'])).toBe(false);
+    });
   });
 });

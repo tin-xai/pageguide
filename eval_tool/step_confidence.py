@@ -55,6 +55,7 @@ ELEMENT_GROUNDING_MEDIUM_THRESHOLD = 0.78
 # How many recent steps `computed_loop_recent` looks back over. Kept for older
 # records/back-compat; the inspector now displays `computed_loop_updated`.
 RECENT_LOOP_WINDOW = 3
+LOOP_UPDATED_TASK_THRESHOLD = 0.3
 
 # Actions that mechanically succeed / have no element-targeting signal.
 NON_GROUNDING_ACTIONS = {"scroll", "scroll_up", "scroll_down", "done"}
@@ -309,6 +310,7 @@ def loop_metrics_summary(steps: list[dict[str, Any]] | None) -> dict[str, Any]:
     """Summarize loop metrics from a trace.
 
     ``loop_steps_updated`` counts steps whose L_t_u is strictly greater than 0.5.
+    ``loop_task_updated`` is the task-level table flag: 1 when any L_t_u >= 0.3.
     ``min_loop_updated`` / ``max_loop_updated`` span all non-initial steps (for display).
     """
     payload = {"steps": list(steps or [])}
@@ -327,6 +329,8 @@ def loop_metrics_summary(steps: list[dict[str, Any]] | None) -> dict[str, Any]:
         "min_loop": min_loop,
         "max_loop": max_loop,
         "loop_steps_updated": loop_steps_updated,
+        "loop_task_updated": 1 if max_loop_updated >= LOOP_UPDATED_TASK_THRESHOLD else 0,
+        "loop_task_updated_threshold": LOOP_UPDATED_TASK_THRESHOLD,
         "min_loop_updated": min_loop_updated,
         "max_loop_updated": max_loop_updated,
         "loop_metric_disagrees": (

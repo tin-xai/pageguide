@@ -128,17 +128,19 @@
           </figure>
         </div>
       {% endif %}
-      {% if step.domSnapshot or step.regionDom or step.domSnapshotAfter %}
+      {% if step.domSnapshot or step.domSnapshotPath or step.regionDom or step.domSnapshotAfter or step.domSnapshotAfterPath %}
         <div class="dom-inspector">
           <div class="dom-inspector-head">
             <h3>DOM Snapshots</h3>
-            <p class="muted">Target crops are cut from the before-action viewport screenshot using the highlighted element bounds plus padding; DOM Target is the stored nearby container for that same element.</p>
+            <p class="muted">Target crops are cut from the before-action viewport screenshot using the highlighted element bounds plus padding; DOM Target is the stored nearby container for that same element. Full-page snapshots are stored as separate files and opened on demand.</p>
           </div>
           <div class="dom-grid">
             <section class="dom-panel">
               <h4>DOM Before</h4>
               {% if step.domSnapshot %}
                 <pre class="dom-code"><code>{{ step.domSnapshot }}</code></pre>
+              {% elif step.domSnapshotPath %}
+                <a class="dom-link" href="/artifacts/{{ step.domSnapshotPath }}" target="_blank" rel="noopener">Open before DOM snapshot ↗</a>
               {% else %}
                 <div class="dom-empty">No before DOM captured.</div>
               {% endif %}
@@ -151,14 +153,39 @@
                 <div class="dom-empty">No target DOM captured.</div>
               {% endif %}
             </section>
-            {% if step.domSnapshotAfter %}
+            {% if step.domSnapshotAfter or step.domSnapshotAfterPath %}
               <section class="dom-panel">
                 <h4>DOM After</h4>
-                <pre class="dom-code"><code>{{ step.domSnapshotAfter }}</code></pre>
+                {% if step.domSnapshotAfter %}
+                  <pre class="dom-code"><code>{{ step.domSnapshotAfter }}</code></pre>
+                {% else %}
+                  <a class="dom-link" href="/artifacts/{{ step.domSnapshotAfterPath }}" target="_blank" rel="noopener">Open after DOM snapshot ↗</a>
+                {% endif %}
               </section>
             {% endif %}
           </div>
         </div>
+      {% endif %}
+      {% if step.oraclePlanIncluded or step.oraclePlan or step.guideQueryWithOraclePlan %}
+        <details>
+          <summary>Oracle Plan / Augmented Task Prompt</summary>
+          <pre>=== ORACLE PLAN ===
+{{ step.oraclePlan or "(none)" }}
+
+=== EXACT TASK PROMPT SENT TO PAGEGUIDE ===
+{{ step.guideQueryWithOraclePlan or "(not captured)" }}</pre>
+        </details>
+      {% endif %}
+      {% if step.forceGroundTruth %}
+        <details open>
+          <summary>ForceGroundTruth Verification</summary>
+          <pre>Oracle step: {{ step.oracleStep or "(none)" }}
+Oracle subgoal: {{ step.oracleSubgoal or "(none)" }}
+Expected URL: {{ step.expectedUrl or "(none)" }}
+Actual URL: {{ step.actualUrl or step.url or "(not verified yet)" }}
+Attempt: {{ step.attempt or 1 }}
+Verification: {% if step.verificationPassed is sameas true %}passed{% elif step.verificationPassed is sameas false %}failed{% else %}pending{% endif %}</pre>
+        </details>
       {% endif %}
       {% if step.rawLlmJson %}
         <details>
