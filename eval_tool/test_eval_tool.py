@@ -1,14 +1,17 @@
 import json
+import os
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from eval_tool.app import build_phase3_rows, create_app, default_tasks, filter_options
 from eval_tool.credentials import Account
 from eval_tool.ece import aggregate_task, compute_ece, ece_payload, is_bot_detection_failure
 from eval_tool.judge import DEFAULT_LLM_MODEL, LlmJudge, configured_judge_model, normalize_grounding_label, normalize_judge_response
-from eval_tool.runner import PlaywrightGuideRunner, _zero_step_explanation, configured_task_model, normalize_max_steps, normalize_region_capture_mode, region_capture_mode_label
+from eval_tool.runner import PlaywrightGuideRunner, _zero_step_explanation, classify_failure_reason, configured_task_model, normalize_input_mode, normalize_max_steps, normalize_region_capture_mode, region_capture_mode_label
 from eval_tool.scoring import (
     ALL_FORMULAS,
     apply_manual_evaluation,
@@ -45,7 +48,262 @@ from eval_tool.mind2web_levels import (
 from eval_tool.tasks import load_tasks, display_task_name, short_site_name
 
 
+class FollowingPromptShapeTest(unittest.TestCase):
+    def _shape_block(self, n_oracle):
+        from eval_tool.following_rate import build_following_prompt
+        oracle = [{"index": i + 1, "key": f"oracle_{i + 1}", "text": f"step {i + 1}", "url": "u"} for i in range(n_oracle)]
+        agent = [{"step": 1, "action": "click", "instruction": "x", "target": "t", "url": "u"}]
+        p = build_following_prompt({"task": "t"}, oracle, agent)
+        # Only inspect the JSON shape example, not the surrounding rules text.
+        start = p.index("{", p.index("exact shape"))
+        end = p.index("Rules:")
+        return p[start:end]
+
+    def test_shape_has_one_key_per_oracle_step_no_extras(self):
+        block = self._shape_block(2)
+        # The pre-satisfied key must be empty (no agent steps), not [1, 2].
+        self.assertIn('"oracle_1": []', block)
+        self.assertIn('"oracle_2": [1, 2]', block)
+        self.assertNotIn("oracle_3", block)  # must not invent a third oracle key
+        self.assertIn('"pre_satisfied": ["oracle_1"]', block)
+
+    def test_shape_scales_to_three_oracle_steps(self):
+        block = self._shape_block(3)
+        self.assertIn('"oracle_1": []', block)
+        self.assertIn('"oracle_2": [1, 2]', block)
+        self.assertIn('"oracle_3": [3, 4]', block)
+        self.assertNotIn("oracle_4", block)
+
+    def test_pre_satisfied_example_key_has_empty_array(self):
+        # Regression: the key listed in pre_satisfied must map to [] in the example.
+        block = self._shape_block(2)
+        self.assertIn('"oracle_1": []', block)
+        self.assertNotIn('"oracle_1": [1, 2]', block)
+
+    def test_shape_single_oracle_step(self):
+        block = self._shape_block(1)
+        # A lone oracle step is shown as a normal mapping with no pre-satisfied claim.
+        self.assertIn('"oracle_1": [1, 2]', block)
+        self.assertNotIn("oracle_2", block)
+        self.assertIn('"pre_satisfied": []', block)
+
+    def test_long_target_is_truncated_to_100_chars(self):
+        from eval_tool.following_rate import _target_text
+        long = "Select a Store Search by zip or city, state Sorry, no store within 100 miles" * 5
+        out = _target_text({"target": {"text": long}})
+        self.assertEqual(len(out), 100)
+        self.assertTrue(out.endswith("…"))
+
+    def test_short_target_is_left_unchanged(self):
+        from eval_tool.following_rate import _target_text
+        out = _target_text({"target": {"text": "Shop My Store"}})
+        self.assertEqual(out, "Shop My Store")
+
+    def test_prompt_agent_target_capped_at_100(self):
+        from eval_tool.following_rate import build_following_prompt, _target_text
+        long = "x" * 400
+        agent = [{"step": 1, "action": "click", "instruction": "i",
+                  "target": _target_text({"target": {"text": long}}), "url": "u"}]
+        oracle = [{"index": 1, "key": "oracle_1", "text": "s", "url": "u"}]
+        p = build_following_prompt({"task": "t"}, oracle, agent)
+        agent_line = next(l for l in p.splitlines() if l.startswith("1. action="))
+        target_part = agent_line.split("target=", 1)[1].split("; URL", 1)[0]
+        self.assertLessEqual(len(target_part), 100)
+
+
+class AnnotatedDifficultyTest(unittest.TestCase):
+    def test_difficulty_from_subgoal_count(self):
+        from eval_tool.mind2web_levels import effective_task_difficulty, reference_step_count
+        from eval_tool.tasks import EvalTask
+        easy = EvalTask(name="t", task_id="annotated-0", task="t", website_url="u",
+                        annotated_subgoals=["Visit site.", "Do a thing."])
+        medium = EvalTask(name="t", task_id="annotated-6", task="t", website_url="u",
+                          annotated_subgoals=["a", "b", "c", "d", "e", "f"])
+        self.assertEqual(reference_step_count(easy), 2)
+        self.assertEqual(effective_task_difficulty(easy), "easy")
+        self.assertEqual(reference_step_count(medium), 6)
+        self.assertEqual(effective_task_difficulty(medium), "medium")
+
+    def test_embedded_number_in_subgoal_does_not_inflate_count(self):
+        # Regression: a subgoal mentioning "zip code 90028" must not be read as
+        # ~90 steps by the numbered-list regex; the count is the subgoal length.
+        from eval_tool.mind2web_levels import effective_task_difficulty, reference_step_count
+        from eval_tool.tasks import EvalTask
+        task = EvalTask(name="t", task_id="annotated-0", task="t", website_url="u",
+                        annotated_subgoals=["Visit the Gamestop website.",
+                                            "Search using zip code 90028 and set as home store."])
+        self.assertEqual(reference_step_count(task), 2)
+        self.assertEqual(effective_task_difficulty(task), "easy")
+
+    def test_difficulty_from_subgoals_via_dict(self):
+        from eval_tool.mind2web_levels import effective_task_difficulty
+        self.assertEqual(effective_task_difficulty({"annotated_subgoals": ["a", "b", "c"]}), "easy")
+        self.assertEqual(effective_task_difficulty({"annotated_subgoals": list("abcdefg")}), "medium")
+
+
+class McNemarTest(unittest.TestCase):
+    def test_no_discordant_pairs_is_not_significant(self):
+        from eval_tool.stats import mcnemar_test
+        r = mcnemar_test(0, 0)
+        self.assertEqual(r["n"], 0)
+        self.assertEqual(r["p_value"], 1.0)
+        self.assertEqual(r["method"], "none")
+        self.assertFalse(r["significant"])
+
+    def test_exact_binomial_for_small_discordant_count(self):
+        from eval_tool.stats import mcnemar_test
+        r = mcnemar_test(8, 1)  # n=9 < 25 -> exact
+        self.assertEqual(r["method"], "exact binomial")
+        self.assertAlmostEqual(r["p_value"], 0.0390625, places=6)
+        self.assertTrue(r["significant"])
+
+    def test_chi_square_for_large_discordant_count(self):
+        from eval_tool.stats import mcnemar_test
+        r = mcnemar_test(30, 10)  # n=40 >= 25 -> corrected chi-square
+        self.assertEqual(r["method"], "chi-square (continuity-corrected)")
+        self.assertAlmostEqual(r["statistic"], 9.025, places=3)
+        self.assertAlmostEqual(r["p_value"], 0.002663, places=5)
+        self.assertTrue(r["significant"])
+
+    def test_p_value_is_symmetric_in_b_and_c(self):
+        from eval_tool.stats import mcnemar_test
+        self.assertAlmostEqual(mcnemar_test(8, 1)["p_value"], mcnemar_test(1, 8)["p_value"], places=9)
+        self.assertAlmostEqual(mcnemar_test(30, 10)["p_value"], mcnemar_test(10, 30)["p_value"], places=9)
+
+    def test_endpoint_returns_stats(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        resp = server_app.test_client().get("/api/mcnemar?b=8&c=1")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertAlmostEqual(data["p_value"], 0.0390625, places=6)
+        self.assertTrue(data["significant"])
+
+    def test_endpoint_handles_bad_args(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        resp = server_app.test_client().get("/api/mcnemar?b=abc")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["n"], 0)  # non-int -> 0, c absent -> 0
+
+
+class JudgeTemperatureTest(unittest.TestCase):
+    def test_default_temperature_is_zero(self):
+        from eval_tool.judge import LlmJudge, DEFAULT_JUDGE_TEMPERATURE
+        self.assertEqual(DEFAULT_JUDGE_TEMPERATURE, 0.0)
+        self.assertEqual(LlmJudge().temperature, 0.0)
+
+    def test_temperature_is_configurable_and_clamped(self):
+        from eval_tool.judge import LlmJudge, normalize_temperature
+        self.assertEqual(LlmJudge(temperature=0.7).temperature, 0.7)
+        self.assertEqual(normalize_temperature(5), 2.0)     # clamp high
+        self.assertEqual(normalize_temperature(-1), 0.0)    # clamp low
+        self.assertEqual(normalize_temperature(""), 0.0)    # blank -> default
+        self.assertEqual(normalize_temperature("abc"), 0.0)  # invalid -> default
+
+    def test_temperature_reaches_request_body(self):
+        from eval_tool.judge import LlmJudge
+        captured = {}
+
+        class _FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode()
+
+        def _fake_urlopen(req, timeout=90):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp()
+
+        judge = LlmJudge(api_key="sk-test", temperature=0.9)
+        with patch("urllib.request.urlopen", _fake_urlopen):
+            judge._call_openai("prompt", None)
+        self.assertEqual(captured["body"]["temperature"], 0.9)
+
+
 class EvalToolTest(unittest.TestCase):
+    def test_following_rate_scores_mapping_with_urls_and_pre_satisfied_start(self):
+        from eval_tool.following_rate import score_following_for_task
+
+        class FakeJudge:
+            api_key = "key"
+            def __init__(self):
+                self.prompt = ""
+            def _call_openai(self, prompt, image_b64):
+                self.prompt = prompt
+                return json.dumps({
+                    "oracle_1": [],
+                    "oracle_2": [1, 2, 3, 4, 5],
+                    "oracle_3": [6],
+                    "oracle_4": [7],
+                    "pre_satisfied": ["oracle_1"],
+                })
+
+        judge = FakeJudge()
+        result = score_following_for_task({
+            "task": {
+                "task": "Download the environmental impact report.",
+                "website_url": "https://new.mta.info/",
+                "reference_steps": "\n".join([
+                    "1. Visit the MTA website.",
+                    "2. Navigate to the Jamaica Bus Depot expansion project page.",
+                    "3. Locate the environmental impact statement details section.",
+                    "4. Open or download the report.",
+                ]),
+                "annotated_reference_urls": [
+                    "https://new.mta.info/",
+                    "https://new.mta.info/project/jamaica-bus-depot-expansion",
+                    "https://new.mta.info/project/jamaica-bus-depot-expansion#environmental-review",
+                    "https://new.mta.info/document/jamaica-bus-depot-feis.pdf",
+                ],
+            },
+            "steps": [
+                {"isInitial": True, "step": 0, "url": "https://new.mta.info/"},
+                {"step": 1, "action": "click", "instruction": "Click Menu", "target": {"text": "Menu"}, "url": "https://new.mta.info/"},
+                {"step": 2, "action": "click", "instruction": "Click Search", "target": {"text": "Search"}, "url": "https://new.mta.info/"},
+                {"step": 3, "action": "type", "instruction": "Type search query", "target": {"text": "Search"}, "url": "https://new.mta.info/search"},
+                {"step": 4, "action": "press", "instruction": "Press Enter", "target": {"text": "Search"}, "url": "https://new.mta.info/search"},
+                {"step": 5, "action": "click", "instruction": "Click result", "target": {"text": "Jamaica Bus Depot"}, "url": "https://new.mta.info/search?q=Jamaica"},
+                {"step": 6, "action": "scroll", "instruction": "Scroll to review section", "target": {"text": "Environmental review"}, "url": "https://new.mta.info/project/jamaica-bus-depot-expansion"},
+                {"step": 7, "action": "click", "instruction": "Click Final Environmental Impact Statement PDF", "target": {"text": "PDF"}, "url": "https://new.mta.info/project/jamaica-bus-depot-expansion#environmental-review"},
+                {"step": 8, "action": "click", "instruction": "Click unrelated footer link", "target": {"text": "Careers"}, "url": "https://new.mta.info/document/jamaica-bus-depot-feis.pdf"},
+            ],
+        }, model="openai/gpt-4o", judge=judge)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["pre_satisfied"], ["oracle_1"])
+        self.assertEqual(result["matched_agent_steps"], 7)
+        self.assertEqual(result["total_agent_steps"], 8)
+        self.assertEqual(result["completed_oracle_steps"], 3)
+        self.assertEqual(result["actionable_oracle_steps"], 3)
+        self.assertAlmostEqual(result["following_rate"], 7 / 8)
+        self.assertAlmostEqual(result["completion_rate"], 1.0)
+        self.assertIn("Oracle plan with recorded/reference URLs", judge.prompt)
+        self.assertIn("https://new.mta.info/project/jamaica-bus-depot-expansion#environmental-review", judge.prompt)
+        self.assertIn("Agent trajectory with recorded URLs", judge.prompt)
+
+    def test_following_rate_normalization_ignores_invalid_and_duplicate_agent_steps(self):
+        from eval_tool.following_rate import normalize_following_mapping
+
+        oracle = [
+            {"key": "oracle_1", "index": 1, "text": "A", "url": ""},
+            {"key": "oracle_2", "index": 2, "text": "B", "url": ""},
+        ]
+        agent = [
+            {"step": 1, "instruction": "one"},
+            {"step": 2, "instruction": "two"},
+        ]
+        result = normalize_following_mapping(
+            {"oracle_1": [1, "1", 99, "bad"], "oracle_2": [2]},
+            oracle,
+            agent,
+        )
+        self.assertEqual(result["mapping"], {"oracle_1": [1], "oracle_2": [2]})
+        self.assertEqual(result["matched_agent_steps"], 2)
+        self.assertEqual(result["completed_oracle_steps"], 2)
+        self.assertAlmostEqual(result["following_rate"], 1.0)
+        self.assertAlmostEqual(result["completion_rate"], 1.0)
+
     def test_llm_grounding_label_normalizer_accepts_expected_forms(self):
         self.assertEqual(normalize_grounding_label("Grounded"), "grounded")
         self.assertEqual(normalize_grounding_label("grounded"), "grounded")
@@ -559,6 +817,16 @@ class EvalToolTest(unittest.TestCase):
         self.assertEqual(_to_uncertainty(0.0), 1.0)
         self.assertEqual(_to_uncertainty(1.0), 0.0)
         self.assertEqual(_to_uncertainty(1.5), 0.0)
+
+    def test_step_metrics_uncertainty_uses_raw_grounding_not_bucketed(self):
+        # G=0.84 buckets to 1.0 under g_grounding, so the OLD path gave uncertainty 0.0. The raw
+        # formula U = 1 - G*(1-0.5*L) gives 0.16 at loop 0 (loop is recomputed to 0 for a lone step).
+        from eval_server.app import _step_metrics
+        steps = [{"step": 1, "action": "click", "target": {"llmIndex": 1},
+                  "element_step_similarity": 0.84, "computed_loop_updated": 0.0}]
+        metrics, _ = _step_metrics(steps)
+        self.assertAlmostEqual(metrics[0]["step_uncertainty"], 0.16)
+        self.assertAlmostEqual(metrics[0]["mech_confidence"], 0.84)
 
     def test_grounding_metrics_counts_mid_trajectory_tasks_by_outcome(self):
         from eval_server.app import app as server_app
@@ -1831,7 +2099,7 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b'value="0.8"', response.data)
         self.assertIn(b'name="loop_warning_threshold"', response.data)
         self.assertIn(b'value="0.3"', response.data)
-        self.assertIn(b'name="workers" value="10"', response.data)
+        self.assertIn(b'name="workers" value="20"', response.data)
         self.assertIn(b'id="grounding-eval-outcome-filter"', response.data)
         self.assertIn(b"Selected Runs Task/Step Summary", response.data)
         self.assertIn(b"setSelectedRunsOutcomeFilter", response.data)
@@ -1886,6 +2154,37 @@ class EvalToolTest(unittest.TestCase):
         self.assertIn(b'value="50"', response.data)
         self.assertIn(b'id="random-seed-input"', response.data)
         self.assertIn(b'value="1"', response.data)
+        self.assertIn(b'id="source-run-select"', response.data)
+        self.assertIn(b'Select Remaining 60', response.data)
+        self.assertIn(b'/api/runs/source-config', response.data)
+
+    def test_eval_server_source_config_api_returns_selected_run_task_ids(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        run = {
+            "run_id": "run-existing",
+            "created_at": "now",
+            "status": "completed",
+            "task_ids": ["annotated-1", "annotated-2"],
+            "task_set": "annotated",
+            "nickname": "step_url_different_oracle_plan",
+            "input_mode": "dom",
+            "include_oracle_plan": True,
+            "force_ground_truth_mode": True,
+            "force_ground_truth_retries": 1,
+        }
+        with patch("eval_server.app.load_run", return_value=run):
+            response = server_app.test_client().get("/api/runs/source-config?run_id=run-existing")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["run_id"], "run-existing")
+        self.assertEqual(data["task_ids"], ["annotated-1", "annotated-2"])
+        self.assertEqual(data["nickname"], "step_url_different_oracle_plan")
+        self.assertEqual(data["input_mode"], "dom")
+        self.assertTrue(data["include_oracle_plan"])
+        self.assertTrue(data["force_ground_truth_mode"])
+        self.assertEqual(data["force_ground_truth_retries"], 1)
 
     def test_eval_server_create_run_persists_warning_and_planning_toggles(self):
         from eval_server.app import app as server_app
@@ -1934,6 +2233,61 @@ class EvalToolTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(saved_runs[-1]["force_ground_truth_mode"])
         self.assertEqual(saved_runs[-1]["force_ground_truth_retries"], 1)
+
+    def test_eval_server_start_evaluation_without_source_is_plain_run(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        task = load_tasks("annotated")[0]
+        fake_run = {"run_id": "run-plain", "created_at": "now", "status": "queued", "task_ids": []}
+        saved_runs = []
+        with patch("eval_server.app.load_run", return_value=None), \
+             patch("eval_server.app.create_run", return_value=fake_run), \
+             patch("eval_server.app.save_run", side_effect=lambda run: saved_runs.append(run) or run), \
+             patch("eval_server.app.start_run") as start_run_mock:
+            response = server_app.test_client().post("/runs", data={
+                "task_set": "annotated",
+                "task_ids": [task.task_id],
+                "nickname": "plain_run",
+            })
+        # No source_run_id -> a normal (non-composite) run that redirects to the dashboard.
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/?tab=automatic", response.headers["Location"])
+        self.assertNotEqual(saved_runs[-1].get("status"), "composite")
+        start_run_mock.assert_called_once()
+
+    def test_eval_server_start_evaluation_with_source_creates_composite(self):
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        tasks = load_tasks("annotated")[:2]
+        source = {"run_id": "run-existing", "created_at": "old", "status": "completed", "task_ids": [tasks[0].task_id]}
+        created = [
+            {"run_id": "run-continuation", "created_at": "now", "status": "queued", "task_ids": []},
+            {"run_id": "run-composite", "created_at": "now", "status": "queued", "task_ids": []},
+        ]
+        saved_runs = []
+        with patch("eval_server.app.load_run", return_value=source), \
+             patch("eval_server.app.create_run", side_effect=created), \
+             patch("eval_server.app.save_run", side_effect=lambda run: saved_runs.append(run) or run), \
+             patch("eval_server.app.start_run") as start_run_mock:
+            # Start Evaluation with a source run selected -> composite (folded into /runs).
+            response = server_app.test_client().post("/runs", data={
+                "task_set": "annotated",
+                "task_ids": [tasks[0].task_id, tasks[1].task_id],
+                "source_run_id": "run-existing",
+                "nickname": "step_url_different_oracle_plan",
+                "include_oracle_plan": "1",
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(saved_runs[-1]["status"], "composite")
+        self.assertEqual(saved_runs[-1]["input_mode"], "dom")
+        self.assertEqual(saved_runs[-1]["composite_sources"], ["run-existing", "run-continuation"])
+        self.assertEqual(saved_runs[-1]["task_ids"], [tasks[0].task_id, tasks[1].task_id])
+        self.assertEqual(saved_runs[-1]["existing_task_count"], 1)
+        self.assertEqual(saved_runs[-1]["continuation_task_count"], 1)
+        self.assertTrue(saved_runs[-1]["include_oracle_plan"])
+        start_run_mock.assert_called_once()
 
     def test_eval_server_run_detail_can_show_reference_steps_and_difficulty(self):
         from eval_server.app import app as server_app
@@ -3146,6 +3500,37 @@ class LoadDomSnapshotTest(unittest.TestCase):
         from eval_tool.storage import load_dom_snapshot
         self.assertEqual(load_dom_snapshot({"domSnapshotPath": "no/such/file.html"}), "")
 
+    def test_composite_run_resolves_results_from_sources_in_order(self):
+        from eval_tool import storage
+
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            with patch.object(storage, "RUNS_DIR", runs_dir):
+                storage.save_run({"run_id": "run-a", "created_at": "1", "status": "completed", "task_ids": ["t1"]})
+                storage.save_task_result("run-a", "t1", {"task_id": "t1", "status": "completed"})
+                storage.save_run({"run_id": "run-b", "created_at": "2", "status": "completed", "task_ids": ["t1", "t2"]})
+                storage.save_task_result("run-b", "t1", {"task_id": "t1", "status": "completed", "marker": "later"})
+                storage.save_task_result("run-b", "t2", {"task_id": "t2", "status": "completed"})
+                storage.save_run({
+                    "run_id": "run-composite",
+                    "created_at": "3",
+                    "status": "composite",
+                    "task_ids": ["t1", "t2", "t3"],
+                    "composite_task_ids": ["t1", "t2", "t3"],
+                    "composite_sources": ["run-a", "run-b"],
+                })
+
+                results = storage.list_task_results_resolved("run-composite")
+                self.assertEqual([r["task_id"] for r in results], ["t1", "t2"])
+                self.assertEqual(results[0]["resolved_run_id"], "run-a")
+                self.assertNotIn("marker", results[0])
+                self.assertEqual(storage.load_task_result_resolved("run-composite", "t2")["resolved_run_id"], "run-b")
+
+    def test_normalize_input_mode(self):
+        self.assertEqual(normalize_input_mode("dom"), "dom")
+        self.assertEqual(normalize_input_mode("DOM+Screenshot"), "dom_screenshot")
+        self.assertEqual(normalize_input_mode("vision"), "dom_screenshot")
+
     def test_subgoal_page_state_resolves_externalized_dom(self):
         from eval_tool import subgoal_progress
         with TemporaryDirectory() as tmp:
@@ -3456,6 +3841,994 @@ class ResolveTrajectoryPathTest(unittest.TestCase):
                 path, run_id = server_module._resolve_trajectory_path("deep", run_id="run-z")
                 self.assertEqual(run_id, "run-z")
                 self.assertTrue(path.endswith("run-z/tasks/big.json"))
+
+
+class RunVariationAnalysisTest(unittest.TestCase):
+    def test_variation_flags_and_combo_label(self):
+        import eval_server.app as server_module
+
+        baseline = server_module.run_variation_flags({})
+        self.assertEqual(baseline, {
+            "grounding_injected": False,
+            "loop_injected": False,
+            "force_ground_truth": False,
+            "force_ground_truth_retries": 0,
+            "planning": False,
+            "oracle_plan": False,
+        })
+        self.assertEqual(
+            server_module.run_variation_combo_label(baseline),
+            server_module.VARIATION_BASELINE_LABEL,
+        )
+
+        run = {
+            "inject_grounding_warning": True,
+            "inject_looping_warning": True,
+            "force_ground_truth_mode": True,
+            "force_ground_truth_retries": 2,
+            "automatic_planning_mode": True,
+            "include_oracle_plan": True,
+        }
+        flags = server_module.run_variation_flags(run)
+        self.assertEqual(
+            server_module.run_variation_combo_label(flags),
+            "Grounding Injected + Loop Injected + Force Ground Truth (2 retries) "
+            "+ Planning + Oracle Plan",
+        )
+
+        # Planning on its own is its own variation combo.
+        planning_only = server_module.run_variation_flags({"automatic_planning_mode": True})
+        self.assertEqual(
+            server_module.run_variation_combo_label(planning_only), "Planning")
+
+    def test_force_ground_truth_retries_fine_grain_combos(self):
+        import eval_server.app as server_module
+
+        # Retry count is only tracked when force-GT mode is on, and it fine-grains the combo:
+        # 0 retries and 1 retry are DIFFERENT variations (0/1 -> retry vs retries wording).
+        f0 = server_module.run_variation_flags(
+            {"force_ground_truth_mode": True, "force_ground_truth_retries": 0})
+        f1 = server_module.run_variation_flags(
+            {"force_ground_truth_mode": True, "force_ground_truth_retries": 1})
+        self.assertEqual(f0["force_ground_truth_retries"], 0)
+        self.assertEqual(f1["force_ground_truth_retries"], 1)
+        self.assertEqual(
+            server_module.run_variation_combo_label(f0), "Force Ground Truth (0 retries)")
+        self.assertEqual(
+            server_module.run_variation_combo_label(f1), "Force Ground Truth (1 retry)")
+        # Retries are ignored when force-GT is off.
+        off = server_module.run_variation_flags({"force_ground_truth_retries": 3})
+        self.assertEqual(off["force_ground_truth_retries"], 0)
+
+    def test_default_excluded_run_dropped_until_reselected(self):
+        import eval_server.app as server_module
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        excluded = next(iter(server_module.VARIATION_DEFAULT_EXCLUDED_RUN_IDS))
+        runs = [
+            {"run_id": "run-keep", "task_set": "annotated",
+             "task_model": "google/gemini-2.5-flash-lite", "inject_looping_warning": True},
+            {"run_id": excluded, "task_set": "annotated",
+             "task_model": "google/gemini-2.5-flash-lite", "inject_looping_warning": True},
+        ]
+        summary = {"run_id": "x", "total_tasks": 10, "passed_tasks": 5, "failed_tasks": 5,
+                   "fail_rate": 0.5, "groups": {k: {
+                       "misgrounded_steps": 0, "loop_steps": 0, "total_steps": 0,
+                       "misgrounded_task_rate_mean": 0.0, "misgrounded_task_rate_std": 0.0,
+                       "loop_task_rate_mean": 0.0, "loop_task_rate_std": 0.0,
+                       "tasks_with_mid_misgrounding": 0, "tasks_with_mid_loop": 0,
+                   } for k in ("all", "success", "failed")},
+                   "difficulty": {lvl: {"total": 0, "passed": 0, "failed": 0}
+                                  for lvl in ("easy", "medium", "hard")}}
+
+        with patch.object(server_module, "list_auto_runs", return_value=runs), \
+             patch.object(server_module, "run_variation_task_step_summary", return_value=summary):
+            # Default load: the excluded run is a listed (unchecked) candidate but is NOT in the
+            # summary, so the Loop Injected combo aggregates only run-keep (1 run / 10 tasks).
+            default_body = server_app.test_client().get("/run-variation-analysis").data.decode()
+            # Explicitly re-selecting it brings it back (2 runs / 20 tasks).
+            reselected_body = server_app.test_client().get(
+                f"/run-variation-analysis?selection=1&run_ids=run-keep&run_ids={excluded}").data.decode()
+
+        self.assertIn(excluded, default_body)     # still a candidate checkbox
+        self.assertIn("Loop Injected", default_body)  # combo present (from run-keep)
+        # The excluded run's checkbox is rendered UNCHECKED by default...
+        self.assertRegex(
+            default_body, rf'value="{excluded}"(?![^>]*checked)')
+        # ...and CHECKED once re-selected.
+        self.assertRegex(
+            reselected_body, rf'value="{excluded}"[^>]*checked')
+
+        def loop_runs_count(body):
+            # The "Loop Injected" comparison row: label cell then the numeric Runs cell.
+            m = re.search(r'Loop Injected</span>\s*</td>\s*<td[^>]*>(\d+)</td>', body)
+            return int(m.group(1)) if m else None
+
+        self.assertEqual(loop_runs_count(default_body), 1)     # only run-keep by default
+        self.assertEqual(loop_runs_count(reselected_body), 2)  # both after reselect
+
+    def _write_task(self, tasks_dir, name, success, steps):
+        (tasks_dir / f"{name}.json").write_text(json.dumps({
+            "task_id": name,
+            "task": {"task": name},
+            "judge": {"success": success},
+            "steps": steps,
+        }), encoding="utf-8")
+
+    def test_run_variation_task_step_summary_counts(self):
+        import eval_server.app as server_module
+
+        # Loop scores are recomputed by backfill_computed_loop (L_t_u = prior matching
+        # action count / 10), so the fixture uses six identical click-on-"foo" actions.
+        # Non-initial indices 0..5; interior = 1..4. L_t_u hits >=0.3 at index 3 (0.3) and 4
+        # (0.4). Index 3 is also misgrounded (0.5 < 0.8) -> both mid flags fire on this task.
+        def click_foo(sim):
+            return {"action": "click", "target": {"text": "foo"},
+                    "element_step_similarity": sim}
+        failing_steps = [{"isInitial": True}] + [
+            click_foo(0.9), click_foo(0.9), click_foo(0.9),
+            click_foo(0.5), click_foo(0.9), click_foo(0.9),
+        ]
+        # Distinct targets -> no loops; both grounded -> no misgrounding.
+        passing_steps = [
+            {"isInitial": True},
+            {"action": "click", "target": {"text": "alpha"}, "element_step_similarity": 0.9},
+            {"action": "type", "target": {"text": "beta"}, "element_step_similarity": 0.95},
+        ]
+        with TemporaryDirectory() as tmp:
+            tasks_dir = Path(tmp) / "run-v" / "tasks"
+            tasks_dir.mkdir(parents=True)
+            self._write_task(tasks_dir, "t-fail", False, failing_steps)
+            self._write_task(tasks_dir, "t-pass", True, passing_steps)
+            with patch.object(server_module, "RUNS_DIR", str(tmp)):
+                summary = server_module.run_variation_task_step_summary("run-v", threshold=0.8)
+
+        self.assertEqual(summary["total_tasks"], 2)
+        self.assertEqual(summary["passed_tasks"], 1)
+        self.assertEqual(summary["failed_tasks"], 1)
+        self.assertAlmostEqual(summary["fail_rate"], 0.5)
+        # Scored (non-initial) steps: 6 (fail) + 2 (pass) = 8.
+        self.assertEqual(summary["groups"]["all"]["total_steps"], 8)
+        # One misgrounded step (the 0.5 similarity). Looping steps (L_t_u > 0) are the
+        # failing task's 2nd..6th identical actions = 5.
+        self.assertEqual(summary["groups"]["all"]["misgrounded_steps"], 1)
+        self.assertEqual(summary["groups"]["all"]["loop_steps"], 5)
+        # Mid (interior) flags land on the failed task only.
+        self.assertEqual(summary["groups"]["failed"]["tasks_with_mid_misgrounding"], 1)
+        self.assertEqual(summary["groups"]["failed"]["tasks_with_mid_loop"], 1)
+        self.assertEqual(summary["groups"]["success"]["tasks_with_mid_misgrounding"], 0)
+
+    def test_run_variation_summary_difficulty_breakdown(self):
+        import eval_server.app as server_module
+        from eval_tool.tasks import tasks_by_id
+        from eval_tool.mind2web_levels import effective_task_difficulty
+
+        task_map = tasks_by_id("annotated")
+        # Real annotated tasks: annotated-0/2 are easy (≤5 subgoals),
+        # annotated-6/7 are medium (6–12 subgoals). Passed/failed mix per level.
+        picks = {"annotated-0": True, "annotated-2": False,
+                 "annotated-6": True, "annotated-7": False}
+        steps = [{"isInitial": True},
+                 {"action": "click", "target": {"text": "a"}, "element_step_similarity": 0.9}]
+        with TemporaryDirectory() as tmp:
+            tasks_dir = Path(tmp) / "run-d" / "tasks"
+            tasks_dir.mkdir(parents=True)
+            for tid, ok in picks.items():
+                self._write_task(tasks_dir, tid, ok, steps)
+            with patch.object(server_module, "RUNS_DIR", str(tmp)):
+                summary = server_module.run_variation_task_step_summary("run-d", threshold=0.8)
+
+        # Expected difficulty tally derived from the same helper the code uses.
+        expected = {lvl: {"passed": 0, "failed": 0, "total": 0}
+                    for lvl in ("easy", "medium", "hard")}
+        for tid, ok in picks.items():
+            lvl = effective_task_difficulty(task_map[tid])
+            expected[lvl]["total"] += 1
+            expected[lvl]["passed" if ok else "failed"] += 1
+        self.assertEqual(summary["difficulty"], expected)
+        # Per-level passed reconciles with the run's overall passed count.
+        d = summary["difficulty"]
+        self.assertEqual(d["easy"]["passed"] + d["medium"]["passed"] + d["hard"]["passed"],
+                         summary["passed_tasks"])
+
+    def test_run_variation_analysis_route_filters_and_diffs(self):
+        import eval_server.app as server_module
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        runs = [
+            {"run_id": "run-base", "task_set": "annotated",
+             "task_model": "google/gemini-2.5-flash-lite"},
+            {"run_id": "run-loop", "task_set": "annotated",
+             "task_model": "google/gemini-2.5-flash-lite", "inject_looping_warning": True},
+            # Wrong model -> filtered out by the default gemini-2.5-flash-lite filter.
+            {"run_id": "run-other", "task_set": "annotated", "task_model": "openai/gpt-4o"},
+        ]
+
+        def fake_summary(run_id, threshold=0.8):
+            passed = {"run-base": 30, "run-loop": 20}.get(run_id, 0)
+            failed = {"run-base": 10, "run-loop": 20}.get(run_id, 0)
+            groups = {k: {
+                "misgrounded_steps": 0, "loop_steps": 0, "total_steps": 0,
+                "misgrounded_task_rate_mean": 0.0, "misgrounded_task_rate_std": 0.0,
+                "loop_task_rate_mean": 0.0, "loop_task_rate_std": 0.0,
+                "tasks_with_mid_misgrounding": 0, "tasks_with_mid_loop": 0,
+            } for k in ("all", "success", "failed")}
+            difficulty = {lvl: {"total": 0, "passed": 0, "failed": 0}
+                          for lvl in ("easy", "medium", "hard")}
+            return {"run_id": run_id, "total_tasks": passed + failed,
+                    "passed_tasks": passed, "failed_tasks": failed,
+                    "fail_rate": failed / (passed + failed), "groups": groups,
+                    "difficulty": difficulty}
+
+        with patch.object(server_module, "list_auto_runs", return_value=runs), \
+             patch.object(server_module, "run_variation_task_step_summary", side_effect=fake_summary):
+            response = server_app.test_client().get("/run-variation-analysis")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.data
+        self.assertIn(b"run-base", body)
+        self.assertIn(b"run-loop", body)
+        # Other-model run is excluded by the default model filter.
+        self.assertNotIn(b"run-other", body)
+        # Loop-injected combo vs baseline: -10 passed, +10 failed.
+        self.assertIn(b"-10", body)
+        self.assertIn(b"+10", body)
+        # Both variation combos are present by default (no manual selection).
+        self.assertIn(b"Loop Injected", body)
+
+    def test_run_variation_analysis_manual_run_selection(self):
+        import eval_server.app as server_module
+        from eval_server.app import app as server_app
+
+        server_app.config.update(TESTING=True)
+        runs = [
+            {"run_id": "run-base", "task_set": "annotated",
+             "task_model": "google/gemini-2.5-flash-lite"},
+            {"run_id": "run-loop", "task_set": "annotated",
+             "task_model": "google/gemini-2.5-flash-lite", "inject_looping_warning": True},
+        ]
+        summary = {"run_id": "x", "total_tasks": 10, "passed_tasks": 5, "failed_tasks": 5,
+                   "fail_rate": 0.5, "groups": {k: {
+                       "misgrounded_steps": 0, "loop_steps": 0, "total_steps": 0,
+                       "misgrounded_task_rate_mean": 0.0, "misgrounded_task_rate_std": 0.0,
+                       "loop_task_rate_mean": 0.0, "loop_task_rate_std": 0.0,
+                       "tasks_with_mid_misgrounding": 0, "tasks_with_mid_loop": 0,
+                   } for k in ("all", "success", "failed")},
+                   "difficulty": {lvl: {"total": 0, "passed": 0, "failed": 0}
+                                  for lvl in ("easy", "medium", "hard")}}
+
+        with patch.object(server_module, "list_auto_runs", return_value=runs), \
+             patch.object(server_module, "run_variation_task_step_summary", return_value=summary):
+            # Manually include ONLY run-base (selection applied). run-loop is deselected, so its
+            # Loop-injected combo must not appear in the comparison, though it still shows in the
+            # inclusion checklist as an unchecked candidate.
+            response = server_app.test_client().get(
+                "/run-variation-analysis?selection=1&run_ids=run-base")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.data
+        self.assertIn(b"run-loop", body)          # still listed as a candidate checkbox
+        self.assertNotIn(b"Loop Injected", body)  # but excluded from the comparison table
+
+
+class RunTaskExplorerTest(unittest.TestCase):
+    def test_step_uncertainty_formula(self):
+        import eval_server.app as server_module
+        # U_t = clip(1 - grounding * (1 - 0.5 * loop), 0, 1)
+        self.assertIsNone(server_module._step_uncertainty(None, 0.0))
+        self.assertAlmostEqual(server_module._step_uncertainty(0.8, 0.0), 0.2)
+        self.assertAlmostEqual(server_module._step_uncertainty(1.0, 1.0), 0.5)
+        # Reference example: G=0.84, Loop=0.2 -> 1 - 0.84*(1 - 0.5*0.2) = 0.244.
+        self.assertAlmostEqual(server_module._step_uncertainty(0.84, 0.2), 0.244)
+        # Perfect grounding, no loop -> zero uncertainty; clipped to [0, 1].
+        self.assertAlmostEqual(server_module._step_uncertainty(1.0, 0.0), 0.0)
+
+    def test_artifact_url(self):
+        import eval_server.app as server_module
+        self.assertIsNone(server_module._artifact_url(""))
+        self.assertEqual(
+            server_module._artifact_url("eval_tool/runs/r/screenshots/t/step-1.jpg"),
+            "/artifacts/eval_tool/runs/r/screenshots/t/step-1.jpg")
+
+    def _write_task(self, tasks_dir, name, task_obj, success, steps):
+        (tasks_dir / f"{name}.json").write_text(json.dumps({
+            "task_id": name, "task": task_obj, "judge": {"success": success}, "steps": steps,
+        }), encoding="utf-8")
+
+    def test_run_task_list_sorted_with_outcomes(self):
+        import eval_server.app as server_module
+        with TemporaryDirectory() as tmp:
+            tasks_dir = Path(tmp) / "run-x" / "tasks"
+            tasks_dir.mkdir(parents=True)
+            self._write_task(tasks_dir, "annotated-10", {"task": "Ten"}, False, [])
+            self._write_task(tasks_dir, "annotated-2", {"task": "Two"}, True, [])
+            with patch.object(server_module, "RUNS_DIR", str(tmp)):
+                tasks = server_module.run_task_list("run-x")
+        # Sorted numerically (2 before 10), with names and outcomes.
+        self.assertEqual([t["task_id"] for t in tasks], ["annotated-2", "annotated-10"])
+        self.assertEqual(tasks[0]["name"], "Two")
+        self.assertEqual(tasks[0]["outcome"], "success")
+        self.assertEqual(tasks[1]["outcome"], "failed")
+
+    def test_cached_file_summary_namespace_isolation(self):
+        import eval_server.app as server_module
+        calls = {"a": 0, "b": 0}
+        with TemporaryDirectory() as tmp:
+            fp = Path(tmp) / "f.json"
+            fp.write_text("{}", encoding="utf-8")
+            cache = {}
+
+            def build_a(path):
+                calls["a"] += 1
+                return {"kind": "a"}
+
+            def build_b(path):
+                calls["b"] += 1
+                return {"kind": "b"}
+
+            # Same file, two namespaces -> two independent entries, each built once.
+            self.assertEqual(server_module._cached_file_summary(cache, str(fp), build_a, namespace="A")["kind"], "a")
+            self.assertEqual(server_module._cached_file_summary(cache, str(fp), build_b, namespace="B")["kind"], "b")
+            # Cache hits: builders not called again, summaries stay distinct (no key collision).
+            self.assertEqual(server_module._cached_file_summary(cache, str(fp), build_a, namespace="A")["kind"], "a")
+            self.assertEqual(server_module._cached_file_summary(cache, str(fp), build_b, namespace="B")["kind"], "b")
+            self.assertEqual(calls, {"a": 1, "b": 1})
+            abspath = os.path.abspath(str(fp))
+            self.assertIn(f"{abspath}::A", cache)
+            self.assertIn(f"{abspath}::B", cache)
+            self.assertNotIn(abspath, cache)  # bare key stays free for default (dashboard) callers
+
+    def test_run_task_list_cache_reuses_summary(self):
+        import eval_server.app as server_module
+        with TemporaryDirectory() as tmp:
+            tasks_dir = Path(tmp) / "run-x" / "tasks"
+            tasks_dir.mkdir(parents=True)
+            self._write_task(tasks_dir, "annotated-1", {"task": "One"}, True, [])
+            cache = {}
+            calls = {"n": 0}
+            real_builder = server_module._explorer_task_summary
+
+            def counting_builder(path):
+                calls["n"] += 1
+                return real_builder(path)
+
+            with patch.object(server_module, "RUNS_DIR", str(tmp)), \
+                 patch.object(server_module, "_explorer_task_summary", counting_builder):
+                first = server_module.run_task_list("run-x", cache)
+                second = server_module.run_task_list("run-x", cache)
+        self.assertEqual(first, second)
+        self.assertEqual(first[0]["task_id"], "annotated-1")
+        # The large task file is parsed once; the second load is a pure cache hit.
+        self.assertEqual(calls["n"], 1)
+        self.assertTrue(any(k.endswith("::explorer_task") for k in cache))
+
+    def test_run_task_detail_payload(self):
+        import eval_server.app as server_module
+        task_obj = {
+            "task": "Do the thing", "website_url": "https://ex.com",
+            "reference_steps": "Visit site.\nSearch zip.",
+            "annotated_subgoals": ["Visit", "Search"],
+            "annotated_reference_urls": ["https://ex.com/", "https://ex.com/x"],
+        }
+        steps = [
+            {"isInitial": True, "url": "https://ex.com"},
+            {"action": "type", "instruction": "zip", "url": "https://ex.com",
+             "element_step_similarity": 0.8, "computed_loop_updated": 0.0,
+             "screenshotBefore": "eval_tool/runs/run-x/screenshots/t/step-1-b.jpg",
+             "targetRect": {"left": 10, "top": 20, "width": 30, "height": 40}},
+        ]
+        with TemporaryDirectory() as tmp:
+            tasks_dir = Path(tmp) / "run-x" / "tasks"
+            tasks_dir.mkdir(parents=True)
+            self._write_task(tasks_dir, "annotated-0", task_obj, False, steps)
+            with patch.object(server_module, "RUNS_DIR", str(tmp)):
+                payload = server_module.run_task_detail_payload("run-x", "annotated-0")
+
+        self.assertEqual(payload["outcome"], "failed")
+        self.assertEqual(payload["website_url"], "https://ex.com")
+        self.assertEqual(len(payload["steps"]), 1)  # initial step dropped
+        step = payload["steps"][0]
+        self.assertAlmostEqual(step["grounding"], 0.8)
+        self.assertAlmostEqual(step["uncertainty"], 0.2)
+        self.assertEqual(step["screenshot_before"],
+                         "/artifacts/eval_tool/runs/run-x/screenshots/t/step-1-b.jpg")
+        self.assertEqual(step["target_rect"], {"left": 10, "top": 20, "width": 30, "height": 40})
+        self.assertEqual(payload["oracle"]["reference_steps"], ["Visit site.", "Search zip."])
+        self.assertEqual(payload["oracle"]["subgoals"], ["Visit", "Search"])
+        self.assertEqual(len(payload["oracle"]["reference_urls"]), 2)
+        # URL-subgoal verification is attached (2 reference URLs -> 2 nodes).
+        self.assertEqual(payload["subgoals_url"]["total"], 2)
+
+    def test_explorer_route_lists_tasks_per_run(self):
+        import eval_server.app as server_module
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        runs = [{"run_id": "run-a", "task_set": "annotated",
+                 "task_model": "google/gemini-2.5-flash-lite"}]
+        tasks = [
+            {"task_id": "annotated-0", "name": "Alpha task", "outcome": "success"},
+            {"task_id": "annotated-1", "name": "Beta task", "outcome": "failed"},
+        ]
+        with patch.object(server_module, "list_auto_runs", return_value=runs), \
+             patch.object(server_module, "run_task_list", return_value=tasks):
+            body = server_app.test_client().get("/run-task-explorer").data
+        self.assertIn(b"run-a", body)
+        self.assertIn(b"Alpha task", body)
+        self.assertIn(b"Beta task", body)
+        self.assertIn(b'count-pass">1 ', body)  # passed count pill shows 1 pass
+        self.assertIn(b'count-fail">1 ', body)  # failed count pill shows 1 fail
+
+    def test_normalize_match_url(self):
+        import eval_server.app as m
+        # Lowercase host, strip trailing slash, keep query, drop default port.
+        self.assertEqual(m._normalize_match_url("https://WWW.Example.com/Path/"),
+                         "https://www.example.com/Path")
+        self.assertEqual(m._normalize_match_url("https://example.com:443/a?x=1"),
+                         "https://example.com/a?x=1")
+        self.assertEqual(m._normalize_match_url(""), "")
+
+    def test_subgoal_url_completion(self):
+        import eval_server.app as server_module
+        task = {
+            "annotated_subgoals": ["Visit GameStop", "Set store 2630"],
+            "annotated_reference_urls": [
+                "https://www.gamestop.com/",
+                "https://www.gamestop.com/search/?store=2630",
+            ],
+            "annotated_match_functions": ["url_included_match", "url_exactly_match"],
+            "annotated_key_nodes": [
+                {"content": {"url": "https://www.gamestop.com/", "reference_answer": "gamestop."},
+                 "match_function_name": "url_included_match"},
+                {"content": {"url": "https://www.gamestop.com/search/?store=2630", "reference_answer": "2630"},
+                 "match_function_name": "url_exactly_match"},
+            ],
+        }
+        # Agent visited the homepage but never the exact store URL: node1 matched, node2 not.
+        steps = [{"url": "https://www.gamestop.com/"},
+                 {"url": "https://www.gamestop.com/search/?q=ps5"}]
+        r = server_module.subgoal_url_completion(task, steps)
+        self.assertEqual(r["total"], 2)
+        self.assertEqual(r["completed"], 1)
+        self.assertTrue(r["nodes"][0]["matched"])   # included: "gamestop." in homepage URL
+        self.assertFalse(r["nodes"][1]["matched"])  # exact store URL not visited
+        self.assertAlmostEqual(r["rate"], 0.5)
+        self.assertEqual(r["nodes"][0]["label"], "Visit GameStop")
+
+        # Reaching the exact store URL (different host case + trailing slash) completes node2.
+        steps2 = steps + [{"url": "https://WWW.gamestop.com/search/?store=2630"}]
+        r2 = server_module.subgoal_url_completion(task, steps2)
+        self.assertEqual(r2["completed"], 2)
+        self.assertAlmostEqual(r2["rate"], 1.0)
+
+        # No oracle nodes -> zero total, rate None (not an error).
+        empty = server_module.subgoal_url_completion({}, steps)
+        self.assertEqual(empty["total"], 0)
+        self.assertIsNone(empty["rate"])
+
+    def test_build_run_outcome_matrix(self):
+        import eval_server.app as server_module
+        run_sections = [
+            {"run_id": "run-a", "combo_label": "Baseline", "tasks": [
+                {"task_id": "annotated-0", "name": "T0", "outcome": "success"},
+                {"task_id": "annotated-1", "name": "T1", "outcome": "failed"},
+                {"task_id": "annotated-2", "name": "T2", "outcome": "failed"},
+                {"task_id": "annotated-3", "name": "T3", "outcome": "pending"},
+            ]},
+            {"run_id": "run-b", "combo_label": "Loop", "tasks": [
+                {"task_id": "annotated-0", "name": "T0", "outcome": "success"},  # agree pass
+                {"task_id": "annotated-1", "name": "T1", "outcome": "success"},  # mixed (fail->pass)
+                {"task_id": "annotated-2", "name": "T2", "outcome": "failed"},   # agree fail
+                {"task_id": "annotated-3", "name": "T3", "outcome": "pending"},  # other (no scored)
+            ]},
+        ]
+        m = server_module.build_run_outcome_matrix(run_sections)
+        self.assertEqual(m["run_ids"], ["run-a", "run-b"])
+        # Rows sorted numerically by task number.
+        self.assertEqual([r["task_id"] for r in m["rows"]],
+                         ["annotated-0", "annotated-1", "annotated-2", "annotated-3"])
+        by_id = {r["task_id"]: r for r in m["rows"]}
+        self.assertEqual(by_id["annotated-0"]["cls"], "agree_pass")
+        self.assertEqual(by_id["annotated-1"]["cls"], "mixed")
+        self.assertEqual(by_id["annotated-2"]["cls"], "agree_fail")
+        self.assertEqual(by_id["annotated-3"]["cls"], "other")
+        self.assertEqual(m["counts"], {"agree_pass": 1, "agree_fail": 1, "mixed": 1, "other": 1})
+        # Comparable = tasks scored in >=2 runs (annotated-3 excluded); 2 of 3 agree.
+        self.assertEqual(m["comparable"], 3)
+        self.assertAlmostEqual(m["agreement_rate"], 2 / 3)
+        # Cells align to run order.
+        self.assertEqual(by_id["annotated-1"]["cells"], ["failed", "success"])
+
+    def test_task_detail_api_json_and_errors(self):
+        import eval_server.app as server_module
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        payload = {"run_id": "run-a", "task_id": "annotated-0", "name": "X",
+                   "outcome": "success", "steps": [], "oracle": {}}
+        with patch.object(server_module, "run_task_detail_payload", return_value=payload):
+            ok = server_app.test_client().get(
+                "/api/run-task-detail?run_id=run-a&task_id=annotated-0")
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.get_json()["name"], "X")
+        # Missing params -> 400.
+        self.assertEqual(server_app.test_client().get("/api/run-task-detail").status_code, 400)
+        # Not found -> 404.
+        with patch.object(server_module, "run_task_detail_payload", return_value=None):
+            missing = server_app.test_client().get(
+                "/api/run-task-detail?run_id=run-a&task_id=nope")
+        self.assertEqual(missing.status_code, 404)
+
+
+class RunStaleTaskDetectionTest(unittest.TestCase):
+    def test_stored_task_text_handles_dict_string_and_none(self):
+        from eval_server.app import _stored_task_text
+        self.assertEqual(_stored_task_text({"task": {"task": "  do X "}}), "do X")
+        self.assertEqual(_stored_task_text({"task": {"name": "do Y"}}), "do Y")
+        self.assertEqual(_stored_task_text({"task": "do Z"}), "do Z")
+        self.assertEqual(_stored_task_text({"task": None}), "")
+        self.assertEqual(_stored_task_text(None), "")
+
+    def test_flags_only_genuinely_new_task_ignoring_reindex_shift(self):
+        # Dataset swap inserted "flightaware" at index 61, shifting carmax 61->62.
+        # The run still holds carmax under the old id 61 (stale) and nfl under 62.
+        # Only annotated-61 (flightaware) has no result anywhere and must be flagged;
+        # annotated-62 (carmax) already has a result under annotated-61 -> NOT flagged.
+        import eval_server.app as sapp
+        dataset = {
+            "annotated-61": SimpleNamespace(task="flightaware"),
+            "annotated-62": SimpleNamespace(task="carmax"),
+            "annotated-63": SimpleNamespace(task="nfl"),
+        }
+        stored = {
+            "annotated-61": {"task_id": "annotated-61", "task": {"name": "carmax"}},
+            "annotated-62": {"task_id": "annotated-62", "task": {"name": "nfl"}},
+            "annotated-63": {"task_id": "annotated-63", "task": {"name": "amtrak"}},
+        }
+        run = {"run_id": "run-x", "task_set": "annotated",
+               "task_ids": ["annotated-61", "annotated-62", "annotated-63"]}
+        with patch("eval_server.app.tasks_by_id", return_value=dataset), \
+             patch("eval_server.app.load_task_result", side_effect=lambda rid, tid: stored.get(tid)):
+            out = sapp._run_stale_or_missing_tasks(run)
+        self.assertEqual([(o["task_id"], o["reason"]) for o in out], [("annotated-61", "stale")])
+        self.assertEqual(out[0]["current_name"], "flightaware")
+
+    def test_flags_missing_result_file(self):
+        import eval_server.app as sapp
+        dataset = {"annotated-61": SimpleNamespace(task="flightaware"),
+                   "annotated-62": SimpleNamespace(task="carmax")}
+        stored = {"annotated-62": {"task_id": "annotated-62", "task": {"name": "carmax"}}}
+        run = {"run_id": "run-x", "task_set": "annotated",
+               "task_ids": ["annotated-61", "annotated-62"]}
+        with patch("eval_server.app.tasks_by_id", return_value=dataset), \
+             patch("eval_server.app.load_task_result", side_effect=lambda rid, tid: stored.get(tid)):
+            out = sapp._run_stale_or_missing_tasks(run)
+        self.assertEqual([(o["task_id"], o["reason"]) for o in out], [("annotated-61", "missing")])
+
+    def test_composite_run_reports_nothing(self):
+        import eval_server.app as sapp
+        run = {"run_id": "c", "composite_sources": ["a", "b"], "task_ids": ["annotated-61"]}
+        self.assertEqual(sapp._run_stale_or_missing_tasks(run), [])
+
+    def test_run_missing_task_route_rejects_unknown_task(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-x", "task_set": "annotated", "task_ids": ["annotated-61"]}
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.tasks_by_id", return_value={}):
+            resp = server_app.test_client().post("/runs/run-x/run-task", data={"task_id": "annotated-61"})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_run_missing_task_route_starts_single_task(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-x", "task_set": "annotated", "task_ids": ["annotated-61"]}
+        task = SimpleNamespace(task_id="annotated-61", task="flightaware")
+        started = []
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.tasks_by_id", return_value={"annotated-61": task}), \
+             patch("eval_server.app.single_task_running", return_value=False), \
+             patch("eval_server.app.start_single_task", side_effect=lambda r, t: started.append((r["run_id"], t.task_id))):
+            resp = server_app.test_client().post("/runs/run-x/run-task", data={"task_id": "annotated-61"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(started, [("run-x", "annotated-61")])
+
+
+class RunPauseResumeTest(unittest.TestCase):
+    def test_pause_run_marks_paused_and_flags(self):
+        import eval_tool.runner as R
+        try:
+            with patch.object(R, "_patch_run", side_effect=lambda rid, **k: {"run_id": rid, **k}):
+                out = R.pause_run("rr")
+            self.assertEqual(out["status"], "paused")
+            self.assertIn("rr", R.PAUSED_RUNS)
+            with patch.object(R, "_patch_run", side_effect=lambda rid, **k: {"run_id": rid, **k}):
+                stopped = R.stop_run("rr")
+            self.assertEqual(stopped["status"], "stopped")
+            self.assertNotIn("rr", R.PAUSED_RUNS)
+        finally:
+            R.PAUSED_RUNS.discard("rr")
+
+    def test_pause_route_pauses_running_run(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        called = []
+        with patch("eval_server.app.load_run", return_value={"run_id": "r", "status": "running"}), \
+             patch("eval_server.app.is_running", return_value=True), \
+             patch("eval_server.app.pause_run", side_effect=lambda rid: called.append(rid)):
+            resp = server_app.test_client().post("/runs/r/pause")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(called, ["r"])
+
+    def test_pause_route_noop_when_not_running(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        called = []
+        with patch("eval_server.app.load_run", return_value={"run_id": "r", "status": "completed"}), \
+             patch("eval_server.app.is_running", return_value=False), \
+             patch("eval_server.app.pause_run", side_effect=lambda rid: called.append(rid)):
+            resp = server_app.test_client().post("/runs/r/pause")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(called, [])
+
+    def test_resume_route_starts_only_remaining_tasks(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "r", "status": "stopped", "task_set": "annotated",
+               "task_ids": ["annotated-1", "annotated-2", "annotated-3"]}
+        task_map = {tid: SimpleNamespace(task_id=tid) for tid in run["task_ids"]}
+        started = []
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.is_running", return_value=False), \
+             patch("eval_server.app.tasks_by_id", return_value=task_map), \
+             patch("eval_server.app._task_result_files", return_value=["/x/annotated-1.json"]), \
+             patch("eval_server.app.start_run", side_effect=lambda r, tasks: started.append([t.task_id for t in tasks])):
+            resp = server_app.test_client().post("/runs/r/resume")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(started, [["annotated-2", "annotated-3"]])
+
+    def test_resume_route_skips_composite_run(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "c", "status": "stopped", "composite_sources": ["a", "b"],
+               "task_ids": ["annotated-1"]}
+        started = []
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app.is_running", return_value=False), \
+             patch("eval_server.app.start_run", side_effect=lambda r, tasks: started.append(tasks)):
+            resp = server_app.test_client().post("/runs/c/resume")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(started, [])
+
+
+class PromptImageLinkTest(unittest.TestCase):
+    def test_externalizes_and_links_llm_images_to_steps(self):
+        import base64 as _b64
+        import eval_tool.runner as R
+        payload = _b64.b64encode(b"fake-jpeg-bytes").decode()
+        steps = [{"step": 0, "isInitial": True}, {"step": 1}, {"step": 2}]
+        debug_prompts = [
+            {"metadata": {"mode": "guide", "step": 1}, "imageBase64": payload},
+            {"metadata": {"mode": "guide_warning_retry", "step": 1}, "imageBase64": payload},
+            {"metadata": {"mode": "guide", "step": 2}, "imageBase64": None},
+        ]
+        runner = R.PlaywrightGuideRunner.__new__(R.PlaywrightGuideRunner)
+        runner.run_id = "run-x"
+        with TemporaryDirectory() as tmp:
+            with patch.object(R, "screenshot_dir", lambda rid, tid: Path(tmp) / tid), \
+                 patch.object(R, "_rel", lambda p: "REL/" + os.path.basename(str(p))):
+                out = runner._externalize_and_link_prompt_images("t1", steps, debug_prompts)
+        # step 1 gets both the main call image and the warning-retry image
+        self.assertEqual(steps[1]["promptImage"], "REL/debug-0-1-guide.jpg")
+        self.assertEqual(steps[1]["warningPromptImage"], "REL/debug-1-1-guide_warning_retry.jpg")
+        # inline base64 is dropped and replaced by a path to keep the JSON small
+        self.assertIsNone(out[0]["imageBase64"])
+        self.assertEqual(out[0]["imageBase64Path"], "REL/debug-0-1-guide.jpg")
+        # step 2 had no image -> untouched
+        self.assertNotIn("promptImage", steps[2])
+
+    def test_no_debug_prompts_is_noop(self):
+        import eval_tool.runner as R
+        runner = R.PlaywrightGuideRunner.__new__(R.PlaywrightGuideRunner)
+        runner.run_id = "run-x"
+        self.assertEqual(runner._externalize_and_link_prompt_images("t1", [{"step": 1}], []), [])
+        self.assertIsNone(runner._externalize_and_link_prompt_images("t1", [], None))
+
+    def test_record_prompt_image_wins_no_duplicate_file(self):
+        # When the step already carries a promptImage from the reliable rewind record, the
+        # redundant debug-prompt base64 is dropped without writing a second file or overriding.
+        import base64 as _b64
+        import eval_tool.runner as R
+        payload = _b64.b64encode(b"fake-jpeg-bytes").decode()
+        steps = [{"step": 1, "promptImage": "REL/step-1-promptImage.jpg"}]
+        debug_prompts = [{"metadata": {"mode": "guide", "step": 1}, "imageBase64": payload}]
+        runner = R.PlaywrightGuideRunner.__new__(R.PlaywrightGuideRunner)
+        runner.run_id = "run-x"
+        saved = []
+        with patch.object(R, "_rel", lambda p: "REL/" + os.path.basename(str(p))), \
+             patch.object(runner, "_save_debug_image", side_effect=lambda *a: saved.append(a) or "REL/dup.jpg"):
+            out = runner._externalize_and_link_prompt_images("t1", steps, debug_prompts)
+        self.assertEqual(saved, [])  # no duplicate file written
+        self.assertEqual(steps[0]["promptImage"], "REL/step-1-promptImage.jpg")  # record image kept
+        self.assertIsNone(out[0]["imageBase64"])  # inline base64 dropped to shrink JSON
+
+
+class RunNoTrajectoryTest(unittest.TestCase):
+    def test_result_has_trajectory(self):
+        import eval_server.app as sapp
+        self.assertTrue(sapp._result_has_trajectory(
+            {"session_id": "s", "steps": [{"isInitial": True}, {"action": "click"}]}))
+        self.assertFalse(sapp._result_has_trajectory(
+            {"session_id": "", "steps": [{"action": "click"}]}))          # no session
+        self.assertFalse(sapp._result_has_trajectory(
+            {"session_id": "s", "steps": [{"isInitial": True}]}))          # only initial step
+        self.assertFalse(sapp._result_has_trajectory({"session_id": "s", "steps": []}))
+        self.assertFalse(sapp._result_has_trajectory(None))
+
+    def test_flags_no_trajectory_tasks_with_reason(self):
+        import eval_server.app as sapp
+        run = {"run_id": "run-A"}
+        results = [
+            {"task_id": "t1", "session_id": "s1", "steps": [{"isInitial": True}, {"action": "click"}]},
+            {"task_id": "t2", "session_id": "", "steps": [], "terminal_reason": "NO STEPS RECORDED"},
+            {"task_id": "t3", "session_id": "s3", "steps": [{"isInitial": True}]},
+        ]
+        out = sapp._run_no_trajectory_tasks(run, results)
+        self.assertEqual([o["task_id"] for o in out], ["t2", "t3"])
+        self.assertEqual(out[0]["reason"], "no session")
+        self.assertEqual(out[1]["reason"], "no steps recorded")
+        self.assertEqual(out[0]["run_id"], "run-A")  # physical run = the run itself
+
+    def test_no_trajectory_targets_resolved_source_run_for_composite(self):
+        import eval_server.app as sapp
+        run = {"run_id": "comp"}
+        results = [{"task_id": "t2", "session_id": "", "steps": [], "resolved_run_id": "src-1"}]
+        out = sapp._run_no_trajectory_tasks(run, results)
+        self.assertEqual(out[0]["run_id"], "src-1")
+
+    def test_rerun_all_route_batches_no_trajectory_tasks(self):
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+        run = {"run_id": "run-A", "task_set": "annotated"}
+        results = [
+            {"task_id": "t1", "session_id": "s", "steps": [{"isInitial": True}, {"action": "x"}]},
+            {"task_id": "t2", "session_id": "", "steps": []},
+            {"task_id": "t3", "session_id": "s3", "steps": [{"isInitial": True}]},
+        ]
+        task_map = {"t2": SimpleNamespace(task_id="t2"), "t3": SimpleNamespace(task_id="t3")}
+        batched = []
+        with patch("eval_server.app.load_run", return_value=run), \
+             patch("eval_server.app._run_results", return_value=results), \
+             patch("eval_server.app.tasks_by_id", return_value=task_map), \
+             patch("eval_server.app.single_task_running", return_value=False), \
+             patch("eval_server.app.start_single_task_batch",
+                   side_effect=lambda r, tasks: batched.append((r["run_id"], sorted(t.task_id for t in tasks)))):
+            resp = server_app.test_client().post("/runs/run-A/rerun-no-trajectory")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(batched, [("run-A", ["t2", "t3"])])
+
+
+class RunOptionsWorkersTest(unittest.TestCase):
+    def _workers_for(self, form):
+        import eval_server.app as sapp
+        from eval_server.app import app as server_app
+        with server_app.test_request_context('/runs', method='POST', data=form):
+            return sapp._run_options_from_form('annotated')['workers']
+
+    def test_workers_clamped_to_50(self):
+        self.assertEqual(self._workers_for({'workers': '99'}), 50)
+
+    def test_workers_within_range_preserved(self):
+        self.assertEqual(self._workers_for({'workers': '30'}), 30)
+
+    def test_workers_floor_of_one(self):
+        self.assertEqual(self._workers_for({'workers': '0'}), 1)
+
+    def test_workers_defaults_to_10_when_absent(self):
+        # Lowered from 20 to reduce provider throttling (empty LLM responses) under concurrency.
+        self.assertEqual(self._workers_for({}), 10)
+
+
+class ClassifyFailureReasonTest(unittest.TestCase):
+    """Re-attribution of opaque terminal reasons to bot_block / llm_empty_response."""
+
+    def test_meaningful_reasons_pass_through(self):
+        for reason in ("done", "max_steps", "force_ground_truth_verifier_failed", "FAILED TO EXECUTE ACTION"):
+            self.assertEqual(classify_failure_reason(reason, final_url="https://x.com"), reason)
+
+    def test_cloudflare_token_in_url_is_bot_block(self):
+        self.assertEqual(
+            classify_failure_reason("NO STEPS RECORDED", final_url="https://www.discogs.com/?__cf_chl_f_tk=abc"),
+            "bot_block",
+        )
+
+    def test_http_403_and_429_are_bot_block(self):
+        self.assertEqual(classify_failure_reason("idle_timeout", nav_http_status=403), "bot_block")
+        self.assertEqual(classify_failure_reason("idle_timeout", nav_http_status=429), "bot_block")
+
+    def test_challenge_phrase_in_prompt_is_bot_block(self):
+        prompts = [{"userPrompt": "PAGE INDEX ... Please verify you are a human before continuing."}]
+        self.assertEqual(
+            classify_failure_reason("idle_timeout", final_url="https://tvguide.com/", debug_prompts=prompts),
+            "bot_block",
+        )
+
+    def test_normal_captcha_widget_is_not_bot_block(self):
+        # A page that merely embeds a recaptcha widget in its normal flow must NOT be flagged.
+        prompts = [{"userPrompt": "[12] (button) Sign in  [13] recaptcha checkbox", "responseContent": "{...}"}]
+        steps = [{"isInitial": False, "action": "click", "url": "https://site.com/login"}]
+        self.assertEqual(
+            classify_failure_reason("idle_timeout", steps=steps, debug_prompts=prompts),
+            "idle_timeout",
+        )
+
+    def test_empty_response_no_step_is_llm_empty_response(self):
+        prompts = [{"responseError": "Empty response from OpenRouter", "responseContent": ""}]
+        self.assertEqual(classify_failure_reason("NO STEPS RECORDED", debug_prompts=prompts), "llm_empty_response")
+
+    def test_empty_content_no_error_no_step_is_llm_empty_response(self):
+        prompts = [{"responseContent": "   "}]
+        self.assertEqual(classify_failure_reason("NO STEPS RECORDED", debug_prompts=prompts), "llm_empty_response")
+
+    def test_empty_response_but_steps_committed_stays_opaque(self):
+        # A valid step was committed → the empty last prompt isn't why the task ended; don't relabel.
+        prompts = [{"responseError": "Empty response from OpenRouter"}]
+        steps = [{"isInitial": False, "action": "click", "url": "https://site.com/"}]
+        self.assertEqual(classify_failure_reason("idle_timeout", steps=steps, debug_prompts=prompts), "idle_timeout")
+
+
+class FollowingRateLimitAndCancelTest(unittest.TestCase):
+    def _make_run_with_tasks(self, runs_dir, run_id, task_ids):
+        tasks_dir = Path(runs_dir) / run_id / "tasks"
+        tasks_dir.mkdir(parents=True)
+        for tid in task_ids:
+            (tasks_dir / f"{tid}.json").write_text(
+                json.dumps({"task_id": tid, "task": {"task": tid}}), encoding="utf-8"
+            )
+
+    def test_work_items_limit_keeps_first_n_by_task_number(self):
+        import eval_server.app as sapp
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            runs_dir.mkdir()
+            # Deliberately out of order to prove stable task-number ordering.
+            self._make_run_with_tasks(
+                runs_dir, "run-x",
+                ["annotated-10", "annotated-2", "annotated-0", "annotated-1"],
+            )
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)):
+                one = sapp._following_work_items("run-x", limit=1)
+                two = sapp._following_work_items("run-x", limit=2)
+                allitems = sapp._following_work_items("run-x")
+        self.assertEqual([t[2] for t in one], ["annotated-0"])
+        self.assertEqual([t[2] for t in two], ["annotated-0", "annotated-1"])
+        self.assertEqual(len(allitems), 4)
+
+    def test_work_items_limit_zero_or_none_returns_all(self):
+        import eval_server.app as sapp
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            runs_dir.mkdir()
+            self._make_run_with_tasks(runs_dir, "run-y", ["annotated-0", "annotated-1"])
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)):
+                self.assertEqual(len(sapp._following_work_items("run-y", limit=0)), 2)
+                self.assertEqual(len(sapp._following_work_items("run-y", limit=None)), 2)
+
+    def test_run_endpoint_fast_fails_when_key_missing(self):
+        import eval_server.app as sapp
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+
+        class _NoKeyJudge:
+            def __init__(self, *a, **k):
+                self.api_key = ""
+
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            runs_dir.mkdir()
+            self._make_run_with_tasks(runs_dir, "run-z", ["annotated-0"])
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value={"run_id": "run-z", "status": "completed"}), \
+                 patch("eval_server.app.is_running", return_value=False), \
+                 patch("eval_server.app.LlmJudge", _NoKeyJudge):
+                resp = server_app.test_client().post(
+                    "/api/llm-following-rates/run",
+                    json={"run_id": "run-z", "model": "openai/gpt-4o", "limit": 1},
+                )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("OPENROUTER_API_KEY", resp.get_json().get("error", ""))
+
+    def test_cancel_endpoint_sets_stop_events(self):
+        import eval_server.app as sapp
+        from eval_server.app import app as server_app
+        import threading as _threading
+        server_app.config.update(TESTING=True)
+        ev = _threading.Event()
+        sapp._following_rate_stops["job-abc"] = ev
+        try:
+            resp = server_app.test_client().post(
+                "/api/llm-following-rates/cancel", json={"job_id": "job-abc"}
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("job-abc", resp.get_json().get("cancelled", []))
+            self.assertTrue(ev.is_set())
+        finally:
+            sapp._following_rate_stops.pop("job-abc", None)
+
+    def test_job_set_stores_job_id_and_does_not_collide(self):
+        # Regression: _following_job_set(job_id, job_id=job_id, ...) used to raise
+        # "multiple values for argument 'job_id'", so scoring never started.
+        import eval_server.app as sapp
+        jid = "job-store-test"
+        try:
+            result = sapp._following_job_set(jid, run_id="run-q", status="queued")
+            self.assertEqual(result["job_id"], jid)
+            self.assertEqual(result["run_id"], "run-q")
+        finally:
+            with sapp._following_rate_jobs_lock:
+                sapp._following_rate_jobs.pop(jid, None)
+
+    def test_run_endpoint_starts_job_when_key_present(self):
+        # Regression: the run endpoint must actually create a queued job (no TypeError).
+        import eval_server.app as sapp
+        from eval_server.app import app as server_app
+        server_app.config.update(TESTING=True)
+
+        class _KeyJudge:
+            def __init__(self, *a, **k):
+                self.api_key = "sk-test"
+
+        started = {}
+
+        def _fake_thread_target(job_id, run_id, model, limit=None, temperature=None):
+            started.update(job_id=job_id, run_id=run_id, limit=limit, temperature=temperature)
+
+        with TemporaryDirectory() as tmp:
+            runs_dir = Path(tmp) / "runs"
+            runs_dir.mkdir()
+            self._make_run_with_tasks(runs_dir, "run-k", ["annotated-0", "annotated-1"])
+            with patch("eval_server.app.RUNS_DIR", str(runs_dir)), \
+                 patch("eval_server.app.load_run", return_value={"run_id": "run-k", "status": "completed"}), \
+                 patch("eval_server.app.is_running", return_value=False), \
+                 patch("eval_server.app.LlmJudge", _KeyJudge), \
+                 patch("eval_server.app._run_following_rate_job", _fake_thread_target):
+                resp = server_app.test_client().post(
+                    "/api/llm-following-rates/run",
+                    json={"run_id": "run-k", "model": "openai/gpt-4o", "limit": 1},
+                )
+                body = resp.get_json()
+                # Give the daemon thread a moment to invoke the (stubbed) target.
+                import time
+                for _ in range(50):
+                    if started:
+                        break
+                    time.sleep(0.01)
+                jid = body.get("job_id")
+                if jid:
+                    with sapp._following_rate_jobs_lock:
+                        sapp._following_rate_jobs.pop(jid, None)
+                    sapp._following_rate_stops.pop(jid, None)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(body.get("status"), "queued")
+        self.assertEqual(body.get("total"), 1)  # limit=1 honored
+        self.assertEqual(started.get("limit"), 1)
+
+    def test_cancel_endpoint_without_job_id_cancels_all(self):
+        import eval_server.app as sapp
+        from eval_server.app import app as server_app
+        import threading as _threading
+        server_app.config.update(TESTING=True)
+        ev1, ev2 = _threading.Event(), _threading.Event()
+        sapp._following_rate_stops["job-1"] = ev1
+        sapp._following_rate_stops["job-2"] = ev2
+        try:
+            resp = server_app.test_client().post("/api/llm-following-rates/cancel", json={})
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.get_json().get("count"), 2)
+            self.assertTrue(ev1.is_set() and ev2.is_set())
+        finally:
+            sapp._following_rate_stops.pop("job-1", None)
+            sapp._following_rate_stops.pop("job-2", None)
 
 
 if __name__ == "__main__":

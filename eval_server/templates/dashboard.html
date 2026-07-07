@@ -341,6 +341,64 @@
       white-space: nowrap;
       text-align: center;
     }
+    .runs-table-wrap {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-y: visible;
+    }
+    .runs-table {
+      min-width: 1180px;
+      table-layout: fixed;
+    }
+    .runs-table th:nth-child(1),
+    .runs-table td:nth-child(1) {
+      width: 44px;
+    }
+    .runs-table th:nth-child(2),
+    .runs-table td:nth-child(2) {
+      width: 410px;
+    }
+    .runs-table th:nth-child(3),
+    .runs-table td:nth-child(3) {
+      width: 140px;
+    }
+    .runs-table th:nth-child(4),
+    .runs-table td:nth-child(4) {
+      width: 170px;
+      overflow-wrap: anywhere;
+    }
+    .runs-table th:nth-child(5),
+    .runs-table td:nth-child(5) {
+      width: 110px;
+    }
+    .runs-table th:nth-child(7),
+    .runs-table td:nth-child(7) {
+      width: 150px;
+      overflow-wrap: anywhere;
+    }
+    .runs-table th:nth-last-child(2),
+    .runs-table td:nth-last-child(2) {
+      width: 90px;
+      white-space: nowrap;
+    }
+    .runs-table th:last-child,
+    .runs-table td:last-child {
+      width: 150px;
+      min-width: 150px;
+      position: sticky;
+      right: 0;
+      z-index: 2;
+      background: var(--card-bg);
+      box-shadow: -10px 0 16px rgba(15, 23, 42, 0.06);
+    }
+    .runs-table th:last-child {
+      z-index: 3;
+    }
+    .runs-table td:last-child .btn {
+      white-space: nowrap;
+      display: inline-flex;
+    }
 
     .goal-cell {
       max-width: 400px;
@@ -540,7 +598,7 @@
     <header>
       <div class="logo-container">
         <span class="logo-icon">🎯</span>
-        <h1>PageGuide <span>Trajectory Saver</span></h1>
+        <h1>PageGuide <span>{% if dataset_dashboard_only %}All Dataset Dashboard{% else %}Trajectory Saver{% endif %}</span></h1>
       </div>
       <div style="display: flex; align-items: center; gap: 16px;">
         <button id="theme-toggle" class="btn" style="background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.2); color: var(--text); padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; box-shadow: none; font-family: inherit;">
@@ -548,8 +606,25 @@
         </button>
         <span style="font-size: 14px; font-weight: 500; color: var(--text-muted);">Evaluation Mode</span>
         <a href="http://127.0.0.1:5050/" class="btn" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: var(--accent); box-shadow: none; padding: 6px 12px; border-radius: 8px; font-family: inherit;">Legacy Evaluation</a>
+        {% if dataset_dashboard_only %}
+        <a href="/?tab=automatic" class="btn" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: var(--accent); box-shadow: none; padding: 6px 12px; border-radius: 8px; font-family: inherit;">Main Dashboard</a>
+        {% else %}
+        <a href="/all-dataset-dashboard" class="btn" style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); color: var(--warning); box-shadow: none; padding: 6px 12px; border-radius: 8px; font-family: inherit;">All Dataset Dashboard</a>
+        {% endif %}
       </div>
     </header>
+
+    {% if dataset_dashboard_only %}
+    <div class="table-container" style="margin-bottom: 40px;">
+      <div class="table-hdr" style="display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap;">
+        <div>
+          <h2>All Dataset Dashboard</h2>
+          <p style="margin: 4px 0 0; color: var(--text-muted); font-size: 13px;">Aggregated grounding, loop, and warning-retry diagnostics across automated dataset runs.</p>
+        </div>
+      </div>
+    </div>
+    {% include "_all_dataset_panels.html" %}
+    {% else %}
 
     <!-- Stats summary -->
     <section class="stats-grid">
@@ -784,10 +859,26 @@
             <h2>Annotated Dataset · Reference URLs</h2>
             <p style="margin: 4px 0 0; color: var(--text-muted); font-size: 13px;">Find blank / dead reference URLs in the annotated dataset, search by task &amp; step, and update them.</p>
           </div>
-          <a class="btn" href="/annotated-urls" style="text-decoration: none;">Open URL Fixer</a>
+          <div style="display: inline-flex; gap: 10px; flex-wrap: wrap;">
+            <a class="btn" href="/run-variation-analysis" style="text-decoration: none;">📊 Variation Analysis</a>
+            <a class="btn" href="/run-task-explorer" style="text-decoration: none;">🔍 Task Explorer</a>
+            <a class="btn" href="/llm-following-rates" style="text-decoration: none;">📈 LLM Following Rates</a>
+            <a class="btn" href="/annotated-urls" style="text-decoration: none;">Open URL Fixer</a>
+          </div>
         </div>
       </div>
 
+      <div class="table-container" style="margin-bottom: 40px;">
+        <div class="table-hdr" style="display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap;">
+          <div>
+            <h2>All Dataset Dashboard</h2>
+            <p style="margin: 4px 0 0; color: var(--text-muted); font-size: 13px;">Part 1 and Part 2 have moved to a dedicated dataset dashboard with warning-retry impact analysis.</p>
+          </div>
+          <a class="btn" href="/all-dataset-dashboard" style="text-decoration: none;">Open All Dataset Dashboard</a>
+        </div>
+      </div>
+
+      {% if false %}
       <!-- Part 2: per-run task/step summary (shown first; the ROC/alignment card is below) -->
       <div class="table-container" id="grounding-summary-panel-container" style="margin-bottom: 40px;">
         <div class="table-hdr" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
@@ -868,6 +959,8 @@
                 <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="planning" onchange="applyRunFeatureFilter()"> Planning</label>
                 <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="grounding" onchange="applyRunFeatureFilter()"> Grounding</label>
                 <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="loop" onchange="applyRunFeatureFilter()"> Loop</label>
+                <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="oracle" onchange="applyRunFeatureFilter()"> Oracle</label>
+                <label style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer;"><input type="checkbox" class="run-feature-filter" value="force_gt" onchange="applyRunFeatureFilter()"> Force GT</label>
               </div>
               <div style="display: grid; gap: 10px; max-height: 220px; overflow-y: auto; padding: 10px; border: 1px solid var(--card-border); border-radius: 6px; background: var(--bg-default);" id="grounding-eval-runs-container">
                 {% for group in grounding_run_groups %}
@@ -875,12 +968,12 @@
                     <div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">{{ group.model or 'Unknown' }}</div>
                     <div style="display: grid; gap: 4px;">
                       {% for run in group.runs %}
-                        <label class="run-inclusion-row" data-source="{{ (run.task_set or '') or 'unknown' }}" data-planning="{{ 1 if run.automatic_planning_mode else 0 }}" data-grounding="{{ 1 if run.inject_grounding_warning else 0 }}" data-loop="{{ 1 if run.inject_looping_warning else 0 }}" style="font-size: 12px; display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto auto; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 6px; background: var(--task-card-bg);">
+                        <label class="run-inclusion-row" data-source="{{ (run.task_set or '') or 'unknown' }}" data-planning="{{ 1 if run.automatic_planning_mode else 0 }}" data-grounding="{{ 1 if run.inject_grounding_warning else 0 }}" data-loop="{{ 1 if run.inject_looping_warning else 0 }}" data-oracle="{{ 1 if run.include_oracle_plan else 0 }}" data-force_gt="{{ 1 if run.force_ground_truth_mode else 0 }}" style="font-size: 12px; display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto auto; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 6px; background: var(--task-card-bg);">
                           <input type="checkbox" class="grounding-eval-run-checkbox" value="{{ run.run_id }}" {% if run.run_id in default_grounding_run_ids %}checked{% endif %} onchange="fetchGroundingMetrics()">
-                          <span style="font-family: monospace; overflow-wrap: anywhere;">{{ run.run_id }}</span>
+                          <span style="overflow-wrap: anywhere;">{% if run.nickname %}<strong>{{ run.nickname }}</strong><br>{% endif %}<span style="font-family: monospace;">{{ run.run_id }}</span></span>
                           <span style="color: var(--text-muted); white-space: nowrap;">{{ run.display_time or 'no date' }}</span>
                           <span class="badge neutral" style="font-size: 10px;" title="Dataset source">{{ task_set_source_label(run.task_set) }}</span>
-                          <span class="badge neutral" style="font-size: 10px;">{{ run.status or 'unknown' }} · {{ (run.task_ids or [])|length }} task{% if (run.task_ids or [])|length != 1 %}s{% endif %}</span>
+                          <span class="badge neutral" style="font-size: 10px;">{{ run.status or 'unknown' }} · {{ run.resolved_completed_count }} / {{ run.resolved_task_count }} task{% if run.resolved_task_count != 1 %}s{% endif %}</span>
                         </label>
                       {% endfor %}
                     </div>
@@ -934,6 +1027,7 @@
           </div>
         </div>
       </div>
+      {% endif %}
 
       {% if annotated_url_summary %}
       <div class="table-container" style="margin-bottom: 24px;">
@@ -987,6 +1081,7 @@
             </div>
             {% if annotated_url_summary and annotated_url_summary.all_different_task_ids %}
             <button type="button" id="all-different-url-btn" onclick="toggleAllDifferentUrlTasks()" aria-pressed="false" style="padding: 8px 16px; border-radius: 8px; background: rgba(16, 185, 129, 0.10); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.28); cursor: pointer; font-family: inherit; font-weight: 700;">All Step URLs Differ ({{ annotated_url_summary.all_different }})</button>
+            <button type="button" id="remaining-different-url-btn" onclick="selectRemainingDifferentUrlTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(14, 165, 233, 0.10); color: #0ea5e9; border: 1px solid rgba(14, 165, 233, 0.28); cursor: pointer; font-family: inherit; font-weight: 700;">Select Remaining 60</button>
             {% endif %}
             <button type="button" onclick="selectAllTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">Select All</button>
             <button type="button" onclick="deselectAllTasks()" style="padding: 8px 16px; border-radius: 8px; background: rgba(124, 58, 237, 0.08); color: var(--accent); border: 1px solid rgba(124, 58, 237, 0.2); cursor: pointer; font-family: inherit; font-weight: 500;">Deselect All</button>
@@ -996,6 +1091,27 @@
         </div>
         <div style="padding: 24px;">
           <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px;">
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="Optional human-readable run label shown in dashboards and comparison pages.">
+              Nickname:
+              <input type="text" name="nickname" placeholder="step_url_different_oracle_plan" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; min-width: 260px;">
+            </label>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="DOM uses text/DOM context. DOM + Screenshot enables PageGuide vision mode for agent calls.">
+              Agent input:
+              <select name="input_mode" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
+                <option value="dom">DOM</option>
+                <option value="dom_screenshot" selected>DOM + Screenshot</option>
+              </select>
+            </label>
+            <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="Pick an existing completed run to build on. Its already-run tasks are reused and its config (DOM / Oracle Plan) is applied; Start Evaluation then runs only the remaining tasks and saves a composite of both.">
+              Existing 40-task run:
+              <select id="source-run-select" onchange="sourceRunChanged(this.value)" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; min-width: 260px;">
+                <option value="">Choose source run…</option>
+                {% for source in composite_source_runs %}
+                  <option value="{{ source.run_id }}">{{ source.label }} · {{ source.task_count }} tasks · {{ 'DOM+Shot' if source.input_mode == 'dom_screenshot' else 'DOM' }}{% if source.include_oracle_plan %} · Oracle{% endif %}{% if source.force_ground_truth_mode %} · FGT·{{ source.force_ground_truth_retries }}r{% endif %}{% if source.inject_grounding_warning %} · G-inj{% endif %}{% if source.inject_looping_warning %} · L-inj{% endif %}{% if source.automatic_planning_mode %} · Plan{% endif %}</option>
+                {% endfor %}
+              </select>
+              <input type="hidden" id="source-run-id-input" name="source_run_id" value="">
+            </label>
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
               Dataset: 
               <select id="task-set-select" onchange="changeTaskSet(this.value)" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit;">
@@ -1031,7 +1147,7 @@
 
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;">
               Concurrent Workers:
-              <input type="number" name="workers" value="10" min="1" max="10" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
+              <input type="number" name="workers" value="20" min="1" max="50" style="padding: 6px 12px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-family: inherit; width: 80px;">
             </label>
 
             <label style="color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-weight: 500;" title="The LLM that drives the PageGuide agent for this run.">
@@ -1166,11 +1282,12 @@
         {% if auto_runs %}
         <form method="post" action="/runs/delete" id="runs-delete-form"
           onsubmit="return confirm('Delete the selected run(s) and all their task results permanently?');">
+        <div class="runs-table-wrap">
         <table style="width: 100%;" class="runs-table">
           <thead>
             <tr>
               <th style="width: 32px;"><input type="checkbox" id="runs-select-all" onclick="toggleAllRuns(this)" title="Select all"></th>
-              <th>Run ID</th>
+              <th>Run</th>
               <th>Status</th>
               <th>Date</th>
               <th>Dataset</th>
@@ -1180,6 +1297,8 @@
               <th class="metric-col-runmeta metric-col-hidden">Target capture</th>
               <th class="col-flag metric-col-flags metric-col-hidden">Inject Grounding</th>
               <th class="col-flag metric-col-flags metric-col-hidden">Inject Loop</th>
+              <th class="col-flag metric-col-flags metric-col-hidden">Include Oracle</th>
+              <th class="col-flag metric-col-flags metric-col-hidden">Force GT</th>
               <th class="col-flag metric-col-flags metric-col-hidden">Planning Mode</th>
               <th>Duration</th>
               <th>Action</th>
@@ -1189,12 +1308,29 @@
             {% for run in auto_runs %}
             <tr>
               <td><input type="checkbox" class="run-select" name="run_ids" value="{{ run.run_id }}" onchange="updateDeleteSelected()"></td>
-              <td><strong style="font-family: monospace; color: var(--accent);">{{ run.run_id }}</strong></td>
+              <td>
+                {% if run.nickname %}
+                  <strong style="display:block; color: var(--text);">{{ run.nickname }}</strong>
+                  <code style="font-size: 12px; color: var(--accent); overflow-wrap: anywhere;">{{ run.run_id }}</code>
+                {% else %}
+                  <strong style="font-family: monospace; color: var(--accent);">{{ run.run_id }}</strong>
+                {% endif %}
+                <div style="display:flex; gap: 4px; flex-wrap: wrap; margin-top: 6px;">
+                  {% for badge in run.badges %}
+                    <span class="badge neutral" style="font-size: 10px;">{{ badge }}</span>
+                  {% endfor %}
+                  {% if run.resolved_completed_count is defined %}
+                    <span class="badge neutral" style="font-size: 10px;">{{ run.resolved_completed_count }} / {{ run.resolved_task_count }} tasks</span>
+                  {% endif %}
+                </div>
+              </td>
               <td>
                 {% if run.status == 'completed' %}
                   <span class="badge success">Completed</span>
                 {% elif run.status == 'running' %}
                   <span class="badge pending">Running</span>
+                {% elif run.status == 'composite' %}
+                  <span class="badge neutral">Composite</span>
                 {% else %}
                   <span class="badge failed">{{ run.status }}</span>
                 {% endif %}
@@ -1213,6 +1349,8 @@
               <td class="metric-col-runmeta metric-col-hidden"><span class="badge neutral">{{ region_capture_mode_label(run.region_capture_mode) }}</span></td>
               <td class="col-flag metric-col-flags metric-col-hidden">{% if run.inject_grounding_warning %}<span style="color: var(--success); font-weight: 800;" title="Inject grounding warning enabled">✓</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
               <td class="col-flag metric-col-flags metric-col-hidden">{% if run.inject_looping_warning %}<span style="color: var(--success); font-weight: 800;" title="Inject loop warning enabled">✓</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
+              <td class="col-flag metric-col-flags metric-col-hidden">{% if run.include_oracle_plan %}<span style="color: var(--success); font-weight: 800;" title="Oracle plan included">✓</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
+              <td class="col-flag metric-col-flags metric-col-hidden">{% if run.force_ground_truth_mode %}<span style="color: var(--success); font-weight: 800;" title="Force Ground Truth enabled">{{ run.force_ground_truth_retries or 0 }}r</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
               <td class="col-flag metric-col-flags metric-col-hidden">{% if run.automatic_planning_mode %}<span style="color: var(--success); font-weight: 800;" title="Automatic planning mode enabled">✓</span>{% else %}<span style="color: var(--text-muted); opacity: 0.5;" title="Disabled or unknown">—</span>{% endif %}</td>
               <td style="color: var(--text-muted);">{% if run.duration %}{{ run.duration }}{% else %}<span style="opacity: 0.5;">—</span>{% endif %}</td>
               <td>
@@ -1222,6 +1360,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
         </form>
         {% else %}
         <div class="empty-state">
@@ -1282,6 +1421,7 @@
       </div>
       {% endif %}
     </section>
+    {% endif %}
   </div>
 
   <script>
@@ -1309,9 +1449,9 @@
     // Part 2 dataset-source filter: drives the same run selection as the Part 1
     // "Runs Included" source filter, then refetches so the summary reflects that source.
     function setSummarySourceFilter(value) {
-      const runSource = document.getElementById('run-source-filter');
+      const runSource = document.getElementById('summary-source-filter');
       if (runSource) runSource.value = value || '';
-      applyRunFeatureFilter();
+      applyPanelRunFeatureFilter('summary', 'summary-run-checkbox');
     }
 
     function escapeHtml(value) {
@@ -1324,7 +1464,19 @@
     }
 
     function selectedGroundingRunIds() {
-      return Array.from(document.querySelectorAll('.grounding-eval-run-checkbox:checked')).map(cb => cb.value);
+      return selectedRunIds('grounding-eval-run-checkbox');
+    }
+
+    function selectedSummaryRunIds() {
+      return selectedRunIds('summary-run-checkbox');
+    }
+
+    function selectedWarningRunIds() {
+      return selectedRunIds('warning-run-checkbox');
+    }
+
+    function selectedRunIds(className) {
+      return Array.from(document.querySelectorAll(`.${className}:checked`)).map(cb => cb.value);
     }
 
     function renderLlmGroundingAnnotationSummary(data) {
@@ -1398,24 +1550,23 @@
       }
     }
 
-    // Narrow the model-grouped "Runs Included" list. Filters apply in order: dataset source
-    // first, then the checked features (planning / grounding / loop, AND semantics; none checked
-    // shows all). Hidden runs are unchecked so they drop out of the grounding metrics, and empty
-    // model groups are hidden.
-    function applyRunFeatureFilter() {
+    function applyPanelRunFeatureFilter(prefix, checkboxClass) {
       const helper = window.DashboardUI;
-      const selected = Array.from(document.querySelectorAll('.run-feature-filter:checked')).map(cb => cb.value);
-      const sourceSelect = document.getElementById('run-source-filter');
+      const selected = Array.from(document.querySelectorAll(`.${prefix}-feature-filter:checked`)).map(cb => cb.value);
+      const sourceSelect = document.getElementById(`${prefix}-source-filter`);
       const sourceFilter = sourceSelect ? sourceSelect.value : '';
-      // Keep the Part 2 dataset-source dropdown mirrored with this one.
-      const summarySource = document.getElementById('grounding-summary-source-filter');
-      if (summarySource && summarySource.value !== sourceFilter) summarySource.value = sourceFilter;
+      if (prefix === 'summary') {
+        const summarySource = document.getElementById('grounding-summary-source-filter');
+        if (summarySource && summarySource.value !== sourceFilter) summarySource.value = sourceFilter;
+      }
       let changedSelection = false;
-      document.querySelectorAll('.run-inclusion-row').forEach(row => {
+      document.querySelectorAll(`.${prefix}-run-row`).forEach(row => {
         const flags = {
           planning: row.getAttribute('data-planning') === '1',
           grounding: row.getAttribute('data-grounding') === '1',
           loop: row.getAttribute('data-loop') === '1',
+          oracle: row.getAttribute('data-oracle') === '1',
+          force_gt: row.getAttribute('data-force_gt') === '1',
         };
         const featureMatch = helper ? helper.runMatchesFeatureFilter(flags, selected)
           : (selected.length === 0 || selected.every(f => flags[f]));
@@ -1423,19 +1574,28 @@
         const show = featureMatch && sourceMatch;
         row.style.display = show ? '' : 'none';
         if (!show) {
-          const cb = row.querySelector('.grounding-eval-run-checkbox');
+          const cb = row.querySelector(`.${checkboxClass}`);
           if (cb && cb.checked) { cb.checked = false; changedSelection = true; }
         }
       });
-      document.querySelectorAll('.run-inclusion-group').forEach(group => {
-        const anyVisible = Array.from(group.querySelectorAll('.run-inclusion-row'))
+      document.querySelectorAll(`.${prefix}-run-group`).forEach(group => {
+        const anyVisible = Array.from(group.querySelectorAll(`.${prefix}-run-row`))
           .some(row => row.style.display !== 'none');
         group.style.display = anyVisible ? '' : 'none';
       });
-      if (changedSelection) fetchGroundingMetrics();
+      if (changedSelection) {
+        if (prefix === 'grounding') fetchGroundingMetrics();
+        if (prefix === 'summary') fetchSummaryMetrics();
+        if (prefix === 'warning') fetchWarningRetryEffectiveness();
+      }
+    }
+
+    function applyRunFeatureFilter() {
+      applyPanelRunFeatureFilter('grounding', 'grounding-eval-run-checkbox');
     }
 
     async function fetchGroundingMetrics() {
+      if (!document.getElementById('grounding-eval-threshold')) return;
       const threshold = document.getElementById('grounding-eval-threshold').value;
       const runIds = selectedGroundingRunIds();
       const mode = document.getElementById('grounding-eval-mode').value;
@@ -1474,6 +1634,146 @@
       } catch (err) {
         resultsDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Network error: ${err.message}</p>`;
       }
+    }
+
+    async function fetchSummaryMetrics() {
+      if (!document.getElementById('grounding-eval-threshold')) return;
+      const threshold = document.getElementById('grounding-eval-threshold').value;
+      const runIds = selectedSummaryRunIds();
+      const mode = document.getElementById('grounding-eval-mode').value;
+      const labelSource = mode === '1llm' ? 'llm' : 'human';
+      const llmLabelModel = document.getElementById('grounding-llm-label-model').value;
+      const outcomeFilter = document.getElementById('grounding-eval-outcome-filter').value;
+      const summaryDiv = document.getElementById('grounding-eval-summary-results');
+      if (!summaryDiv) return;
+      if (runIds.length === 0) {
+        summaryDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No runs selected.</p>';
+        return;
+      }
+      summaryDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">Loading task/step summary...</p>';
+      try {
+        const response = await fetch('/api/grounding_metrics', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_ids: runIds, threshold, label_source: labelSource, llm_label_model: llmLabelModel, outcome_filter: outcomeFilter })
+        });
+        const data = await response.json();
+        if (data.error) {
+          summaryDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Error: ${escapeHtml(data.error)}</p>`;
+          return;
+        }
+        summaryDiv.innerHTML = renderSelectedRunsTaskStepSummary(data);
+      } catch (err) {
+        summaryDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Network error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function formatRate(value) {
+      return value !== null && value !== undefined && Number.isFinite(Number(value))
+        ? `${(Number(value) * 100).toFixed(1)}%`
+        : '—';
+    }
+
+    async function fetchWarningRetryEffectiveness() {
+      const resultsDiv = document.getElementById('warning-retry-results');
+      if (!resultsDiv) return;
+      const runIds = selectedWarningRunIds();
+      const changeFields = selectedWarningChangeFields();
+      if (runIds.length === 0) {
+        resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">No runs selected.</p>';
+        return;
+      }
+      if (changeFields.length === 0) {
+        resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">Select at least one change definition.</p>';
+        return;
+      }
+      resultsDiv.innerHTML = '<p style="color: var(--text-muted); font-size: 13px; font-style: italic;">Loading warning retry analysis...</p>';
+      try {
+        const response = await fetch('/api/warning_retry_effectiveness', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_ids: runIds, change_fields: changeFields })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error) {
+          resultsDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Error: ${escapeHtml(data.error || response.status)}</p>`;
+          return;
+        }
+        renderWarningRetryEffectiveness(data);
+      } catch (err) {
+        resultsDiv.innerHTML = `<p style="color: #ef4444; font-size: 13px;">Network error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function selectedWarningChangeFields() {
+      return Array.from(document.querySelectorAll('.warning-change-field:checked')).map(cb => cb.value);
+    }
+
+    function warningChangeFieldLabel(field) {
+      if (field === 'dom_element') return 'DOM element';
+      if (field === 'instruction') return 'Text instruction';
+      if (field === 'action') return 'Action type';
+      return field;
+    }
+
+    function renderWarningRetryEffectiveness(data) {
+      const resultsDiv = document.getElementById('warning-retry-results');
+      if (!resultsDiv) return;
+      const totals = data.totals || {};
+      const groups = Object.values(data.groups || {});
+      const examples = data.examples || [];
+      const activeFields = (data.change_fields || []).map(warningChangeFieldLabel).join(', ') || 'None';
+      const groupRows = groups.map(group => `<tr>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border); font-weight: 800;">${escapeHtml(group.label)}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.tasks_changed || 0} / ${group.tasks_with_warning || 0}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.changed_tasks_passed || 0} pass / ${group.changed_tasks_failed || 0} fail</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${formatRate(group.changed_task_pass_rate)}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.unchanged_tasks_passed || 0} pass / ${group.unchanged_tasks_failed || 0} fail</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${formatRate(group.unchanged_task_pass_rate)}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${formatRate(group.task_changed_rate)}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.warning_steps || 0}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.changed || 0}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${formatRate(group.changed_rate)}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.unchanged || 0}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.grounding_improved || 0}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.loop_reduced || 0}</td>
+        <td style="padding: 10px 12px; border: 1px solid var(--card-border);">${group.unparsed || 0}</td>
+      </tr>`).join('');
+      const exampleRows = examples.map(ex => `<tr>
+        <td style="padding: 8px 10px; border: 1px solid var(--card-border);"><code>${escapeHtml(ex.run_id)}</code><br><span style="color: var(--text-muted);">${escapeHtml(ex.task_id)} · step ${escapeHtml(ex.step)}</span>${ex.stored_task_id && ex.stored_task_id !== ex.task_id ? `<br><span style="color: var(--text-muted); font-size: 11px;">stored as ${escapeHtml(ex.stored_task_id)}</span>` : ''}<br><a href="${escapeHtml(ex.explorer_url || `/run-task-explorer?task_id=${encodeURIComponent(ex.task_id || '')}&run_id=${encodeURIComponent(ex.run_id || '')}`)}" target="_blank" rel="noopener" style="font-weight: 800; color: var(--accent);">Open task + screenshots</a></td>
+        <td style="padding: 8px 10px; border: 1px solid var(--card-border);">${(ex.warning_types || []).map(t => `<span class="badge warning" style="font-size: 10px; margin-right: 4px;">${escapeHtml(t)}</span>`).join('')}</td>
+        <td style="padding: 8px 10px; border: 1px solid var(--card-border);">${ex.changed === null ? 'Unparsed' : ex.changed ? '<span class="badge green">Changed</span>' : '<span class="badge neutral">Same</span>'}<div style="margin-top: 6px;">${ex.outcome === 'success' ? '<span class="badge green">Task passed</span>' : ex.outcome === 'failed' ? '<span class="badge failed">Task failed</span>' : `<span class="badge neutral">${escapeHtml(ex.outcome || 'unknown')}</span>`}</div><div style="margin-top: 4px; color: var(--text-muted); font-size: 11px;">Counted: ${(ex.changed_fields || []).map(escapeHtml).join(', ') || '—'}</div><div style="margin-top: 2px; color: var(--text-muted); font-size: 11px;">All diffs: ${(ex.all_changed_fields || []).map(escapeHtml).join(', ') || '—'}</div></td>
+        <td style="padding: 8px 10px; border: 1px solid var(--card-border);">
+          <div style="font-weight: 800;">Action: ${escapeHtml(ex.first_action || '—')} → ${escapeHtml(ex.retry_action || '—')}</div>
+          <div style="margin-top: 6px;"><strong>Index:</strong> ${escapeHtml(ex.first_index ?? '—')} → ${escapeHtml(ex.retry_index ?? '—')}</div>
+          <div style="margin-top: 6px; max-width: 420px;"><strong>Instruction:</strong><br>${escapeHtml(ex.first_instruction || '—')}<br><span style="color: var(--text-muted);">→ ${escapeHtml(ex.retry_instruction || '—')}</span></div>
+          <div style="margin-top: 6px; max-width: 420px;"><strong>Model element:</strong><br>${escapeHtml(ex.first_element_text || '—')}<br><span style="color: var(--text-muted);">→ ${escapeHtml(ex.retry_element_text || '—')}</span></div>
+          <div style="margin-top: 6px; max-width: 420px;"><strong>Resolved DOM:</strong><br>${escapeHtml(ex.first_resolved_element_text || '—')}<br><span style="color: var(--text-muted);">→ ${escapeHtml(ex.retry_resolved_element_text || '—')}</span></div>
+        </td>
+        <td style="padding: 8px 10px; border: 1px solid var(--card-border);">G ${escapeHtml(ex.first_grounding ?? '—')} → ${escapeHtml(ex.retry_grounding ?? '—')}<br>L ${escapeHtml(ex.first_loop ?? '—')} → ${escapeHtml(ex.retry_loop ?? '—')}</td>
+      </tr>`).join('');
+      resultsDiv.innerHTML = `
+        <div style="margin-bottom: 12px; color: var(--text-muted); font-size: 13px;">Counting change by: <strong style="color: var(--text);">${escapeHtml(activeFields)}</strong></div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px;">
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;"><div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Warning retries</div><div style="font-size: 28px; font-weight: 800;">${totals.warning_steps || 0}</div></div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;"><div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Changed answer</div><div style="font-size: 28px; font-weight: 800; color: var(--success);">${formatRate(totals.changed_rate)}</div></div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;"><div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Tasks changed</div><div style="font-size: 28px; font-weight: 800; color: var(--success);">${totals.tasks_changed || 0} / ${totals.tasks_with_warning || 0}</div><div style="font-size: 12px; color: var(--text-muted);">${formatRate(totals.task_changed_rate)}</div></div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;"><div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Changed tasks passed</div><div style="font-size: 28px; font-weight: 800; color: var(--success);">${totals.changed_tasks_passed || 0}</div><div style="font-size: 12px; color: var(--text-muted);">${formatRate(totals.changed_task_pass_rate)} pass rate · ${totals.changed_tasks_failed || 0} failed</div></div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;"><div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Unchanged tasks passed</div><div style="font-size: 28px; font-weight: 800;">${totals.unchanged_tasks_passed || 0}</div><div style="font-size: 12px; color: var(--text-muted);">${formatRate(totals.unchanged_task_pass_rate)} pass rate · ${totals.unchanged_tasks_failed || 0} failed</div></div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;"><div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Grounding improved</div><div style="font-size: 28px; font-weight: 800;">${totals.grounding_improved || 0}</div></div>
+          <div style="background: var(--task-card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;"><div style="font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Loop reduced</div><div style="font-size: 28px; font-weight: 800;">${totals.loop_reduced || 0}</div></div>
+        </div>
+        <table style="width: 100%; min-width: 760px; border-collapse: collapse; border: 1px solid var(--card-border); font-size: 13px; margin-bottom: 18px;">
+          <thead><tr style="background: var(--badge-neutral-bg);"><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Model · Warning</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Tasks Changed</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Changed Outcome</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Changed Pass Rate</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Unchanged Outcome</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Unchanged Pass Rate</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Task Change Rate</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Retries</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Changed</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Changed Rate</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Same</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">G Improved</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">L Reduced</th><th style="padding: 10px 12px; text-align: left; border: 1px solid var(--card-border);">Unparsed</th></tr></thead>
+          <tbody>${groupRows || '<tr><td colspan="14" style="padding: 12px; color: var(--text-muted);">No warning retry steps found in selected runs.</td></tr>'}</tbody>
+        </table>
+        <details ${exampleRows ? 'open' : ''}>
+          <summary style="cursor: pointer; color: var(--text-muted); font-weight: 800; margin-bottom: 8px;">Examples</summary>
+          <table style="width: 100%; min-width: 900px; border-collapse: collapse; border: 1px solid var(--card-border); font-size: 12px;">
+            <thead><tr style="background: var(--badge-neutral-bg);"><th style="padding: 8px 10px; text-align: left; border: 1px solid var(--card-border);">Run / Task</th><th style="padding: 8px 10px; text-align: left; border: 1px solid var(--card-border);">Warning</th><th style="padding: 8px 10px; text-align: left; border: 1px solid var(--card-border);">Result</th><th style="padding: 8px 10px; text-align: left; border: 1px solid var(--card-border);">Detailed Change</th><th style="padding: 8px 10px; text-align: left; border: 1px solid var(--card-border);">Scores</th></tr></thead>
+            <tbody>${exampleRows || '<tr><td colspan="5" style="padding: 12px; color: var(--text-muted);">No examples.</td></tr>'}</tbody>
+          </table>
+        </details>`;
     }
 
     async function generateHumanAnnotationSet() {
@@ -1732,10 +2032,6 @@
       }
       html += `</tbody></table>`;
       resultsDiv.innerHTML = html;
-      // Part 2 renders into its own card below.
-      const summaryDiv = document.getElementById('grounding-eval-summary-results');
-      if (summaryDiv) summaryDiv.innerHTML = renderSelectedRunsTaskStepSummary(data);
-
       renderAUROCGraph(data, Number(threshold));
     }
 
@@ -1962,7 +2258,11 @@
     
     // Fetch metrics on page load if the auto view is default or when we load
     document.addEventListener("DOMContentLoaded", function() {
-      fetchGroundingMetrics();
+      if (document.getElementById('grounding-eval-panel-container')) {
+        fetchGroundingMetrics();
+        fetchSummaryMetrics();
+        fetchWarningRetryEffectiveness();
+      }
     });
 
     function automaticUrl(params = {}) {
@@ -2057,6 +2357,75 @@
       updateSelectedTaskUi();
     }
 
+    function setNamedField(name, value) {
+      const el = document.querySelector(`[name="${name}"]`);
+      if (!el || value === undefined || value === null || value === '') return;
+      el.value = String(value);
+    }
+
+    function setNamedCheckbox(name, checked) {
+      const el = document.querySelector(`[name="${name}"]`);
+      if (el) el.checked = !!checked;
+    }
+
+    const SOURCE_RUN_CACHE = {};
+
+    async function getSourceRun(runId) {
+      if (!runId) return null;
+      if (SOURCE_RUN_CACHE[runId]) return SOURCE_RUN_CACHE[runId];
+      const res = await fetch(`/api/runs/source-config?run_id=${encodeURIComponent(runId)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Could not load ${runId}`);
+      SOURCE_RUN_CACHE[runId] = data;
+      return data;
+    }
+
+    async function applySourceRunConfig(runId) {
+      const sourceId = document.getElementById('source-run-id-input');
+      if (sourceId) sourceId.value = runId || '';
+      const run = await getSourceRun(runId);
+      if (!run) return;
+      setNamedField('input_mode', run.input_mode || 'dom');
+      setNamedField('task_model', run.task_model);
+      setNamedField('judge_model', run.judge_model);
+      setNamedField('judge_method', run.judge_method);
+      setNamedField('temperature', run.temperature);
+      setNamedField('grounding_warning_threshold', run.grounding_warning_threshold);
+      setNamedField('loop_warning_threshold', run.loop_warning_threshold);
+      setNamedCheckbox('include_oracle_plan', run.include_oracle_plan);
+      setNamedCheckbox('force_ground_truth_mode', run.force_ground_truth_mode);
+      setNamedField('force_ground_truth_retries', run.force_ground_truth_retries);
+      setNamedCheckbox('inject_grounding_warning', run.inject_grounding_warning);
+      setNamedCheckbox('inject_looping_warning', run.inject_looping_warning);
+      setNamedCheckbox('automatic_planning_mode', run.automatic_planning_mode);
+      if (run.region_capture_mode && typeof setTargetCaptureMode === 'function') {
+        setTargetCaptureMode(run.region_capture_mode);
+      }
+      const nickname = document.querySelector('[name="nickname"]');
+      if (nickname && !nickname.value.trim()) {
+        nickname.value = `${run.nickname || run.run_id}_plus_remaining`;
+      }
+      updateForceGroundTruthUi();
+      return run;
+    }
+
+    async function sourceRunChanged(runId) {
+      try {
+        const run = await applySourceRunConfig(runId);
+        // Mirror what Start Evaluation will run: choosing a source run selects the tasks NOT
+        // already in it (across the whole dataset); clearing it restores the default selection.
+        if (run && Array.isArray(run.task_ids)) {
+          const existing = new Set(run.task_ids);
+          const remaining = taskCheckboxes().map(cb => cb.value).filter(id => !existing.has(id));
+          selectTaskIds(remaining);
+        } else {
+          selectAllTasks();
+        }
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
     function updateForceGroundTruthUi() {
       const mode = document.getElementById('force-ground-truth-mode');
       const retries = document.getElementById('force-ground-truth-retries');
@@ -2086,11 +2455,32 @@
         selectAllDifferentUrlTasks();
       }
     }
+
+    async function selectRemainingDifferentUrlTasks() {
+      const select = document.getElementById('source-run-select');
+      const runId = select ? select.value : '';
+      let run = null;
+      try {
+        run = await applySourceRunConfig(runId);
+      } catch (err) {
+        alert(err.message);
+        return;
+      }
+      if (!run) {
+        alert('Choose an existing 40-task run first.');
+        return;
+      }
+      const existing = new Set(run.task_ids || []);
+      const remaining = taskCheckboxes().map(cb => cb.value).filter(id => !existing.has(id));
+      selectTaskIds(remaining);
+    }
+    {% else %}
     {% endif %}
 
     document.addEventListener('DOMContentLoaded', function() {
+      if (!document.querySelector('input[name="task_ids"]')) return;
       {% if annotated_url_summary and annotated_url_summary.all_different_task_ids %}
-      selectAllDifferentUrlTasks();
+      selectAllTasks();
       {% else %}
       {% if auto_apply_default_sample %}
       randomSelectTasks({{ default_auto_sample_n }}, {{ default_auto_sample_seed }});

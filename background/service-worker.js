@@ -1,6 +1,10 @@
 // PageGuide Background Service Worker
 // Handles API calls to multiple LLM providers (Gemini, OpenRouter, OpenAI)
 
+// Pure request builders (system role / user message / image ordering). Loaded first so the
+// provider functions below can use pgBuildOpenAIMessages / pgGeminiSystemInstruction / pgUserText.
+importScripts('llm_request.js');
+
 console.log('🤖 PageGuide Service Worker started');
 
 // ===== Keep-Alive Mechanism =====
@@ -575,19 +579,17 @@ async function callRouterLLM(messages, systemPrompt) {
   
   try {
     const temperature = await getLlmTemperature();
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
-    console.log('🎯 Router LLM (Gemini 2.5 Flash) - prompt length:', userContent.length);
-    
+    const userText = pgUserText(messages);
+
+    console.log('🎯 Router LLM (Gemini 2.5 Flash) - prompt length:', userText.length);
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: userContent }] }],
-        generationConfig: { 
+        systemInstruction: pgGeminiSystemInstruction(systemPrompt),
+        contents: [{ role: 'user', parts: [{ text: userText }] }],
+        generationConfig: {
           temperature: temperature,
           maxOutputTokens: 256 // Router responses are short
         }
@@ -735,14 +737,11 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
   
   try {
     const temperature = await getLlmTemperature();
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
+    const userText = pgUserText(messages);
+
     // Build parts array - text first, then image if provided
-    const parts = [{ text: userContent }];
-    
+    const parts = [{ text: userText }];
+
     // Add image if provided (for vision capabilities)
     if (imageBase64) {
       console.log('🖼️ Adding image to Gemini request');
@@ -753,17 +752,18 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
         }
       });
     }
-    
-    console.log('🤖 Gemini request - prompt length:', userContent.length, 'has image:', !!imageBase64);
-    
+
+    console.log('🤖 Gemini request - prompt length:', userText.length, 'has image:', !!imageBase64);
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        systemInstruction: pgGeminiSystemInstruction(systemPrompt),
         contents: [{ role: 'user', parts: parts }],
-        generationConfig: { 
+        generationConfig: {
           temperature: temperature,
-          maxOutputTokens: 4096 
+          maxOutputTokens: 4096
         },
         // Be more permissive with safety to avoid unnecessary blocks
         safetySettings: [
@@ -822,54 +822,56 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
   
   try {
     const temperature = await getLlmTemperature();
-    // Build single-turn message (no conversation history)
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
-    // Build content array for multimodal (text + image)
+    // Build single-turn user content (no conversation history)
+    const userText = pgUserText(messages);
+
+    // Build content for multimodal (text + image); image stays last.
     let content;
     if (imageBase64) {
       console.log('🖼️ Adding image to OpenRouter request');
       content = [
-        { type: 'text', text: userContent },
+        { type: 'text', text: userText },
         { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
       ];
     } else {
-      content = userContent;
+      content = userText;
     }
-    
-    const chatMessages = [{ role: 'user', content: content }];
-    
-    const response = await fetch(config.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': chrome.runtime.getURL(''),
-        'X-Title': 'PageGuide'
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: chatMessages,
-        temperature: temperature,
-        max_tokens: 1024
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
+
+    const chatMessages = pgBuildOpenAIMessages(systemPrompt, content);
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': chrome.runtime.getURL(''),
+      'X-Title': 'PageGuide'
+    };
+    const body = JSON.stringify({ model: model, messages: chatMessages, temperature: temperature, max_tokens: 1024 });
+
+    // Retry transient throttling (429/5xx) and empty completions — the dominant source of
+    // spurious eval failures when many workers hit the provider concurrently.
+    const MAX_TRIES = 3;
+    let lastError = 'Empty response from OpenRouter';
+    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+      const response = await fetch(config.endpoint, { method: 'POST', headers, body });
+      let data = {};
+      try { data = await response.json(); } catch (e) { data = {}; }
+
+      if (!response.ok) {
+        lastError = `OpenRouter API error: ${data.error?.message || response.status}`;
+        if ((response.status === 429 || response.status >= 500) && attempt < MAX_TRIES) {
+          await new Promise(r => setTimeout(r, 600 * attempt));
+          continue;
+        }
+        return { error: lastError };
+      }
+
+      const text = data.choices?.[0]?.message?.content;
+      if (text) return { content: text };
+
+      lastError = 'Empty response from OpenRouter';
+      if (attempt < MAX_TRIES) await new Promise(r => setTimeout(r, 600 * attempt));
     }
-    
-    const text = data.choices?.[0]?.message?.content;
-    if (!text) {
-      return { error: 'Empty response from OpenRouter' };
-    }
-    
-    return { content: text };
+    return { error: lastError };
   } catch (error) {
     return { error: `OpenRouter network error: ${error.message}` };
   }
@@ -888,25 +890,22 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
   
   try {
     const temperature = await getLlmTemperature();
-    // Build single-turn message (no conversation history)
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
-    // Build content array for multimodal (text + image)
+    // Build single-turn user content (no conversation history)
+    const userText = pgUserText(messages);
+
+    // Build content for multimodal (text + image); image stays last.
     let content;
     if (imageBase64) {
       console.log('🖼️ Adding image to OpenAI request');
       content = [
-        { type: 'text', text: userContent },
+        { type: 'text', text: userText },
         { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: 'high' } }
       ];
     } else {
-      content = userContent;
+      content = userText;
     }
-    
-    const chatMessages = [{ role: 'user', content: content }];
+
+    const chatMessages = pgBuildOpenAIMessages(systemPrompt, content);
     
     const response = await fetch(config.endpoint, {
       method: 'POST',
@@ -954,14 +953,11 @@ async function callGeminiMultiImage(messages, systemPrompt, settings, images = [
   
   try {
     const temperature = await getLlmTemperature();
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
+    const userText = pgUserText(messages);
+
     // Build parts array - text first, then images
-    const parts = [{ text: userContent }];
-    
+    const parts = [{ text: userText }];
+
     // Add all images with labels
     if (images && images.length > 0) {
       console.log(`🖼️ Adding ${images.length} images to Gemini request`);
@@ -978,17 +974,18 @@ async function callGeminiMultiImage(messages, systemPrompt, settings, images = [
         });
       }
     }
-    
-    console.log('🤖 Gemini multi-image request - prompt length:', userContent.length, 'images:', images.length);
-    
+
+    console.log('🤖 Gemini multi-image request - prompt length:', userText.length, 'images:', images.length);
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        systemInstruction: pgGeminiSystemInstruction(systemPrompt),
         contents: [{ role: 'user', parts: parts }],
-        generationConfig: { 
+        generationConfig: {
           temperature: temperature,
-          maxOutputTokens: 4096 
+          maxOutputTokens: 4096
         },
         safetySettings: [
           { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
@@ -1036,28 +1033,25 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
   
   try {
     const temperature = await getLlmTemperature();
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
-    // Build content array for multimodal (text + images)
-    const content = [{ type: 'text', text: userContent }];
-    
+    const userText = pgUserText(messages);
+
+    // Build content array for multimodal (text + images); images stay after the text.
+    const content = [{ type: 'text', text: userText }];
+
     if (images && images.length > 0) {
       console.log(`🖼️ Adding ${images.length} images to OpenRouter request`);
       for (const img of images) {
         if (img.label) {
           content.push({ type: 'text', text: `[${img.label}]:` });
         }
-        content.push({ 
-          type: 'image_url', 
-          image_url: { url: `data:image/jpeg;base64,${img.base64}` } 
+        content.push({
+          type: 'image_url',
+          image_url: { url: `data:image/jpeg;base64,${img.base64}` }
         });
       }
     }
-    
-    const chatMessages = [{ role: 'user', content: content }];
+
+    const chatMessages = pgBuildOpenAIMessages(systemPrompt, content);
     
     const response = await fetch(config.endpoint, {
       method: 'POST',
@@ -1105,14 +1099,11 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
   
   try {
     const temperature = await getLlmTemperature();
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
-    // Build content array for multimodal (text + images)
-    const content = [{ type: 'text', text: userContent }];
-    
+    const userText = pgUserText(messages);
+
+    // Build content array for multimodal (text + images); images stay after the text.
+    const content = [{ type: 'text', text: userText }];
+
     if (images && images.length > 0) {
       console.log(`🖼️ Adding ${images.length} images to OpenAI request`);
       for (const img of images) {
@@ -1126,7 +1117,7 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
       }
     }
 
-    const chatMessages = [{ role: 'user', content: content }];
+    const chatMessages = pgBuildOpenAIMessages(systemPrompt, content);
 
     const response = await fetch(config.endpoint, {
       method: 'POST',

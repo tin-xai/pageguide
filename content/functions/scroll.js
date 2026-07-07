@@ -24,7 +24,11 @@ function scrollToHighlight(index = 0) {
   const element = highlights[targetIndex];
   
   if (element) {
-    element.scrollIntoView({ behavior: _pageguideScrollBehavior(), block: 'center' });
+    if (typeof pgScrollIntoViewReliably === 'function') {
+      pgScrollIntoViewReliably(element, { behavior: _pageguideScrollBehavior() });
+    } else {
+      element.scrollIntoView({ behavior: _pageguideScrollBehavior(), block: 'center' });
+    }
     // Flash effect
     const originalBg = element.style.backgroundColor;
     element.style.backgroundColor = 'rgba(255, 200, 0, 0.8)';
@@ -132,6 +136,84 @@ function scrollViewport(direction) {
       resolve(didScroll);
     }, 500);
   });
+}
+
+/**
+ * Nearest scrollable ancestor of `el` (an overflow:auto/scroll element that actually overflows),
+ * falling back to the page scroller. Used so we can move the RIGHT scroller when scrollIntoView
+ * doesn't land the element in the viewport (nested containers / transformed scrollers).
+ */
+function pgScrollableAncestor(el) {
+  let node = el && el.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    try {
+      const oy = getComputedStyle(node).overflowY;
+      if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && node.scrollHeight > node.clientHeight + 1) {
+        return node;
+      }
+    } catch (e) { /* cross-origin / detached — skip */ }
+    node = node.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+if (typeof window !== 'undefined') window.pgScrollableAncestor = pgScrollableAncestor;
+
+/** True when `el`'s box is meaningfully inside the viewport (below `headerOffset`, above the fold). */
+function pgElementInViewport(el, headerOffset = 0) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+  const r = el.getBoundingClientRect();
+  const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  if (r.width <= 0 || r.height <= 0) return false;
+  const vertOk = r.bottom > headerOffset + 1 && r.top < vh - 1;
+  const horizOk = r.right > 0 && r.left < vw;
+  return vertOk && horizOk;
+}
+if (typeof window !== 'undefined') window.pgElementInViewport = pgElementInViewport;
+
+/**
+ * Reliably bring `el` into the viewport for screenshot/click. Tries scrollIntoView(center), then
+ * VERIFIES the element is actually visible; if not (nested/transformed scroller, sticky header),
+ * explicitly adjusts the nearest scrollable ancestor's scrollTop to center it and retries once.
+ * Returns true when the element is visibly in the viewport afterwards.
+ * @returns {Promise<boolean>}
+ */
+async function pgScrollIntoViewReliably(el, opts = {}) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+  const behavior = opts.behavior || (window._guidev2?.autoMode === true ? 'instant' : 'smooth');
+  const headerOffset = opts.headerOffset || 0;
+  const settleMs = opts.settleMs != null ? opts.settleMs : (behavior === 'instant' ? 60 : 350);
+  const settle = () => new Promise(r => setTimeout(r, settleMs));
+
+  try {
+    el.scrollIntoView({ behavior, block: 'center', inline: 'nearest' });
+  } catch (e) {
+    try { el.scrollIntoView(); } catch (e2) { /* ignore */ }
+  }
+  await settle();
+  if (pgElementInViewport(el, headerOffset)) return true;
+
+  // Fallback: move the real scroll container so the element lands near the center of its viewport.
+  const scroller = pgScrollableAncestor(el);
+  try {
+    const rect = el.getBoundingClientRect();
+    if (scroller === document.scrollingElement || scroller === document.documentElement) {
+      const targetTop = (window.scrollY || 0) + rect.top - (window.innerHeight / 2) + (rect.height / 2);
+      window.scrollTo({ top: Math.max(0, targetTop), behavior });
+    } else {
+      const sRect = scroller.getBoundingClientRect();
+      const delta = (rect.top - sRect.top) - (scroller.clientHeight / 2) + (rect.height / 2);
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
+    }
+  } catch (e) { /* best-effort */ }
+  await settle();
+  return pgElementInViewport(el, headerOffset);
+}
+if (typeof window !== 'undefined') window.pgScrollIntoViewReliably = pgScrollIntoViewReliably;
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.pgScrollIntoViewReliably = pgScrollIntoViewReliably;
+  module.exports.pgScrollableAncestor = pgScrollableAncestor;
+  module.exports.pgElementInViewport = pgElementInViewport;
 }
 
 console.log('📜 scroll.js loaded');

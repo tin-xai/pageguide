@@ -5,13 +5,35 @@ import threading
 import copy
 import random
 import re
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlsplit, unquote
 from flask import Flask, request, jsonify, render_template, abort, redirect, url_for, send_from_directory, send_file
 
 import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(BASE_DIR))
 
-from eval_tool.storage import list_runs as list_auto_runs, load_run, task_set_options, normalize_task_set, task_set_label, list_task_results, save_task_result, clear_run, utc_now, RUNS_DIR, REPO_ROOT, load_dom_snapshot
+from eval_tool.storage import (
+    composite_task_ids,
+    is_composite_run,
+    list_runs as list_auto_runs,
+    list_task_results,
+    list_task_results_resolved,
+    source_run_ids_for,
+    load_run,
+    load_task_result,
+    load_task_result_resolved,
+    task_set_options,
+    normalize_task_set,
+    task_set_label,
+    save_task_result,
+    clear_run,
+    utc_now,
+    RUNS_DIR,
+    REPO_ROOT,
+    load_dom_snapshot,
+)
 from eval_tool.tasks import load_tasks, tasks_by_id, display_task_name
 from eval_tool.annotated_urls import (
     DATASET_PATH as ANNOTATED_DATASET_PATH,
@@ -25,8 +47,8 @@ from eval_tool.annotated_urls import (
     scan as scan_annotated_urls,
     update_url as update_annotated_url,
 )
-from eval_tool.runner import create_run, save_run, start_run, DEFAULT_MAX_STEPS, configured_task_model, is_running, stop_run, configured_region_capture_mode, normalize_region_capture_mode, region_capture_mode_label, normalize_temperature, normalize_unit_threshold, DEFAULT_GROUNDING_WARNING_THRESHOLD, DEFAULT_LOOP_WARNING_THRESHOLD
-from eval_tool.judge import configured_judge_model, MODEL_OPTIONS, DEFAULT_JUDGE_METHOD, judge_method_options, normalize_judge_method, normalize_model, LlmJudge
+from eval_tool.runner import create_run, save_run, start_run, DEFAULT_MAX_STEPS, configured_task_model, is_running, stop_run, pause_run, configured_region_capture_mode, normalize_input_mode, normalize_region_capture_mode, region_capture_mode_label, normalize_temperature, normalize_unit_threshold, DEFAULT_GROUNDING_WARNING_THRESHOLD, DEFAULT_LOOP_WARNING_THRESHOLD, start_single_task, start_single_task_batch, single_task_running, single_task_progress
+from eval_tool.judge import configured_judge_model, MODEL_OPTIONS, DEFAULT_JUDGE_METHOD, judge_method_options, normalize_judge_method, normalize_model, LlmJudge, normalize_temperature, DEFAULT_JUDGE_TEMPERATURE
 from eval_tool.mind2web_levels import (
     DIFFICULTY_LABELS,
     DIFFICULTY_LEVELS,
@@ -38,6 +60,15 @@ from eval_tool.mind2web_levels import (
     reference_step_count,
 )
 from eval_tool.scoring import apply_manual_evaluation, evaluation_for_inspector, task_outcome
+from eval_tool.stats import mcnemar_test
+from eval_tool.following_rate import (
+    DEFAULT_FOLLOWING_MODEL,
+    MAX_FOLLOWING_WORKERS,
+    aggregate_following_results,
+    model_options_with_following_default,
+    normalize_following_model,
+    score_following_for_task,
+)
 from eval_tool.step_confidence import backfill_computed_loop, backfill_element_step_similarity, backfill_g_progress, compute_spec_confidence, SpecProgressClient, g_grounding, _action_key, _action_key_updated, _element_text, low_grounding_summary, format_low_grounding_summary, infer_predicted_goal_state, loop_metrics_summary
 from eval_tool.subgoal_progress import PageState, backfill_subgoal_progress, evaluate_subgoal_details
 
@@ -137,6 +168,8 @@ def _run_display_time(run):
 
 
 def _run_task_count(run):
+    if is_composite_run(run):
+        return len(composite_task_ids(run))
     task_ids = run.get("task_ids")
     if isinstance(task_ids, list):
         return len(task_ids)
@@ -146,6 +179,146 @@ def _run_task_count(run):
         except (TypeError, ValueError):
             continue
     return 0
+
+
+def _run_completed_count(run):
+    """Number of completed task results for a run WITHOUT parsing the (tens-of-MB) task files.
+
+    Task result files are named ``<task_id>.json``, so counting them (and, for composites, the
+    distinct task ids across source runs) gives the completed count from cheap ``os.listdir``s.
+    The dashboard renders this for every run, so parsing every file here (the old
+    ``len(_run_results(...))``) made the page take ~14s to load."""
+    if is_composite_run(run):
+        seen = set()
+        for source_run_id in source_run_ids_for(run):
+            for path in _task_result_files(source_run_id):
+                seen.add(os.path.basename(path)[:-len(".json")])
+        return len(seen)
+    files = _task_result_files(run.get("run_id", ""))
+    if files:
+        return len(files)
+    # Rare fallback for runs whose results are not stored as per-task files.
+    return len(list_task_results(run.get("run_id", "")))
+
+
+def _run_results(run_id):
+    run = load_run(run_id)
+    if is_composite_run(run):
+        return list_task_results_resolved(run_id)
+    results = []
+    for path in _task_result_files(run_id):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if data:
+                results.append(data)
+        except Exception:
+            continue
+    return results if results else list_task_results(run_id)
+
+
+def _run_task_result(run_id, task_id):
+    run = load_run(run_id)
+    if is_composite_run(run):
+        return load_task_result_resolved(run_id, task_id)
+    path = _task_json_path(run_id, task_id)
+    if not path or not os.path.exists(path):
+        for result in list_task_results(run_id):
+            if result and result.get("task_id") == task_id:
+                return result
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _run_display_name(run):
+    nickname = str((run or {}).get("nickname") or "").strip()
+    run_id = str((run or {}).get("run_id") or "")
+    return f"{nickname} ({run_id})" if nickname else run_id
+
+
+def _run_is_baseline(run):
+    """A baseline run has no injection/variant flags — just plain DOM or DOM + Screenshot."""
+    r = run or {}
+    return not (
+        r.get("include_oracle_plan")
+        or r.get("force_ground_truth_mode")
+        or r.get("inject_grounding_warning")
+        or r.get("inject_looping_warning")
+    )
+
+
+def _run_badges(run):
+    badges = []
+    mode = str((run or {}).get("input_mode") or "dom").strip()
+    badges.append("DOM + Screenshot" if mode == "dom_screenshot" else "DOM")
+    if _run_is_baseline(run):
+        badges.append("Baseline")
+    if is_composite_run(run):
+        badges.append("Composite")
+    if (run or {}).get("include_oracle_plan"):
+        badges.append("Include Oracle")
+    if (run or {}).get("force_ground_truth_mode"):
+        retries = int((run or {}).get("force_ground_truth_retries") or 0)
+        badges.append(force_ground_truth_label(retries))
+    if (run or {}).get("inject_grounding_warning"):
+        badges.append("Grounding Injected")
+    if (run or {}).get("inject_looping_warning"):
+        badges.append("Loop Injected")
+    return badges
+
+
+# Emoji per marker for the (plain-text) run selector, so each mode/variant is
+# visually distinct at a glance in a native <select> (which can't render styled pills).
+_RUN_MARKER_EMOJI = {
+    "DOM": "🔤",
+    "DOM + Screenshot": "🖼️",
+    "Baseline": "⭐",
+    "Composite": "🧩",
+    "Include Oracle": "🔮",
+    "Grounding Injected": "📍",
+    "Loop Injected": "🔁",
+}
+
+
+def _run_selector_markers(run):
+    """Emoji-prefixed variant/mode markers used in the LLM-following-rates run selector."""
+    markers = []
+    for badge in _run_badges(run):
+        emoji = _RUN_MARKER_EMOJI.get(badge)
+        if emoji is None and badge.startswith("Force Ground Truth"):
+            emoji = "✅"
+        markers.append(f"{emoji} {badge}" if emoji else badge)
+    return markers
+
+
+def _run_source_option(run, *, include_task_ids=True):
+    option = {
+        "run_id": run.get("run_id") or "",
+        "label": _run_display_name(run),
+        "nickname": str(run.get("nickname") or ""),
+        "task_count": _run_task_count(run),
+        "input_mode": str(run.get("input_mode") or "dom"),
+        "task_model": str(run.get("task_model") or ""),
+        "judge_model": str(run.get("judge_model") or ""),
+        "judge_method": str(run.get("judge_method") or ""),
+        "temperature": run.get("temperature"),
+        "include_oracle_plan": bool(run.get("include_oracle_plan")),
+        "force_ground_truth_mode": bool(run.get("force_ground_truth_mode")),
+        "force_ground_truth_retries": int(run.get("force_ground_truth_retries") or 0),
+        "inject_grounding_warning": bool(run.get("inject_grounding_warning")),
+        "inject_looping_warning": bool(run.get("inject_looping_warning")),
+        "grounding_warning_threshold": run.get("grounding_warning_threshold"),
+        "loop_warning_threshold": run.get("loop_warning_threshold"),
+        "automatic_planning_mode": bool(run.get("automatic_planning_mode")),
+        "region_capture_mode": str(run.get("region_capture_mode") or ""),
+    }
+    if include_task_ids:
+        option["task_ids"] = composite_task_ids(run) if is_composite_run(run) else list(run.get("task_ids") or [])
+    return option
 
 
 def _annotated_reference_url_summary() -> dict:
@@ -251,6 +424,11 @@ ANNOTATED_URL_CHECK_CACHE_FILE = os.path.join(BASE_DIR, 'annotated_url_check_cac
 DASHBOARD_CACHE_VERSION = 2
 DEFAULT_GROUNDING_LLM_LABEL_MODEL = "openai/gpt-4o"
 GROUNDING_LABEL_SKIP_ACTIONS = {"scroll", "scroll_up", "scroll_down", "done"}
+FOLLOWING_EVAL_FIELD = "llm_following_eval"
+_following_rate_jobs = {}
+_following_rate_jobs_lock = threading.Lock()
+# job_id -> threading.Event; set to request cancellation of a running scoring job.
+_following_rate_stops = {}
 
 
 def _load_dashboard_cache():
@@ -372,8 +550,12 @@ def _cache_meta(filepath):
     return {'mtime_ns': stat.st_mtime_ns, 'size': stat.st_size, 'version': DASHBOARD_CACHE_VERSION}
 
 
-def _cached_file_summary(cache, filepath, builder):
-    key = os.path.abspath(filepath)
+def _cached_file_summary(cache, filepath, builder, namespace=""):
+    # Different callers cache different summary shapes for the SAME file (e.g. the dashboard's
+    # chart summary vs. the explorer's task summary). Namespacing the key keeps them from
+    # overwriting each other; an empty namespace preserves the original bare-abspath key.
+    abspath = os.path.abspath(filepath)
+    key = f"{abspath}::{namespace}" if namespace else abspath
     try:
         meta = _cache_meta(filepath)
     except OSError:
@@ -412,12 +594,19 @@ def _step_metrics(steps, high_threshold=None, medium_threshold=None):
         loop_u = s.get("computed_loop_updated")
         if loop_u is not None and loop_u > 0.5:
             loop_count += 1
-        _mech_conf = compute_spec_confidence(s, formula="spec_noprogress", high_threshold=high_threshold, medium_threshold=medium_threshold)
+        # Step Uncertainty uses RAW element similarity (not bucketed grounding):
+        # U = clip(1 - G_similarity * (1 - 0.5 * Loop), 0, 1). mech_confidence = 1 - U for consistency.
+        _grounding = _numeric_step_value(s, "element_step_similarity")
+        _loop = s.get("computed_loop_updated")
+        if _loop is None:
+            _loop = s.get("computed_loop")
+        _uncert = _step_uncertainty(_grounding, _loop)
+        _mech_conf = None if _uncert is None else 1.0 - _uncert
         step_metrics.append({
             "step": s.get("step"),
             "action": s.get("action"),
             "mech_confidence": _mech_conf,
-            "step_uncertainty": _to_uncertainty(_mech_conf),
+            "step_uncertainty": _uncert,
             "rule_grounding": g_grounding(s, high_threshold=high_threshold, medium_threshold=medium_threshold),
             "element_step_similarity": s.get("element_step_similarity"),
             "grounded_human_label": s.get("grounded_human_label"),
@@ -1663,7 +1852,7 @@ def api_generate_human_annotation_set():
         return jsonify({
             "status": "success",
             "run_id": run["run_id"],
-            "task_count": len(run.get("task_ids") or []),
+            "task_count": _run_task_count(run),
             "sampled_counts": run.get("sampled_counts") or {},
             "url": url_for("run_detail", run_id=run["run_id"]),
         })
@@ -1973,6 +2162,10 @@ def dashboard():
         run['duration'] = _run_timing(run)['duration']
         run['reference_summary'] = _run_reference_summary(run)
         run['display_time'] = _run_display_time(run)
+        run['display_name'] = _run_display_name(run)
+        run['badges'] = _run_badges(run)
+        run['resolved_task_count'] = _run_task_count(run)
+        run['resolved_completed_count'] = _run_completed_count(run)
         run['is_default_human_annotation_source'] = run.get("run_id") in DEFAULT_HUMAN_ANNOTATION_SOURCE_RUN_IDS
     grounding_run_groups, default_grounding_run_ids = _grounding_run_groups(auto_runs)
     grounding_run_sources = []
@@ -1990,6 +2183,11 @@ def dashboard():
         run for run in auto_runs
         if run.get("run_id") in DEFAULT_HUMAN_ANNOTATION_SOURCE_RUN_IDS
     ]
+    composite_source_runs = [
+        _run_source_option(run, include_task_ids=False)
+        for run in auto_runs
+        if (run.get("task_set") or "").strip() == task_set and _run_task_count(run) > 0
+    ]
     starred_tasks = collect_starred_tasks()
     if cache_changed:
         _save_dashboard_cache(dashboard_cache)
@@ -2003,6 +2201,7 @@ def dashboard():
         auto_runs=auto_runs,
         grounding_run_groups=grounding_run_groups,
         grounding_run_sources=grounding_run_sources,
+        composite_source_runs=composite_source_runs,
         default_grounding_run_ids=default_grounding_run_ids,
         human_annotation_sources=human_annotation_sources,
         human_annotation_default_run_ids=DEFAULT_HUMAN_ANNOTATION_SOURCE_RUN_IDS,
@@ -2029,7 +2228,87 @@ def dashboard():
         default_grounding_label_model=_default_grounding_label_model(),
         default_region_capture_mode=configured_region_capture_mode(),
         region_capture_mode_label=region_capture_mode_label,
+        run_badges=_run_badges,
+        run_display_name=_run_display_name,
     )
+
+
+def _all_dataset_dashboard_context():
+    def reconcile_run(run: dict) -> dict:
+        if run.get("status") == "running" and not is_running(run.get("run_id", "")):
+            run = save_run({**run, "status": "interrupted", "completed_at": utc_now(),
+                            "error": run.get("error") or "Run was interrupted (server restarted while it was running)."})
+        return run
+
+    auto_runs = [reconcile_run(run) for run in list_auto_runs()]
+    for run in auto_runs:
+        run.setdefault("task_model", "")
+        run.setdefault("judge_model", "")
+        run['duration'] = _run_timing(run)['duration']
+        run['reference_summary'] = _run_reference_summary(run)
+        run['display_time'] = _run_display_time(run)
+        run['display_name'] = _run_display_name(run)
+        run['badges'] = _run_badges(run)
+        run['resolved_task_count'] = _run_task_count(run)
+        run['resolved_completed_count'] = _run_completed_count(run)
+
+    grounding_run_groups, default_grounding_run_ids = _grounding_run_groups(auto_runs)
+    grounding_run_sources = []
+    seen_sources = set()
+    for run in auto_runs:
+        source_id = (run.get("task_set") or "").strip() or "unknown"
+        if source_id in seen_sources:
+            continue
+        seen_sources.add(source_id)
+        grounding_run_sources.append({"id": source_id, "label": task_set_label(run.get("task_set"))})
+    grounding_run_sources.sort(key=lambda s: s["label"].lower())
+
+    return {
+        "dataset_dashboard_only": True,
+        "trajectories": [],
+        "chart_trajectories": [],
+        "chart_run_id": "",
+        "stats": {"total": 0, "success": 0, "failed": 0, "pending": 0, "success_rate": 0, "error_stats": {}},
+        "available_tasks": [],
+        "auto_runs": auto_runs,
+        "grounding_run_groups": grounding_run_groups,
+        "grounding_run_sources": grounding_run_sources,
+        "composite_source_runs": [],
+        "default_grounding_run_ids": default_grounding_run_ids,
+        "human_annotation_sources": [],
+        "human_annotation_default_run_ids": DEFAULT_HUMAN_ANNOTATION_SOURCE_RUN_IDS,
+        "human_annotation_run_id": HUMAN_ANNOTATION_RUN_ID,
+        "starred_tasks": [],
+        "task_set": "annotated",
+        "task_set_options": task_set_options(),
+        "difficulty": "",
+        "difficulty_labels": DIFFICULTY_LABELS,
+        "difficulty_level_counts": {},
+        "has_difficulty_filter": False,
+        "grounding_label_model_options": MODEL_OPTIONS,
+        "default_grounding_label_model": _default_grounding_label_model(),
+        "annotated_url_summary": None,
+        "default_selected_task_ids": None,
+        "default_max_steps": DEFAULT_MAX_STEPS,
+        "model_options": MODEL_OPTIONS,
+        "default_task_model": configured_task_model(),
+        "default_judge_model": configured_judge_model(),
+        "judge_method_options": judge_method_options(),
+        "default_judge_method": DEFAULT_JUDGE_METHOD,
+        "default_region_capture_mode": configured_region_capture_mode(),
+        "region_capture_mode_label": region_capture_mode_label,
+        "run_badges": _run_badges,
+        "run_display_name": _run_display_name,
+        "auto_apply_default_sample": False,
+        "default_auto_sample_n": 50,
+        "default_auto_sample_seed": 1,
+    }
+
+
+@app.route('/all-dataset-dashboard')
+def all_dataset_dashboard():
+    return render_template('dashboard.html', **_all_dataset_dashboard_context())
+
 
 @app.route('/mind2web/download')
 def download_mind2web_csv():
@@ -2041,9 +2320,321 @@ def download_mind2web_csv():
         abort(404, "No Mind2Web tasks match that difficulty filter.")
     return send_file(dest, as_attachment=True, download_name=filename)
 
-@app.route('/runs', methods=['POST'])
-def create_eval_run():
-    task_set = normalize_task_set(request.form.get("task_set"))
+
+@app.route('/api/runs/source-config')
+def api_run_source_config():
+    run_id = str(request.args.get("run_id") or "").strip()
+    run = load_run(run_id) if run_id else None
+    if not run:
+        return jsonify({"error": "run not found"}), 404
+    return jsonify(_run_source_option(run, include_task_ids=True))
+
+
+def _following_rate_run_options():
+    options = []
+    for run in list_auto_runs():
+        completed = _run_completed_count(run)
+        if completed <= 0:
+            continue
+        if _run_task_count(run) != 104:
+            continue
+        option = _run_source_option(run, include_task_ids=False)
+        option.update({
+            "completed_count": completed,
+            "display_time": _run_display_time(run),
+            "display_name": _run_display_name(run),
+            "badges": _run_selector_markers(run),
+            "status": run.get("status") or "",
+        })
+        options.append(option)
+    return sorted(options, key=lambda r: (-_run_chrono_key(load_run(r["run_id"]) or {}), r["run_id"]))
+
+
+def _following_model_label(model):
+    for option in model_options_with_following_default():
+        if option["id"] == model:
+            return option["label"]
+    return model
+
+
+def _following_task_entry(data, model):
+    task = data.get("task") if isinstance(data.get("task"), dict) else {}
+    entry = ((data.get(FOLLOWING_EVAL_FIELD) or {}).get(model) or {})
+    return {
+        "task_id": data.get("task_id") or "",
+        "name": task.get("task") or task.get("name") or data.get("task_id") or "",
+        "website_url": task.get("website_url") or "",
+        "status": "scored" if entry.get("available") else ("error" if entry else "pending"),
+        "available": bool(entry.get("available")),
+        "error": entry.get("error") or "",
+        "updated_at": entry.get("updated_at") or "",
+        "following_rate": entry.get("following_rate"),
+        "completion_rate": entry.get("completion_rate"),
+        "matched_agent_steps": entry.get("matched_agent_steps", 0),
+        "total_agent_steps": entry.get("total_agent_steps", 0),
+        "completed_oracle_steps": entry.get("completed_oracle_steps", 0),
+        "actionable_oracle_steps": entry.get("actionable_oracle_steps", 0),
+        "total_oracle_steps": entry.get("total_oracle_steps", 0),
+        "mapping": entry.get("mapping") or {},
+        "pre_satisfied": entry.get("pre_satisfied") or [],
+        "oracle_steps": entry.get("oracle_steps") or [],
+        "agent_steps": entry.get("agent_steps") or [],
+        "prompt": entry.get("prompt") or "",
+        "raw_response": entry.get("raw_response") or "",
+    }
+
+
+def _following_result_payload(run_id, model):
+    run = load_run(run_id)
+    if not run:
+        return None
+    model = normalize_following_model(model)
+    task_entries = []
+    raw_entries = []
+    if is_composite_run(run):
+        datasets = [res for res in list_task_results_resolved(run_id)]
+    else:
+        datasets = []
+        for path in _task_result_files(run_id):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    datasets.append(json.load(f))
+            except Exception:
+                continue
+    for data in datasets:
+        task_entries.append(_following_task_entry(data, model))
+        raw_entries.append(((data.get(FOLLOWING_EVAL_FIELD) or {}).get(model) or {}))
+    return {
+        "run": {
+            "run_id": run_id,
+            "display_name": _run_display_name(run),
+            "status": run.get("status") or "",
+            "task_count": _run_task_count(run),
+            "completed_count": _run_completed_count(run),
+            "task_model": run.get("task_model") or "",
+            "task_set": run.get("task_set") or "",
+            "badges": _run_badges(run),
+        },
+        "model": model,
+        "model_label": _following_model_label(model),
+        "summary": aggregate_following_results(raw_entries),
+        "tasks": sorted(task_entries, key=lambda t: _task_number(t["task_id"])),
+    }
+
+
+def _following_job_set(job_id, **updates):
+    with _following_rate_jobs_lock:
+        job = _following_rate_jobs.setdefault(job_id, {})
+        job.update(updates)
+        job["job_id"] = job_id
+        job["updated_at"] = utc_now()
+        return dict(job)
+
+
+def _following_work_items(run_id, limit=None):
+    """Return [(data, physical_run_id, task_id)] to score, composite-aware.
+
+    For composite runs the results are resolved from the source runs and the
+    scores are written back to the physical source run that owns each task.
+
+    ``limit`` (N) keeps only the first N tasks in stable task-number order, so a
+    quick N=1 smoke test always scores the same lowest-numbered task."""
+    run = load_run(run_id)
+    items = []
+    if is_composite_run(run):
+        for res in list_task_results_resolved(run_id):
+            data = dict(res)
+            physical_run_id = data.pop("resolved_run_id", None) or run_id
+            data.pop("logical_run_id", None)
+            task_id = str(data.get("task_id") or "")
+            if not task_id:
+                continue
+            items.append((data, physical_run_id, task_id))
+    else:
+        for path in _task_result_files(run_id):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            task_id = data.get("task_id") or os.path.splitext(os.path.basename(path))[0]
+            items.append((data, run_id, task_id))
+    if limit is not None and limit > 0:
+        items.sort(key=lambda it: _task_number(it[2]))
+        items = items[:limit]
+    return items
+
+
+def _score_following_item(data, physical_run_id, task_id, model, temperature=None):
+    try:
+        result = score_following_for_task(data, model=model, temperature=temperature)
+    except Exception as exc:
+        result = {
+            "available": False,
+            "model": model,
+            "error": str(exc),
+            "prompt": "",
+            "raw_response": "",
+            "oracle_steps": [],
+            "agent_steps": [],
+        }
+    result["updated_at"] = utc_now()
+    data.setdefault(FOLLOWING_EVAL_FIELD, {})[model] = result
+    save_task_result(physical_run_id, task_id, data)
+    return _following_task_entry(data, model)
+
+
+def _run_following_rate_job(job_id, run_id, model, limit=None, temperature=None):
+    model = normalize_following_model(model)
+    stop_event = _following_rate_stops.get(job_id)
+    run = load_run(run_id)
+    if not run:
+        _following_job_set(job_id, status="failed", error="run not found", completed=0, total=0)
+        return
+    items = _following_work_items(run_id, limit=limit)
+    if not items:
+        _following_job_set(job_id, status="failed", error="no completed task result files found", completed=0, total=0)
+        return
+
+    _following_job_set(job_id, status="running", error="", completed=0, total=len(items), tasks=[])
+    workers = min(MAX_FOLLOWING_WORKERS, max(1, len(items)))
+    tasks = []
+    cancelled = False
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_score_following_item, data, physical_run_id, task_id, model, temperature) for (data, physical_run_id, task_id) in items]
+            for future in as_completed(futures):
+                try:
+                    task_entry = future.result()
+                except Exception as exc:
+                    task_entry = {"task_id": "", "name": "", "status": "error", "error": str(exc)}
+                tasks.append(task_entry)
+                _following_job_set(job_id, completed=len(tasks), tasks=sorted(tasks, key=lambda t: _task_number(t.get("task_id", ""))))
+                if stop_event is not None and stop_event.is_set():
+                    cancelled = True
+                    for f in futures:
+                        f.cancel()
+                    break
+    except Exception as exc:
+        _following_job_set(job_id, status="failed", error=str(exc), completed=len(tasks), tasks=tasks)
+        _following_rate_stops.pop(job_id, None)
+        return
+    _following_rate_stops.pop(job_id, None)
+    if cancelled:
+        payload = _following_result_payload(run_id, model) or {}
+        _following_job_set(job_id, status="cancelled", error="cancelled by user", completed=len(tasks), tasks=payload.get("tasks") or tasks, summary=payload.get("summary") or {})
+        return
+    payload = _following_result_payload(run_id, model) or {}
+    _following_job_set(job_id, status="completed", completed=len(items), tasks=payload.get("tasks") or tasks, summary=payload.get("summary") or {})
+
+
+@app.route('/llm-following-rates')
+def llm_following_rates():
+    run_options = _following_rate_run_options()
+    requested_run_id = str(request.args.get("run_id") or "").strip()
+    selected_run_id = requested_run_id if any(r["run_id"] == requested_run_id for r in run_options) else (run_options[0]["run_id"] if run_options else "")
+    selected_model = normalize_following_model(request.args.get("model") or DEFAULT_FOLLOWING_MODEL)
+    initial_result = _following_result_payload(selected_run_id, selected_model) if selected_run_id else None
+    return render_template(
+        "llm_following_rates.html",
+        run_options=run_options,
+        selected_run_id=selected_run_id,
+        selected_model=selected_model,
+        model_options=model_options_with_following_default(),
+        default_model=DEFAULT_FOLLOWING_MODEL,
+        max_workers=MAX_FOLLOWING_WORKERS,
+        default_temperature=DEFAULT_JUDGE_TEMPERATURE,
+        initial_result=initial_result,
+    )
+
+
+@app.route('/api/llm-following-rates/run', methods=['POST'])
+def api_llm_following_rates_run():
+    payload = request.get_json(silent=True) or request.form or {}
+    run_id = str(payload.get("run_id") or "").strip()
+    model = normalize_following_model(payload.get("model") or DEFAULT_FOLLOWING_MODEL)
+    run = load_run(run_id) if run_id else None
+    if not run:
+        return jsonify({"error": "run not found"}), 404
+    if is_running(run_id) or run.get("status") == "running":
+        return jsonify({"error": "run is still running"}), 400
+    try:
+        limit = int(payload.get("limit"))
+    except (TypeError, ValueError):
+        limit = None
+    if limit is not None and limit <= 0:
+        limit = None
+    temperature = normalize_temperature(payload.get("temperature"))
+    # Fail fast with a clear message if the judge LLM key is not configured,
+    # instead of silently saving N identical "not configured" errors.
+    if not LlmJudge(model=model).api_key:
+        return jsonify({"error": "OPENROUTER_API_KEY is not configured — the scorer LLM cannot be called. Check your .env key name."}), 400
+    work_items = _following_work_items(run_id, limit=limit)
+    if not work_items:
+        return jsonify({"error": "no completed task result files found"}), 400
+
+    job_id = uuid.uuid4().hex
+    _following_rate_stops[job_id] = threading.Event()
+    _following_job_set(
+        job_id,
+        run_id=run_id,
+        model=model,
+        model_label=_following_model_label(model),
+        status="queued",
+        total=len(work_items),
+        completed=0,
+        tasks=[],
+        error="",
+        limit=limit or 0,
+        temperature=temperature,
+        created_at=utc_now(),
+    )
+    thread = threading.Thread(target=_run_following_rate_job, args=(job_id, run_id, model, limit, temperature), daemon=True)
+    thread.start()
+    return jsonify({"job_id": job_id, "status": "queued", "run_id": run_id, "model": model, "total": len(work_items), "temperature": temperature})
+
+
+@app.route('/api/llm-following-rates/status')
+def api_llm_following_rates_status():
+    job_id = str(request.args.get("job_id") or "").strip()
+    with _following_rate_jobs_lock:
+        job = dict(_following_rate_jobs.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+    return jsonify(job)
+
+
+@app.route('/api/llm-following-rates/cancel', methods=['POST'])
+def api_llm_following_rates_cancel():
+    """Signal any running scoring job(s) to stop after their in-flight tasks.
+
+    With no job_id, cancels every active job (used by the "Stop scoring" button
+    to end whatever is running)."""
+    payload = request.get_json(silent=True) or request.form or {}
+    job_id = str(payload.get("job_id") or "").strip()
+    cancelled = []
+    if job_id:
+        event = _following_rate_stops.get(job_id)
+        if event is not None:
+            event.set()
+            cancelled.append(job_id)
+    else:
+        for jid, event in list(_following_rate_stops.items()):
+            event.set()
+            cancelled.append(jid)
+    return jsonify({"cancelled": cancelled, "count": len(cancelled)})
+
+
+@app.route('/api/llm-following-rates/result')
+def api_llm_following_rates_result():
+    run_id = str(request.args.get("run_id") or "").strip()
+    model = normalize_following_model(request.args.get("model") or DEFAULT_FOLLOWING_MODEL)
+    payload = _following_result_payload(run_id, model) if run_id else None
+    if not payload:
+        return jsonify({"error": "run not found"}), 404
+    return jsonify(payload)
+
+def _selected_tasks_from_form(task_set):
     selected = request.form.getlist("task_ids")
     if not selected:
         abort(400, "No valid tasks selected.")
@@ -2051,57 +2642,235 @@ def create_eval_run():
     tasks = [task_map[task_id] for task_id in selected if task_id in task_map]
     if not tasks:
         abort(400, "No valid tasks selected.")
-    max_steps = request.form.get("max_steps") or DEFAULT_MAX_STEPS
-    workers = int(request.form.get("workers") or 1)
-    task_model = request.form.get("task_model") or configured_task_model()
-    temperature = normalize_temperature(request.form.get("temperature"))
-    judge_model = request.form.get("judge_model") or configured_judge_model()
-    judge_method = normalize_judge_method(request.form.get("judge_method"))
-    # Only the curated no_login set has reliable reference_steps to inject.
-    ground_truth_mode = task_set == "no_login" and bool(request.form.get("ground_truth_mode"))
-    include_oracle_plan = task_set == "annotated" and bool(request.form.get("include_oracle_plan"))
-    force_ground_truth_mode = task_set == "annotated" and bool(request.form.get("force_ground_truth_mode"))
+    return selected, tasks
+
+
+def _run_options_from_form(task_set, *, input_mode=None):
     try:
         force_ground_truth_retries = int(request.form.get("force_ground_truth_retries") or 0)
     except (TypeError, ValueError):
         force_ground_truth_retries = 0
     force_ground_truth_retries = max(0, min(2, force_ground_truth_retries))
-    inject_grounding_warning = bool(request.form.get("inject_grounding_warning"))
-    inject_looping_warning = bool(request.form.get("inject_looping_warning"))
-    grounding_warning_threshold = normalize_unit_threshold(
-        request.form.get("grounding_warning_threshold"), DEFAULT_GROUNDING_WARNING_THRESHOLD
-    )
-    loop_warning_threshold = normalize_unit_threshold(
-        request.form.get("loop_warning_threshold"), DEFAULT_LOOP_WARNING_THRESHOLD
-    )
-    automatic_planning_mode = bool(request.form.get("automatic_planning_mode"))
-    region_capture_mode = normalize_region_capture_mode(
-        request.form.get("region_capture_mode") or configured_region_capture_mode()
-    )
-    run = create_run([task.task_id for task in tasks])
-    run = save_run({
-        **run,
+    return {
         "task_set": task_set,
         "csv_path": str(task_set),
-        "max_steps": max_steps,
-        "workers": workers,
-        "task_model": task_model,
-        "temperature": temperature,
-        "judge_model": judge_model,
-        "judge_method": judge_method,
-        "ground_truth_mode": ground_truth_mode,
-        "include_oracle_plan": include_oracle_plan,
-        "force_ground_truth_mode": force_ground_truth_mode,
+        "max_steps": request.form.get("max_steps") or DEFAULT_MAX_STEPS,
+        "workers": max(1, min(50, int(request.form.get("workers") or 10))),
+        "task_model": request.form.get("task_model") or configured_task_model(),
+        "temperature": normalize_temperature(request.form.get("temperature")),
+        "judge_model": request.form.get("judge_model") or configured_judge_model(),
+        "judge_method": normalize_judge_method(request.form.get("judge_method")),
+        # Only the curated no_login set has reliable reference_steps to inject.
+        "ground_truth_mode": task_set == "no_login" and bool(request.form.get("ground_truth_mode")),
+        "include_oracle_plan": task_set == "annotated" and bool(request.form.get("include_oracle_plan")),
+        "force_ground_truth_mode": task_set == "annotated" and bool(request.form.get("force_ground_truth_mode")),
         "force_ground_truth_retries": force_ground_truth_retries,
-        "inject_grounding_warning": inject_grounding_warning,
-        "inject_looping_warning": inject_looping_warning,
-        "grounding_warning_threshold": grounding_warning_threshold,
-        "loop_warning_threshold": loop_warning_threshold,
-        "automatic_planning_mode": automatic_planning_mode,
-        "region_capture_mode": region_capture_mode,
-    })
+        "inject_grounding_warning": bool(request.form.get("inject_grounding_warning")),
+        "inject_looping_warning": bool(request.form.get("inject_looping_warning")),
+        "grounding_warning_threshold": normalize_unit_threshold(
+            request.form.get("grounding_warning_threshold"), DEFAULT_GROUNDING_WARNING_THRESHOLD
+        ),
+        "loop_warning_threshold": normalize_unit_threshold(
+            request.form.get("loop_warning_threshold"), DEFAULT_LOOP_WARNING_THRESHOLD
+        ),
+        "automatic_planning_mode": bool(request.form.get("automatic_planning_mode")),
+        "region_capture_mode": normalize_region_capture_mode(
+            request.form.get("region_capture_mode") or configured_region_capture_mode()
+        ),
+        "nickname": str(request.form.get("nickname") or "").strip(),
+        "input_mode": input_mode or normalize_input_mode(request.form.get("input_mode")),
+    }
+
+
+def _save_configured_run(tasks, options, *, task_ids=None):
+    run = create_run(task_ids or [task.task_id for task in tasks])
+    return save_run({**run, **options})
+
+
+@app.route('/runs', methods=['POST'])
+def create_eval_run():
+    task_set = normalize_task_set(request.form.get("task_set"))
+    _, tasks = _selected_tasks_from_form(task_set)
+    # When an existing source run is chosen, Start Evaluation builds a DOM composite: it evaluates
+    # only the tasks not already in the source and stitches them together into one composite run.
+    source_run_id = str(request.form.get("source_run_id") or "").strip()
+    source_run = load_run(source_run_id) if source_run_id else None
+    if source_run:
+        return _launch_dom_composite(task_set, tasks, source_run)
+    run = _save_configured_run(tasks, _run_options_from_form(task_set))
     start_run(run, tasks)
     return redirect(url_for("dashboard") + "?tab=automatic")
+
+
+def _launch_dom_composite(task_set, tasks, source_run):
+    """Reuse the source run's already-evaluated tasks, evaluate the rest, and record a composite
+    run spanning both. The composite target is source ∪ selected, so it is correct whether the
+    form submitted only the remaining tasks or the full task set."""
+    source_run_id = source_run.get("run_id") or ""
+    source_ids = list(composite_task_ids(source_run) or source_run.get("task_ids") or [])
+    source_id_set = set(source_ids)
+    missing_tasks = [task for task in tasks if task.task_id not in source_id_set]
+    composite_ids = source_ids + [task.task_id for task in missing_tasks]
+    options = _run_options_from_form(task_set, input_mode="dom")
+    nickname = options.get("nickname") or "dom_100_composite"
+
+    continuation_run = None
+    if missing_tasks:
+        continuation_run = _save_configured_run(
+            missing_tasks,
+            {**options, "nickname": f"{nickname}_continuation_{len(missing_tasks)}", "composite_parent_nickname": nickname},
+        )
+        start_run(continuation_run, missing_tasks)
+
+    composite_sources = [source_run_id] + ([continuation_run["run_id"]] if continuation_run else [])
+    composite = create_run(composite_ids)
+    composite = save_run({
+        **composite,
+        **options,
+        "nickname": nickname,
+        "status": "composite",
+        "completed_at": utc_now() if not missing_tasks else None,
+        "task_ids": composite_ids,
+        "composite_task_ids": composite_ids,
+        "composite_sources": composite_sources,
+        "composite_kind": "dom_reuse_existing_plus_continuation",
+        "source_run_id": source_run_id,
+        "continuation_run_id": continuation_run["run_id"] if continuation_run else None,
+        "existing_task_count": len(source_ids),
+        "continuation_task_count": len(missing_tasks),
+    })
+    return redirect(url_for("run_detail", run_id=composite["run_id"]))
+
+
+def _stored_task_text(result):
+    """Best-effort extraction of the task instruction stored inside a task result."""
+    if not isinstance(result, dict):
+        return ""
+    task = result.get("task")
+    if isinstance(task, dict):
+        return (task.get("task") or task.get("name") or "").strip()
+    if isinstance(task, str):
+        return task.strip()
+    return ""
+
+
+def _result_has_trajectory(result):
+    """A result is inspectable only if it has a session id AND at least one real step.
+
+    Tasks that failed before recording anything (no session) or produced no action steps
+    (e.g. terminal_reason == "NO STEPS RECORDED") show no trajectory in the inspector.
+    """
+    if not isinstance(result, dict):
+        return False
+    if not result.get("session_id"):
+        return False
+    steps = result.get("steps") or []
+    return any(isinstance(step, dict) and not step.get("isInitial") for step in steps)
+
+
+def _run_no_trajectory_tasks(run, results):
+    """Tasks in the run whose stored result has no usable trajectory, each with the physical
+    run that holds it (the run itself, or a composite source) so the rerun saves in the right place."""
+    if not run:
+        return []
+    run_id = run.get("run_id", "")
+    out = []
+    for res in results or []:
+        if not isinstance(res, dict) or _result_has_trajectory(res):
+            continue
+        task_id = res.get("task_id")
+        if not task_id:
+            continue
+        out.append({
+            "task_id": task_id,
+            "task": res.get("task"),
+            "reason": "no steps recorded" if res.get("session_id") else "no session",
+            "terminal_reason": res.get("terminal_reason") or "",
+            "run_id": res.get("resolved_run_id") or run_id,
+        })
+    return out
+
+
+def _run_stale_or_missing_tasks(run):
+    """Tasks in a (non-composite) run that have no result anywhere in the run.
+
+    A task is reported only when its current dataset instruction does not appear
+    in *any* stored result for this run. This deliberately ignores tasks that are
+    merely re-indexed by a dataset swap (their instruction already has a result
+    under a different, shifted task_id) — those need an index fix, not a rerun —
+    and surfaces only genuinely new/missing tasks that require evaluation.
+    """
+    if not run or is_composite_run(run):
+        return []
+    task_map = tasks_by_id(run.get("task_set"))
+    if not task_map:
+        return []
+    run_id = run.get("run_id", "")
+    task_ids = run.get("task_ids") or []
+    stored_by_id = {task_id: load_task_result(run_id, task_id) for task_id in task_ids}
+    stored_texts = {text for text in (_stored_task_text(r) for r in stored_by_id.values()) if text}
+    out = []
+    for task_id in task_ids:
+        current = task_map.get(task_id)
+        if not current:
+            continue
+        current_text = (getattr(current, "task", "") or "").strip()
+        if not current_text or current_text in stored_texts:
+            continue  # instruction already has a result somewhere in the run
+        stored = stored_by_id.get(task_id)
+        out.append({
+            "task_id": task_id,
+            "reason": "missing" if stored is None else "stale",
+            "current_name": current_text,
+            "stored_name": _stored_task_text(stored),
+        })
+    return out
+
+
+@app.route('/runs/<run_id>/run-task', methods=['POST'])
+def run_single_run_task(run_id):
+    run = load_run(run_id)
+    if not run:
+        abort(404)
+    task_id = (request.form.get("task_id") or "").strip()
+    task = tasks_by_id(run.get("task_set")).get(task_id)
+    if not task:
+        abort(400, description=f"Task {task_id!r} is not in the current dataset for this run.")
+    if not single_task_running(run_id):
+        start_single_task(run, task)
+    return redirect(url_for("run_detail", run_id=run_id))
+
+
+@app.route('/runs/<run_id>/rerun-no-trajectory', methods=['POST'])
+def rerun_no_trajectory_tasks(run_id):
+    run = load_run(run_id)
+    if not run:
+        abort(404)
+    no_traj = _run_no_trajectory_tasks(run, _run_results(run_id))
+    # No-trajectory tasks may live in different physical runs (composite sources); batch per run.
+    by_run = {}
+    for task in no_traj:
+        by_run.setdefault(task["run_id"], []).append(task["task_id"])
+    for physical_run_id, task_ids in by_run.items():
+        if single_task_running(physical_run_id):
+            continue
+        physical_run = load_run(physical_run_id)
+        if not physical_run:
+            continue
+        task_map = tasks_by_id(physical_run.get("task_set"))
+        tasks = [task_map[tid] for tid in task_ids if tid in task_map]
+        if tasks:
+            start_single_task_batch(physical_run, tasks)
+    return redirect(url_for("run_detail", run_id=run_id))
+
+
+@app.route('/api/runs/<run_id>/run-task-status')
+def run_single_task_status(run_id):
+    return jsonify({
+        "running": single_task_running(run_id),
+        "state": single_task_progress(run_id) or {},
+    })
+
 
 @app.route('/runs/<run_id>')
 def run_detail(run_id):
@@ -2111,8 +2880,10 @@ def run_detail(run_id):
     if run.get("status") == "running" and not is_running(run_id):
         run = save_run({**run, "status": "interrupted", "completed_at": utc_now(),
                         "error": run.get("error") or "Run was interrupted."})
+    run["display_name"] = _run_display_name(run)
+    run["badges"] = _run_badges(run)
                         
-    results = list_task_results(run_id)
+    results = _run_results(run_id)
     run_task_map = tasks_by_id(run.get("task_set")) if _supports_reference_difficulty(run.get("task_set")) else {}
     llm_grounding_model = _normalize_grounding_label_model(request.args.get("llm_grounding_model"))
     is_human_annotation_set = _human_annotation_run(run)
@@ -2130,7 +2901,7 @@ def run_detail(run_id):
         res["star_reason"] = (star or {}).get("reason", "")
 
     # Compute run stats
-    total = len(run.get("task_ids") or [])
+    total = _run_task_count(run)
     completed = 0
     passed = 0
     failed = 0
@@ -2266,6 +3037,7 @@ def run_detail(run_id):
 
         chart_trajectories.append({
             "sessionId": session_id,
+            "runId": res.get("resolved_run_id") or run_id,
             "goal": goal,
             "task_name": display_task_name(task),
             "startedAt": started_at_ms,
@@ -2366,7 +3138,19 @@ def run_detail(run_id):
             "tasks": [],
         })
 
-    return render_template('run_detail.html', run=run, results=results, stats=stats, chart_trajectories=chart_trajectories, timing=timing, region_capture_mode_label=region_capture_mode_label, subgoal_rerun_summary=subgoal_rerun_summary, selfreport_rerun_summary=selfreport_rerun_summary, goalrel_rerun_summary=goalrel_rerun_summary, grounding_rerun_summary=grounding_rerun_summary, llm_grounding_rerun_summary=llm_grounding_rerun_summary, llm_grounding_model=llm_grounding_model, grounding_label_model_options=MODEL_OPTIONS)
+    stale_tasks = _run_stale_or_missing_tasks(run)
+    no_trajectory_tasks = _run_no_trajectory_tasks(run, results)
+    single_task_state = single_task_progress(run_id)
+    single_task_active = single_task_running(run_id)
+    remaining_task_count = 0
+    run_resumable = (
+        not is_composite_run(run)
+        and not is_running(run_id)
+        and run.get("status") in {"paused", "stopped", "interrupted"}
+    )
+    if run_resumable:
+        remaining_task_count = len(_run_remaining_task_ids(run))
+    return render_template('run_detail.html', run=run, results=results, stats=stats, chart_trajectories=chart_trajectories, timing=timing, region_capture_mode_label=region_capture_mode_label, subgoal_rerun_summary=subgoal_rerun_summary, selfreport_rerun_summary=selfreport_rerun_summary, goalrel_rerun_summary=goalrel_rerun_summary, grounding_rerun_summary=grounding_rerun_summary, llm_grounding_rerun_summary=llm_grounding_rerun_summary, llm_grounding_model=llm_grounding_model, grounding_label_model_options=MODEL_OPTIONS, stale_tasks=stale_tasks, no_trajectory_tasks=no_trajectory_tasks, single_task_state=single_task_state, single_task_active=single_task_active, run_resumable=run_resumable, remaining_task_count=remaining_task_count)
 
 @app.route('/artifacts/<path:filename>')
 def serve_artifacts(filename):
@@ -2615,6 +3399,38 @@ def stop_eval_run(run_id):
     if run.get("status") == "running" or is_running(run_id):
         stop_run(run_id)
     return redirect(url_for("run_detail", run_id=run_id))
+
+
+def _run_remaining_task_ids(run):
+    """Task ids in a (non-composite) run that don't yet have a saved result."""
+    done = {os.path.basename(p)[:-len(".json")] for p in _task_result_files(run.get("run_id", ""))}
+    return [tid for tid in (run.get("task_ids") or []) if tid not in done]
+
+
+@app.route('/runs/<run_id>/pause', methods=['POST'])
+def pause_eval_run(run_id):
+    run = load_run(run_id)
+    if not run:
+        abort(404)
+    if run.get("status") == "running" or is_running(run_id):
+        pause_run(run_id)
+    return redirect(url_for("run_detail", run_id=run_id))
+
+
+@app.route('/runs/<run_id>/resume', methods=['POST'])
+def resume_eval_run(run_id):
+    run = load_run(run_id)
+    if not run:
+        abort(404)
+    # Composite runs have no tasks of their own; resume the underlying source run instead.
+    if is_composite_run(run) or is_running(run_id):
+        return redirect(url_for("run_detail", run_id=run_id))
+    task_map = tasks_by_id(run.get("task_set"))
+    tasks = [task_map[tid] for tid in _run_remaining_task_ids(run) if tid in task_map]
+    if tasks:
+        start_run(run, tasks)
+    return redirect(url_for("run_detail", run_id=run_id))
+
 
 @app.route('/runs/<run_id>/delete', methods=['POST'])
 def delete_run(run_id):
@@ -2926,8 +3742,14 @@ def trajectory_detail(session_id):
             if step.get('isInitial'):
                 continue
             step['rule_grounding'] = g_grounding(step, high_threshold=high_threshold, medium_threshold=medium_threshold)
-            step['mech_confidence'] = compute_spec_confidence(step, formula="spec_noprogress", high_threshold=high_threshold, medium_threshold=medium_threshold)
-            step['step_uncertainty'] = _to_uncertainty(step['mech_confidence'])
+            # Step Uncertainty uses RAW element similarity (not bucketed grounding):
+            # U = clip(1 - G_similarity * (1 - 0.5 * Loop), 0, 1). mech_confidence = 1 - U.
+            _grounding = _numeric_step_value(step, "element_step_similarity")
+            _loop = step.get("computed_loop_updated")
+            if _loop is None:
+                _loop = step.get("computed_loop")
+            step['step_uncertainty'] = _step_uncertainty(_grounding, _loop)
+            step['mech_confidence'] = None if step['step_uncertainty'] is None else 1.0 - step['step_uncertainty']
             step['action_key'] = _action_key(step)
             step['action_key_updated'] = _action_key_updated(step)
             step['dom_element_text'] = _element_text(step)
@@ -3001,6 +3823,1221 @@ def trajectory_detail(session_id):
         return render_template('inspector.html', trajectory=trajectory, run_id=run_id, run_high=run_high, run_medium=run_medium, star=star, subgoal_rerun_summary=subgoal_rerun_summary, selfreport_rerun_summary=selfreport_rerun_summary, goalrel_rerun_summary=goalrel_rerun_summary, grounding_rerun_summary=grounding_rerun_summary, llm_grounding_rerun_summary=llm_grounding_rerun_summary, llm_grounding_model=llm_grounding_model, grounding_label_model_options=MODEL_OPTIONS)
     except Exception:
         abort(500)
+
+# --- Run-variation analysis (Annotated Dataset, per-run task/step summary) ---------------
+# A specialized dashboard that scopes the same task/step grounding+loop metrics computed by
+# /api/grounding_metrics down to a SINGLE run (one table row per run) and pairs each run with
+# its injection variation flags (Loop Injected / Grounding Injected / Force Ground Truth).
+
+VARIATION_MID_LOOP_THRESHOLD = 0.3
+VARIATION_DEFAULT_MODEL = "gemini-2.5-flash-lite"
+VARIATION_DEFAULT_TASK_SET = "annotated"
+VARIATION_BASELINE_LABEL = "Baseline (no injection)"
+# Runs excluded from the summary by default (still selectable in the inclusion checklist).
+# run-b747c133a897 is an earlier duplicate of the Loop Injected config (see run-99c2f6a8bade).
+VARIATION_DEFAULT_EXCLUDED_RUN_IDS = {"run-b747c133a897"}
+
+
+def _variation_mid_flags(steps, threshold):
+    """(mid_misgrounded, mid_loop) for a task: whether any INTERIOR step (non-initial steps
+    excluding the first and last) is below the grounding threshold / has L_t_u >= the mid-loop
+    threshold. Mirrors _mid_flags inside api_grounding_metrics."""
+    non_initial = [s for s in (steps or []) if not s.get("isInitial")]
+    interior = non_initial[1:-1]
+    mid_misgrounded = False
+    mid_loop = False
+    for step in interior:
+        sim = _numeric_step_value(step, "element_step_similarity")
+        if sim is not None and sim < threshold:
+            mid_misgrounded = True
+        loop_value = _numeric_step_value(step, "computed_loop_updated")
+        if loop_value is None:
+            loop_value = _numeric_step_value(step, "computed_loop")
+        if loop_value is not None and loop_value >= VARIATION_MID_LOOP_THRESHOLD:
+            mid_loop = True
+    return mid_misgrounded, mid_loop
+
+
+def _empty_variation_group():
+    return {
+        "task_count": 0,
+        "total_steps": 0,
+        "misgrounded_steps": 0,
+        "loop_steps": 0,
+        "tasks_with_mid_misgrounding": 0,
+        "tasks_with_mid_loop": 0,
+        "_misgrounded_task_rates": [],
+        "_loop_task_rates": [],
+    }
+
+
+def _finalize_variation_group(group):
+    group["misgrounded_step_rate"] = _ratio(group["misgrounded_steps"], group["total_steps"])
+    group["loop_step_rate"] = _ratio(group["loop_steps"], group["total_steps"])
+    m_mean, m_std = _mean_std(group.pop("_misgrounded_task_rates", []))
+    group["misgrounded_task_rate_mean"] = m_mean
+    group["misgrounded_task_rate_std"] = m_std
+    l_mean, l_std = _mean_std(group.pop("_loop_task_rates", []))
+    group["loop_task_rate_mean"] = l_mean
+    group["loop_task_rate_std"] = l_std
+
+
+def run_variation_task_step_summary(run_id, threshold=0.8):
+    """Per-run task/step grounding+loop summary. Same metrics as the model-grouped stats in
+    /api/grounding_metrics, but scoped to one run. Returns groups all/success/failed plus
+    the run's passed/failed/total task counts and fail rate."""
+    summary = {
+        "run_id": run_id,
+        "total_tasks": 0,
+        "passed_tasks": 0,
+        "failed_tasks": 0,
+        "fail_rate": None,
+        "groups": {
+            "all": _empty_variation_group(),
+            "success": _empty_variation_group(),
+            "failed": _empty_variation_group(),
+        },
+        "difficulty": {
+            level: {"total": 0, "passed": 0, "failed": 0}
+            for level in DIFFICULTY_LEVELS
+        },
+    }
+    task_map = tasks_by_id((load_run(run_id) or {}).get("task_set") or "annotated")
+
+    def _apply(group, scored, misg, loop, mid_m, mid_l):
+        group["task_count"] += 1
+        group["total_steps"] += scored
+        group["misgrounded_steps"] += misg
+        group["loop_steps"] += loop
+        if mid_m:
+            group["tasks_with_mid_misgrounding"] += 1
+        if mid_l:
+            group["tasks_with_mid_loop"] += 1
+        if scored > 0:
+            group["_misgrounded_task_rates"].append(misg / scored)
+            group["_loop_task_rates"].append(loop / scored)
+
+    for data in _run_results(run_id):
+        outcome = task_outcome(data)
+        summary["total_tasks"] += 1
+        if outcome == "success":
+            summary["passed_tasks"] += 1
+        elif outcome == "failed":
+            summary["failed_tasks"] += 1
+        task_def = task_map.get(data.get("task_id"))
+        if task_def is not None:
+            level = effective_task_difficulty(task_def)
+            bucket = summary["difficulty"].get(level)
+            if bucket is not None:
+                bucket["total"] += 1
+                if outcome == "success":
+                    bucket["passed"] += 1
+                elif outcome == "failed":
+                    bucket["failed"] += 1
+        backfill_computed_loop(data)
+        scored = misg = loop = 0
+        for step in data.get("steps", []):
+            if step.get("isInitial"):
+                continue
+            sim = _numeric_step_value(step, "element_step_similarity")
+            if sim is None:
+                continue
+            scored += 1
+            if sim < threshold:
+                misg += 1
+            loop_value = _numeric_step_value(step, "computed_loop_updated")
+            if loop_value is None:
+                loop_value = _numeric_step_value(step, "computed_loop")
+            if loop_value is not None and loop_value > 0:
+                loop += 1
+        mid_m, mid_l = _variation_mid_flags(data.get("steps", []), threshold)
+        _apply(summary["groups"]["all"], scored, misg, loop, mid_m, mid_l)
+        if outcome in {"success", "failed"}:
+            _apply(summary["groups"][outcome], scored, misg, loop, mid_m, mid_l)
+
+    for group in summary["groups"].values():
+        _finalize_variation_group(group)
+    summary["fail_rate"] = _ratio(summary["failed_tasks"], summary["total_tasks"])
+    return summary
+
+
+def run_variation_flags(run):
+    """The variations recorded on a run: the three injection modes plus the two
+    planning modes (automatic planning and oracle-plan injection). Force-ground-truth also
+    carries its retry count, which fine-grains the variation (0 retries vs 1 retry, ...)."""
+    force_gt = bool(run.get("force_ground_truth_mode"))
+    return {
+        "grounding_injected": bool(run.get("inject_grounding_warning")),
+        "loop_injected": bool(run.get("inject_looping_warning")),
+        "force_ground_truth": force_gt,
+        "force_ground_truth_retries": int(run.get("force_ground_truth_retries") or 0) if force_gt else 0,
+        "planning": bool(run.get("automatic_planning_mode")),
+        "oracle_plan": bool(run.get("include_oracle_plan")),
+    }
+
+
+def force_ground_truth_label(retries):
+    """e.g. 'Force Ground Truth (0 retries)' / '(1 retry)'."""
+    unit = "retry" if retries == 1 else "retries"
+    return f"Force Ground Truth ({retries} {unit})"
+
+
+# (flag key, label) in display order for combo labels & badges. Force Ground Truth is handled
+# separately in run_variation_combo_label because its label depends on the retry count.
+VARIATION_LABELS = [
+    ("grounding_injected", "Grounding Injected"),
+    ("loop_injected", "Loop Injected"),
+    ("planning", "Planning"),
+    ("oracle_plan", "Oracle Plan"),
+]
+
+
+def run_variation_combo_label(flags):
+    """Human-readable label for a run's variation combination."""
+    parts = []
+    if flags.get("grounding_injected"):
+        parts.append("Grounding Injected")
+    if flags.get("loop_injected"):
+        parts.append("Loop Injected")
+    if flags.get("force_ground_truth"):
+        parts.append(force_ground_truth_label(flags.get("force_ground_truth_retries", 0)))
+    if flags.get("planning"):
+        parts.append("Planning")
+    if flags.get("oracle_plan"):
+        parts.append("Oracle Plan")
+    return " + ".join(parts) if parts else VARIATION_BASELINE_LABEL
+
+
+def _select_analysis_runs():
+    """Shared run filtering + manual selection for the variation dashboards.
+
+    Reads task_set / model filter and the manual run-inclusion state (selection / run_ids)
+    from the request. Returns (candidates, included_runs, ctx):
+      - candidates: [{run, run_id, flags, combo_label, model_label, display_time,
+                      task_count, included}] for every run matching the dataset/model filter
+                      (drives the inclusion checklist).
+      - included_runs: the raw run dicts that are actually selected.
+      - ctx: filter/selection state for the template.
+    """
+    task_set_filter = request.args.get("task_set", VARIATION_DEFAULT_TASK_SET)
+    model_filter = request.args.get("model", VARIATION_DEFAULT_MODEL)
+
+    all_runs = list(list_auto_runs())
+    task_set_ids = sorted({(r.get("task_set") or "").strip() for r in all_runs if (r.get("task_set") or "").strip()})
+    model_ids = sorted({(r.get("task_model") or "").strip() for r in all_runs if (r.get("task_model") or "").strip()})
+
+    def _matches(run):
+        if task_set_filter and (run.get("task_set") or "").strip() != task_set_filter:
+            return False
+        if model_filter and model_filter.lower() not in (run.get("task_model") or "").lower():
+            return False
+        return True
+
+    candidate_runs = [run for run in all_runs if _matches(run)]
+    candidate_runs.sort(key=_run_chrono_key, reverse=True)
+    selection_applied = request.args.get("selection") == "1"
+    selected_ids = set(request.args.getlist("run_ids"))
+
+    def _is_included(run_id):
+        # Manual selection: with the form submitted (selection=1) only checked run_ids count;
+        # on first load every candidate is on except the default-excluded duplicates.
+        if selection_applied:
+            return run_id in selected_ids
+        return run_id not in VARIATION_DEFAULT_EXCLUDED_RUN_IDS
+
+    candidates = []
+    included_runs = []
+    for run in candidate_runs:
+        run_id = run.get("run_id", "")
+        flags = run_variation_flags(run)
+        included = _is_included(run_id)
+        candidates.append({
+            "run": run,
+            "run_id": run_id,
+            "display_name": _run_display_name(run),
+            "badges": _run_badges(run),
+            "flags": flags,
+            "combo_label": run_variation_combo_label(flags),
+            "model_label": _grounding_display_model_name(run.get("task_model")),
+            "display_time": _run_display_time(run),
+            "task_count": _run_task_count(run),
+            "included": included,
+        })
+        if included:
+            included_runs.append(run)
+
+    ctx = {
+        "task_set_filter": task_set_filter,
+        "model_filter": model_filter,
+        "task_set_ids": task_set_ids,
+        "model_ids": model_ids,
+        "selection_applied": selection_applied,
+    }
+    return candidates, included_runs, ctx
+
+
+@app.route('/run-variation-analysis')
+def run_variation_analysis():
+    """Specialized dashboard: for the selected task set + model (default Annotated Dataset,
+    Gemini 2.5 Flash Lite), show one main-table row per run with the task/step grounding+loop
+    metrics, tag each run with its injection variations, and compare pass/fail vs baseline."""
+    try:
+        threshold = float(request.args.get("threshold", 0.8))
+    except (ValueError, TypeError):
+        threshold = 0.8
+
+    candidates, included_runs, ctx = _select_analysis_runs()
+
+    rows = []
+    for cand in candidates:
+        if not cand["included"]:
+            continue
+        rows.append({
+            "run": cand["run"],
+            "flags": cand["flags"],
+            "combo_label": cand["combo_label"],
+            "summary": run_variation_task_step_summary(cand["run_id"], threshold),
+            "model_label": cand["model_label"],
+            "display_time": cand["display_time"],
+            "badges": cand["badges"],
+        })
+
+    # Aggregate pass/fail by variation combo and diff each combo against baseline.
+    combos = {}
+    for row in rows:
+        c = combos.setdefault(row["combo_label"], {
+            "label": row["combo_label"], "runs": 0,
+            "total_tasks": 0, "passed": 0, "failed": 0,
+        })
+        c["runs"] += 1
+        c["total_tasks"] += row["summary"]["total_tasks"]
+        c["passed"] += row["summary"]["passed_tasks"]
+        c["failed"] += row["summary"]["failed_tasks"]
+    baseline = combos.get(VARIATION_BASELINE_LABEL)
+    comparison = []
+    for c in combos.values():
+        c["pass_rate"] = _ratio(c["passed"], c["total_tasks"])
+        c["fail_rate"] = _ratio(c["failed"], c["total_tasks"])
+        c["is_baseline"] = c["label"] == VARIATION_BASELINE_LABEL
+        if baseline is not None and not c["is_baseline"]:
+            c["passed_diff"] = c["passed"] - baseline["passed"]
+            c["failed_diff"] = c["failed"] - baseline["failed"]
+        else:
+            c["passed_diff"] = None
+            c["failed_diff"] = None
+        comparison.append(c)
+    comparison.sort(key=lambda c: (not c["is_baseline"], c["label"]))
+
+    return render_template('run_variation_analysis.html',
+        rows=rows,
+        comparison=comparison,
+        candidates=candidates,
+        selection_applied=ctx["selection_applied"],
+        task_set_filter=ctx["task_set_filter"],
+        model_filter=ctx["model_filter"],
+        threshold=threshold,
+        task_set_ids=ctx["task_set_ids"],
+        model_ids=ctx["model_ids"],
+        baseline_label=VARIATION_BASELINE_LABEL,
+        mid_loop_threshold=VARIATION_MID_LOOP_THRESHOLD,
+        variation_labels=VARIATION_LABELS,
+    )
+
+
+# --- Per-run task explorer (task pass/fail, step detail, trend lines, oracle vs agent) -------
+
+def _artifact_url(path):
+    """Map a stored screenshot path (relative to the repo root) to its /artifacts URL."""
+    if not path:
+        return None
+    return "/artifacts/" + str(path).lstrip("/")
+
+
+def _normalize_match_url(url):
+    """Port of the extension's _gv2NormalizeForceUrl (content/tasks/guidev2.js): lowercase
+    host, drop default ports, decode + strip trailing slash on the path, keep the query.
+    Used for url_exactly_match so oracle URLs and agent URLs compare canonically."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        scheme = (parts.scheme or "").lower()
+        host = (parts.hostname or "").lower()
+        port = parts.port
+        if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+            port = None
+        path = re.sub(r"/+$", "", unquote(parts.path or "")) or "/"
+        netloc = host + (f":{port}" if port else "")
+        out = f"{scheme}://{netloc}{path}" if scheme else f"{netloc}{path}"
+        if parts.query:
+            out += "?" + parts.query
+        return out
+    except Exception:
+        return raw.rstrip("/")
+
+
+def _agent_trajectory_urls(steps):
+    """Every URL the agent actually visited across the trajectory (all steps, incl. initial)."""
+    urls = []
+    for step in steps or []:
+        for key in ("url", "actualUrl", "currentUrl", "pageUrl"):
+            value = step.get(key)
+            if value:
+                urls.append(str(value))
+    return urls
+
+
+def _url_node_matched(node, match_fn, agent_urls, agent_urls_norm):
+    """Whether one oracle key node is satisfied by the agent trajectory. url_exactly_match =
+    normalized reference URL appears among the visited URLs; url_included_match (default) =
+    the node's reference_answer (or reference URL) is a substring of some visited URL."""
+    content = (node or {}).get("content") or {}
+    ref_url = (content.get("url") or "").strip()
+    ref_answer = (content.get("reference_answer") or "").strip()
+    fn = (match_fn or (node or {}).get("match_function_name") or "").strip()
+    if fn == "url_exactly_match":
+        target = _normalize_match_url(ref_url)
+        return bool(target) and target in agent_urls_norm
+    needle = (ref_answer or ref_url).lower()
+    if not needle:
+        return False
+    return any(needle in u.lower() for u in agent_urls)
+
+
+def subgoal_url_completion(task, steps):
+    """Verify oracle subgoals by URL: each annotated key node is 'complete' when any URL in the
+    agent trajectory matches it (per its match function). Returns
+    {total, completed, rate, nodes:[{label, expected_url, match_function, matched}]}."""
+    key_nodes = task.get("annotated_key_nodes") or []
+    reference_urls = task.get("annotated_reference_urls") or []
+    match_fns = task.get("annotated_match_functions") or []
+    subgoals = task.get("annotated_subgoals") or []
+    agent_urls = _agent_trajectory_urls(steps)
+    agent_urls_norm = {_normalize_match_url(u) for u in agent_urls}
+
+    nodes = []
+    # Prefer key nodes (they carry url + reference_answer + match fn); else reference URLs.
+    source = key_nodes if key_nodes else [{"content": {"url": u}} for u in reference_urls]
+    for i, node in enumerate(source):
+        fn = match_fns[i] if i < len(match_fns) else ((node or {}).get("match_function_name") or "")
+        matched = _url_node_matched(node, fn, agent_urls, agent_urls_norm)
+        content = (node or {}).get("content") or {}
+        label = (subgoals[i] if i < len(subgoals) else "") or content.get("url") or f"subgoal {i + 1}"
+        nodes.append({
+            "label": label,
+            "expected_url": content.get("url") or "",
+            "match_function": fn,
+            "matched": matched,
+        })
+
+    total = len(nodes)
+    completed = sum(1 for n in nodes if n["matched"])
+    return {"total": total, "completed": completed, "rate": _ratio(completed, total), "nodes": nodes}
+
+
+def _step_uncertainty(grounding, loop):
+    """U_t = clip(1 - grounding * (1 - 0.5 * L_t_u), 0, 1); higher = more uncertain.
+    Matches the inspector's Step Uncertainty definition. None when grounding is missing."""
+    if grounding is None:
+        return None
+    loop = loop or 0.0
+    return max(0.0, min(1.0, 1.0 - grounding * (1.0 - 0.5 * loop)))
+
+
+def _explorer_task_summary_from_data(data):
+    """The small per-task record the explorer page needs (no steps retained)."""
+    task = data.get("task", {}) or {}
+    subgoals = subgoal_url_completion(task, data.get("steps", []))
+    task_id = data.get("task_id") or ""
+    return {
+        "task_id": task_id,
+        "stored_task_id": task_id,
+        "name": task.get("task") or task.get("name") or task_id,
+        "website_url": task.get("website_url") or "",
+        "outcome": task_outcome(data),
+        "subgoal_completed": subgoals["completed"],
+        "subgoal_total": subgoals["total"],
+        "subgoal_rate": subgoals["rate"],
+    }
+
+
+def _explorer_task_summary(filepath):
+    """Cache builder: parse one (large) task file once into its explorer summary."""
+    with open(filepath, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return _explorer_task_summary_from_data(data)
+
+
+def _task_identity_key(title, url=""):
+    title_key = _normalize_task_identity(title)
+    url_key = _normalize_task_identity(url)
+    return (title_key, url_key) if url_key else (title_key, "")
+
+
+def _canonical_task_identity_maps(task_set):
+    task_map = tasks_by_id(task_set)
+    by_title_url = {}
+    by_title = {}
+    for task_id, task in task_map.items():
+        title = _task_def_title(task)
+        url = _task_def_url(task)
+        title_key = _normalize_task_identity(title)
+        if not title_key:
+            continue
+        if url:
+            by_title_url[_task_identity_key(title, url)] = task_id
+        by_title[title_key] = task_id
+    return by_title_url, by_title
+
+
+def _canonical_task_id_for_summary(summary, by_title_url, by_title):
+    title = summary.get("name") or ""
+    url = summary.get("website_url") or ""
+    title_key = _normalize_task_identity(title)
+    if not title_key:
+        return ""
+    if url:
+        matched = by_title_url.get(_task_identity_key(title, url))
+        if matched:
+            return matched
+    return by_title.get(title_key, "")
+
+
+def _canonicalize_run_task_summaries(run_id, summaries):
+    run = load_run(run_id) or {}
+    task_set = normalize_task_set(run.get("task_set") or "annotated")
+    by_title_url, by_title = _canonical_task_identity_maps(task_set)
+    canonical = []
+    seen = {}
+    for summary in summaries:
+        item = dict(summary)
+        stored_task_id = item.get("stored_task_id") or item.get("task_id") or ""
+        canonical_task_id = _canonical_task_id_for_summary(item, by_title_url, by_title)
+        if canonical_task_id:
+            item["task_id"] = canonical_task_id
+            item["stored_task_id"] = stored_task_id
+            if canonical_task_id != stored_task_id:
+                item["task_resolution"] = {
+                    "requested_task_id": canonical_task_id,
+                    "resolved_task_id": stored_task_id,
+                    "resolved": True,
+                }
+        else:
+            item["stored_task_id"] = stored_task_id
+            item["task_resolution"] = {
+                "requested_task_id": stored_task_id,
+                "stale_task_id": stored_task_id,
+                "stale_task": item.get("name") or "",
+                "resolved": False,
+            }
+
+        existing = seen.get(item["task_id"])
+        if existing is None:
+            seen[item["task_id"]] = item
+            canonical.append(item)
+            continue
+        # Prefer the file whose stored id already matches the current canonical id.
+        if existing.get("stored_task_id") != existing.get("task_id") and item.get("stored_task_id") == item.get("task_id"):
+            canonical[canonical.index(existing)] = item
+            seen[item["task_id"]] = item
+    return canonical
+
+
+def run_task_list(run_id, cache=None):
+    """Lightweight per-task listing for a run: [{task_id, name, outcome, subgoal_*}] sorted by
+    task number.
+
+    Task files are large (tens of MB each). With a ``cache`` dict, each file's summary is memoized
+    by mtime+size via ``_cached_file_summary`` so unchanged files are never re-parsed — this is the
+    page-load hot path. Without a cache (or for composite runs whose results are resolved from
+    parts rather than a single file), it falls back to parsing every result directly."""
+    tasks = []
+    if cache is not None and not is_composite_run(load_run(run_id)):
+        for path in _task_result_files(run_id):
+            try:
+                summary = _cached_file_summary(cache, path, _explorer_task_summary, namespace="explorer_task_v2")
+            except Exception:
+                summary = None
+            if summary:
+                tasks.append(summary)
+    if not tasks:
+        for data in _run_results(run_id):
+            tasks.append(_explorer_task_summary_from_data(data))
+    tasks = _canonicalize_run_task_summaries(run_id, tasks)
+    tasks.sort(key=lambda t: _task_number(t["task_id"]))
+    return tasks
+
+
+def _task_attr(task, *names):
+    if not task:
+        return ""
+    if isinstance(task, dict):
+        for name in names:
+            value = task.get(name)
+            if value not in (None, ""):
+                return value
+        return ""
+    for name in names:
+        value = getattr(task, name, None)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _normalize_task_identity(value):
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _result_task_title(data):
+    return _task_attr((data or {}).get("task") or {}, "task", "name")
+
+
+def _result_task_url(data):
+    return _task_attr((data or {}).get("task") or {}, "website_url")
+
+
+def _task_def_title(task):
+    return _task_attr(task, "task", "name")
+
+
+def _task_def_url(task):
+    return _task_attr(task, "website_url")
+
+
+def _result_matches_task_def(data, task):
+    """True when a stored result's embedded task matches the current task registry entry."""
+    if not data or not task:
+        return True
+    expected_title = _normalize_task_identity(_task_def_title(task))
+    actual_title = _normalize_task_identity(_result_task_title(data))
+    if expected_title and actual_title and expected_title != actual_title:
+        return False
+    expected_url = _normalize_task_identity(_task_def_url(task))
+    actual_url = _normalize_task_identity(_result_task_url(data))
+    if expected_url and actual_url and expected_url != actual_url:
+        return False
+    return True
+
+
+def _canonical_task_for_run(run_id, task_id):
+    run = load_run(run_id) or {}
+    task_set = normalize_task_set(run.get("task_set") or "annotated")
+    return tasks_by_id(task_set).get(task_id)
+
+
+def _resolve_run_task_result_for_display(run_id, task_id):
+    """Resolve stale annotated task ids by matching against the current task definition.
+
+    Some older annotated runs were produced before the dataset ordering changed. Their files can
+    be named ``annotated-90.json`` while the embedded task is now the current ``annotated-91``.
+    The explorer should compare the same task across runs, so it uses the current registry entry
+    and falls back to scanning the run for a matching embedded task.
+    """
+    canonical_task = _canonical_task_for_run(run_id, task_id)
+    direct = _run_task_result(run_id, task_id)
+    if not canonical_task or _result_matches_task_def(direct, canonical_task):
+        return direct, None
+
+    expected_title = _task_def_title(canonical_task)
+    expected_url = _task_def_url(canonical_task)
+    mismatch = {
+        "requested_task_id": task_id,
+        "requested_task": expected_title,
+        "requested_url": expected_url,
+        "stale_task_id": (direct or {}).get("task_id") or task_id,
+        "stale_task": _result_task_title(direct),
+        "stale_url": _result_task_url(direct),
+        "resolved": False,
+    }
+    for candidate in _run_results(run_id):
+        if candidate is direct:
+            continue
+        if _result_matches_task_def(candidate, canonical_task):
+            mismatch.update({
+                "resolved": True,
+                "resolved_task_id": candidate.get("task_id"),
+                "resolved_task": _result_task_title(candidate),
+                "resolved_url": _result_task_url(candidate),
+            })
+            return candidate, mismatch
+    return None, mismatch
+
+
+def run_task_detail_payload(run_id, task_id):
+    """Full per-task detail for the explorer: agent steps (action, url, grounding, loop,
+    uncertainty, screenshots, target box), the oracle/reference steps, and the judge verdict."""
+    data, task_resolution = _resolve_run_task_result_for_display(run_id, task_id)
+    if not data:
+        canonical_task = _canonical_task_for_run(run_id, task_id)
+        if not canonical_task or not task_resolution:
+            return None
+        return {
+            "run_id": run_id,
+            "task_id": task_id,
+            "requested_task_id": task_id,
+            "name": _task_def_title(canonical_task) or task_id,
+            "website_url": _task_def_url(canonical_task) or "",
+            "outcome": "mismatch",
+            "judge_reason": "",
+            "evaluation_source": "",
+            "steps": [],
+            "oracle": {
+                "reference_steps": [ln.strip() for ln in str(_task_attr(canonical_task, "reference_steps", "success_criteria")).splitlines() if ln.strip()],
+                "subgoals": _task_attr(canonical_task, "annotated_subgoals") or [],
+                "reference_urls": _task_attr(canonical_task, "annotated_reference_urls") or [],
+            },
+            "subgoals_url": None,
+            "task_resolution": task_resolution,
+        }
+    backfill_computed_loop(data)
+    task = data.get("task", {}) or {}
+
+    steps = []
+    for step in data.get("steps", []):
+        if step.get("isInitial"):
+            continue
+        grounding = _numeric_step_value(step, "element_step_similarity")
+        loop = _numeric_step_value(step, "computed_loop_updated")
+        if loop is None:
+            loop = _numeric_step_value(step, "computed_loop")
+        target = step.get("target") if isinstance(step.get("target"), dict) else {}
+        retry_info = None
+        if step.get("warningInjected"):
+            change, first, retry = _warning_retry_changed(step, DEFAULT_WARNING_CHANGE_FIELDS)
+            first_element = (first or {}).get("element") if isinstance((first or {}).get("element"), dict) else {}
+            retry_element = (retry or {}).get("element") if isinstance((retry or {}).get("element"), dict) else {}
+            retry_info = {
+                "warning_types": [str(t) for t in (step.get("warningTypes") or ["warning"]) if str(t)],
+                "changed": change.get("changed") if change else None,
+                "changed_fields": change.get("changed_fields") if change else [],
+                "all_changed_fields": change.get("all_changed_fields") if change else [],
+                "first_action": (first or {}).get("action") if isinstance(first, dict) else "",
+                "retry_action": (retry or {}).get("action") if isinstance(retry, dict) else "",
+                "first_instruction": (first or {}).get("instruction") if isinstance(first, dict) else "",
+                "retry_instruction": (retry or {}).get("instruction") if isinstance(retry, dict) else "",
+                "first_index": first_element.get("index"),
+                "retry_index": retry_element.get("index"),
+                "first_element_text": first_element.get("text") or "",
+                "retry_element_text": retry_element.get("text") or "",
+                "first_resolved_element_text": step.get("firstResolvedElementText") or "",
+                "retry_resolved_element_text": step.get("retryResolvedElementText") or "",
+                "first_grounding": _numeric_step_value(step, "firstGroundingSimilarity"),
+                "retry_grounding": _numeric_step_value(step, "retryGroundingSimilarity"),
+                "first_loop": _numeric_step_value(step, "firstLoopScore"),
+                "retry_loop": _numeric_step_value(step, "retryLoopScore"),
+            }
+        steps.append({
+            "step": step.get("step"),
+            "action": step.get("action"),
+            "instruction": step.get("instruction") or step.get("typeText") or "",
+            "target_index": target.get("llmIndex") if target.get("llmIndex") is not None else target.get("index"),
+            "target_text": target.get("text") or target.get("label") or "",
+            "element_text": _element_text(step),
+            "target_tag": target.get("tag") or target.get("tagName") or "",
+            "target_role": target.get("role") or "",
+            "url": step.get("url") or step.get("actualUrl") or step.get("currentUrl") or "",
+            "grounding": grounding,
+            "loop": loop,
+            "uncertainty": _step_uncertainty(grounding, loop),
+            "screenshot_before": _artifact_url(step.get("screenshotBefore") or step.get("screenshot")),
+            "screenshot_after": _artifact_url(step.get("screenshotAfter")),
+            "region_shot": _artifact_url(step.get("regionShot") or step.get("targetScreenshot")),
+            "target_rect": step.get("targetRect"),
+            "oracle_step": step.get("oracleStep"),
+            "oracle_subgoal": step.get("oracleSubgoal"),
+            "warning_retry": retry_info,
+        })
+
+    reference_steps = task.get("reference_steps") or task.get("success_criteria") or ""
+    reference_lines = [ln.strip() for ln in str(reference_steps).splitlines() if ln.strip()]
+    judge = data.get("judge") or {}
+    evaluation = data.get("evaluation") or {}
+    evaluation_source = evaluation.get("source") if evaluation.get("status") in {"success", "failed"} else ""
+    display_reason = (
+        evaluation.get("notes")
+        if evaluation.get("status") in {"success", "failed"} and evaluation.get("notes") is not None
+        else judge.get("reason") or ""
+    )
+    return {
+        "run_id": run_id,
+        "task_id": data.get("task_id") or task_id,
+        "requested_task_id": task_id,
+        "name": task.get("task") or task.get("name") or task_id,
+        "website_url": task.get("website_url") or "",
+        "outcome": task_outcome(data),
+        "judge_reason": display_reason,
+        "evaluation_source": evaluation_source or ("judge" if judge else ""),
+        "steps": steps,
+        "oracle": {
+            "reference_steps": reference_lines,
+            "subgoals": task.get("annotated_subgoals") or [],
+            "reference_urls": task.get("annotated_reference_urls") or [],
+        },
+        "subgoals_url": subgoal_url_completion(task, data.get("steps", [])),
+        "task_resolution": task_resolution,
+    }
+
+
+def _task_number(task_id):
+    m = re.search(r'(\d+)', task_id or "")
+    return int(m.group(1)) if m else 0
+
+
+def build_run_outcome_matrix(run_sections):
+    """Cross-run pass/fail matrix keyed by task, for comparing N runs by run (not by task).
+
+    Returns {run_ids, rows, counts} where each row is one task with a cell per run and a
+    class: 'agree_pass' (all runs pass), 'agree_fail' (all fail), 'mixed' (some pass, some
+    fail = the interesting difference), or 'other' (only missing/unknown outcomes). counts
+    tallies each class plus an agreement_rate = agreeing tasks / tasks scored in >=2 runs."""
+    run_ids = [s["run_id"] for s in run_sections]
+    task_map = {}
+    for section in run_sections:
+        for t in section["tasks"]:
+            entry = task_map.setdefault(t["task_id"], {"name": t["name"], "outcomes": {}})
+            entry["outcomes"][section["run_id"]] = t["outcome"]
+            if t["name"] and not entry.get("name"):
+                entry["name"] = t["name"]
+
+    rows = []
+    counts = {"agree_pass": 0, "agree_fail": 0, "mixed": 0, "other": 0}
+    comparable = 0  # tasks scored (pass/fail) in >=2 runs
+    agreeing = 0
+    for task_id in sorted(task_map, key=_task_number):
+        entry = task_map[task_id]
+        cells = [entry["outcomes"].get(rid) for rid in run_ids]
+        present = [c for c in cells if c in ("success", "failed")]
+        passes = sum(1 for c in present if c == "success")
+        fails = sum(1 for c in present if c == "failed")
+        if present and passes == len(present):
+            cls = "agree_pass"
+        elif present and fails == len(present):
+            cls = "agree_fail"
+        elif passes > 0 and fails > 0:
+            cls = "mixed"
+        else:
+            cls = "other"
+        counts[cls] += 1
+        if len(present) >= 2:
+            comparable += 1
+            if cls in ("agree_pass", "agree_fail"):
+                agreeing += 1
+        rows.append({
+            "task_id": task_id,
+            "name": entry["name"],
+            "cells": cells,
+            "cls": cls,
+            "passes": passes,
+            "fails": fails,
+        })
+
+    return {
+        "run_ids": run_ids,
+        "rows": rows,
+        "counts": counts,
+        "agreement_rate": _ratio(agreeing, comparable),
+        "comparable": comparable,
+    }
+
+
+@app.route('/run-task-explorer')
+def run_task_explorer():
+    """Single-page explorer: per included run, how many tasks passed/failed and the task list.
+    Clicking a task lazy-loads its step detail (trend lines + screenshots) from
+    /api/run-task-detail. A comparison section shows one task across runs vs the oracle."""
+    candidates, included_runs, ctx = _select_analysis_runs()
+
+    # Per-file summary cache (shared with the dashboard): task files are tens of MB, so without
+    # this the page re-parses ~all of them on every load. Only new/changed files get re-read.
+    cache = _load_dashboard_cache()
+    metas_before = {k: (v or {}).get('meta') for k, v in cache.items()}
+
+    run_sections = []
+    task_id_set = set()
+    for run in included_runs:
+        run_id = run.get("run_id", "")
+        flags = run_variation_flags(run)
+        tasks = run_task_list(run_id, cache)
+        passed = sum(1 for t in tasks if t["outcome"] == "success")
+        failed = sum(1 for t in tasks if t["outcome"] == "failed")
+        for t in tasks:
+            task_id_set.add(t["task_id"])
+        # Aggregate URL-subgoal completion across the run's tasks (total matched nodes /
+        # total nodes), plus how many tasks reached 100% of their URL subgoals.
+        subgoal_completed = sum(t.get("subgoal_completed", 0) for t in tasks)
+        subgoal_total = sum(t.get("subgoal_total", 0) for t in tasks)
+        fully_complete = sum(1 for t in tasks if t.get("subgoal_total") and t.get("subgoal_completed") == t.get("subgoal_total"))
+        run_sections.append({
+            "run_id": run_id,
+            "display_name": _run_display_name(run),
+            "badges": _run_badges(run),
+            "combo_label": run_variation_combo_label(flags),
+            "flags": flags,
+            "model_label": _grounding_display_model_name(run.get("task_model")),
+            "display_time": _run_display_time(run),
+            "passed": passed,
+            "failed": failed,
+            "total": len(tasks),
+            "tasks": tasks,
+            "subgoal_completed": subgoal_completed,
+            "subgoal_total": subgoal_total,
+            "subgoal_rate": _ratio(subgoal_completed, subgoal_total),
+            "subgoal_fully_complete": fully_complete,
+        })
+
+    all_task_ids = sorted(task_id_set, key=_task_number)
+    outcome_matrix = build_run_outcome_matrix(run_sections)
+    # Compact metadata for the run-vs-run pickers (task count + characteristics),
+    # keyed by run_id. Derived from run_sections — no extra data reads.
+    run_meta = {
+        s["run_id"]: {
+            "combo_label": s["combo_label"],
+            "badges": s["badges"],
+            "flags": s["flags"],
+            "total": s["total"],
+            "passed": s["passed"],
+            "failed": s["failed"],
+        }
+        for s in run_sections
+    }
+
+    # Persist only if a file was newly parsed or changed (avoids rewriting on cache-hit loads).
+    if {k: (v or {}).get('meta') for k, v in cache.items()} != metas_before:
+        _save_dashboard_cache(cache)
+
+    return render_template('run_task_explorer.html',
+        candidates=candidates,
+        run_sections=run_sections,
+        all_task_ids=all_task_ids,
+        outcome_matrix=outcome_matrix,
+        run_meta=run_meta,
+        selection_applied=ctx["selection_applied"],
+        task_set_filter=ctx["task_set_filter"],
+        model_filter=ctx["model_filter"],
+        task_set_ids=ctx["task_set_ids"],
+        model_ids=ctx["model_ids"],
+    )
+
+
+@app.route('/api/mcnemar')
+def api_mcnemar():
+    """McNemar's paired test for a run pair. ``b`` = pass->fail, ``c`` = fail->pass.
+
+    The explorer computes b/c client-side from the outcome matrix and calls this to
+    get a rigorous p-value (exact binomial for small discordant n, else corrected
+    chi-square)."""
+    def _int_arg(name):
+        try:
+            return int(request.args.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+    return jsonify(mcnemar_test(_int_arg("b"), _int_arg("c")))
+
+
+@app.route('/api/run-task-detail')
+def api_run_task_detail():
+    """JSON step detail for one run+task, lazy-loaded by the explorer page."""
+    run_id = request.args.get("run_id", "")
+    task_id = request.args.get("task_id", "")
+    if not run_id or not task_id:
+        return jsonify({"error": "run_id and task_id are required"}), 400
+    try:
+        payload = run_task_detail_payload(run_id, task_id)
+    except Exception:
+        payload = None
+    if payload is None:
+        return jsonify({"error": "task not found"}), 404
+    return jsonify(payload)
+
+
+@app.route('/api/run-task-detail/evaluation', methods=['POST', 'OPTIONS'])
+def api_run_task_detail_evaluation():
+    if request.method == 'OPTIONS':
+        return '', 204
+    payload = request.json or {}
+    run_id = str(payload.get("run_id") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    status = str(payload.get("status") or "").strip().lower()
+    notes = str(payload.get("reason") or payload.get("notes") or "").strip()
+    if not run_id or not task_id:
+        return jsonify({"error": "run_id and task_id are required"}), 400
+    if status not in {"success", "failed"}:
+        return jsonify({"error": "status must be success or failed"}), 400
+    data = _run_task_result(run_id, task_id)
+    if not data:
+        return jsonify({"error": "task not found"}), 404
+    physical_run_id = data.pop("resolved_run_id", None) or run_id
+    data.pop("logical_run_id", None)
+    updated = apply_manual_evaluation(data, status=status, notes=notes)
+    save_task_result(physical_run_id, updated.get("task_id") or task_id, updated)
+    refreshed = run_task_detail_payload(run_id, task_id)
+    return jsonify({
+        "status": "success",
+        "run_id": run_id,
+        "physical_run_id": physical_run_id,
+        "task_id": task_id,
+        "outcome": task_outcome(updated),
+        "detail": refreshed,
+    })
+
+
+def _parse_agent_json_response(raw):
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except Exception:
+                return None
+    return None
+
+
+def _agent_answer_signature(parsed, step):
+    parsed = parsed if isinstance(parsed, dict) else {}
+    element = parsed.get("element") if isinstance(parsed.get("element"), dict) else {}
+    return {
+        "action": str(parsed.get("action") or "").strip().lower(),
+        "instruction": str(parsed.get("instruction") or "").strip().lower(),
+        "index": str(element.get("index") if element.get("index") is not None else "").strip(),
+        "element_text": str(element.get("text") or "").strip().lower(),
+        "resolved_text": str(step.get("retryResolvedElementText") or step.get("firstResolvedElementText") or "").strip().lower(),
+    }
+
+
+WARNING_CHANGE_FIELD_MAP = {
+    "dom_element": ("index",),
+    "instruction": ("instruction",),
+    "action": ("action",),
+}
+DEFAULT_WARNING_CHANGE_FIELDS = ("dom_element", "instruction", "action")
+
+
+def _normalize_warning_change_fields(values):
+    selected = []
+    for value in values or []:
+        key = str(value or "").strip().lower()
+        if key in WARNING_CHANGE_FIELD_MAP and key not in selected:
+            selected.append(key)
+    return selected or list(DEFAULT_WARNING_CHANGE_FIELDS)
+
+
+def _warning_retry_changed(step, change_fields=None):
+    first = _parse_agent_json_response(step.get("firstRawResponse"))
+    retry = _parse_agent_json_response(step.get("retryRawResponse"))
+    if not first or not retry:
+        return None, first, retry
+    first_sig = _agent_answer_signature(first, step)
+    retry_sig = _agent_answer_signature(retry, step)
+    # Resolved text belongs to each side when present; overwrite after constructing the base
+    # signature so older runs that lack resolved fields still compare the raw model JSON.
+    first_sig["resolved_text"] = str(step.get("firstResolvedElementText") or first_sig["element_text"]).strip().lower()
+    retry_sig["resolved_text"] = str(step.get("retryResolvedElementText") or retry_sig["element_text"]).strip().lower()
+    changed_fields = [
+        key for key in ("action", "instruction", "index", "element_text", "resolved_text")
+        if first_sig.get(key) != retry_sig.get(key)
+    ]
+    selected_fields = _normalize_warning_change_fields(change_fields)
+    counted_signature_fields = []
+    for field in selected_fields:
+        counted_signature_fields.extend(WARNING_CHANGE_FIELD_MAP[field])
+    counted_changed_fields = [field for field in counted_signature_fields if field in changed_fields]
+    return {
+        "changed": bool(counted_changed_fields),
+        "changed_fields": counted_changed_fields,
+        "all_changed_fields": changed_fields,
+        "change_fields": selected_fields,
+        "first": first_sig,
+        "retry": retry_sig,
+    }, first, retry
+
+
+@app.route('/api/warning_retry_effectiveness', methods=['POST', 'OPTIONS'])
+def api_warning_retry_effectiveness():
+    if request.method == 'OPTIONS':
+        return '', 204
+    payload = request.json or {}
+    run_ids = [str(rid).strip() for rid in (payload.get("run_ids") or []) if str(rid).strip()]
+    change_fields = _normalize_warning_change_fields(payload.get("change_fields"))
+    response = {
+        "change_fields": change_fields,
+        "totals": {
+            "runs": 0,
+            "tasks_with_warning": 0,
+            "tasks_changed": 0,
+            "changed_tasks_passed": 0,
+            "changed_tasks_failed": 0,
+            "unchanged_tasks_passed": 0,
+            "unchanged_tasks_failed": 0,
+            "warning_steps": 0,
+            "changed": 0,
+            "unchanged": 0,
+            "unparsed": 0,
+            "grounding_improved": 0,
+            "loop_reduced": 0,
+        },
+        "groups": {},
+        "examples": [],
+    }
+
+    def group_for(key, label):
+        if key not in response["groups"]:
+            response["groups"][key] = {
+                "label": label,
+                "tasks_with_warning": 0,
+                "tasks_changed": 0,
+                "changed_tasks_passed": 0,
+                "changed_tasks_failed": 0,
+                "unchanged_tasks_passed": 0,
+                "unchanged_tasks_failed": 0,
+                "warning_steps": 0,
+                "changed": 0,
+                "unchanged": 0,
+                "unparsed": 0,
+                "grounding_improved": 0,
+                "loop_reduced": 0,
+            }
+        return response["groups"][key]
+
+    for run_id in run_ids:
+        run = load_run(run_id)
+        if not run:
+            continue
+        response["totals"]["runs"] += 1
+        model_label = _grounding_display_model_name(run.get("task_model") or "Unknown")
+        for task in _run_results(run_id):
+            stored_task_id = task.get("task_id") or task.get("session_id") or ""
+            task_summary = _explorer_task_summary_from_data(task)
+            canonical_rows = _canonicalize_run_task_summaries(run_id, [task_summary])
+            canonical_task_id = (canonical_rows[0].get("task_id") if canonical_rows else stored_task_id) or stored_task_id
+            task_id = canonical_task_id
+            outcome = task_outcome(task)
+            task_warning_groups = set()
+            task_changed_groups = set()
+            task_group_changed = {}
+            task_group_parsed = {}
+            task_has_warning = False
+            task_has_changed = False
+            task_parsed_warning = False
+            for step in task.get("steps") or []:
+                if not step.get("warningInjected"):
+                    continue
+                warning_types = [str(t) for t in (step.get("warningTypes") or ["warning"]) if str(t)]
+                type_label = " + ".join(sorted(warning_types)) if warning_types else "warning"
+                key = f"{model_label}::{type_label}"
+                group = group_for(key, f"{model_label} · {type_label}")
+                task_has_warning = True
+                task_warning_groups.add(key)
+                task_group_changed.setdefault(key, False)
+                task_group_parsed.setdefault(key, False)
+                response["totals"]["warning_steps"] += 1
+                group["warning_steps"] += 1
+
+                change, first, retry = _warning_retry_changed(step, change_fields)
+                if change is None:
+                    response["totals"]["unparsed"] += 1
+                    group["unparsed"] += 1
+                    changed = None
+                else:
+                    task_parsed_warning = True
+                    task_group_parsed[key] = True
+                    changed = bool(change["changed"])
+                    bucket = "changed" if changed else "unchanged"
+                    response["totals"][bucket] += 1
+                    group[bucket] += 1
+                    if changed:
+                        task_has_changed = True
+                        task_changed_groups.add(key)
+                        task_group_changed[key] = True
+
+                first_g = _numeric_step_value(step, "firstGroundingSimilarity")
+                retry_g = _numeric_step_value(step, "retryGroundingSimilarity")
+                if first_g is not None and retry_g is not None and retry_g > first_g:
+                    response["totals"]["grounding_improved"] += 1
+                    group["grounding_improved"] += 1
+                first_l = _numeric_step_value(step, "firstLoopScore")
+                retry_l = _numeric_step_value(step, "retryLoopScore")
+                if first_l is not None and retry_l is not None and retry_l < first_l:
+                    response["totals"]["loop_reduced"] += 1
+                    group["loop_reduced"] += 1
+
+                if len(response["examples"]) < 20:
+                    response["examples"].append({
+                        "run_id": run_id,
+                        "task_id": task_id,
+                        "stored_task_id": stored_task_id,
+                        "explorer_url": url_for("run_task_explorer", task_id=task_id, run_id=run_id),
+                        "step": step.get("step"),
+                        "model": model_label,
+                        "warning_types": warning_types,
+                        "outcome": outcome,
+                        "changed": changed,
+                        "changed_fields": change.get("changed_fields") if change else [],
+                        "all_changed_fields": change.get("all_changed_fields") if change else [],
+                        "first_action": (first or {}).get("action") if isinstance(first, dict) else "",
+                        "retry_action": (retry or {}).get("action") if isinstance(retry, dict) else "",
+                        "first_instruction": (first or {}).get("instruction") if isinstance(first, dict) else "",
+                        "retry_instruction": (retry or {}).get("instruction") if isinstance(retry, dict) else "",
+                        "first_index": ((first or {}).get("element") or {}).get("index") if isinstance((first or {}).get("element"), dict) else "",
+                        "retry_index": ((retry or {}).get("element") or {}).get("index") if isinstance((retry or {}).get("element"), dict) else "",
+                        "first_element_text": ((first or {}).get("element") or {}).get("text") if isinstance((first or {}).get("element"), dict) else "",
+                        "retry_element_text": ((retry or {}).get("element") or {}).get("text") if isinstance((retry or {}).get("element"), dict) else "",
+                        "first_resolved_element_text": step.get("firstResolvedElementText") or "",
+                        "retry_resolved_element_text": step.get("retryResolvedElementText") or "",
+                        "first_grounding": first_g,
+                        "retry_grounding": retry_g,
+                        "first_loop": first_l,
+                        "retry_loop": retry_l,
+                    })
+            if task_has_warning:
+                response["totals"]["tasks_with_warning"] += 1
+                for key in task_warning_groups:
+                    response["groups"][key]["tasks_with_warning"] += 1
+                if task_parsed_warning:
+                    if task_has_changed:
+                        outcome_key = "changed_tasks_passed" if outcome == "success" else "changed_tasks_failed" if outcome == "failed" else ""
+                    else:
+                        outcome_key = "unchanged_tasks_passed" if outcome == "success" else "unchanged_tasks_failed" if outcome == "failed" else ""
+                    if outcome_key:
+                        response["totals"][outcome_key] += 1
+                for key in task_warning_groups:
+                    if not task_group_parsed.get(key):
+                        continue
+                    if task_group_changed.get(key):
+                        outcome_key = "changed_tasks_passed" if outcome == "success" else "changed_tasks_failed" if outcome == "failed" else ""
+                    else:
+                        outcome_key = "unchanged_tasks_passed" if outcome == "success" else "unchanged_tasks_failed" if outcome == "failed" else ""
+                    if outcome_key:
+                        response["groups"][key][outcome_key] += 1
+            if task_has_changed:
+                response["totals"]["tasks_changed"] += 1
+                for key in task_changed_groups:
+                    response["groups"][key]["tasks_changed"] += 1
+
+    for stats in response["groups"].values():
+        denom = stats["warning_steps"] - stats["unparsed"]
+        stats["changed_rate"] = _ratio(stats["changed"], denom)
+        stats["task_changed_rate"] = _ratio(stats["tasks_changed"], stats["tasks_with_warning"])
+        changed_outcome_total = stats["changed_tasks_passed"] + stats["changed_tasks_failed"]
+        unchanged_outcome_total = stats["unchanged_tasks_passed"] + stats["unchanged_tasks_failed"]
+        stats["changed_task_pass_rate"] = _ratio(stats["changed_tasks_passed"], changed_outcome_total)
+        stats["unchanged_task_pass_rate"] = _ratio(stats["unchanged_tasks_passed"], unchanged_outcome_total)
+    total_denom = response["totals"]["warning_steps"] - response["totals"]["unparsed"]
+    response["totals"]["changed_rate"] = _ratio(response["totals"]["changed"], total_denom)
+    response["totals"]["task_changed_rate"] = _ratio(response["totals"]["tasks_changed"], response["totals"]["tasks_with_warning"])
+    changed_outcome_total = response["totals"]["changed_tasks_passed"] + response["totals"]["changed_tasks_failed"]
+    unchanged_outcome_total = response["totals"]["unchanged_tasks_passed"] + response["totals"]["unchanged_tasks_failed"]
+    response["totals"]["changed_task_pass_rate"] = _ratio(response["totals"]["changed_tasks_passed"], changed_outcome_total)
+    response["totals"]["unchanged_task_pass_rate"] = _ratio(response["totals"]["unchanged_tasks_passed"], unchanged_outcome_total)
+    response["groups"] = dict(sorted(response["groups"].items(), key=lambda item: item[1]["label"].lower()))
+    return jsonify(response)
+
 
 @app.route('/api/grounding_metrics', methods=['POST', 'OPTIONS'])
 def api_grounding_metrics():

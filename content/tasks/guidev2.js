@@ -349,6 +349,13 @@ window._guidev2 = { active: false, question: '', previousSteps: [], currentPlanS
 
 // Prevent concurrent resume/generate calls
 let _guidev2Resuming = false;
+// When the resume lock was last taken by an auto-loop continuation. Used only to release a leaked
+// lock (see _gv2ResumeLockStuck) so a stuck flag can't permanently wedge the loop.
+let _guidev2ResumingSince = 0;
+const _GV2_RESUMING_MAX_MS = 120000; // 2 min — longer than any real continuation
+function _gv2ResumeLockStuck() {
+  return _guidev2Resuming && _guidev2ResumingSince > 0 && (Date.now() - _guidev2ResumingSince) > _GV2_RESUMING_MAX_MS;
+}
 
 // Flag set when a click step is awaiting user action
 let _guidev2WaitingForClick = false;
@@ -641,6 +648,7 @@ async function gv2GenerateForceGroundTruthStep(pageIndex, stepNumber) {
     action: 'callLLM',
     systemPrompt,
     messages: [{ role: 'user', content: userPrompt }],
+    imageBase64: g._pendingPromptImage || null,
     metadata: {
       mode: 'force_ground_truth',
       step: stepNumber,
@@ -1664,6 +1672,37 @@ async function _gv2IsEvalMode() {
   }
 }
 
+// DOM+Screenshot eval mode: the guide attaches the current viewport screenshot to its
+// reasoning LLM call (and any warning-retry call). Gated on eval mode so normal
+// interactive guide usage is unchanged; the eval sets sync `visionEnabled` per input mode.
+async function _gv2EvalVisionEnabled() {
+  try {
+    if (!(await _gv2IsEvalMode())) return false;
+    const s = await chrome.storage.sync.get(['visionEnabled']);
+    return s.visionEnabled === true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function _gv2CaptureVisionShot() {
+  // Capture the current (before-action) viewport, hiding PageGuide's own overlays so the
+  // model sees only the page — not the "Pause task" / "Agent thinking…" UI.
+  const hidden = [];
+  try {
+    for (const id of [_GV2_AUTO_OVERLAY_ID, _GV2_INDICATOR_ID, 'pageguide-som-container']) {
+      const el = document.getElementById(id);
+      if (el && el.style.visibility !== 'hidden') { el.style.visibility = 'hidden'; hidden.push(el); }
+    }
+  } catch (e) {}
+  let shot = null;
+  try {
+    if (typeof captureScreenshot === 'function') shot = await captureScreenshot();
+  } catch (e) {}
+  for (const el of hidden) { try { el.style.visibility = ''; } catch (e) {} }
+  return shot;
+}
+
 // Debug-only target-region capture: 'legacy' crops the carried before-shot using immediate
 // element bounds; 'aligned' scrolls the highlight into view, takes a fresh screenshot, then crops.
 const _GV2_REGION_CAPTURE_KEY = 'guideDebugRegionCapture';
@@ -1780,6 +1819,7 @@ Return JSON for the task plan.`;
       action: 'callLLM',
       systemPrompt: GUIDE_V2_PLANNING_PROMPT,
       messages: [{ role: 'user', content: prompt }],
+      imageBase64: g._pendingPromptImage || null,
       metadata: planningMetadata
     });
     if (response?.error || !response?.content) throw new Error(response?.error || 'No planning response');
@@ -2293,8 +2333,19 @@ async function _gv2ScrollRegionTargetIntoView(el) {
   } catch (e) { /* best-effort */ }
   const instant = evalMode || window._guidev2?.autoMode === true;
   const scrollEl = el.closest('a, button, [role="button"], [role="link"], [role="menuitem"], li, summary, nav') || el;
-  scrollEl.scrollIntoView({ behavior: instant ? 'instant' : 'smooth', block: 'center', inline: 'nearest' });
-  await new Promise((resolve) => setTimeout(resolve, instant ? 200 : 550));
+  // Reliable scroll: verify the target actually became visible; fall back to moving the real
+  // scroll container (nested/transformed scrollers, sticky headers) so the captured screenshot
+  // and SoM marks reflect the target. Falls back to a bare scrollIntoView if the helper is absent.
+  if (typeof pgScrollIntoViewReliably === 'function') {
+    const visible = await pgScrollIntoViewReliably(scrollEl, {
+      behavior: instant ? 'instant' : 'smooth',
+      settleMs: instant ? 200 : 550,
+    });
+    if (!visible) console.warn('[guidev2] scroll-to-target failed — target not visible in viewport after scroll');
+  } else {
+    scrollEl.scrollIntoView({ behavior: instant ? 'instant' : 'smooth', block: 'center', inline: 'nearest' });
+    await new Promise((resolve) => setTimeout(resolve, instant ? 200 : 550));
+  }
 }
 
 async function gv2CaptureRegion(screenshotBase64, options = {}) {
@@ -2369,6 +2420,84 @@ function _gv2CropScreenshot(base64, rect) {
     } catch (e) { finish(null); }
   });
 }
+
+// SoM mark palette (mirrors showSetOfMarks in content/functions/highlight.js) so the baked-in
+// screenshot marks and the live overlay use the same per-index colors.
+const _GV2_SOM_COLORS = ['#e74c3c', '#9b59b6', '#3498db', '#27ae60', '#f39c12', '#1abc9c', '#e91e63', '#00bcd4'];
+
+/**
+ * Scale a viewport rect to screenshot-image pixels, returning {x,y,w,h}, or null when the element
+ * is too small or fully outside the viewport. Pure (no DOM) so it is unit-testable.
+ */
+function _gv2SomImageBox(rect, scaleX, scaleY, vw, vh) {
+  if (!rect) return null;
+  if (rect.width < 5 || rect.height < 5) return null;
+  if (rect.bottom < 0 || rect.top > vh) return null;
+  if (rect.right < 0 || rect.left > vw) return null;
+  return { x: rect.left * scaleX, y: rect.top * scaleY, w: rect.width * scaleX, h: rect.height * scaleY };
+}
+if (typeof window !== 'undefined') window._gv2SomImageBox = _gv2SomImageBox;
+
+/**
+ * Bake numbered Set-of-Marks boxes onto a base64 JPEG viewport screenshot using a canvas. Uses
+ * getBoundingClientRect() viewport coordinates scaled to the captured image (scale = image width /
+ * innerWidth), so alignment does not depend on the page's CSS positioning/transform/scroll — unlike
+ * a DOM overlay. Resolves the marked base64, or the original base64 on any failure.
+ */
+function _gv2DrawSomOnScreenshot(base64, pageIndex) {
+  return new Promise((resolve) => {
+    const indexMap = pageIndex?.indexMap || (typeof window !== 'undefined' ? window._pageguideIndex : null) || {};
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    setTimeout(() => finish(base64), 1500); // never hang the record store on a stuck decode
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const vw = window.innerWidth || img.naturalWidth;
+          const vh = window.innerHeight || img.naturalHeight;
+          const scaleX = img.naturalWidth / vw;
+          const scaleY = img.naturalHeight / vh;
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          const lineW = Math.max(2, Math.round(2 * scaleX));
+          const fontPx = Math.max(11, Math.round(11 * scaleX));
+          const padX = Math.max(2, Math.round(2 * scaleX));
+          const padY = Math.max(1, Math.round(1 * scaleY));
+          ctx.textBaseline = 'top';
+          ctx.font = `bold ${fontPx}px monospace`;
+          for (const [idx, el] of Object.entries(indexMap)) {
+            let rect;
+            try { rect = el.getBoundingClientRect(); } catch (e) { continue; }
+            const box = _gv2SomImageBox(rect, scaleX, scaleY, vw, vh);
+            if (!box) continue;
+            const color = _GV2_SOM_COLORS[parseInt(idx, 10) % _GV2_SOM_COLORS.length];
+            ctx.lineWidth = lineW;
+            ctx.strokeStyle = color;
+            ctx.strokeRect(box.x, box.y, box.w, box.h);
+            // Numbered label at the box's top-left corner (drop inside if it would clip off-screen).
+            const label = String(idx);
+            const lw = ctx.measureText(label).width + padX * 2;
+            const lh = fontPx + padY * 2;
+            const lx = box.x;
+            const ly = box.y - lh < 0 ? box.y : box.y - lh;
+            ctx.fillStyle = color;
+            ctx.fillRect(lx, ly, lw, lh);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, lx + padX, ly + padY);
+          }
+          finish(canvas.toDataURL('image/jpeg', 0.8).replace(/^data:image\/\w+;base64,/, ''));
+        } catch (e) { finish(base64); }
+      };
+      img.onerror = () => finish(base64);
+      img.src = 'data:image/jpeg;base64,' + base64;
+    } catch (e) { finish(base64); }
+  });
+}
+if (typeof window !== 'undefined') window._gv2DrawSomOnScreenshot = _gv2DrawSomOnScreenshot;
 
 async function gv2CaptureStepRecord(data) {
   const g = window._guidev2;
@@ -2585,7 +2714,9 @@ async function gv2CaptureStepRecord(data) {
       tutorialMatch: data.tutorialMatch || null,
       rawLlmJson: data.rawLlmJson || '',
       systemPrompt: data.systemPrompt || '',
-      userPrompt: data.userPrompt || ''
+      userPrompt: data.userPrompt || '',
+      // DOM+Screenshot: the exact (clean, before-action) viewport image sent to the LLM this step.
+      promptImage: g._pendingPromptImage || null
     };
 
     await rewindPutRecord(record);
@@ -2819,11 +2950,28 @@ async function gv2GenerateNextStep() {
   g._lastPageSig = curSig;
 
   const pageBg = getPageBackground();
+  // Live overlay for the human watching (honors the user's persistent somEnabled toggle). The
+  // model's screenshot gets its marks baked in below, not from this overlay.
   if (typeof showSomIfEnabled === 'function') await showSomIfEnabled(pageIndex);
   if (_gv2IsStopped()) return null;
 
   const stepNumber = g.previousSteps.length + 1;
   console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
+
+  // DOM+Screenshot mode: capture the (clean, before-action) viewport ONCE here so every variant's
+  // LLM call for this step — main reasoning, planning, force-ground-truth, and warning retry —
+  // sends the same DOM text + screenshot. Stashed on `g` so those separate call sites can read it
+  // and so this step's rewind record stores it reliably.
+  const visionEnabled = await _gv2EvalVisionEnabled();
+  let visionShot = visionEnabled ? await _gv2CaptureVisionShot() : null;
+  // Bake the numbered [N] Set-of-Marks onto the captured bitmap so the image the model sees carries
+  // the same indices as the PAGE INDEX text. Done on the screenshot (via canvas, using viewport
+  // rects scaled to the image) rather than a DOM overlay, so the marks stay aligned with the
+  // captured pixels regardless of the page's CSS positioning / transform / scroll container.
+  if (visionShot && typeof _gv2DrawSomOnScreenshot === 'function') {
+    visionShot = (await _gv2DrawSomOnScreenshot(visionShot, pageIndex)) || visionShot;
+  }
+  g._pendingPromptImage = visionShot || null;
 
   if (g.forceGroundTruth?.enabled) {
     return gv2GenerateForceGroundTruthStep(pageIndex, stepNumber);
@@ -2932,6 +3080,7 @@ Return JSON for Step ${stepNumber}`;
         role: 'user',
         content: userPrompt
       }],
+      imageBase64: visionShot || null,
       metadata: {
         mode: 'guide',
         step: stepNumber,
@@ -2978,6 +3127,7 @@ Return JSON for Step ${stepNumber}`;
             action: 'callLLM',
             systemPrompt,
             messages: [{ role: 'user', content: retryUserPrompt }],
+            imageBase64: visionShot || null,
             metadata: {
               mode: 'guide_warning_retry',
               step: stepNumber,
@@ -3573,6 +3723,44 @@ function _gv2SetupClickListener() {
 let _guidev2PageHiding = false;
 window.addEventListener('pagehide', () => { _guidev2PageHiding = true; });
 
+/**
+ * Should a failed gv2GenerateNextStep() result be retried? True only for *transient* failures
+ * (empty/errored LLM response, sparse DOM, generic throw). False for terminal outcomes — a null
+ * (stopped/inactive), a success, or an intentional stop (paused, max-steps, force-ground-truth,
+ * already-continuing). Pure — unit-testable. Prevents one flaky next-step call from permanently
+ * ending an eval task.
+ */
+function _gv2ShouldRetryGeneration(result) {
+  if (!result) return false;                 // null → guide stopped/inactive; don't spin
+  if (result.success !== false) return false; // success (or non-failure) → nothing to retry
+  if (result.stoppedByMaxSteps || result.forceGroundTruthFailed) return false;
+  const err = result.error || '';
+  if (err === 'Guide paused' || err === 'Guide stopped' || err === 'Guide is already continuing') return false;
+  return true;                               // transient (LLM empty/error, sparse DOM, …) → retry
+}
+if (typeof window !== 'undefined') window._gv2ShouldRetryGeneration = _gv2ShouldRetryGeneration;
+
+/**
+ * gv2GenerateNextStep() with a bounded retry on transient failures, so a single empty/errored LLM
+ * response doesn't strand the auto-loop (which is the dominant cause of eval idle_timeouts). The
+ * caller must already hold the _guidev2Resuming lock.
+ */
+async function _gv2GenerateNextStepResilient(maxTries = 3, backoffMs = 1200) {
+  let result = null;
+  for (let attempt = 1; attempt <= maxTries; attempt++) {
+    if (_gv2IsStopped()) return result || { success: false, progressed: false, error: 'Guide stopped' };
+    result = await gv2GenerateNextStep();
+    if (!_gv2ShouldRetryGeneration(result)) return result;
+    if (attempt < maxTries) {
+      console.log(`[guidev2] next-step generation failed (attempt ${attempt}/${maxTries}) — retrying`, result?.error || '');
+      await new Promise(r => setTimeout(r, backoffMs));
+    }
+  }
+  console.warn('[guidev2] next-step generation still failing after retries; ending continuation', result?.error || '');
+  return result;
+}
+if (typeof window !== 'undefined') window._gv2GenerateNextStepResilient = _gv2GenerateNextStepResilient;
+
 async function _gv2WaitForNavOrSettle(startUrl) {
   const POLL_MS = 100;
   const MAX_POLLS = 20; // 2 s
@@ -3609,8 +3797,10 @@ async function _gv2WaitForNavOrSettle(startUrl) {
         }
       }
       console.log('[guidev2] SPA navigation confirmed');
+      if (_gv2ResumeLockStuck()) { console.warn('[guidev2] releasing stale resume lock (SPA nav)'); _guidev2Resuming = false; }
       if (_guidev2Resuming) return { success: false, progressed: false, navigated: true, capturedAfter: false, error: 'Guide is already continuing' };
       _guidev2Resuming = true;  // Set BEFORE any await to prevent double-fire
+      _guidev2ResumingSince = Date.now();
       try {
         // Give the SPA framework time to tear down the old view and render the
         // new one before we start the stability observer.  Without this initial
@@ -3623,7 +3813,7 @@ async function _gv2WaitForNavOrSettle(startUrl) {
         // Rewind: refresh the just-clicked step's snapshot with the post-click view.
         await gv2RecaptureAfterAction(_gv2CompletedStepNumber());
         if (_gv2IsStopped()) return { success: false, progressed: false, navigated: true, capturedAfter: true, error: 'Guide stopped' };
-        const result = await gv2GenerateNextStep();
+        const result = await _gv2GenerateNextStepResilient();
         if (!_guidev2Stopped && result && result.success !== false) {
           try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
           return { success: true, progressed: true, navigated: true, capturedAfter: true };
@@ -3664,8 +3854,10 @@ async function _gv2WaitForNavOrSettle(startUrl) {
   } catch (e) { /* SW unavailable — proceed with same-page behaviour */ }
 
   console.log('[guidev2] No navigation — continuing on same page');
+  if (_gv2ResumeLockStuck()) { console.warn('[guidev2] releasing stale resume lock (same-page)'); _guidev2Resuming = false; }
   if (_guidev2Resuming) return { success: false, progressed: false, navigated: false, capturedAfter: false, error: 'Guide is already continuing' };
   _guidev2Resuming = true;
+  _guidev2ResumingSince = Date.now();
   try {
     // Wait for DOM to settle (e.g. dropdown finished rendering)
     await gv2WaitForDomStable(2000, 300);
@@ -3673,7 +3865,7 @@ async function _gv2WaitForNavOrSettle(startUrl) {
     // Rewind: refresh the just-clicked step's snapshot with the post-click view.
     await gv2RecaptureAfterAction(_gv2CompletedStepNumber());
     if (_gv2IsStopped()) return { success: false, progressed: false, navigated: false, capturedAfter: true, error: 'Guide stopped' };
-    const result = await gv2GenerateNextStep();
+    const result = await _gv2GenerateNextStepResilient();
     if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
       return { success: true, progressed: true, navigated: false, capturedAfter: true };
@@ -3775,11 +3967,13 @@ async function _gv2ContinueAfterFormEdit(label) {
 
   console.log(`[guidev2] ${label} done, generating next step...`);
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+  if (_gv2ResumeLockStuck()) { console.warn('[guidev2] releasing stale resume lock (form edit)'); _guidev2Resuming = false; }
   if (_guidev2Resuming) return;
   _guidev2Resuming = true;
+  _guidev2ResumingSince = Date.now();
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
   try {
-    const result = await gv2GenerateNextStep();
+    const result = await _gv2GenerateNextStepResilient();
     if (!_guidev2Stopped && result && result.success !== false) {
       try { chrome.runtime.sendMessage({ action: 'guideStep', result }); } catch (e) {}
       return { success: true, progressed: true, result };

@@ -336,10 +336,18 @@
     <div class="run-card">
       <div class="run-header">
         <div>
-          <h2 style="font-family: monospace; color: var(--accent); margin-bottom: 8px; font-size: 24px;">{{ run.run_id }}</h2>
+          {% if run.nickname %}
+            <h2 style="color: var(--text); margin-bottom: 4px; font-size: 24px;">{{ run.nickname }}</h2>
+            <div style="font-family: monospace; color: var(--accent); margin-bottom: 8px; font-size: 15px;">{{ run.run_id }}</div>
+          {% else %}
+            <h2 style="font-family: monospace; color: var(--accent); margin-bottom: 8px; font-size: 24px;">{{ run.run_id }}</h2>
+          {% endif %}
           <p style="color: var(--text-muted);">Dataset: {{ run.task_set }}</p>
           <p style="color: var(--text-muted); margin-top: 4px;">Target capture: <strong style="color: var(--text);">{{ region_capture_mode_label(run.region_capture_mode) }}</strong></p>
           <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+            {% for badge in run.badges %}
+            <span class="badge neutral" style="text-transform: none; letter-spacing: 0; max-width: 100%; white-space: normal;">{{ badge }}</span>
+            {% endfor %}
             <span class="badge neutral" style="text-transform: none; letter-spacing: 0; max-width: 100%; white-space: normal;">
               Task model: <code style="font-family: monospace; color: var(--text); overflow-wrap: anywhere;">{{ run.task_model or 'Unknown' }}</code>
             </span>
@@ -412,14 +420,79 @@
             </form>
           {% elif run.status == 'running' %}
             <span class="badge pending">Running ({{ run.progress }})</span>
-            <form action="/runs/{{ run.run_id }}/stop" method="post" style="margin-top: 10px; display: inline-block;">
-              <button type="submit" class="btn" style="background: var(--failure);">Stop Run</button>
-            </form>
+            <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+              <form action="/runs/{{ run.run_id }}/pause" method="post" style="margin: 0;">
+                <button type="submit" class="btn" style="background: rgba(245, 158, 11, 0.15); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.35); box-shadow: none;" title="Gracefully stop after the in-flight tasks; you can resume the remaining tasks later.">⏸️ Pause Run</button>
+              </form>
+              <form action="/runs/{{ run.run_id }}/stop" method="post" style="margin: 0;">
+                <button type="submit" class="btn" style="background: rgba(239, 68, 68, 0.12); color: var(--failure); border: 1px solid rgba(239, 68, 68, 0.3); box-shadow: none;" title="Stop the run (remaining tasks can still be resumed later).">Stop Run</button>
+              </form>
+            </div>
           {% else %}
-            <span class="badge failed">{{ run.status }}</span>
+            <span class="badge {{ 'pending' if run.status == 'paused' else 'failed' }}">{{ run.status }}</span>
+            {% if run_resumable and remaining_task_count > 0 %}
+            <form action="/runs/{{ run.run_id }}/resume" method="post" style="margin-top: 10px; display: block;">
+              <button type="submit" class="btn" style="background: rgba(16, 185, 129, 0.15); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.35); box-shadow: none;" title="Continue evaluating the {{ remaining_task_count }} task(s) that don't yet have a result.">▶️ Resume Run · {{ remaining_task_count }} task{{ 's' if remaining_task_count != 1 else '' }} left</button>
+            </form>
+            {% elif run_resumable %}
+            <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted);">All tasks have results — nothing to resume.</div>
+            {% endif %}
           {% endif %}
         </div>
       </div>
+      {% if single_task_active %}
+      <div id="single-task-banner" data-run="{{ run.run_id }}" style="margin-top: 16px; padding: 14px 16px; background: rgba(37, 99, 235, 0.10); border: 1px solid rgba(37, 99, 235, 0.3); border-radius: 10px; color: var(--pending); font-weight: 700;">
+        ⏳ Evaluating <span style="font-family: monospace;">{{ single_task_state.task_id }}</span>{% if single_task_state.total %} <span id="single-task-count">({{ single_task_state.completed or 0 }}/{{ single_task_state.total }})</span>{% endif %} — <span id="single-task-phase">{{ single_task_state.phase }}</span>… <span style="font-weight: 500; color: var(--text-muted);">this page refreshes when it finishes.</span>
+      </div>
+      {% elif single_task_state and single_task_state.status == 'failed' %}
+      <div style="margin-top: 16px; padding: 14px 16px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 10px; color: #b91c1c; font-weight: 600;">
+        ✖️ Task <span style="font-family: monospace;">{{ single_task_state.task_id }}</span> failed to run: {{ single_task_state.error }}
+      </div>
+      {% endif %}
+      {% if stale_tasks and not single_task_active %}
+      <div style="margin-top: 16px; padding: 16px; background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px;">
+        <div style="font-weight: 800; color: var(--warning); margin-bottom: 4px;">⚠️ {{ stale_tasks|length }} task{{ 's' if stale_tasks|length != 1 else '' }} need re-running</div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">These task IDs are missing a result or hold a stale result from a previous dataset. Running one saves the result into this run (and into any composite run that includes it).</div>
+        {% for st in stale_tasks %}
+        <div style="display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid rgba(245, 158, 11, 0.2);">
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-family: monospace; font-weight: 700; color: var(--accent);">{{ st.task_id }} <span style="text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; color: var(--warning); border: 1px solid rgba(245,158,11,0.4); border-radius: 4px; padding: 1px 5px;">{{ st.reason }}</span></div>
+            <div style="font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">→ {{ st.current_name }}</div>
+            {% if st.stored_name %}<div style="font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">was: {{ st.stored_name }}</div>{% endif %}
+          </div>
+          <form action="/runs/{{ run.run_id }}/run-task" method="post" style="margin: 0;">
+            <input type="hidden" name="task_id" value="{{ st.task_id }}">
+            <button type="submit" class="btn" style="background: rgba(245, 158, 11, 0.15); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.35); box-shadow: none; white-space: nowrap;">▶️ Run this task</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if no_trajectory_tasks and not single_task_active %}
+      <div style="margin-top: 16px; padding: 16px; background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.3); border-radius: 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px;">
+          <div style="font-weight: 800; color: var(--pending);">🎬 {{ no_trajectory_tasks|length }} task{{ 's' if no_trajectory_tasks|length != 1 else '' }} with no trajectory</div>
+          <form action="/runs/{{ run.run_id }}/rerun-no-trajectory" method="post" style="margin: 0;" onsubmit="return confirm('Rerun all {{ no_trajectory_tasks|length }} task(s) with no trajectory? This runs them with the run\'s worker concurrency.');">
+            <button type="submit" class="btn" style="background: var(--pending); color: #fff; border: none; box-shadow: none; white-space: nowrap;">▶️ Rerun all ({{ no_trajectory_tasks|length }})</button>
+          </form>
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">These tasks recorded no inspectable trajectory (no session or no steps). Rerun one — or all — to replace their result{% if run.composite_sources %} in the source run that holds it (reflected here automatically){% else %} in this run{% endif %}.</div>
+        <div style="max-height: 340px; overflow-y: auto;">
+        {% for t in no_trajectory_tasks %}
+          <div style="display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid rgba(37,99,235,0.18);">
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ task_display_name(t.task) }}</div>
+              <div style="font-family: monospace; font-size: 11px; color: var(--text-muted);">{{ t.task_id }} · <span style="text-transform: uppercase; color: var(--pending);">{{ t.reason }}</span>{% if t.terminal_reason %} · {{ t.terminal_reason }}{% endif %}</div>
+            </div>
+            <form action="/runs/{{ t.run_id }}/run-task" method="post" style="margin: 0;">
+              <input type="hidden" name="task_id" value="{{ t.task_id }}">
+              <button type="submit" class="btn" style="background: rgba(37, 99, 235, 0.15); color: var(--pending); border: 1px solid rgba(37, 99, 235, 0.35); box-shadow: none; white-space: nowrap;">▶️ Rerun</button>
+            </form>
+          </div>
+        {% endfor %}
+        </div>
+      </div>
+      {% endif %}
       {% if run.error %}
         <div style="padding: 16px; background: rgba(239, 68, 68, 0.1); border-left: 4px solid var(--failure); border-radius: 4px; margin-top: 16px; color: #fca5a5;">
           <strong>Error:</strong> {{ run.error }}
@@ -636,7 +709,7 @@
             <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
               <div style="min-width: 220px;">
                 {% if res.session_id %}
-                  <a href="/trajectory/{{ res.session_id }}?run_id={{ run.run_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
+                  <a href="/trajectory/{{ res.session_id }}?run_id={{ res.resolved_run_id or run.run_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
                 {% else %}
                   <strong>{{ task_display_name(res.task) }}</strong>
                 {% endif %}
@@ -690,7 +763,7 @@
             <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--task-card-bg);">
               <div style="min-width: 220px;">
                 {% if res.session_id %}
-                  <a href="/trajectory/{{ res.session_id }}?run_id={{ run.run_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
+                  <a href="/trajectory/{{ res.session_id }}?run_id={{ res.resolved_run_id or run.run_id }}" style="color: var(--accent); font-weight: 800; text-decoration: none;">{{ task_display_name(res.task) }}</a>
                 {% else %}
                   <strong>{{ task_display_name(res.task) }}</strong>
                 {% endif %}
@@ -783,7 +856,7 @@
           <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('loops', this)" aria-pressed="false">Show Loops</button>
           <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('gtprog', this)" aria-pressed="false">Show GT / No-GT Progress</button>
           <button type="button" class="metric-toggle-btn" onclick="toggleRunMetricColumn('llmground', this)" aria-pressed="false">Show Grounded_LLM_Label</button>
-          <span class="badge neutral">{{ results|length }} / {{ run.task_ids|length }} Tasks</span>
+          <span class="badge neutral">{{ stats.completed }} / {{ stats.total }} Tasks</span>
         </div>
       </div>
       {% if results %}
@@ -938,7 +1011,7 @@
             <td>
               <div style="display: flex; gap: 8px; align-items: center;">
                 {% if res.session_id %}
-                  <a href="/trajectory/{{ res.session_id }}?run_id={{ run.run_id }}" class="btn">Inspect Trajectory</a>
+                  <a href="/trajectory/{{ res.session_id }}?run_id={{ res.resolved_run_id or run.run_id }}" class="btn">Inspect Trajectory</a>
                 {% else %}
                   <span class="badge neutral" title="{{ res.diagnostics.zero_step_explanation if res.diagnostics and res.diagnostics.zero_step_explanation else 'No PageGuide session was recorded — the task failed before any step (e.g. navigation/DNS error or block).' }}" style="font-style: italic; cursor: help;">No trajectory</span>
                 {% endif %}
@@ -1054,7 +1127,7 @@
       }
       taskRows.sort((a, b) => b.low.length - a.low.length || a.minVal - b.minVal);
       breakdown.innerHTML = taskRows.map(row => {
-        const href = row.sessionId ? `/trajectory/${encodeURIComponent(row.sessionId)}?run_id={{ run.run_id }}` : '';
+        const href = row.sessionId ? `/trajectory/${encodeURIComponent(row.sessionId)}?run_id=${encodeURIComponent(row.runId || '{{ run.run_id }}')}` : '';
         const name = href ? `<a href="${href}" style="color: var(--accent); font-weight: 800; text-decoration: none;">${escapeHtml(row.name)}</a>` : `<strong>${escapeHtml(row.name)}</strong>`;
         const samples = row.low.slice(0, 3).map(s => {
           const label = `Step ${escapeHtml(String(s.step ?? '?'))}: ${s.value.toFixed(2)}`;
@@ -1543,6 +1616,30 @@
         }
       });
     }
+  </script>
+  <script>
+    // Poll single-task backfill progress; reload when it finishes so the fresh
+    // result (and any composite that sources this run) shows the new outcome.
+    (function () {
+      var banner = document.getElementById('single-task-banner');
+      if (!banner) return;
+      var runId = banner.getAttribute('data-run');
+      var phaseEl = document.getElementById('single-task-phase');
+      var countEl = document.getElementById('single-task-count');
+      function poll() {
+        fetch('/api/runs/' + encodeURIComponent(runId) + '/run-task-status')
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            var s = d && d.state;
+            if (s && s.phase && phaseEl) { phaseEl.textContent = s.phase; }
+            if (s && countEl && typeof s.total !== 'undefined') { countEl.textContent = '(' + (s.completed || 0) + '/' + s.total + ')'; }
+            if (!d || !d.running) { window.location.reload(); return; }
+            setTimeout(poll, 2000);
+          })
+          .catch(function () { setTimeout(poll, 3000); });
+      }
+      setTimeout(poll, 2000);
+    })();
   </script>
 </body>
 </html>

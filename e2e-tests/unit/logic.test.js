@@ -984,6 +984,84 @@ describe('_gv2ShouldUseAlignedRegionCapture (content/tasks/guidev2.js)', () => {
   });
 });
 
+// Vision-mode Set-of-Marks: the numbered [N] boxes are baked onto the captured screenshot using
+// viewport rects scaled to the image. _gv2SomImageBox does that scaling + the skip filters (too
+// small / off-viewport) that keep the marks matching what's actually visible in the shot.
+describe('_gv2SomImageBox (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    global.chrome = {
+      storage: {
+        local: { get: jest.fn(async () => ({})) },
+        sync: { get: jest.fn(async () => ({})) },
+      },
+    };
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  // devicePixelRatio 2 → screenshot is 2× the CSS viewport (2000×1600 for a 1000×800 viewport).
+  const SX = 2, SY = 2, VW = 1000, VH = 800;
+  const rect = (left, top, width, height) => ({
+    left, top, width, height, right: left + width, bottom: top + height,
+  });
+
+  test('scales an in-viewport rect to image pixels', () => {
+    expect(window._gv2SomImageBox(rect(100, 50, 80, 20), SX, SY, VW, VH))
+      .toEqual({ x: 200, y: 100, w: 160, h: 40 });
+  });
+
+  test('skips elements smaller than 5px', () => {
+    expect(window._gv2SomImageBox(rect(10, 10, 3, 3), SX, SY, VW, VH)).toBeNull();
+  });
+
+  test('skips elements fully below or above the viewport', () => {
+    expect(window._gv2SomImageBox(rect(10, 900, 50, 20), SX, SY, VW, VH)).toBeNull(); // below
+    expect(window._gv2SomImageBox(rect(10, -30, 50, 20), SX, SY, VW, VH)).toBeNull(); // above
+  });
+
+  test('keeps a partially-visible element straddling the top edge', () => {
+    expect(window._gv2SomImageBox(rect(10, -5, 50, 20), SX, SY, VW, VH))
+      .toEqual({ x: 20, y: -10, w: 100, h: 40 });
+  });
+});
+
+// Auto-loop resilience: a single transient next-step failure (empty/errored LLM response, sparse
+// DOM) must be RETRIED, not treated as terminal — otherwise the eval task strands and idle-times
+// out. Intentional stops (paused, max-steps, force-ground-truth, stopped) must NOT be retried.
+describe('_gv2ShouldRetryGeneration (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    global.chrome = {
+      storage: {
+        local: { get: jest.fn(async () => ({})) },
+        sync: { get: jest.fn(async () => ({})) },
+      },
+    };
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  test('retries transient failures', () => {
+    expect(window._gv2ShouldRetryGeneration({ success: false, error: 'Empty response from OpenRouter' })).toBe(true);
+    expect(window._gv2ShouldRetryGeneration({ success: false, error: 'LLM error' })).toBe(true);
+    expect(window._gv2ShouldRetryGeneration({ success: false })).toBe(true);
+  });
+
+  test('does not retry success or non-failure results', () => {
+    expect(window._gv2ShouldRetryGeneration({ success: true })).toBe(false);
+    expect(window._gv2ShouldRetryGeneration({ progressed: true })).toBe(false);
+  });
+
+  test('does not retry intentional stops', () => {
+    expect(window._gv2ShouldRetryGeneration({ success: false, error: 'Guide paused' })).toBe(false);
+    expect(window._gv2ShouldRetryGeneration({ success: false, error: 'Guide stopped' })).toBe(false);
+    expect(window._gv2ShouldRetryGeneration({ success: false, error: 'Guide is already continuing' })).toBe(false);
+    expect(window._gv2ShouldRetryGeneration({ success: false, stoppedByMaxSteps: true })).toBe(false);
+    expect(window._gv2ShouldRetryGeneration({ success: false, forceGroundTruthFailed: true })).toBe(false);
+  });
+
+  test('does not retry a null result (guide stopped/inactive)', () => {
+    expect(window._gv2ShouldRetryGeneration(null)).toBe(false);
+  });
+});
+
 describe('_gv2ElementStepSimilarityResult (content/tasks/guidev2.js)', () => {
   beforeAll(() => {
     loadScript('content/utils.js');
@@ -1165,19 +1243,77 @@ describe('scrollToHighlight (content/functions/scroll.js)', () => {
     window._pageguideHighlights = [];
   });
 
+  const _inView = () => ({ top: 0, bottom: 10, left: 0, right: 10, width: 10, height: 10 });
+
   test('uses smooth scroll in manual mode', () => {
-    const el = { scrollIntoView: jest.fn(), style: {} };
+    const el = { scrollIntoView: jest.fn(), style: {}, getBoundingClientRect: _inView };
     window._pageguideHighlights = [el];
     window.scrollToHighlight(0);
-    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center', inline: 'nearest' });
   });
 
   test('uses instant scroll during auto guide', () => {
     window._guidev2 = { autoMode: true };
-    const el = { scrollIntoView: jest.fn(), style: {} };
+    const el = { scrollIntoView: jest.fn(), style: {}, getBoundingClientRect: _inView };
     window._pageguideHighlights = [el];
     window.scrollToHighlight(0);
-    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'instant', block: 'center' });
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'instant', block: 'center', inline: 'nearest' });
+  });
+});
+
+describe('pgElementInViewport / pgScrollableAncestor / pgScrollIntoViewReliably (content/functions/scroll.js)', () => {
+  beforeAll(() => { loadScript('content/functions/scroll.js'); });
+  beforeEach(() => { delete window._guidev2; });
+
+  const rect = (top, height = 10) => () => ({
+    top, bottom: top + height, left: 0, right: 10, width: 10, height,
+  });
+
+  test('pgElementInViewport: true when box is within the viewport', () => {
+    expect(window.pgElementInViewport({ getBoundingClientRect: rect(100) })).toBe(true);
+  });
+
+  test('pgElementInViewport: false when below the fold or zero-size', () => {
+    expect(window.pgElementInViewport({ getBoundingClientRect: rect(window.innerHeight + 50) })).toBe(false);
+    expect(window.pgElementInViewport({ getBoundingClientRect: () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 }) })).toBe(false);
+  });
+
+  test('pgElementInViewport: respects headerOffset (element hidden behind a sticky header)', () => {
+    // Element occupies y=[0,40]; a 60px header covers it → not visible.
+    expect(window.pgElementInViewport({ getBoundingClientRect: rect(0, 40) }, 60)).toBe(false);
+  });
+
+  test('pgScrollableAncestor: returns the nearest overflow:auto ancestor that overflows', () => {
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { value: 500, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { value: 200, configurable: true });
+    const child = document.createElement('div');
+    scroller.appendChild(child);
+    document.body.appendChild(scroller);
+    expect(window.pgScrollableAncestor(child)).toBe(scroller);
+    document.body.removeChild(scroller);
+  });
+
+  test('pgScrollableAncestor: falls back to the document scroller when no ancestor scrolls', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    expect(window.pgScrollableAncestor(el)).toBe(document.scrollingElement || document.documentElement);
+    document.body.removeChild(el);
+  });
+
+  test('pgScrollIntoViewReliably: returns true and scrolls when the target is visible', async () => {
+    const el = { scrollIntoView: jest.fn(), getBoundingClientRect: rect(100) };
+    await expect(window.pgScrollIntoViewReliably(el, { behavior: 'instant', settleMs: 1 })).resolves.toBe(true);
+    expect(el.scrollIntoView).toHaveBeenCalledWith({ behavior: 'instant', block: 'center', inline: 'nearest' });
+  });
+
+  test('pgScrollIntoViewReliably: falls back to scrolling the container when still off-screen', async () => {
+    window.scrollTo = jest.fn();
+    // Always below the fold → both visibility checks fail; fallback must run and result is false.
+    const el = { scrollIntoView: jest.fn(), getBoundingClientRect: rect(window.innerHeight + 500) };
+    await expect(window.pgScrollIntoViewReliably(el, { behavior: 'instant', settleMs: 1 })).resolves.toBe(false);
+    expect(window.scrollTo).toHaveBeenCalled(); // document scroller adjusted as fallback
   });
 });
 
@@ -2193,6 +2329,57 @@ describe('Dashboard UI helpers (eval_server/static/dashboard_ui.js)', () => {
     test('missing flag is treated as not-included', () => {
       expect(window.DashboardUI.runMatchesFeatureFilter({}, ['planning'])).toBe(false);
       expect(window.DashboardUI.runMatchesFeatureFilter(undefined, ['grounding'])).toBe(false);
+    });
+  });
+});
+
+describe('LLM request builders (background/llm_request.js)', () => {
+  beforeAll(() => {
+    loadScript('background/llm_request.js');
+  });
+
+  describe('pgUserText', () => {
+    test('returns the last message content', () => {
+      expect(window.pgUserText([{ content: 'a' }, { content: 'b' }])).toBe('b');
+    });
+    test('empty/undefined messages -> empty string', () => {
+      expect(window.pgUserText([])).toBe('');
+      expect(window.pgUserText(undefined)).toBe('');
+    });
+  });
+
+  describe('pgBuildOpenAIMessages', () => {
+    test('system prompt present -> separate system role, then user', () => {
+      expect(window.pgBuildOpenAIMessages('SYS', 'u')).toEqual([
+        { role: 'system', content: 'SYS' },
+        { role: 'user', content: 'u' },
+      ]);
+    });
+    test('empty system prompt -> only the user message', () => {
+      expect(window.pgBuildOpenAIMessages('', 'u')).toEqual([{ role: 'user', content: 'u' }]);
+    });
+    test('content array: system is separate and the image stays last in the user message', () => {
+      const content = [
+        { type: 'text', text: 'DOM…' },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,X' } },
+      ];
+      const out = window.pgBuildOpenAIMessages('SYS', content);
+      expect(out[0]).toEqual({ role: 'system', content: 'SYS' });
+      expect(out[1].role).toBe('user');
+      expect(out[1].content[0].type).toBe('text');
+      expect(out[1].content[out[1].content.length - 1].type).toBe('image_url');
+      // the system prompt is NOT folded into the user text
+      expect(JSON.stringify(out[1].content)).not.toContain('SYS');
+    });
+  });
+
+  describe('pgGeminiSystemInstruction', () => {
+    test('present -> parts wrapper', () => {
+      expect(window.pgGeminiSystemInstruction('x')).toEqual({ parts: [{ text: 'x' }] });
+    });
+    test('empty -> undefined (omitted from request)', () => {
+      expect(window.pgGeminiSystemInstruction('')).toBeUndefined();
+      expect(window.pgGeminiSystemInstruction(null)).toBeUndefined();
     });
   });
 });

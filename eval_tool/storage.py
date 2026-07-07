@@ -15,7 +15,9 @@ NO_LOGIN_DATA_CSV = DATA_GUIDE_DIR / "Copy of GuideTaskData - guide_task_no_log_
 LOGIN_DATA_CSV = DATA_GUIDE_DIR / "Copy of GuideTaskData - guide_task-log-in.csv"
 MIND2WEB_DATA_CSV = DATA_GUIDE_DIR / "mind2web_tasks.csv"
 ONLINE_MIND2WEB_DATA_CSV = DATA_GUIDE_DIR / "online_mind2web_tasks.csv"
-ANNOTATED_DATA_JSON = DATA_GUIDE_DIR / "AnnotatedDataset.json"
+# The active annotated dataset. Loads AnnotatedDatasetOriginal.json (the full
+# 104-task original); the older, trimmed AnnotatedDataset.json is no longer used.
+ANNOTATED_DATA_JSON = DATA_GUIDE_DIR / "AnnotatedDatasetOriginal.json"
 RUNS_DIR = REPO_ROOT / "eval_tool" / "runs"
 
 
@@ -219,6 +221,72 @@ def list_task_results(run_id: str) -> list[dict[str, Any]]:
         return []
     results = [read_json(path) for path in task_dir.glob("*.json")]
     return [r for r in results if r]
+
+
+def is_composite_run(run: dict[str, Any] | None) -> bool:
+    return bool(run and isinstance(run.get("composite_sources"), list))
+
+
+def composite_task_ids(run: dict[str, Any] | None) -> list[str]:
+    if not run:
+        return []
+    ids = run.get("composite_task_ids")
+    if isinstance(ids, list):
+        return [str(task_id) for task_id in ids]
+    ids = run.get("task_ids")
+    return [str(task_id) for task_id in ids] if isinstance(ids, list) else []
+
+
+def source_run_ids_for(run: dict[str, Any] | None) -> list[str]:
+    if not is_composite_run(run):
+        return []
+    out = []
+    for run_id in run.get("composite_sources") or []:
+        run_id = str(run_id or "").strip()
+        if run_id and run_id not in out:
+            out.append(run_id)
+    return out
+
+
+def load_task_result_resolved(run_id: str, task_id: str) -> dict[str, Any] | None:
+    run = load_run(run_id)
+    if not is_composite_run(run):
+        return load_task_result(run_id, task_id)
+    for source_run_id in source_run_ids_for(run):
+        result = load_task_result(source_run_id, task_id)
+        if result:
+            resolved = dict(result)
+            resolved["resolved_run_id"] = source_run_id
+            resolved.setdefault("logical_run_id", run_id)
+            return resolved
+    return None
+
+
+def list_task_results_resolved(run_id: str) -> list[dict[str, Any]]:
+    run = load_run(run_id)
+    if not is_composite_run(run):
+        return list_task_results(run_id)
+
+    results_by_task: dict[str, dict[str, Any]] = {}
+    for source_run_id in source_run_ids_for(run):
+        for result in list_task_results(source_run_id):
+            task_id = str(result.get("task_id") or "")
+            if not task_id or task_id in results_by_task:
+                continue
+            resolved = dict(result)
+            resolved["resolved_run_id"] = source_run_id
+            resolved.setdefault("logical_run_id", run_id)
+            results_by_task[task_id] = resolved
+
+    ordered_ids = composite_task_ids(run)
+    ordered_id_set = set(ordered_ids)
+    ordered = []
+    for task_id in ordered_ids:
+        result = results_by_task.get(task_id)
+        if result:
+            ordered.append(result)
+    extras = [result for task_id, result in results_by_task.items() if task_id not in ordered_id_set]
+    return ordered + extras
 
 
 def clear_run(run_id: str) -> None:

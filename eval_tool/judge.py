@@ -81,6 +81,20 @@ def normalize_model(value: str | None) -> str:
     return value if value in valid else DEFAULT_LLM_MODEL
 
 
+DEFAULT_JUDGE_TEMPERATURE = 0.0
+
+
+def normalize_temperature(value: float | str | None) -> float:
+    """Clamp the sampling temperature to [0, 2]; default to 0 (deterministic)."""
+    if value is None or value == "":
+        return DEFAULT_JUDGE_TEMPERATURE
+    try:
+        temp = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_JUDGE_TEMPERATURE
+    return max(0.0, min(2.0, temp))
+
+
 def extract_json(text: str) -> dict[str, Any]:
     text = (text or "").strip()
     text = re.sub(r"^```json\s*", "", text, flags=re.I)
@@ -122,10 +136,11 @@ def normalize_grounding_label(value: Any) -> str | None:
 
 
 class LlmJudge:
-    def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
+    def __init__(self, model: str | None = None, api_key: str | None = None, temperature: float | None = None) -> None:
         self.model = model or configured_judge_model()
         self.api_key = api_key or _env_value("OPENROUTER_API_KEY", "OPEN_REUTER_API_KEY", "open-reuter-api-key")
         self.endpoint = os.environ.get("PAGEGUIDE_EVAL_JUDGE_ENDPOINT", "https://openrouter.ai/api/v1/chat/completions")
+        self.temperature = normalize_temperature(temperature)
 
     def judge_final_screenshot(self, task: dict[str, Any], screenshot_path: Path | None) -> dict[str, Any]:
         if not self.api_key:
@@ -401,7 +416,7 @@ Return JSON only:
         body = {
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
-            "temperature": 0,
+            "temperature": self.temperature,
         }
         req = urllib.request.Request(
             self.endpoint,

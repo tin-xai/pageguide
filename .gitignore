@@ -24,6 +24,7 @@ Thumbs.db
 .test-user-data*
 test-results/
 playwright-report/
+.lavish/
 
 # Build artifacts
 *.zip

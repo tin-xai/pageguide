@@ -17,7 +17,7 @@ from typing import Any
 from .scoring import effective_success, score_step
 
 
-_BOT_PATTERN = re.compile(r"captcha|blocked|net::|ERR_|denied|forbidden", re.IGNORECASE)
+_BOT_PATTERN = re.compile(r"captcha|blocked|bot_block|net::|ERR_|denied|forbidden", re.IGNORECASE)
 
 
 def is_bot_detection_failure(result: dict[str, Any]) -> bool:

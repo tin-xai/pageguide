@@ -55,6 +55,8 @@ MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 DEFAULT_GROUNDING_WARNING_THRESHOLD = 0.8
 DEFAULT_LOOP_WARNING_THRESHOLD = 0.3
+INPUT_MODE_DOM = "dom"
+INPUT_MODE_DOM_SCREENSHOT = "dom_screenshot"
 
 # Mirrors extension key `guideDebugRegionCapture` (side panel debug toggle).
 GUIDE_REGION_CAPTURE_KEY = "guideDebugRegionCapture"
@@ -67,6 +69,13 @@ def normalize_region_capture_mode(value: Any) -> str:
     if v in {REGION_CAPTURE_ALIGNED, "new", "new_target", "new_target_captured"}:
         return REGION_CAPTURE_ALIGNED
     return REGION_CAPTURE_LEGACY
+
+
+def normalize_input_mode(value: Any) -> str:
+    v = str(value or "").strip().lower().replace("-", "_").replace("+", "_")
+    if v in {INPUT_MODE_DOM_SCREENSHOT, "screenshot", "screenshots", "vision", "dom_plus_screenshot", "dom_screenshots"}:
+        return INPUT_MODE_DOM_SCREENSHOT
+    return INPUT_MODE_DOM
 
 
 def region_capture_mode_label(mode: str | None) -> str:
@@ -231,6 +240,73 @@ def normalize_max_steps(value: Any) -> int:
     return max(MIN_MAX_STEPS, min(MAX_MAX_STEPS, number))
 
 
+# Opaque terminal reasons that we try to re-attribute to a concrete cause (bot_block /
+# llm_empty_response). "done" / "max_steps" / "force_ground_truth_verifier_failed" /
+# "FAILED TO EXECUTE ACTION" are already meaningful and left untouched.
+_RECLASSIFIABLE_REASONS = {"idle_timeout", "NO STEPS RECORDED", "task_timeout", "UNKNOWN FAILURE"}
+# Cloudflare / challenge markers that appear in the URL of an active bot-block page.
+_BOT_BLOCK_URL_MARKERS = ("__cf_chl", "/cdn-cgi/challenge", "cf_chl_")
+# Interstitial-specific phrases. Kept narrow (no bare "captcha"/"recaptcha") so a page that merely
+# embeds a captcha widget in its normal flow is not misread as a block.
+_BOT_BLOCK_TEXT_MARKERS = (
+    "verify you are human",
+    "verify you are a human",
+    "please verify you are a human",
+    "checking your browser before",
+    "checking if the site connection is secure",
+    "unusual traffic from your",
+    "pardon our interruption",
+    "request unsuccessful. incapsula",
+    "px-captcha",
+    "are you a robot",
+    "enable javascript and cookies to continue",
+    "why do i have to complete a captcha",
+)
+
+
+def classify_failure_reason(
+    terminal_reason: str,
+    *,
+    final_url: str | None = None,
+    steps: list[dict[str, Any]] | None = None,
+    debug_prompts: list[dict[str, Any]] | None = None,
+    nav_http_status: int | None = None,
+) -> str:
+    """Re-attribute an opaque terminal_reason to a concrete cause when the evidence supports it.
+
+    Returns `bot_block` (site blocked the automation) or `llm_empty_response` (the model/provider
+    returned nothing, so no step could be built), else the original reason. Pure — unit-testable.
+    Precision over recall: only strong signals (cloudflare URL token, HTTP 403/429, block-page
+    phrases) trigger bot_block.
+    """
+    if terminal_reason not in _RECLASSIFIABLE_REASONS:
+        return terminal_reason
+    steps = steps or []
+    debug_prompts = debug_prompts or []
+    non_initial = [s for s in steps if not s.get("isInitial")]
+
+    if nav_http_status in (403, 429):
+        return "bot_block"
+
+    urls = " ".join([str(final_url or "")] + [str(s.get("url") or "") for s in steps]).lower()
+    if any(marker in urls for marker in _BOT_BLOCK_URL_MARKERS):
+        return "bot_block"
+
+    haystack = urls
+    for prompt in debug_prompts:
+        haystack += " " + str(prompt.get("userPrompt") or "").lower()
+    if any(marker in haystack for marker in _BOT_BLOCK_TEXT_MARKERS):
+        return "bot_block"
+
+    # No committed step and the last LLM call errored / came back empty → provider throttle/flakiness.
+    if not non_initial and debug_prompts:
+        last = debug_prompts[-1]
+        if last.get("responseError") or not str(last.get("responseContent") or "").strip():
+            return "llm_empty_response"
+
+    return terminal_reason
+
+
 def _zero_step_explanation(diagnostics: dict[str, Any], terminal_reason: str) -> str:
     if diagnostics.get("error"):
         return "The evaluator hit an exception before any PageGuide step was recorded."
@@ -247,7 +323,13 @@ def _zero_step_explanation(diagnostics: dict[str, Any], terminal_reason: str) ->
     return "PageGuide produced no recorded action steps before the evaluator stopped waiting."
 
 
+# Runs halted with pause_run (vs stop_run) are marked "paused" so the UI can offer a
+# Resume action; the flag is consulted by _run_eval when the worker unwinds.
+PAUSED_RUNS: set[str] = set()
+
+
 def start_run(run: dict[str, Any], tasks: list[EvalTask]) -> None:
+    PAUSED_RUNS.discard(run["run_id"])
     stop_event = threading.Event()
     RUN_STOPS[run["run_id"]] = stop_event
     _patch_run(
@@ -275,24 +357,29 @@ def is_running(run_id: str) -> bool:
     return bool(thread and thread.is_alive())
 
 
-def stop_run(run_id: str) -> dict[str, Any]:
+def _halt_run(run_id: str, *, status: str, phase: str) -> dict[str, Any]:
     stop_event = RUN_STOPS.setdefault(run_id, threading.Event())
     stop_event.set()
     loop = RUN_LOOPS.get(run_id)
     contexts = RUN_CONTEXTS.get(run_id)
     if loop and contexts:
-        for context in contexts:
+        for context in list(contexts):
             try:
                 asyncio.run_coroutine_threadsafe(context.close(), loop)
             except Exception:
                 pass
-    return _patch_run(
-        run_id,
-        status="stopped",
-        completed_at=utc_now(),
-        current_phase="stopped by user",
-        error=None,
-    )
+    return _patch_run(run_id, status=status, completed_at=utc_now(), current_phase=phase, error=None)
+
+
+def stop_run(run_id: str) -> dict[str, Any]:
+    PAUSED_RUNS.discard(run_id)
+    return _halt_run(run_id, status="stopped", phase="stopped by user")
+
+
+def pause_run(run_id: str) -> dict[str, Any]:
+    """Gracefully halt a run but mark it 'paused' so it can be resumed later."""
+    PAUSED_RUNS.add(run_id)
+    return _halt_run(run_id, status="paused", phase="paused by user")
 
 
 def _patch_run(run_id: str, **patch: Any) -> dict[str, Any]:
@@ -301,22 +388,196 @@ def _patch_run(run_id: str, **patch: Any) -> dict[str, Any]:
     return save_run(run)
 
 
+# Single-task backfill: evaluate one task INTO an existing run without touching
+# that run's run.json metadata (status, task_total, progress). Used to fill a
+# missing/stale task into an already-completed run. Progress is tracked purely
+# in memory so the run's stored summary is left intact.
+SINGLE_TASK_THREADS: dict[str, threading.Thread] = {}
+SINGLE_TASK_PROGRESS: dict[str, dict[str, Any]] = {}
+
+
+def single_task_running(run_id: str) -> bool:
+    thread = SINGLE_TASK_THREADS.get(run_id)
+    return bool(thread and thread.is_alive())
+
+
+def single_task_progress(run_id: str) -> dict[str, Any] | None:
+    return SINGLE_TASK_PROGRESS.get(run_id)
+
+
+def start_single_task(run: dict[str, Any], task: EvalTask) -> None:
+    """Evaluate a single ``task`` into an existing run in a background thread.
+
+    The task result file is saved (overwriting any stale result) using the run's
+    existing configuration, but ``run.json`` is never rewritten, so a completed
+    run keeps its status/metadata. Any composite run that sources this run picks
+    up the refreshed result automatically. Raises if a single-task evaluation is
+    already in flight for this run.
+    """
+    run_id = run["run_id"]
+    if single_task_running(run_id):
+        raise RuntimeError("A single-task evaluation is already running for this run.")
+    stop_event = threading.Event()
+    SINGLE_TASK_PROGRESS[run_id] = {
+        "task_id": task.task_id,
+        "status": "running",
+        "phase": "queued",
+        "error": None,
+        "started_at": utc_now(),
+        "completed_at": None,
+    }
+
+    def _progress(rid: str, **patch: Any) -> dict[str, Any]:
+        state = SINGLE_TASK_PROGRESS.get(rid)
+        if state is None:
+            return {}
+        phase = patch.get("current_phase")
+        if phase:
+            state["phase"] = phase
+        return state
+
+    def _worker() -> None:
+        try:
+            asyncio.run(_run_single_task_eval(run_id, task, _progress, stop_event))
+            state = SINGLE_TASK_PROGRESS.get(run_id)
+            if state is not None and state.get("status") == "running":
+                state["status"] = "completed"
+        except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
+            state = SINGLE_TASK_PROGRESS.get(run_id)
+            if state is not None:
+                state["status"] = "failed"
+                state["error"] = str(exc)
+        finally:
+            state = SINGLE_TASK_PROGRESS.get(run_id)
+            if state is not None:
+                state["completed_at"] = utc_now()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    SINGLE_TASK_THREADS[run_id] = thread
+    thread.start()
+
+
+async def _run_single_task_eval(
+    run_id: str,
+    task: EvalTask,
+    progress_cb: Callable[..., dict[str, Any]],
+    stop_event: threading.Event,
+) -> None:
+    result_path = task_path(run_id, task.task_id)
+    before_mtime = result_path.stat().st_mtime if result_path.exists() else None
+    # _run_in_browser indexes RUN_CONTEXTS[run_id] directly, so it must be seeded (as
+    # _run_eval does) or the worker raises KeyError, which run() swallows via its
+    # return_exceptions=True gather.
+    RUN_LOOPS[run_id] = asyncio.get_running_loop()
+    RUN_CONTEXTS[run_id] = []
+    try:
+        runner = PlaywrightGuideRunner(run_id, LlmJudge(), progress_cb, stop_event)
+        await runner.run([task])
+    finally:
+        RUN_CONTEXTS.pop(run_id, None)
+        RUN_LOOPS.pop(run_id, None)
+    # run() gathers worker exceptions with return_exceptions=True, so any failure inside a
+    # worker is swallowed and no result is written. Detect that a result was actually
+    # (re)saved so the caller can report a real failure instead of a false success.
+    saved = result_path.exists() and (before_mtime is None or result_path.stat().st_mtime > before_mtime)
+    if not saved:
+        raise RuntimeError(
+            "The evaluation finished without saving a result for this task (PageGuide "
+            "reported no completed steps). Check the server terminal for a traceback and retry."
+        )
+
+
+def start_single_task_batch(run: dict[str, Any], tasks: list[EvalTask]) -> None:
+    """Evaluate several tasks into an existing run in one background job, without mutating
+    run.json. Uses the run's own worker concurrency. Progress is tracked in-memory (shared
+    with single-task progress, keyed by run_id) so the same banner/status endpoint reports it.
+    """
+    run_id = run["run_id"]
+    if single_task_running(run_id):
+        raise RuntimeError("A task evaluation is already running for this run.")
+    tasks = list(tasks or [])
+    if not tasks:
+        return
+    stop_event = threading.Event()
+    SINGLE_TASK_PROGRESS[run_id] = {
+        "task_id": f"{len(tasks)} tasks",
+        "status": "running",
+        "phase": "queued",
+        "completed": 0,
+        "total": len(tasks),
+        "error": None,
+        "started_at": utc_now(),
+        "completed_at": None,
+    }
+
+    def _progress(rid: str, **patch: Any) -> dict[str, Any]:
+        state = SINGLE_TASK_PROGRESS.get(rid)
+        if state is None:
+            return {}
+        phase = patch.get("current_phase")
+        if phase:
+            state["phase"] = phase
+        if "completed_tasks" in patch:
+            state["completed"] = patch["completed_tasks"]
+        return state
+
+    def _worker() -> None:
+        try:
+            asyncio.run(_run_task_batch_eval(run_id, tasks, _progress, stop_event))
+            state = SINGLE_TASK_PROGRESS.get(run_id)
+            if state is not None and state.get("status") == "running":
+                state["status"] = "completed"
+        except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
+            state = SINGLE_TASK_PROGRESS.get(run_id)
+            if state is not None:
+                state["status"] = "failed"
+                state["error"] = str(exc)
+        finally:
+            state = SINGLE_TASK_PROGRESS.get(run_id)
+            if state is not None:
+                state["completed_at"] = utc_now()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    SINGLE_TASK_THREADS[run_id] = thread
+    thread.start()
+
+
+async def _run_task_batch_eval(
+    run_id: str,
+    tasks: list[EvalTask],
+    progress_cb: Callable[..., dict[str, Any]],
+    stop_event: threading.Event,
+) -> None:
+    # Seed RUN_CONTEXTS (see _run_single_task_eval) so the worker doesn't KeyError.
+    RUN_LOOPS[run_id] = asyncio.get_running_loop()
+    RUN_CONTEXTS[run_id] = []
+    try:
+        runner = PlaywrightGuideRunner(run_id, LlmJudge(), progress_cb, stop_event)
+        await runner.run(tasks)
+    finally:
+        RUN_CONTEXTS.pop(run_id, None)
+        RUN_LOOPS.pop(run_id, None)
+
+
 async def _run_eval(run_id: str, tasks: list[EvalTask], stop_event: threading.Event) -> None:
     RUN_LOOPS[run_id] = asyncio.get_running_loop()
     RUN_CONTEXTS[run_id] = []
     runner = PlaywrightGuideRunner(run_id, LlmJudge(), _patch_run, stop_event)
+    # A halted run is "paused" (resumable) if pause_run flagged it, else "stopped".
+    halt_status = lambda: "paused" if run_id in PAUSED_RUNS else "stopped"
+    halt_phase = lambda: "paused by user" if run_id in PAUSED_RUNS else "stopped by user"
     try:
         await runner.run(tasks)
         if stop_event.is_set():
-            _patch_run(run_id, status="stopped", completed_at=utc_now(), current_phase="stopped by user")
+            _patch_run(run_id, status=halt_status(), completed_at=utc_now(), current_phase=halt_phase())
         else:
             _patch_run(run_id, status="completed", completed_at=utc_now())
     except RunStopped:
-        _patch_run(run_id, status="stopped", completed_at=utc_now(), current_phase="stopped by user", error=None)
+        _patch_run(run_id, status=halt_status(), completed_at=utc_now(), current_phase=halt_phase(), error=None)
     except Exception as exc:
         traceback.print_exc()
         if stop_event.is_set():
-            _patch_run(run_id, status="stopped", completed_at=utc_now(), current_phase="stopped by user", error=None)
+            _patch_run(run_id, status=halt_status(), completed_at=utc_now(), current_phase=halt_phase(), error=None)
         else:
             _patch_run(run_id, status="failed", completed_at=utc_now(), error=str(exc))
     finally:
@@ -366,6 +627,7 @@ class PlaywrightGuideRunner:
             run.get("loop_warning_threshold"), DEFAULT_LOOP_WARNING_THRESHOLD
         )
         self.automatic_planning_mode = bool(run.get("automatic_planning_mode"))
+        self.input_mode = normalize_input_mode(run.get("input_mode"))
         self.region_capture_mode = normalize_region_capture_mode(
             run.get("region_capture_mode") or os.environ.get("PAGEGUIDE_EVAL_REGION_CAPTURE")
         )
@@ -587,8 +849,8 @@ class PlaywrightGuideRunner:
         openrouter_key = _env_value("OPENROUTER_API_KEY", "OPEN_REUTER_API_KEY", "open-reuter-api-key")
         openrouter_model = self.task_model
         await extension_page.evaluate(
-            """async ({ openrouterKey, openrouterModel, maxSteps, temperature, regionCaptureMode, groundingWarning, loopingWarning, groundingThreshold, loopThreshold, planningMode }) => {
-              const syncPrefs = {};
+            """async ({ openrouterKey, openrouterModel, maxSteps, temperature, inputMode, regionCaptureMode, groundingWarning, loopingWarning, groundingThreshold, loopThreshold, planningMode }) => {
+              const syncPrefs = { visionEnabled: inputMode === 'dom_screenshot' };
               if (openrouterKey) {
                 syncPrefs.provider = 'openrouter';
                 syncPrefs.openrouterApiKey = openrouterKey;
@@ -625,6 +887,7 @@ class PlaywrightGuideRunner:
                 "openrouterModel": openrouter_model,
                 "maxSteps": self.max_steps,
                 "temperature": self.temperature,
+                "inputMode": self.input_mode,
                 "regionCaptureMode": self.region_capture_mode,
                 "groundingWarning": self.inject_grounding_warning,
                 "loopingWarning": self.inject_looping_warning,
@@ -668,6 +931,7 @@ class PlaywrightGuideRunner:
             "max_steps": self.max_steps,
             "task_model": self.task_model,
             "judge_model": self.judge_model,
+            "input_mode": self.input_mode,
         }
 
         def progress(step: int, phase: str) -> None:
@@ -749,6 +1013,18 @@ class PlaywrightGuideRunner:
             diagnostics["last_debug_prompt_timestamp"] = last_prompt.get("timestamp")
         if not steps and terminal_reason == "UNKNOWN FAILURE":
             terminal_reason = "NO STEPS RECORDED"
+        # Re-attribute an opaque timeout/no-steps to a concrete cause (bot_block / llm_empty_response)
+        # so eval failures reflect real errors instead of a catch-all timeout.
+        reclassified = classify_failure_reason(
+            terminal_reason,
+            final_url=diagnostics.get("final_url"),
+            steps=steps,
+            debug_prompts=debug_prompts,
+            nav_http_status=diagnostics.get("nav_http_status"),
+        )
+        if reclassified != terminal_reason:
+            diagnostics["reclassified_from"] = terminal_reason
+            terminal_reason = reclassified
         if diagnostics["step_count"] == 0:
             diagnostics["zero_step_explanation"] = _zero_step_explanation(diagnostics, terminal_reason)
 
@@ -759,6 +1035,9 @@ class PlaywrightGuideRunner:
             task_data["oracle_plan"] = oracle_plan
             task_data["guide_query_with_oracle_plan"] = guide_query
         enriched_steps = enrich_step_scores(steps)
+        # DOM+Screenshot: externalize the screenshot(s) the guide sent to the LLM and link the
+        # file path onto each step so the inspector can show exactly what the model saw.
+        debug_prompts = self._externalize_and_link_prompt_images(task.task_id, enriched_steps, debug_prompts)
         if self.judge_method == "webjudge":
             judge = WebJudge(
                 model=self.judge_model, api_key=self.judge.api_key
@@ -780,6 +1059,7 @@ class PlaywrightGuideRunner:
             "spec_goal_text": spec_goal_text,
             "debug_prompts": debug_prompts,
             "diagnostics": diagnostics,
+            "input_mode": self.input_mode,
         }
         try:
             backfill_element_step_similarity(result, SpecProgressClient())
@@ -792,7 +1072,12 @@ class PlaywrightGuideRunner:
     async def _navigate_to_task(self, page: Any, url: str, diagnostics: dict[str, Any]) -> None:
         diagnostics["navigation_strategy"] = "commit_then_best_effort_domcontentloaded"
         try:
-            await page.goto(url, wait_until="commit", timeout=20000)
+            response = await page.goto(url, wait_until="commit", timeout=20000)
+            if response is not None:
+                try:
+                    diagnostics["nav_http_status"] = response.status
+                except Exception:
+                    pass
         except Exception as exc:
             diagnostics["navigation_commit_error"] = f"{type(exc).__name__}: {str(exc).splitlines()[0]}"
             raise
@@ -994,6 +1279,11 @@ class PlaywrightGuideRunner:
         idle_deadline = asyncio.get_running_loop().time() + self.idle_timeout_s
         last_step_count = -1
         last_session_id = None
+        # Track in-flight LLM activity so idle_timeout means "genuinely hung", not "working slowly".
+        # A new committed step OR a new/updated debug prompt (an LLM call being issued) counts as
+        # progress and resets the idle clock.
+        last_debug_count = -1
+        last_debug_ts = None
 
         while asyncio.get_running_loop().time() < deadline:
             state = await extension_page.evaluate(
@@ -1023,11 +1313,19 @@ class PlaywrightGuideRunner:
             )
             last_session_id = state.get("sessionId") or last_session_id
             step_count = int(state.get("stepCount") or 0)
-            if step_count != last_step_count:
+            debug_count = int(state.get("debugPromptCount") or 0)
+            debug_ts = state.get("lastDebugPromptTimestamp")
+            step_progressed = step_count != last_step_count
+            llm_active = (debug_count != last_debug_count) or (debug_ts != last_debug_ts)
+            if step_progressed:
                 last_step_count = step_count
-                idle_deadline = asyncio.get_running_loop().time() + self.idle_timeout_s
                 if progress:
                     progress(step_count, "executing steps")
+            # Reset the idle clock on a committed step OR any in-flight LLM activity.
+            if step_progressed or llm_active:
+                last_debug_count = debug_count
+                last_debug_ts = debug_ts
+                idle_deadline = asyncio.get_running_loop().time() + self.idle_timeout_s
 
             if state.get("lastIsDone"):
                 return {**state, "reason": "done", "sessionId": last_session_id}
@@ -1103,7 +1401,7 @@ class PlaywrightGuideRunner:
             })
         for rec in (data or {}).get("steps") or []:
             cleaned = dict(rec)
-            for key in ("screenshot", "screenshotBefore", "screenshotAfter", "regionShot"):
+            for key in ("screenshot", "screenshotBefore", "screenshotAfter", "regionShot", "promptImage"):
                 if cleaned.get(key):
                     cleaned[key] = self._save_base64(task_id, cleaned["step"], key, cleaned[key])
             # Full-page DOM snapshots can be tens of MB each; inlining them makes the task
@@ -1129,6 +1427,63 @@ class PlaywrightGuideRunner:
             }"""
         )
         return data or []
+
+    def _externalize_and_link_prompt_images(self, task_id: str, steps: list[dict[str, Any]], debug_prompts: Any) -> Any:
+        """Save each debug prompt's inline LLM image to a file and attach the path to its step.
+
+        The guide records the sent screenshot as ``imageBase64`` on the debug prompt (via the
+        service worker). Inlining that base64 in the task JSON would bloat it, so write it to a
+        sibling file and reference by path. Matching the debug prompt's ``metadata.step``/``mode``
+        to a step sets ``promptImage`` (main call) or ``warningPromptImage`` (warning retry).
+        """
+        if not isinstance(debug_prompts, list):
+            return debug_prompts
+        by_num: dict[int, dict[str, Any]] = {}
+        for step in steps or []:
+            try:
+                by_num[int(step.get("step"))] = step
+            except (TypeError, ValueError):
+                continue
+        for idx, dp in enumerate(debug_prompts):
+            if not isinstance(dp, dict):
+                continue
+            image = dp.get("imageBase64")
+            if not (isinstance(image, str) and image):
+                continue
+            meta = dp.get("metadata") or {}
+            mode = meta.get("mode")
+            try:
+                step_num = int(meta.get("step"))
+            except (TypeError, ValueError):
+                step_num = None
+            step = by_num.get(step_num) if step_num is not None else None
+            # The step's rewind record is the reliable source of the sent image; when it already
+            # carries one, just drop the (redundant, bulky) inline base64 to keep the JSON small.
+            if step is not None and mode != "guide_warning_retry" and step.get("promptImage"):
+                dp["imageBase64"] = None
+                continue
+            path = self._save_debug_image(task_id, idx, step_num, mode, image)
+            if not path:
+                continue
+            dp["imageBase64Path"] = path
+            dp["imageBase64"] = None
+            if step is not None:
+                if mode == "guide_warning_retry":
+                    step.setdefault("warningPromptImage", path)
+                else:
+                    step.setdefault("promptImage", path)
+        return debug_prompts
+
+    def _save_debug_image(self, task_id: str, idx: int, step_num: Any, mode: Any, value: str) -> str | None:
+        payload = value.split(",", 1)[-1]
+        label = f"{step_num if step_num is not None else 'x'}-{mode or 'llm'}"
+        path = screenshot_dir(self.run_id, task_id) / f"debug-{idx}-{label}.jpg"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.write_bytes(base64.b64decode(payload))
+        except Exception:
+            return None
+        return _rel(path)
 
     def _save_base64(self, task_id: str, step: Any, name: str, value: str) -> str:
         payload = value.split(",", 1)[-1]

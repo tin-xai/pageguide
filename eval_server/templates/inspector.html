@@ -1345,7 +1345,7 @@
           </summary>
           <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px; margin-top: 8px;">
             <div style="margin-bottom: 12px;">
-              Step Uncertainty (U_t = clip(1 − internal grounding × (1 - 0.5 × L_t_u), 0, 1); higher = more uncertain) <br/>
+              Step Uncertainty (U_t = clip(1 − element similarity × (1 - 0.5 × L_t_u), 0, 1); higher = more uncertain) <br/>
               <span style="opacity: 0.8;">Scroll steps (scroll_down, scroll_up) are excluded — they return None and are omitted from aggregations.</span>
             </div>
             <details style="background: var(--badge-neutral-bg); border: 1px solid var(--badge-neutral-border); border-radius: 8px; padding: 10px 14px;">
@@ -1357,7 +1357,7 @@
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">L_t_u (Updated Loop Penalty):</strong> Same denominator as L_t, but a match requires the same normalized <em>action type</em> and the same <em>element/action text</em>. For example, click Search and type Search are no longer treated as the same loop.</div>
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">LLM Progress:</strong> The agent's own <em>LLM-self-reported</em> progress for the step — three-point: <code>1.0</code> clear progress, <code>0.5</code> no net / exploratory movement, <code>0.0</code> regression. Shown for insight; not factored into C_t.</div>
                 <div style="margin-bottom: 8px;"><strong style="color: var(--text);">Subgoal Progress:</strong> <em>Deterministic.</em> The LLM authors an ordered subgoal rubric once per task; the system then verifies each subgoal from page state (URL/DOM) every step. <code>1.0</code> = verified count increased, <code>0.5</code> = unchanged, <code>0.0</code> = decreased or returned to a previously-seen state without a new subgoal.</div>
-                <div><strong style="color: var(--text);">U_t (Step Uncertainty):</strong> clip(1 − internal grounding × (1 − 0.5 × L_t_u), 0, 1); higher = more uncertain (low grounding / high loop). Progress signals are informational and not part of this formula.</div>
+                <div><strong style="color: var(--text);">U_t (Step Uncertainty):</strong> clip(1 − element similarity × (1 − 0.5 × L_t_u), 0, 1); higher = more uncertain (low grounding / high loop). Uses the raw element-instruction similarity (not the bucketed grounding). Progress signals are informational and not part of this formula.</div>
               </div>
             </details>
           </div>
@@ -1824,7 +1824,7 @@
             <div id="warning-evidence-summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 12px;"></div>
             <details style="margin-top: 12px;" open>
               <summary><strong>Full retry request — everything sent to the model</strong></summary>
-              <div style="font-size: 12px; color: var(--text-muted); margin: 6px 0;">Three parts: (1) system prompt, (2) user prompt = SoM/page index (<code>=== PAGE INDEX ===</code>) + user goal + history, (3) reflection prompt appended to the user message. Text-only call — no image is sent.</div>
+              <div style="font-size: 12px; color: var(--text-muted); margin: 6px 0;">Three parts: (1) system prompt, (2) user prompt = SoM/page index (<code>=== PAGE INDEX ===</code>) + user goal + history, (3) reflection prompt appended to the user message. In DOM+Screenshot mode the step's viewport image is also sent (shown above); otherwise the call is text-only.</div>
               <pre id="pre-warning-full-request"></pre>
             </details>
             <details style="margin-top: 12px;">
@@ -1891,6 +1891,25 @@
             </div>
           </div>
 
+          <!-- Screenshot(s) actually sent to the LLM in DOM+Screenshot mode -->
+          <details id="llm-image-details" style="display: none;" open>
+            <summary>🖼️ Screenshot sent to LLM (DOM+Screenshot)</summary>
+            <div style="font-size: 12px; color: var(--text-muted); margin: 6px 0;">The exact viewport image included in the model's reasoning call for this step. If a warning retry occurred, the retry's image is shown too.</div>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px;">
+              <figure id="llm-image-main-fig" style="margin: 0; display: none; max-width: 100%;">
+                <figcaption style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">Main call</figcaption>
+                <a id="a-llm-main" href="#" target="_blank" rel="noopener">
+                  <img id="img-llm-main" src="" alt="Screenshot sent to LLM" style="max-width: 100%; max-height: 320px; border-radius: 8px; border: 1px solid var(--card-border); cursor: zoom-in;">
+                </a>
+              </figure>
+              <figure id="llm-image-retry-fig" style="margin: 0; display: none; max-width: 100%;">
+                <figcaption style="font-size: 11px; font-weight: 700; color: var(--badge-warning-text, #b45309); margin-bottom: 4px;">Warning retry</figcaption>
+                <a id="a-llm-retry" href="#" target="_blank" rel="noopener">
+                  <img id="img-llm-retry" src="" alt="Screenshot sent to LLM on retry" style="max-width: 100%; max-height: 320px; border-radius: 8px; border: 1px solid var(--card-border); cursor: zoom-in;">
+                </a>
+              </figure>
+            </div>
+          </details>
           <!-- Collapsible Prompts & Agent output -->
           <details>
             <summary>System Prompt</summary>
@@ -2578,6 +2597,24 @@
         forcePre.textContent = '';
       }
       document.getElementById('pre-raw-llm').textContent = stepData.rawLlmJson || '(none)';
+
+      // Screenshot(s) sent to the LLM (DOM+Screenshot mode)
+      (function () {
+        const details = document.getElementById('llm-image-details');
+        const mainFig = document.getElementById('llm-image-main-fig');
+        const retryFig = document.getElementById('llm-image-retry-fig');
+        const imgMain = document.getElementById('img-llm-main');
+        const imgRetry = document.getElementById('img-llm-retry');
+        const aMain = document.getElementById('a-llm-main');
+        const aRetry = document.getElementById('a-llm-retry');
+        const mainShot = stepData.promptImage || null;
+        const retryShot = stepData.warningPromptImage || null;
+        if (mainShot) { const u = resolveScreenshot(mainShot); imgMain.src = u; aMain.href = u; mainFig.style.display = ''; }
+        else { imgMain.src = ''; mainFig.style.display = 'none'; }
+        if (retryShot) { const u = resolveScreenshot(retryShot); imgRetry.src = u; aRetry.href = u; retryFig.style.display = ''; }
+        else { imgRetry.src = ''; retryFig.style.display = 'none'; }
+        details.style.display = (mainShot || retryShot) ? '' : 'none';
+      })();
 
       // Sync Lightbox index
       const carouselIdx = trajectory.steps.findIndex(item => item.step === stepId);
