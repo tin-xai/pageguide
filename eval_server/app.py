@@ -251,6 +251,7 @@ def _run_is_baseline(run):
     )
 
 
+@app.template_global('run_variant_badges')
 def _run_badges(run):
     badges = []
     mode = str((run or {}).get("input_mode") or "dom").strip()
