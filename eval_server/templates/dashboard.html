@@ -679,7 +679,7 @@
             <select onchange="window.location.href='/?chart_run_id=' + this.value + (window.location.search.includes('tab=automatic') ? '&tab=automatic' : '')" style="padding: 4px 8px; border-radius: 6px; background: var(--input-bg); color: var(--input-text); border: 1px solid var(--card-border); font-size: 0.9em; max-width: 250px;">
               <option value="" {% if not chart_run_id %}selected{% endif %}>Real Testing</option>
               {% for run in auto_runs %}
-                <option value="{{ run.run_id }}" {% if chart_run_id == run.run_id %}selected{% endif %}>Auto Run: {{ run.run_id }}</option>
+                <option value="{{ run.run_id }}" {% if chart_run_id == run.run_id %}selected{% endif %}>Auto Run: {{ run.display_name }}</option>
               {% endfor %}
             </select>
           </div>
@@ -834,7 +834,7 @@
               {% for run in human_annotation_sources %}
                 <label style="display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--task-card-bg); cursor: pointer;">
                   <input type="checkbox" class="human-annotation-source-run" value="{{ run.run_id }}" checked>
-                  <span style="font-family: monospace; overflow-wrap: anywhere;">{{ run.run_id }}</span>
+                  <span style="overflow-wrap: anywhere;"><strong>{{ run.display_name }}</strong><br><span style="font-family: monospace;">{{ run.run_id }}</span></span>
                   <code style="font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere;">{{ run.task_model or 'Unknown' }}</code>
                   <span class="badge neutral" style="font-size: 10px;">{{ (run.task_ids or [])|length }} tasks</span>
                 </label>
@@ -970,7 +970,7 @@
                       {% for run in group.runs %}
                         <label class="run-inclusion-row" data-source="{{ (run.task_set or '') or 'unknown' }}" data-planning="{{ 1 if run.automatic_planning_mode else 0 }}" data-grounding="{{ 1 if run.inject_grounding_warning else 0 }}" data-loop="{{ 1 if run.inject_looping_warning else 0 }}" data-oracle="{{ 1 if run.include_oracle_plan else 0 }}" data-force_gt="{{ 1 if run.force_ground_truth_mode else 0 }}" style="font-size: 12px; display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto auto; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 6px; background: var(--task-card-bg);">
                           <input type="checkbox" class="grounding-eval-run-checkbox" value="{{ run.run_id }}" {% if run.run_id in default_grounding_run_ids %}checked{% endif %} onchange="fetchGroundingMetrics()">
-                          <span style="overflow-wrap: anywhere;">{% if run.nickname %}<strong>{{ run.nickname }}</strong><br>{% endif %}<span style="font-family: monospace;">{{ run.run_id }}</span></span>
+                          <span style="overflow-wrap: anywhere;"><strong>{{ run.display_name }}</strong><br><span style="font-family: monospace;">{{ run.run_id }}</span></span>
                           <span style="color: var(--text-muted); white-space: nowrap;">{{ run.display_time or 'no date' }}</span>
                           <span class="badge neutral" style="font-size: 10px;" title="Dataset source">{{ task_set_source_label(run.task_set) }}</span>
                           <span class="badge neutral" style="font-size: 10px;">{{ run.status or 'unknown' }} · {{ run.resolved_completed_count }} / {{ run.resolved_task_count }} task{% if run.resolved_task_count != 1 %}s{% endif %}</span>
@@ -1309,8 +1309,8 @@
             <tr>
               <td><input type="checkbox" class="run-select" name="run_ids" value="{{ run.run_id }}" onchange="updateDeleteSelected()"></td>
               <td>
-                {% if run.nickname %}
-                  <strong style="display:block; color: var(--text);">{{ run.nickname }}</strong>
+                {% if run.display_name != run.run_id %}
+                  <strong style="display:block; color: var(--text);">{{ run.display_name }}</strong>
                   <code style="font-size: 12px; color: var(--accent); overflow-wrap: anywhere;">{{ run.run_id }}</code>
                 {% else %}
                   <strong style="font-family: monospace; color: var(--accent);">{{ run.run_id }}</strong>

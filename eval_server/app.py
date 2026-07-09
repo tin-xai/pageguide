@@ -237,7 +237,52 @@ def _run_task_result(run_id, task_id):
 def _run_display_name(run):
     nickname = str((run or {}).get("nickname") or "").strip()
     run_id = str((run or {}).get("run_id") or "")
+    if _uses_generated_run_nickname(run):
+        return nickname or _generated_run_nickname_base(run)
     return f"{nickname} ({run_id})" if nickname else run_id
+
+
+def _uses_generated_run_nickname(run):
+    r = run or {}
+    return (
+        str(r.get("task_set") or "").strip() == "annotated"
+        and "gemini-2.5-flash-lite" in str(r.get("task_model") or "").lower()
+    )
+
+
+def _generated_run_nickname_base(run):
+    flags = run_variation_flags(run or {})
+    input_mode = str((run or {}).get("input_mode") or "dom").strip()
+    input_label = "DOM + Screenshot" if input_mode == "dom_screenshot" else "DOM"
+    condition_label = run_variation_combo_label(flags)
+    if condition_label == VARIATION_BASELINE_LABEL:
+        condition_label = "No condition"
+    return " · ".join((
+        task_set_label((run or {}).get("task_set")),
+        "Gemini 2.5 Flash Lite",
+        condition_label,
+        input_label,
+    ))
+
+
+def _assign_run_display_names(runs):
+    """Set display_name and number duplicate generated nicknames oldest-first."""
+    generated_groups = {}
+    for run in runs:
+        if _uses_generated_run_nickname(run) and not str(run.get("nickname") or "").strip():
+            generated_groups.setdefault(_generated_run_nickname_base(run), []).append(run)
+
+    for base, group in generated_groups.items():
+        ordered = sorted(
+            group,
+            key=lambda r: (_run_chrono_key(r), str(r.get("run_id") or "")),
+        )
+        for index, run in enumerate(ordered, 1):
+            run["display_name"] = f"{base} · {index}" if len(ordered) > 1 else base
+
+    for run in runs:
+        run.setdefault("display_name", _run_display_name(run))
+    return runs
 
 
 def _run_is_baseline(run):
@@ -2157,13 +2202,13 @@ def dashboard():
         return run
         
     auto_runs = [reconcile_run(run) for run in list_auto_runs()]
+    _assign_run_display_names(auto_runs)
     for run in auto_runs:
         run.setdefault("task_model", "")
         run.setdefault("judge_model", "")
         run['duration'] = _run_timing(run)['duration']
         run['reference_summary'] = _run_reference_summary(run)
         run['display_time'] = _run_display_time(run)
-        run['display_name'] = _run_display_name(run)
         run['badges'] = _run_badges(run)
         run['resolved_task_count'] = _run_task_count(run)
         run['resolved_completed_count'] = _run_completed_count(run)
@@ -2242,13 +2287,13 @@ def _all_dataset_dashboard_context():
         return run
 
     auto_runs = [reconcile_run(run) for run in list_auto_runs()]
+    _assign_run_display_names(auto_runs)
     for run in auto_runs:
         run.setdefault("task_model", "")
         run.setdefault("judge_model", "")
         run['duration'] = _run_timing(run)['duration']
         run['reference_summary'] = _run_reference_summary(run)
         run['display_time'] = _run_display_time(run)
-        run['display_name'] = _run_display_name(run)
         run['badges'] = _run_badges(run)
         run['resolved_task_count'] = _run_task_count(run)
         run['resolved_completed_count'] = _run_completed_count(run)
@@ -2333,7 +2378,8 @@ def api_run_source_config():
 
 def _following_rate_run_options():
     options = []
-    for run in list_auto_runs():
+    runs = _assign_run_display_names(list(list_auto_runs()))
+    for run in runs:
         completed = _run_completed_count(run)
         if completed <= 0:
             continue
@@ -2343,7 +2389,7 @@ def _following_rate_run_options():
         option.update({
             "completed_count": completed,
             "display_time": _run_display_time(run),
-            "display_name": _run_display_name(run),
+            "display_name": run["display_name"],
             "badges": _run_selector_markers(run),
             "status": run.get("status") or "",
         })
@@ -4036,6 +4082,7 @@ def _select_analysis_runs():
 
     candidate_runs = [run for run in all_runs if _matches(run)]
     candidate_runs.sort(key=_run_chrono_key, reverse=True)
+    _assign_run_display_names(candidate_runs)
     selection_applied = request.args.get("selection") == "1"
     selected_ids = set(request.args.getlist("run_ids"))
 
@@ -4055,7 +4102,7 @@ def _select_analysis_runs():
         candidates.append({
             "run": run,
             "run_id": run_id,
-            "display_name": _run_display_name(run),
+            "display_name": run["display_name"],
             "badges": _run_badges(run),
             "flags": flags,
             "combo_label": run_variation_combo_label(flags),
@@ -4095,6 +4142,7 @@ def run_variation_analysis():
             continue
         rows.append({
             "run": cand["run"],
+            "display_name": cand["display_name"],
             "flags": cand["flags"],
             "combo_label": cand["combo_label"],
             "summary": run_variation_task_step_summary(cand["run_id"], threshold),
@@ -4671,7 +4719,10 @@ def run_task_explorer():
         fully_complete = sum(1 for t in tasks if t.get("subgoal_total") and t.get("subgoal_completed") == t.get("subgoal_total"))
         run_sections.append({
             "run_id": run_id,
-            "display_name": _run_display_name(run),
+            "display_name": next(
+                (cand["display_name"] for cand in candidates if cand["run_id"] == run_id),
+                _run_display_name(run),
+            ),
             "badges": _run_badges(run),
             "combo_label": run_variation_combo_label(flags),
             "flags": flags,
