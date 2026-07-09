@@ -38,6 +38,12 @@ let startY = 0;
 let scrollLeft = 0;
 let scrollTop = 0;
 let wasDragging = false;
+let guideConfidenceThreshold = 0.7;
+
+function _normalizeConfidenceThreshold(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.7;
+}
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
@@ -195,7 +201,7 @@ async function showGoalStepPreview(step, anchor) {
 
   // Confidence status (green ≥70%, yellow <70%) — no red for confidence.
   const conf = meta?.confidence;
-  const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf) : null;
+  const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf, guideConfidenceThreshold) : null;
   // Confidence pinned to the top-left corner of the card.
   const confHtml = (tier && conf != null)
     ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
@@ -205,6 +211,20 @@ async function showGoalStepPreview(step, anchor) {
   const pctOf = (c) => (c != null) ? Math.round(c * 100) + '%' : '—';
   const dualHtml = dual
     ? `<div class="pageguide-goal-step-dual">🐞 Full: <b>${pctOf(dual.full)}</b> · No-progress: <b>${pctOf(dual.reduced)}</b> · No-loop: <b>${pctOf(dual.noloop)}</b></div>`
+    : '';
+  const scoreSource = rec || meta || {};
+  const fmtScore = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '—';
+  const loopMatches = scoreSource.loopMatches != null ? Number(scoreSource.loopMatches) : null;
+  const planDone = scoreSource.planCompleted != null ? Number(scoreSource.planCompleted) : null;
+  const planTotal = scoreSource.planTotal != null ? Number(scoreSource.planTotal) : currentGuidePlan.length;
+  const scoreHtml = (!isInitialNode && (scoreSource.mechGrounding != null || scoreSource.mechLoop != null || scoreSource.confidence != null))
+    ? `<div class="pageguide-goal-step-scores">
+        <div>Grounding: <b>${fmtScore(scoreSource.mechGrounding ?? scoreSource.grounded)}</b></div>
+        <div>Loop: <b>${fmtScore(scoreSource.mechLoop)}</b>${loopMatches != null ? ` (${loopMatches}/10 matches)` : ''}</div>
+        <div>Plan: <b>${Number.isFinite(planDone) && planTotal ? `${Math.min(planDone, planTotal)}/${planTotal}` : '—'}</b></div>
+        ${scoreSource.llmElementText ? `<div>LLM text: <b>${escapeHtml(scoreSource.llmElementText)}</b></div>` : ''}
+        ${scoreSource.domElementText ? `<div>DOM text: <b>${escapeHtml(scoreSource.domElementText)}</b></div>` : ''}
+      </div>`
     : '';
   const url = meta?.url || rec?.url || '';
   // Show the URL as a compact "link" hyperlink rather than the full (often long) address.
@@ -237,6 +257,7 @@ async function showGoalStepPreview(step, anchor) {
     ${topImg}
     <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
+    ${scoreHtml}
     ${dualHtml}
     ${urlHtml}
     ${beforeHtml}
@@ -346,11 +367,12 @@ function renderGoalDots(current, total) {
     if (st.status === 'done') dot.classList.add('done');
     else if (st.status === 'current') dot.classList.add('current');
     // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
-    const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence) : null;
+    const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
     if (tier === 'high') dot.classList.add('conf-high');
     else if (tier === 'med') dot.classList.add('conf-med');
     // Red is reserved for verification failures and low *grounding* (not confidence).
-    if (rec && typeof rec.grounding === 'number' && rec.grounding < 0.5) dot.classList.add('review');
+    const groundingForReview = rec?.mechGrounding ?? rec?.grounding;
+    if (typeof groundingForReview === 'number' && groundingForReview < 0.5) dot.classList.add('review');
     if (st.verify) dot.classList.add(`verify-${st.verify}`);
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -536,20 +558,53 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   const progress = document.getElementById('pageguide-goal-progress');
   const stepText = document.getElementById('pageguide-goal-steptext');
   const fill = document.getElementById('pageguide-goal-bar-fill');
+  const planList = document.getElementById('pageguide-plan-list');
 
   if (icon) icon.textContent = ROUTE_ICONS[activeRoute] || ROUTE_ICONS[normalized] || '🎯';
   if (titleEl) titleEl.textContent = titleText;
 
   const totalSteps = Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0);
+  let planCompleted = 0;
+  let highestDone = 0;
+  
+  currentGuideRecords.forEach(r => {
+    const cps = Number(r.completedPlanStep) || Number(r.meta?.completedPlanStep) || 0;
+    if (cps > highestDone) highestDone = cps;
+  });
+
   if (isGuide && totalSteps > 0 && currentGuideStep > 0) {
     const safeStep = Math.max(1, Math.min(currentGuideStep, totalSteps));
+    const planTotal = currentGuidePlan.length;
+    planCompleted = highestDone;
+    const concreteCount = Math.max(currentGuideRecords.length, safeStep);
     if (progress) progress.style.display = 'flex';
-    if (stepText) stepText.textContent = `Step ${safeStep} of ${totalSteps}`;
-    if (fill) fill.style.width = `${Math.round((safeStep / totalSteps) * 100)}%`;
+    if (stepText) {
+      stepText.textContent = planTotal
+        ? `Plan ${Math.min(planCompleted, planTotal)}/${planTotal} · Step ${concreteCount}`
+        : `Step ${safeStep} of ${totalSteps}`;
+    }
+    if (fill) fill.style.width = `${Math.round(((planTotal ? Math.min(planCompleted, planTotal) : safeStep) / (planTotal || totalSteps)) * 100)}%`;
     renderGoalDots(safeStep, totalSteps);
     renderConfChart();
   } else if (progress) {
     progress.style.display = 'none';
+  }
+  
+  if (planList) {
+    if (isGuide && currentGuidePlan.length) {
+      planList.style.display = 'flex';
+      planList.innerHTML = currentGuidePlan.map((p, i) => {
+        const n = Number(p?.n || i + 1) || i + 1;
+        const goal = String(p?.goal || p?.description || p?.step || '').trim();
+        const isDone = n <= highestDone;
+        const isCurrent = !isDone && n === highestDone + 1;
+        const cls = isDone ? ' done' : (isCurrent ? ' current' : '');
+        return `<div class="pageguide-plan-row${cls}"><span class="pageguide-plan-num">${escapeHtml(String(n))}.</span><span class="pageguide-plan-goal">${escapeHtml(goal)}</span></div>`;
+      }).join('');
+    } else {
+      planList.style.display = 'none';
+      planList.innerHTML = '';
+    }
   }
 
   if (isGuide) _ensureGoalCollapseBtn();
@@ -651,6 +706,11 @@ function updateGuidePauseButton() {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const local = await chrome.storage.local.get(['guideConfidenceThreshold']);
+    guideConfidenceThreshold = _normalizeConfidenceThreshold(local.guideConfidenceThreshold);
+  } catch (e) {}
+
   // Get current tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab?.id;
@@ -917,6 +977,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       chrome.storage.sync.get(['debugEnabled', 'alwaysShowPromptBtn']).then(s => {
         updateDebugButtonVisibility(s.debugEnabled === true, s.alwaysShowPromptBtn === true);
       });
+    }
+    if (namespace === 'local' && changes.guideConfidenceThreshold) {
+      guideConfidenceThreshold = _normalizeConfidenceThreshold(changes.guideConfidenceThreshold.newValue);
+      renderGoalCard({ route: currentGoal?.route || 'guide', step: currentGuideStep });
     }
   });
 });
@@ -1616,7 +1680,7 @@ function addSteerRestoreCard(message) {
  * Load prefix steps of a session into memory.
  */
 async function loadSessionSteps(sessionId) {
-  let steps = null, title = '';
+  let steps = null, title = '', plan = [];
   if (sessionId && typeof rewindVerifyScreenshots === 'function') {
     try { await rewindVerifyScreenshots(sessionId); } catch (e) {}
   }
@@ -1627,6 +1691,7 @@ async function loadSessionSteps(sessionId) {
       if (idx && idx.steps && idx.steps.length) {
         steps = idx.steps;
         title = idx.branchLabel || idx.goal || '';
+        plan = Array.isArray(idx.guidePlan) ? idx.guidePlan : (Array.isArray(idx.plan) ? idx.plan : []);
       }
     }
   } catch (e) {}
@@ -1642,6 +1707,7 @@ async function loadSessionSteps(sessionId) {
   currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
   currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
   currentGuideTitle = title || '';
+  currentGuidePlan = Array.isArray(plan) ? plan : [];
 }
 
 /**
@@ -1885,7 +1951,7 @@ async function showBranchTree(keepZoom = false) {
       const conf = node.meta.confidence;
       let statusDotHtml = '';
       if (conf != null) {
-        const isGood = conf >= 0.7;
+        const isGood = conf >= guideConfidenceThreshold;
         const color = isGood ? '#22c55e' : '#eab308';
         const title = `Confidence: ${Math.round(conf * 100)}%`;
         statusDotHtml = `<span class="pg-tree-node-status-dot" style="background: ${color};" title="${title}"></span>`;
@@ -2003,7 +2069,7 @@ async function showBranchTree(keepZoom = false) {
         : '';
 
       const conf = node.meta.confidence;
-      const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf) : null;
+      const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf, guideConfidenceThreshold) : null;
       const badgeHtml = (tier && conf != null)
         ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
         : '';
@@ -2335,7 +2401,7 @@ const GUIDE_CONF_SOURCES = {
 };
 
 function _normalizeConfSource(v) {
-  return v === 'mechanical' ? 'mechanical' : 'llm';
+  return v === 'llm' ? 'llm' : 'mechanical';
 }
 
 function _renderConfSource(btn, source) {
@@ -2354,7 +2420,7 @@ function initConfidenceSourceToggle() {
   if (!btn) return;
   chrome.storage.local.get(GUIDE_CONF_SOURCE_KEY)
     .then(r => _renderConfSource(btn, _normalizeConfSource(r[GUIDE_CONF_SOURCE_KEY])))
-    .catch(() => _renderConfSource(btn, 'llm'));
+    .catch(() => _renderConfSource(btn, 'mechanical'));
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -4156,7 +4222,7 @@ async function saveTrajectoryToRepo() {
   const llmSource = `${provider.charAt(0).toUpperCase() + provider.slice(1)} - ${modelStr}`;
 
   const localSettings = await chrome.storage.local.get(['guideConfidenceSource']);
-  const confSourceVal = localSettings.guideConfidenceSource || 'llm';
+  const confSourceVal = localSettings.guideConfidenceSource || 'mechanical';
   const confSource = confSourceVal === 'mechanical' ? 'No-LLM' : 'LLM Report';
 
   const payload = {
@@ -4405,6 +4471,16 @@ function handleContentMessage(message, sender, sendResponse) {
   if (message.action === 'guideStep') {
     hideTyping();
     addGuideStep(message.result);
+  } else if (message.action === 'guidePlan') {
+    _setJourneyRecalledMode(false);
+    currentGuidePlan = Array.isArray(message.plan) ? message.plan : [];
+    currentGuideTitle = message.title || currentGuideTitle;
+    if (message.sessionId) {
+      const j = _journeysBySession[message.sessionId] || (_journeysBySession[message.sessionId] = { title: '', steps: [] });
+      j.title = message.title || j.title || currentGoal?.prompt || '';
+      j.plan = currentGuidePlan;
+    }
+    renderGoalCard({ route: 'guide', title: currentGuideTitle, step: currentGuideStep || 1 });
   } else if (message.action === 'guidePaused') {
     if (!guideActive && !guidePaused) return;
     guideStopped = false;
@@ -4435,7 +4511,7 @@ function handleContentMessage(message, sender, sendResponse) {
         if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);
         else currentGuideRecords.push(message.meta);
         currentGuideRecords.sort((a, b) => Number(a.step) - Number(b.step));
-        currentGuideStep = message.meta.planStep || message.meta.step || currentGuideStep;
+        currentGuideStep = message.meta.step || currentGuideStep;
         renderGoalCard({ route: 'guide', step: currentGuideStep });
         setExportEnabled(true);
 

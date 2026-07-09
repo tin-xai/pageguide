@@ -33,15 +33,17 @@ Return JSON only:
   "action": "click" | "type" | "clear_text" | "done",
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
   "isLastStep": false,
-  "progress": 0.0,
+  "completedPlanStep": 1,
+  "completedPlanStepReason": "reasoning here",
   "risk": "low" | "high",
   "riskReason": "short reason for the risk level",
   "confirmation": "needed" | "no need"
 }
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
+"completedPlanStep": the highest plan step number completed by this action, or null if none is completed yet.
+"completedPlanStepReason": short explanation for that completion value.
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
-"progress": 0.0, 0.5, or 1.0 — given the observed prior steps, current page state, and proposed action, does this step move the agent CLOSER to the user’s goal? 1.0 = clear progress toward completion, 0.5 = no clear net progress or only exploratory/redundant movement, 0.0 = regression, deviation, or undoing prior progress.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
 
@@ -446,9 +448,11 @@ async function gv2SaveFallback(extra = {}) {
         lowConfidenceCount: s.lowConfidenceCount || 0,
         predictedGoalState: s.predictedGoalState || null,
         mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
+        mechElementTexts: Array.isArray(s._mechElementTexts) ? s._mechElementTexts : [],
+        guidePlan: Array.isArray(s.guidePlan) ? s.guidePlan : [],
+        guideTitle: s.guideTitle || '',
         lastActionStepNumber: s._lastActionStepNumber || null,
         activeStepNumber: s._activeStepNumber || null,
-        predictedGoalState: s.predictedGoalState || null,
         lastUrl: window.location.href,
         timestamp: Date.now(),
         ...extra
@@ -635,6 +639,9 @@ async function _gv2ResumeFromState(state) {
     paused: false,
     lowConfidenceCount: state.lowConfidenceCount || 0,
     _mechKeys: Array.isArray(state.mechKeys) ? state.mechKeys : [],
+    _mechElementTexts: Array.isArray(state.mechElementTexts) ? state.mechElementTexts : [],
+    guidePlan: Array.isArray(state.guidePlan) ? state.guidePlan : [],
+    guideTitle: state.guideTitle || '',
     _lastActionStepNumber: state.lastActionStepNumber || state.activeStepNumber || (state.previousSteps || []).length || null,
     _activeStepNumber: state.activeStepNumber || null
   };
@@ -762,10 +769,16 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     const kept = [];
     const originalTrajectory = [];
     let goal = '';
+    let restoredPlan = [];
+    let restoredTitle = '';
     
     if (typeof rewindGetIndex === 'function') {
       const idx = await rewindGetIndex(payload.sessionId);
       if (idx && idx.goal) goal = idx.goal;
+      if (idx) {
+        restoredPlan = Array.isArray(idx.guidePlan) ? idx.guidePlan : (Array.isArray(idx.plan) ? idx.plan : []);
+        restoredTitle = idx.guideTitle || '';
+      }
       
       if (idx && idx.steps) {
         const sortedSteps = idx.steps.slice().sort((a, b) => Number(a.step) - Number(b.step));
@@ -810,13 +823,13 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       autoMode,
       paused: false,
       lowConfidenceCount: 0,
-      // Seed the loop-detection key list from the kept steps so L_t keeps counting
-      // correctly after a rewind/steer. One entry per prior action (the loop denominator
-      // counts ALL previous actions), using the same action+text key.
-      _mechKeys: kept
-        .map(r => (typeof gv2ElementKey === 'function'
-          ? gv2ElementKey({ action: r.action, element: { text: r.target?.text }, instruction: r.instruction })
-          : '')),
+      _mechKeys: [],
+      _mechElementTexts: kept
+        .map(r => _gv2NormalizeDomText(r.target?.domText || r.target?.text || r.instruction))
+        .filter(Boolean),
+      guidePlan: restoredPlan,
+      guideTitle: restoredTitle,
+      _planAttempted: Array.isArray(restoredPlan) && restoredPlan.length > 0,
       currentPlanStep: fromStep + 1,
       _lastActionStepNumber: fromStep || null,
       _activeStepNumber: fromStep + 1,
@@ -1285,7 +1298,10 @@ async function _gv2SetState(pendingResume) {
     lowConfidenceCount: s.lowConfidenceCount || 0,
     predictedGoalState: s.predictedGoalState || null,
     // Mechanical confidence: carry the loop-detection key list across navigations.
-    mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : []
+    mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
+    mechElementTexts: Array.isArray(s._mechElementTexts) ? s._mechElementTexts : [],
+    guidePlan: Array.isArray(s.guidePlan) ? s.guidePlan : [],
+    guideTitle: s.guideTitle || ''
   };
 
   // Primary: tell service worker (survives page navigation if SW stays alive)
@@ -1301,7 +1317,10 @@ async function _gv2SetState(pendingResume) {
     paused: !!s.paused,
     lowConfidenceCount: s.lowConfidenceCount || 0,
     lastActionStepNumber: s._lastActionStepNumber || null,
-    activeStepNumber: s._activeStepNumber || null
+    activeStepNumber: s._activeStepNumber || null,
+    mechElementTexts: Array.isArray(s._mechElementTexts) ? s._mechElementTexts : [],
+    guidePlan: Array.isArray(s.guidePlan) ? s.guidePlan : [],
+    guideTitle: s.guideTitle || ''
   });
 }
 
@@ -1369,13 +1388,24 @@ async function _gv2ConfidenceFormula() {
 // behavior), 'mechanical' = rule-based grounding × loop computed from execution signals (no LLM).
 // Decides which score becomes the active `confidence` that drives the tier/pause/red-highlight logic.
 const _GV2_CONF_SOURCE_KEY = 'guideConfidenceSource';
+const _GV2_CONF_THRESHOLD_KEY = 'guideConfidenceThreshold';
+
+async function _gv2ConfidenceThreshold() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_CONF_THRESHOLD_KEY);
+    const n = Number(r[_GV2_CONF_THRESHOLD_KEY]);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.7;
+  } catch (e) {
+    return 0.7;
+  }
+}
 
 async function _gv2ConfidenceSource() {
   try {
     const r = await chrome.storage.local.get(_GV2_CONF_SOURCE_KEY);
-    return r[_GV2_CONF_SOURCE_KEY] === 'mechanical' ? 'mechanical' : 'llm'; // default llm
+    return r[_GV2_CONF_SOURCE_KEY] === 'llm' ? 'llm' : 'mechanical'; // default mechanical
   } catch (e) {
-    return 'llm';
+    return 'mechanical';
   }
 }
 
@@ -1398,6 +1428,17 @@ async function _gv2ShouldUseAlignedRegionCapture(g) {
   return _gv2IsAlignedRegionCapture();
 }
 if (typeof window !== 'undefined') window._gv2ShouldUseAlignedRegionCapture = _gv2ShouldUseAlignedRegionCapture;
+
+const _GV2_PLANNING_KEY = 'guidePlanningEnabled';
+
+async function _gv2IsPlanningEnabled() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_PLANNING_KEY);
+    return r[_GV2_PLANNING_KEY] !== false;
+  } catch (e) {
+    return true;
+  }
+}
 
 const _GV2_PASS_HISTORY_KEY = 'guideDebugPassHistory';
 
@@ -1466,6 +1507,20 @@ async function _gv2GoalRelevanceScore(g, instruction) {
   }
 }
 
+function _gv2NormalizeDomText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function _gv2ElementAccessibleText(el) {
+  if (!el) return '';
+  try {
+    const name = typeof getAccessibleName === 'function' ? (getAccessibleName(el) || '') : '';
+    return String(name || el.textContent || '').replace(/\s+/g, ' ').trim();
+  } catch (e) {
+    return String(el.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+}
+
 async function _gv2ElementStepSimilarity(instruction, elementText, hasIndex) {
   if (!hasIndex) return null;
   const instr = String(instruction || '').trim();
@@ -1482,6 +1537,96 @@ async function _gv2ElementStepSimilarity(instruction, elementText, hasIndex) {
   } catch (e) {
     return null;
   }
+}
+
+async function _gv2ElementGroundingSimilarity(llmElementText, domElementText) {
+  const llm = String(llmElementText || '').trim();
+  const dom = String(domElementText || '').trim();
+  if (!llm || !dom) return 0.0;
+  if (typeof gv2CosineSimilarity !== 'function') return null;
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: 'callEmbed',
+      texts: [llm, dom]
+    });
+    if (resp?.error || !Array.isArray(resp.embeddings) || resp.embeddings.length < 2) return null;
+    return gv2CosineSimilarity(resp.embeddings[0], resp.embeddings[1]);
+  } catch (e) {
+    return null;
+  }
+}
+
+function _gv2CoercePlan(raw, question) {
+  const obj = raw && typeof raw === 'object' ? raw : null;
+  const sourceSteps = Array.isArray(obj?.steps) ? obj.steps : (Array.isArray(obj?.plan) ? obj.plan : []);
+  const steps = sourceSteps
+    .map((s, i) => {
+      const goal = typeof s === 'string' ? s : (s?.goal || s?.description || s?.step || s?.title || '');
+      return { n: Number(s?.n || s?.number || i + 1) || i + 1, goal: String(goal || '').trim() };
+    })
+    .filter(s => s.goal);
+  if (!steps.length) return null;
+  return {
+    title: String(obj?.title || question || 'Guide').trim(),
+    steps: steps.map((s, i) => ({ n: i + 1, goal: s.goal }))
+  };
+}
+
+async function _gv2GenerateInitialPlan(g, pageIndex) {
+  if (!g?.question || !(await _gv2IsPlanningEnabled())) return null;
+  let tutorialSection = '';
+  if (g.tutorialRef) {
+    tutorialSection = `\nTutorial reference for a matching task:\n${g.tutorialRef.content.steps.join('\n')}\n`;
+  }
+  const prompt = `Create a concise execution plan for a browser guide before any action is taken.
+Return JSON only: {"title":"short title","steps":[{"n":1,"goal":"observable user-facing milestone"}]}.
+Use 3-10 high-level milestones. Do not include hidden reasoning.
+
+Current URL: ${window.location.href}
+User goal: ${g.question}
+${tutorialSection}
+Visible interactive page index:
+${pageIndex?.indexText || ''}`;
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      action: 'callLLM',
+      systemPrompt: '',
+      messages: [{ role: 'user', content: prompt }],
+      metadata: { kind: 'guideInitialPlan', mode: 'guide', url: window.location.href }
+    });
+    if (resp?.error || !resp?.content) return null;
+    const parsed = (typeof gv2ExtractJsonObject === 'function') ? gv2ExtractJsonObject(resp.content) : JSON.parse(resp.content);
+    return _gv2CoercePlan(parsed, g.question);
+  } catch (e) {
+    console.warn('[guidev2] initial plan failed:', e);
+    return null;
+  }
+}
+
+async function _gv2SetInitialPlan(g, pageIndex) {
+  if (!g || g._planAttempted) return;
+  g._planAttempted = true;
+  const plan = await _gv2GenerateInitialPlan(g, pageIndex);
+  if (!plan) return;
+  g.guidePlan = plan.steps;
+  g.guideTitle = plan.title;
+  try {
+    if (g.sessionId && typeof rewindUpdateSessionMeta === 'function') {
+      await rewindUpdateSessionMeta(g.sessionId, {
+        guidePlan: plan.steps,
+        guideTitle: plan.title,
+        plan: plan.steps
+      });
+    }
+  } catch (e) { /* non-fatal */ }
+  try {
+    chrome.runtime.sendMessage({
+      action: 'guidePlan',
+      sessionId: g.sessionId,
+      title: plan.title,
+      plan: plan.steps
+    });
+  } catch (e) { /* panel may be closed */ }
 }
 
 /**
@@ -1720,6 +1865,8 @@ async function gv2CaptureStepRecord(data) {
         sessionId: g.sessionId,
         step: data.step,
         planStep: data.planStep != null ? data.planStep : data.step,
+        completedPlanStep: data.completedPlanStep != null ? data.completedPlanStep : null,
+        completedPlanStepReason: data.completedPlanStepReason || '',
         instruction: data.instruction || '',
         action: data.action || null,
         isLastStep: !!data.isLastStep,
@@ -1736,6 +1883,12 @@ async function gv2CaptureStepRecord(data) {
         elementStepSimilarity: data.elementStepSimilarity != null ? data.elementStepSimilarity : null,
         element_step_similarity: data.element_step_similarity != null ? data.element_step_similarity : null,
         mechLoop: data.mechLoop != null ? data.mechLoop : null,
+        loopMatches: data.loopMatches != null ? data.loopMatches : null,
+        domElementText: data.domElementText || null,
+        llmElementText: data.llmElementText || null,
+        resolvedIndex: data.resolvedIndex != null ? data.resolvedIndex : null,
+        planTotal: data.planTotal != null ? data.planTotal : null,
+        planCompleted: data.planCompleted != null ? data.planCompleted : null,
         confidenceSource: data.confidenceSource || null,
         confirmation: data.confirmation || null,
         llmStep: data.llmStep != null ? data.llmStep : null,
@@ -1768,6 +1921,8 @@ async function gv2CaptureStepRecord(data) {
       sessionId: g.sessionId,
       step: data.step,
       planStep: data.planStep != null ? data.planStep : data.step,
+      completedPlanStep: data.completedPlanStep != null ? data.completedPlanStep : null,
+      completedPlanStepReason: data.completedPlanStepReason || '',
       timestamp: Date.now(),
       url: window.location.href,
       title: document.title || '',
@@ -1786,6 +1941,12 @@ async function gv2CaptureStepRecord(data) {
       elementStepSimilarity: data.elementStepSimilarity != null ? data.elementStepSimilarity : null,
       element_step_similarity: data.element_step_similarity != null ? data.element_step_similarity : null,
       mechLoop: data.mechLoop != null ? data.mechLoop : null,
+      loopMatches: data.loopMatches != null ? data.loopMatches : null,
+      domElementText: data.domElementText || null,
+      llmElementText: data.llmElementText || null,
+      resolvedIndex: data.resolvedIndex != null ? data.resolvedIndex : null,
+      planTotal: data.planTotal != null ? data.planTotal : null,
+      planCompleted: data.planCompleted != null ? data.planCompleted : null,
       confidenceSource: data.confidenceSource || null,
       confirmation: data.confirmation || null,
       llmStep: data.llmStep != null ? data.llmStep : null,
@@ -1951,6 +2112,10 @@ async function _handleStepByStepGuideV2(question) {
     paused: false,
     lowConfidenceCount: 0,
     _mechKeys: [],
+    _mechElementTexts: [],
+    guidePlan: [],
+    guideTitle: '',
+    _planAttempted: false,
     currentPlanStep: 1
   };
 
@@ -2029,6 +2194,10 @@ async function gv2GenerateNextStep() {
   const stepNumber = g.previousSteps.length + 1;
   console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
 
+  if (stepNumber === 1) {
+    await _gv2SetInitialPlan(g, pageIndex);
+  }
+
   // Use tutorial cached at session start (no repeated lookup or API call)
   let tutorialSection = '';
   if (g.tutorialRef) {
@@ -2036,6 +2205,18 @@ async function gv2GenerateNextStep() {
 Pre-verified steps for "${g.tutorialRef.task}" on ${g.tutorialRef.website}:
 ${g.tutorialRef.content.steps.join('\n')}
 Use these as a reference guide but map each step to the actual elements visible in the PAGE INDEX above.
+`;
+  }
+
+  let planSection = '';
+  if (Array.isArray(g.guidePlan) && g.guidePlan.length) {
+    planSection = `\n=== ORIGINAL PLAN ===
+${g.guidePlan.map(p => {
+  const isDone = g.currentPlanStep > p.n;
+  const status = isDone ? 'complete' : (Number(p.n) === Number(g.currentPlanStep || 1) ? 'current' : 'pending');
+  return `${p.n}. [${status}] ${p.goal}`;
+}).join('\n')}
+Return "completedPlanStep" as the highest original plan milestone number completed by this action (or null), and "completedPlanStepReason".
 `;
   }
 
@@ -2111,6 +2292,7 @@ ${pageIndex.indexText}
 === USER GOAL ===
 ${activeQuestion}
 ${tutorialSection}
+${planSection}
 === CURRENT STEP ===
 Step ${stepNumber}
 ${completedStepsSection}
@@ -2308,30 +2490,43 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       : ((typeof step.confidence === 'number' && isFinite(step.confidence))
           ? Math.max(0, Math.min(1, step.confidence)) : null);
 
-    // Mechanical ("no-LLM") confidence: element-step cosine grounding × loop penalty.
     const action = String(step.action || (step.isLastStep ? 'done' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
-    const hasIndex = step.element?.index != null && step.element?.index !== '';
     const hasText = !!(step.element?.text && String(step.element.text).trim());
+    const hasIndex = step.element?.index != null && step.element?.index !== '';
+    const hasTarget = !step.isLastStep && action !== 'done' && (hasIndex || hasText);
     const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
-    const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, step.element?.text, hasIndex);
-    const currentKey = (typeof gv2ElementKey === 'function') ? gv2ElementKey(step) : '';
-    const priorKeys = Array.isArray(g._mechKeys) ? g._mechKeys : (g._mechKeys = []);
+    const idxToUse = hasTarget
+      ? (gv2PickTargetIndex(step.element?.text, step.element?.index) ?? step.element?.index ?? null)
+      : null;
+    const resolvedEl = idxToUse != null ? (window._pageguideIndex?.[idxToUse] || null) : null;
+    const domElementText = _gv2ElementAccessibleText(resolvedEl);
+    const llmElementText = String(step.element?.text || '').trim();
+    const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, step.element?.text, hasTarget);
+    let internalGrounding = await _gv2ElementGroundingSimilarity(llmElementText, domElementText);
+    if (internalGrounding == null) {
+      const a = _gv2NormalizeDomText(llmElementText);
+      const b = _gv2NormalizeDomText(domElementText);
+      internalGrounding = (a && b && (a === b || a.includes(b) || b.includes(a))) ? 1.0 : 0.0;
+    }
+    const currentKey = _gv2NormalizeDomText(domElementText);
+    const priorKeys = Array.isArray(g._mechElementTexts) ? g._mechElementTexts : (g._mechElementTexts = []);
     const mech = (typeof gv2ComputeMechanicalConfidence === 'function')
-      ? gv2ComputeMechanicalConfidence({ action, hasIndex, hasText, elementStepSimilarity, priorKeys, currentKey })
-      : { confidence: null, grounding: null, loop: null };
-    // Record this step's action key for future loop detection. Every action is pushed
-    // (not just target-bearing ones) so the loop denominator counts ALL previous actions,
-    // matching the reference compute_loop_score.
-    priorKeys.push(currentKey);
+      ? gv2ComputeMechanicalConfidence({ hasTarget, grounding: internalGrounding, priorKeys, currentKey })
+      : { confidence: null, grounding: null, loop: null, loopMatches: 0 };
+    if (hasTarget && currentKey) priorKeys.push(currentKey);
 
     // The ACTIVE confidence — what drives the timeline tier, the 3-strikes pause, and the red
     // highlight — is chosen by the source toggle: 'mechanical' uses the rule-based score, otherwise
     // the LLM self-report (default). Both are stored on the record regardless (side-by-side).
     const confSource = await _gv2ConfidenceSource();
     const confidence = (confSource === 'mechanical') ? mech.confidence : llmConfidence;
-    if (typeof step.planStep === 'number' && step.planStep >= 1) {
-      g.currentPlanStep = step.planStep;
+    const rawPlanStep = Number(step.completedPlanStep);
+    const planStep = step.step; // Fallback for legacy step tracking
+    if (Number.isFinite(rawPlanStep) && rawPlanStep >= 1) {
+      g.currentPlanStep = rawPlanStep + 1; // advance to next
     }
+    const planTotal = Array.isArray(g.guidePlan) ? g.guidePlan.length : 0;
+    const planCompleted = planTotal ? Math.max(0, Math.min(planTotal, (g.currentPlanStep || 1) - 1)) : null;
 
     // Clear previous highlights
     if (typeof clearHighlights === 'function') clearHighlights();
@@ -2341,18 +2536,11 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     //   Step 1: find the element by text match (more reliable than LLM index)
     //   Step 2: fall back to the LLM's index only if no confident text match
     let highlightCount = 0;
-    if (step.element?.index || step.element?.text) {
+    if (hasTarget) {
       const pageBg = getPageBackground();
-      // Slice 6: low-confidence steps (< 0.5) are highlighted RED on the page to flag the
-      // user that this step is uncertain and worth reviewing/steering before acting.
-      const isLowConfidence = confidence != null && confidence < 0.5;
-      const style = isLowConfidence
-        ? { color: '#ff4757', animation: 'pulse' }
-        : (typeof getRandomHighlightStyle === 'function'
-            ? getRandomHighlightStyle(pageBg.isDark)
-            : { color: '#2ed573', animation: 'pulse' });
-
-      const idxToUse = gv2PickTargetIndex(step.element?.text, step.element?.index) ?? step.element?.index;
+      const style = typeof getRandomHighlightStyle === 'function'
+        ? getRandomHighlightStyle(pageBg.isDark)
+        : { color: '#2ed573', animation: 'pulse' };
 
       if (textMatchIdx !== null && idxToUse === step.element.index && textMatchIdx !== step.element.index) {
         console.log(`[guidev2] Kept LLM index ${step.element.index} over text-match index ${textMatchIdx} for "${step.element.text}"`);
@@ -2371,7 +2559,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       // Store the resolved target element and its text so gv2NextStep can click
       // it reliably even if React's reconciliation removes the highlight span
       // before the user presses "Next →".
-      g.currentTargetEl   = window._pageguideIndex[idxToUse] || null;
+      g.currentTargetEl   = resolvedEl;
       g.currentTargetText = step.element.text || null;
     } else {
       g.currentTargetEl   = null;
@@ -2397,7 +2585,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Pause conditions: 3 low-confidence actions, high risk (JSON), or confirmation needed (JSON)
     const isHighRiskJson = step.risk === 'high';
     const needsConfirmation = step.confirmation === 'needed';
-    if (confidence !== null && confidence < 0.7) {
+    const confidenceThreshold = await _gv2ConfidenceThreshold();
+    if (confidence !== null && confidence < confidenceThreshold) {
       g.lowConfidenceCount = (g.lowConfidenceCount || 0) + 1;
     }
     const willPause = (g.lowConfidenceCount >= 3) || isHighRiskJson || needsConfirmation;
@@ -2456,7 +2645,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Rewind: capture screenshot + target region + DOM snapshot BEFORE auto-performing the action.
     await gv2CaptureStepRecord({
       step: step.step,
-      planStep: step.step,
+      planStep,
+      completedPlanStep: step.completedPlanStep,
+      completedPlanStepReason: step.completedPlanStepReason,
       confidence,
       grounded: conf.grounded,
       loop: conf.loop,
@@ -2468,6 +2659,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       elementStepSimilarity,
       element_step_similarity: elementStepSimilarity,
       mechLoop: mech.loop,
+      loopMatches: mech.loopMatches,
+      domElementText,
+      llmElementText,
+      resolvedIndex: idxToUse,
+      planTotal,
+      planCompleted,
       confidenceSource: confSource,
       confirmation: step.confirmation || null,
       llmStep: step.llmStep,
@@ -2477,7 +2674,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       action,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,
       isLastStep: isLast,
-      target: { text: step.element?.text || null, llmIndex: step.element?.index ?? null },
+      target: { text: step.element?.text || null, domText: domElementText || null, llmIndex: step.element?.index ?? null, resolvedIndex: idxToUse },
       rawLlmJson: content,
       systemPrompt,
       userPrompt,
@@ -2514,7 +2711,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       targetText: step.element?.text || null,
       action,
       confidence,
-      planStep: step.step,
+      planStep,
       highlightCount,
       hasHighlights: highlightCount > 0,
       autoMode: !!g.autoMode,
@@ -3185,6 +3382,24 @@ window.gv2TakeControl = async function () {
   return gv2PauseGuide('You have control. Press Resume when you want the agent to continue.');
 };
 
+function _gv2BuildSteerQuestion(originalGoal, payload, redoStep, includeContext) {
+  const goal = String(originalGoal || '').trim();
+  if (!includeContext) return goal;
+  const observed = payload?.parentObservedStepCount != null ? payload.parentObservedStepCount : 'unknown';
+  const redoInstruction = String(payload?.redoInstruction || '').trim();
+  const newGoal = String(payload?.newGoal || '').trim();
+  const lines = [
+    goal,
+    '',
+    '=== STEER CONTEXT ===',
+    `Original journey had ${observed} observed steps.`,
+    redoInstruction ? `Step ${redoStep}: ${redoInstruction}` : `Step ${redoStep}: redo this step from the restored page state.`
+  ];
+  if (newGoal) lines.push(`User redirection: ${newGoal}`);
+  return lines.join('\n');
+}
+if (typeof window !== 'undefined') window._gv2BuildSteerQuestion = _gv2BuildSteerQuestion;
+
 // ===== ROUTER INTEGRATION =====
 // guidev2.js is injected after guide.js, so this assignment overrides guide.js.
 
@@ -3192,8 +3407,16 @@ window.handleStepByStepGuide = function (question, continueFromStep = false) {
   // continueFromStep=true comes from guide.js's continueGuidance() which won't fire
   // when v2 is active (_pageguideGuidance.active = false). Handle defensively anyway.
   if (continueFromStep) {
+    if (((window._guidev2?.previousSteps || []).length + 1) > 15) {
+      const configuredMax = GV2_MAX_STEPS;
+      GV2_MAX_STEPS = 15;
+      const result = _gv2StopForMaxSteps(window._guidev2);
+      GV2_MAX_STEPS = configuredMax;
+      return result;
+    }
     const capResult = _gv2CheckStepCap(window._guidev2);
     if (capResult) return capResult;
+    if (_gv2IsStopped()) _guidev2Stopped = false;
     return gv2GenerateNextStep();
   }
   return _handleStepByStepGuideV2(question);

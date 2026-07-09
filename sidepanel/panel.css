@@ -2728,6 +2728,43 @@ body {
   color: #737b91;
 }
 
+.pageguide-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.pageguide-plan-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--pg-muted, #737b91);
+  font: 650 11px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.pageguide-plan-row.done {
+  color: var(--pg-success, #22c55e);
+}
+
+.pageguide-plan-row.current {
+  color: var(--pg-accent, #7857ff);
+}
+
+.pageguide-plan-num {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: right;
+  font-weight: 800;
+}
+
+.pageguide-plan-goal {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .pageguide-goal-bar {
   display: none;
 }
@@ -2857,6 +2894,16 @@ body {
   margin: 2px 0 4px;
 }
 .pageguide-goal-step-dual b { color: var(--pg-text, inherit); }
+
+.pageguide-goal-step-scores {
+  margin: 6px 0 4px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--pg-hover, rgba(128, 128, 128, 0.1));
+  color: var(--pg-muted, #9aa1b2);
+  font: 500 11px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.pageguide-goal-step-scores b { color: var(--pg-text, inherit); }
 
 /* Debug-only: double-line confidence chart (Full vs No-progress) in the goal card. */
 .pageguide-conf-chart {

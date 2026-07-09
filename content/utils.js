@@ -1101,11 +1101,14 @@ if (typeof module !== 'undefined' && module.exports) {
  * Two tiers only — there is intentionally NO red tier for confidence.
  *
  * @param {number} confidence - normalized 0..1, or null/NaN if unavailable
- * @returns {'high'|'med'|null} 'high' (≥0.7, green), 'med' (<0.7, yellow), null (unknown)
+ * @returns {'high'|'med'|null} 'high' (≥threshold, green), 'med' (<threshold, yellow), null (unknown)
  */
-function gv2ConfidenceTier(confidence) {
+function gv2ConfidenceTier(confidence, threshold = 0.7) {
   if (typeof confidence !== 'number' || !isFinite(confidence)) return null;
-  return confidence >= 0.7 ? 'high' : 'med';
+  const t = (typeof threshold === 'number' && isFinite(threshold))
+    ? Math.max(0, Math.min(1, threshold))
+    : 0.7;
+  return confidence >= t ? 'high' : 'med';
 }
 
 // Weights for the decomposed confidence formula. Tunable here (not exposed in the UI).
@@ -1147,46 +1150,19 @@ function gv2ComputeConfidence(parts, formula = 'full', weights) {
 // ───────────────────────────────────────────────────────────────────────────
 // Mechanical ("no-LLM") step confidence
 //
-// An alternative to the LLM self-reported confidence above. Instead of asking the
-// model to grade its own action, we derive confidence purely from execution signals
-// that target the two failure modes mechanical signals can actually detect — element
-// MISGROUNDING and action LOOPING:
+// Confidence is derived from two execution signals:
+//   C_t = clip( grounding × (1 − 0.5 × loopFraction), 0, 1 )
 //
-//   C_t = clip( G_grounding × (1 − λ_L × L_t),  0, 1 )
+//   grounding    ∈ [0, 1] cosine similarity between the LLM element text and the
+//                actual accessible text of the resolved DOM element.
+//   loopFraction ∈ [0, 1] number of previous matching DOM element texts / 10.
 //
-//   G_grounding ∈ {0, 0.7, 1.0}  rule-based from SoM resolution (no LLM)
-//   L_t         ∈ [0, 1]         fraction of prior target-bearing steps with the same element key
-//   λ_L                          loop penalty weight (default 0.5)
-//
-// Steps with no element target (e.g. a `done` step) are EXCLUDED: grounding is null,
-// confidence is null, and they are omitted from the loop denominator. Pure (no DOM /
-// storage) so they're unit-testable.
+// Steps with no element target (e.g. a `done` step) are excluded.
 // ───────────────────────────────────────────────────────────────────────────
-
-const GV2_GROUNDING_LAMBDA_L = 0.5; // loop penalty weight for the mechanical formula
-
-/**
- * Rule-based grounding score from SoM resolution. Measures whether the LLM's chosen
- * element actually resolved on the page — not which path was ultimately clicked.
- *
- * @param {{hasTarget:boolean, indexValid:boolean, textFound:boolean}} parts
- * @returns {number|null} 1.0 (exact index resolved), 0.7 (text fallback only),
- *   0.0 (nothing resolved), or null when the step has no element target (excluded).
- */
-function gv2GroundingScore(parts) {
-  if (!parts || !parts.hasTarget) return null;
-  if (parts.indexValid) return 1.0;
-  if (parts.textFound) return 0.7;
-  return 0.0;
-}
 
 /**
  * Loop score for the current step: the fraction of PREVIOUS actions that share this
- * step's action key. L_t = |{ prev : key(prev) == key_t }| / |prev|.
- *
- * Faithful port of the reference `compute_loop_score`: the denominator is the number
- * of previous actions (every prior step, not just target-bearing ones), with no +1.
- * Returns 0.0 when there are no previous actions or the current step has no key.
+ * step's normalized DOM element text, divided by 10.
  *
  * @param {string[]} priorKeys - action keys of every prior step (in order)
  * @param {string} currentKey  - action key of the current step
@@ -1197,24 +1173,36 @@ function gv2LoopScore(priorKeys, currentKey) {
   if (prior.length === 0) return 0.0;
   if (!currentKey) return 0.0;
   const matches = prior.filter(k => k === currentKey).length;
-  return Math.min(1, matches / prior.length);
+  return Math.min(1, matches / 10);
+}
+
+const GV2_LOOP_PENALTY = 0.5;
+
+function gv2GroundingScore(parts) {
+  if (!parts || !parts.hasTarget) return null;
+  const v = parts.grounding;
+  if (typeof v !== 'number' || !isFinite(v)) return 0;
+  return Math.max(0, Math.min(1, v));
 }
 
 /**
  * Combine the mechanical grounding + loop signals into a single confidence score.
  * Returns null (excluded step) when grounding is null.
  *
- * @param {{hasTarget:boolean, indexValid:boolean, textFound:boolean, priorKeys:string[], currentKey:string}} parts
- * @param {{lambdaL?:number}} [weights]
- * @returns {{confidence:number|null, grounding:number|null, loop:number|null}}
+ * @param {{hasTarget:boolean, grounding:number, priorKeys:string[], currentKey:string}} parts
+ * @returns {{confidence:number|null, grounding:number|null, loop:number|null, loopMatches:number}}
  */
-function gv2ComputeMechanicalConfidence(parts, weights) {
+function gv2ComputeMechanicalConfidence(parts) {
   const clip01 = v => Math.max(0, Math.min(1, v));
-  const lamL = (weights && typeof weights.lambdaL === 'number') ? weights.lambdaL : GV2_GROUNDING_LAMBDA_L;
-  const grounding = gv2GroundingScore(parts);
-  if (grounding == null) return { confidence: null, grounding: null, loop: null };
+  if (!parts || !parts.hasTarget) return { confidence: null, grounding: null, loop: null, loopMatches: 0 };
+  const grounding = (typeof parts.grounding === 'number' && isFinite(parts.grounding))
+    ? clip01(parts.grounding)
+    : 0;
+  const prior = Array.isArray(parts.priorKeys) ? parts.priorKeys : [];
+  const currentKey = parts.currentKey || '';
+  const loopMatches = currentKey ? prior.filter(k => k === currentKey).length : 0;
   const loop = gv2LoopScore(parts?.priorKeys, parts?.currentKey) ?? 0;
-  return { confidence: clip01(grounding * (1 - lamL * loop)), grounding, loop };
+  return { confidence: clip01(grounding * (1 - GV2_LOOP_PENALTY * loop)), grounding, loop, loopMatches };
 }
 
 /**
@@ -1286,7 +1274,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2ElementKey = gv2ElementKey;
   module.exports.GV2_LAMBDA_L = GV2_LAMBDA_L;
   module.exports.GV2_LAMBDA_P = GV2_LAMBDA_P;
-  module.exports.GV2_GROUNDING_LAMBDA_L = GV2_GROUNDING_LAMBDA_L;
+  module.exports.GV2_LOOP_PENALTY = GV2_LOOP_PENALTY;
   module.exports.gv2CropRect = gv2CropRect;
 }
 
@@ -1476,7 +1464,7 @@ function gv2DotState(args) {
   const total = Math.max(plan.length, maxStep, current, records.length);
 
   const recOf = (i) => records.find(r => Number(r.step) === i) || null;
-  const isLow = (x) => x != null && x < 0.5;
+  const isLowGrounding = (x) => x != null && x < 0.5;
 
   const out = [];
   for (let i = 1; i <= total; i++) {
@@ -1487,7 +1475,7 @@ function gv2DotState(args) {
     else status = 'pending';
     if (!active && i <= current) status = 'done'; // finished guide: everything up to current done
 
-    const review = !!(r && (isLow(r.confidence) || isLow(r.grounding)));
+    const review = !!(r && (isLowGrounding(r.grounding) || isLowGrounding(r.mechGrounding)));
     const verify = (verifications[i] && verifications[i].status) ||
                    (r && r.verification && r.verification.status) || null;
     out.push({ step: i, status, review, verify });

@@ -591,6 +591,11 @@ describe('gv2ConfidenceTier (content/utils.js)', () => {
     expect(window.gv2ConfidenceTier(0.2)).toBe('med');   // low confidence is YELLOW, not red
     expect(window.gv2ConfidenceTier(0)).toBe('med');
   });
+  test('custom threshold controls green vs yellow tier', () => {
+    expect(window.gv2ConfidenceTier(0.8, 0.85)).toBe('med');
+    expect(window.gv2ConfidenceTier(0.85, 0.85)).toBe('high');
+    expect(window.gv2ConfidenceTier(0.6, 0.5)).toBe('high');
+  });
 
   test('null/NaN/non-number → null (unknown)', () => {
     expect(window.gv2ConfidenceTier(null)).toBeNull();
@@ -690,19 +695,15 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
   beforeAll(() => { loadScript('content/utils.js'); });
 
   describe('gv2GroundingScore', () => {
-    test('exact SoM index resolved → 1.0', () => {
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: true, textFound: false })).toBe(1.0);
-      // indexValid wins even if text also matched
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: true, textFound: true })).toBe(1.0);
+    test('uses internal grounding cosine similarity', () => {
+      expect(window.gv2GroundingScore({ hasTarget: true, grounding: 0.82 })).toBeCloseTo(0.82, 6);
     });
-    test('index failed but text fallback found → 0.7', () => {
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: false, textFound: true })).toBe(0.7);
-    });
-    test('nothing resolved → 0.0', () => {
-      expect(window.gv2GroundingScore({ hasTarget: true, indexValid: false, textFound: false })).toBe(0.0);
+    test('clamps grounding to [0,1]', () => {
+      expect(window.gv2GroundingScore({ hasTarget: true, grounding: 5 })).toBe(1);
+      expect(window.gv2GroundingScore({ hasTarget: true, grounding: -2 })).toBe(0);
     });
     test('no element target → null (excluded step)', () => {
-      expect(window.gv2GroundingScore({ hasTarget: false, indexValid: true, textFound: true })).toBeNull();
+      expect(window.gv2GroundingScore({ hasTarget: false, grounding: 1 })).toBeNull();
       expect(window.gv2GroundingScore(null)).toBeNull();
     });
   });
@@ -714,16 +715,13 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
     test('no matching prior key → 0', () => {
       expect(window.gv2LoopScore(['b', 'c'], 'a')).toBe(0);
     });
-    test('repeated key → matches / number of previous actions (reference)', () => {
-      // two prior "a", current "a": 2 / 2 = 1.0
-      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBeCloseTo(1.0, 6);
-      // one prior "a" among 3 previous: 1 / 3
-      expect(window.gv2LoopScore(['a', 'b', 'c'], 'a')).toBeCloseTo(1 / 3, 6);
-      // reference worked example: prev ["search","filters"], current "search" → 1/2
-      expect(window.gv2LoopScore(['search', 'filters'], 'search')).toBeCloseTo(0.5, 6);
+    test('repeated key → matches / 10', () => {
+      expect(window.gv2LoopScore(['a'], 'a')).toBeCloseTo(0.1, 6);
+      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBeCloseTo(0.2, 6);
+      expect(window.gv2LoopScore(['search', 'filters'], 'search')).toBeCloseTo(0.1, 6);
     });
     test('result is capped at 1.0', () => {
-      expect(window.gv2LoopScore(['a', 'a'], 'a')).toBe(1);
+      expect(window.gv2LoopScore(Array.from({ length: 12 }, () => 'a'), 'a')).toBe(1);
     });
     test('no current key → 0 (reference returns 0, not null)', () => {
       expect(window.gv2LoopScore(['a'], '')).toBe(0);
@@ -732,25 +730,23 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
   });
 
   describe('gv2ComputeMechanicalConfidence', () => {
-    test('C_t = G × (1 − λ_L·L_t), default λ_L = 0.5', () => {
-      // G=1.0, no prior → L=0 → 1.0
-      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(1.0, 6);
-      // G=0.7 (text fallback), L=0 → 0.7
-      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: false, textFound: true, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(0.7, 6);
+    test('C_t = internal grounding × (1 − 0.5·L_t_u)', () => {
+      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, grounding: 1, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(1.0, 6);
+      expect(window.gv2ComputeMechanicalConfidence({ hasTarget: true, grounding: 0.7, priorKeys: [], currentKey: 'a' }).confidence).toBeCloseTo(0.7, 6);
     });
-    test('loop penalty lowers confidence: G=1.0, one prior repeat (L=1.0, λ=0.5) → 0.5', () => {
-      // priorKeys ['a'], currentKey 'a' → L = 1/1 = 1.0; C = 1.0 * (1 - 0.5*1.0) = 0.5
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' });
-      expect(r.loop).toBeCloseTo(1.0, 6);
-      expect(r.confidence).toBeCloseTo(0.5, 6);
+    test('one prior repeat gives L_t_u=0.1 and applies 0.5 loop penalty', () => {
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, grounding: 1, priorKeys: ['a'], currentKey: 'a' });
+      expect(r.loop).toBeCloseTo(0.1, 6);
+      expect(r.loopMatches).toBe(1);
+      expect(r.confidence).toBeCloseTo(0.95, 6);
     });
-    test('reference example step 3: prev [search,filters], L=0.5 → C=0.75', () => {
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['search', 'filters'], currentKey: 'search' });
-      expect(r.loop).toBeCloseTo(0.5, 6);
-      expect(r.confidence).toBeCloseTo(0.75, 6);
+    test('ten prior repeats caps L_t_u at 1 and halves confidence', () => {
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, grounding: 0.8, priorKeys: Array.from({ length: 10 }, () => 'a'), currentKey: 'a' });
+      expect(r.loop).toBe(1);
+      expect(r.confidence).toBeCloseTo(0.4, 6);
     });
     test('grounding zero → confidence 0 (hard floor)', () => {
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: false, textFound: false, priorKeys: ['a', 'a'], currentKey: 'a' });
+      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, grounding: 0, priorKeys: ['a', 'a'], currentKey: 'a' });
       expect(r.grounding).toBe(0);
       expect(r.confidence).toBe(0);
     });
@@ -759,11 +755,6 @@ describe('gv2 mechanical confidence — rule-based "no-LLM" scoring (content/uti
       expect(r.confidence).toBeNull();
       expect(r.grounding).toBeNull();
       expect(r.loop).toBeNull();
-    });
-    test('λ_L override is respected', () => {
-      // G=1.0, prior ['a'] current 'a' → L=1.0; λ=1.0 → 1.0*(1-1.0*1.0)=0
-      const r = window.gv2ComputeMechanicalConfidence({ hasTarget: true, indexValid: true, textFound: false, priorKeys: ['a'], currentKey: 'a' }, { lambdaL: 1.0 });
-      expect(r.confidence).toBeCloseTo(0.0, 6);
     });
   });
 
@@ -934,13 +925,13 @@ describe('gv2DotState (content/utils.js)', () => {
     expect(dots[6].status).toBe('pending');   // step 7 not started
   });
 
-  test('marks low-confidence and low-grounding steps for review', () => {
+  test('marks low-grounding steps for review but not low-confidence yellow status', () => {
     const records = [
-      { step: 1, confidence: 0.3 },              // low self-confidence
-      { step: 2, confidence: 0.9, grounding: 0.2 } // low grounding
+      { step: 1, confidence: 0.3 },
+      { step: 2, confidence: 0.9, mechGrounding: 0.2 }
     ];
     const dots = window.gv2DotState({ plan: [], records, verifications: {}, current: 2, guideActive: true });
-    expect(dots[0].review).toBe(true);
+    expect(dots[0].review).toBe(false);
     expect(dots[1].review).toBe(true);
   });
 

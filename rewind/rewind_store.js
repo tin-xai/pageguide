@@ -91,6 +91,12 @@
       mechConfidence: record.mechConfidence,
       mechGrounding: record.mechGrounding,
       mechLoop: record.mechLoop,
+      loopMatches: record.loopMatches,
+      domElementText: record.domElementText,
+      llmElementText: record.llmElementText,
+      resolvedIndex: record.resolvedIndex,
+      planTotal: record.planTotal,
+      planCompleted: record.planCompleted,
       confidenceSource: record.confidenceSource,
       risk: record.risk,
       mode: record.mode,
@@ -162,6 +168,8 @@
       sessionId: branchSessionId,
       goal,
       startedAt,
+      guidePlan: Array.isArray(parent.guidePlan) ? parent.guidePlan : (Array.isArray(parent.plan) ? parent.plan : []),
+      guideTitle: parent.guideTitle || '',
       steps: []
     }, branchMeta);
 

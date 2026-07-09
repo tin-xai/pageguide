@@ -12,6 +12,23 @@
   const INSPECTOR_ID = 'pageguide-rewind-inspector';
   let _injectedCss = false;
   let _sessionId = null;
+  let _confidenceThreshold = 0.7;
+
+  function _normConfidenceThreshold(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.7;
+  }
+
+  try {
+    chrome.storage.local.get(['guideConfidenceThreshold']).then(r => {
+      _confidenceThreshold = _normConfidenceThreshold(r.guideConfidenceThreshold);
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.guideConfidenceThreshold) {
+        _confidenceThreshold = _normConfidenceThreshold(changes.guideConfidenceThreshold.newValue);
+      }
+    });
+  } catch (e) {}
 
   function _injectCss() {
     if (_injectedCss) return;
@@ -37,7 +54,7 @@
 #${TIMELINE_ID} .rw-step.done .rw-dot::after{content:"✓";position:absolute;inset:0;color:#fff;font:800 8px/11px sans-serif;text-align:center}
 #${TIMELINE_ID} .rw-step.current .rw-dot{width:16px;height:16px;background:#fff;border:4px solid #7857ff;box-shadow:0 0 0 4px rgba(120,87,255,.16)}
 #${TIMELINE_ID} .rw-step.current .rw-instr{color:#7857ff;font-weight:760}
-#${TIMELINE_ID} .rw-step.rw-review .rw-dot{background:#ff526a;border-color:#ff526a}
+#${TIMELINE_ID} .rw-step.rw-review .rw-dot{background:#facc15;border-color:#eab308}
 #${TIMELINE_ID} .rw-step.rw-verify-failed .rw-dot{background:#ff6b35;border-color:#ff6b35}
 #${TIMELINE_ID} .rw-step.rw-verify-blocked .rw-dot{background:#ffa502;border-color:#ffa502}
 #${TIMELINE_ID} .rw-body{flex:1;min-width:0}
@@ -48,7 +65,7 @@
 #${TIMELINE_ID} .rw-right::after{content:"⌄";color:#a5abba;font-size:13px}
 #${TIMELINE_ID} .rw-step.current .rw-right::after{content:"⌃";color:#7857ff}
 #${TIMELINE_ID} .rw-thumb{display:none!important}
-#${TIMELINE_ID} .rw-flag{display:inline-block;font:700 9px/1 sans-serif;color:#ff4757;background:rgba(255,71,87,.14);border:1px solid rgba(255,71,87,.35);padding:2px 6px;border-radius:99px;margin-top:2px}
+#${TIMELINE_ID} .rw-flag{display:inline-block;font:700 9px/1 sans-serif;color:#a16207;background:rgba(250,204,21,.18);border:1px solid rgba(234,179,8,.4);padding:2px 6px;border-radius:99px;margin-top:2px}
 #${TIMELINE_ID} .rw-step.rw-verify-failed .rw-instr::after{content:" ⚠";color:#ff6b35}
 #${TIMELINE_ID} .rw-step.rw-verify-blocked .rw-instr::after{content:" ⛔";color:#ffa502}
 
@@ -153,7 +170,7 @@
     const shot = _recordShot(rec);
     const img = shot ? `<img src="data:image/jpeg;base64,${shot}" alt="">` : '';
     const bits = [];
-    if (meta.confidence != null && meta.confidence < 0.5) bits.push('Review suggested');
+    if (meta.confidence != null && meta.confidence < _confidenceThreshold) bits.push('Low confidence');
     if (meta.durationMs != null) bits.push(_fmtDuration(meta.durationMs));
     const cost = _fmtCost(meta.cost); if (cost) bits.push(cost);
     card.innerHTML = `${img}<div class="rw-hc-instr">Step ${meta.step}</div><div>${_escape(meta.instruction || '')}</div><div class="rw-hc-meta">${bits.join(' · ')}</div>`;
@@ -201,7 +218,7 @@
     wrap.id = INSPECTOR_ID;
     let badgesHtml = '';
     if (rec.confidence != null) {
-      const isHigh = rec.confidence >= 0.7;
+      const isHigh = rec.confidence >= _confidenceThreshold;
       badgesHtml += `<span class="rw-ins-badge ${isHigh ? 'conf-high' : 'conf-med'}">● Confidence: ${Math.round(rec.confidence * 100)}%</span>`;
     }
     if (rec.verification?.status) {
@@ -210,6 +227,19 @@
       const label = v === 'success' ? 'Verified' : (v === 'failed' ? 'Failed' : 'Blocked');
       badgesHtml += `<span class="rw-ins-badge ${cls}">● ${label}</span>`;
     }
+    const fmtScore = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '—';
+    const planText = (rec.planCompleted != null && rec.planTotal)
+      ? `${Math.min(Number(rec.planCompleted), Number(rec.planTotal))}/${rec.planTotal}`
+      : '—';
+    const scoreHtml = (rec.mechGrounding != null || rec.mechLoop != null || rec.loopMatches != null)
+      ? `<div class="rw-score-details" style="margin-top:8px;font:400 11px/1.5 -apple-system,sans-serif;opacity:.9">
+          <div><strong>Grounding:</strong> ${fmtScore(rec.mechGrounding)}</div>
+          <div><strong>Loop:</strong> ${fmtScore(rec.mechLoop)}${rec.loopMatches != null ? ` (${_escape(rec.loopMatches)}/10 matches)` : ''}</div>
+          <div><strong>Plan:</strong> ${_escape(planText)}</div>
+          ${rec.llmElementText ? `<div><strong>LLM text:</strong> ${_escape(rec.llmElementText)}</div>` : ''}
+          ${rec.domElementText ? `<div><strong>DOM text:</strong> ${_escape(rec.domElementText)}</div>` : ''}
+        </div>`
+      : '';
 
     // Debug-only: show how confidence is composed from the three LLM signals (grounded G,
     // loop L, progress P) and ALL THREE formula versions side by side, so they can be compared
@@ -250,6 +280,7 @@
             ${badgesHtml}
             ${extraMeta ? `<span style="opacity:.6; font-size:11px; margin-left:4px;">${_escape(extraMeta)}</span>` : ''}
           </div>
+          ${scoreHtml}
           ${debugConfHtml}
         </div>
         <div class="rw-tabs">
@@ -493,8 +524,8 @@
     if (meta.planStep && meta.planStep > _planProgress) { _planProgress = meta.planStep; _renderPlan(); }
     const track = container.querySelector('.rw-track');
 
-    // Low confidence → flag the step for review (the numeric score is NOT shown).
-    const lowConf = (meta.confidence != null && meta.confidence < 0.5);
+    // Low confidence → yellow status.
+    const lowConf = (meta.confidence != null && meta.confidence < _confidenceThreshold);
     let row = track.querySelector(`[data-step="${meta.step}"]`);
     const created = !row;
     if (!row) {
@@ -509,7 +540,7 @@
       <span class="rw-dot"></span>
       <span class="rw-body">
         <span class="rw-instr">${_escape(meta.instruction || ('Step ' + meta.step))}</span>
-        ${lowConf ? '<span class="rw-flag">⚑ Review</span>' : ''}
+        ${lowConf ? '<span class="rw-flag">Low confidence</span>' : ''}
       </span>
       <span class="rw-right">
         <span class="rw-when"></span>

@@ -64,8 +64,12 @@ async function loadSettings() {
   // Kept in chrome.storage.local (not sync) because the capture writes large
   // snapshots locally and the content script reads the flag from local too.
   try {
-    const local = await chrome.storage.local.get('rewindCaptureEnabled');
+    const local = await chrome.storage.local.get(['rewindCaptureEnabled', 'guidePlanningEnabled', 'guideConfidenceThreshold']);
     document.getElementById('rewindCaptureEnabled').checked = local.rewindCaptureEnabled !== false;
+    const planningToggle = document.getElementById('guidePlanningEnabled');
+    if (planningToggle) planningToggle.checked = local.guidePlanningEnabled !== false;
+    const thresholdInput = document.getElementById('guideConfidenceThreshold');
+    if (thresholdInput) thresholdInput.value = Number.isFinite(Number(local.guideConfidenceThreshold)) ? Number(local.guideConfidenceThreshold) : 0.7;
   } catch (e) {}
 }
 
@@ -283,6 +287,29 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         await chrome.storage.local.set({ rewindCaptureEnabled: rewindToggle.checked });
         showStatus(rewindToggle.checked ? 'Rewind capture enabled' : 'Rewind capture disabled', 'success');
+      } catch (e) {}
+    });
+  }
+
+  const planningToggle = document.getElementById('guidePlanningEnabled');
+  if (planningToggle) {
+    planningToggle.addEventListener('change', async () => {
+      try {
+        await chrome.storage.local.set({ guidePlanningEnabled: planningToggle.checked });
+        showStatus(planningToggle.checked ? 'Guide planning enabled' : 'Guide planning disabled', 'success');
+      } catch (e) {}
+    });
+  }
+
+  const confidenceThresholdInput = document.getElementById('guideConfidenceThreshold');
+  if (confidenceThresholdInput) {
+    confidenceThresholdInput.addEventListener('change', async () => {
+      const raw = Number(confidenceThresholdInput.value);
+      const value = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 0.7;
+      confidenceThresholdInput.value = value;
+      try {
+        await chrome.storage.local.set({ guideConfidenceThreshold: value });
+        showStatus(`Confidence threshold set to ${value}`, 'success');
       } catch (e) {}
     });
   }
