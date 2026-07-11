@@ -1256,6 +1256,41 @@ function gv2CropRect(rect, dpr, imgW, imgH, pad) {
   return { sx, sy, sw, sh };
 }
 
+// Normalize a viewport-CSS-px target rect to [0,1] fractions of the viewport, so a marker box can
+// be drawn on a full-viewport screenshot regardless of devicePixelRatio (captureVisibleTab spans
+// exactly the viewport). Returns { x, y, w, h } clamped to [0,1], or null on bad input.
+function gv2TargetNormRect(rect, viewportW, viewportH) {
+  if (!rect) return null;
+  const W = Number(viewportW), H = Number(viewportH);
+  if (!(W > 0) || !(H > 0)) return null;
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+  const x = clamp01((Number(rect.left) || 0) / W);
+  const y = clamp01((Number(rect.top) || 0) / H);
+  const w = clamp01((Number(rect.width) || 0) / W);
+  const h = clamp01((Number(rect.height) || 0) / H);
+  // Don't let the box spill past the right/bottom edge.
+  return { x, y, w: Math.min(w, 1 - x), h: Math.min(h, 1 - y) };
+}
+
+// Normalize a viewport-CSS-px target rect to [0,1] fractions WITHIN a regionShot crop, given the
+// crop { sx, sy, sw, sh } (image px) and devicePixelRatio used to produce it. Lets a marker box be
+// drawn on the cropped thumbnail. Returns { x, y, w, h } clamped to [0,1], or null on bad input.
+function gv2RegionMarkerRect(rect, crop, dpr) {
+  if (!rect || !crop) return null;
+  const scale = (typeof dpr === 'number' && dpr > 0) ? dpr : 1;
+  const sw = Number(crop.sw), sh = Number(crop.sh);
+  if (!(sw > 0) || !(sh > 0)) return null;
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+  // Element position in image px, relative to the crop origin.
+  const mx = (Number(rect.left) || 0) * scale - (Number(crop.sx) || 0);
+  const my = (Number(rect.top) || 0) * scale - (Number(crop.sy) || 0);
+  const mw = (Number(rect.width) || 0) * scale;
+  const mh = (Number(rect.height) || 0) * scale;
+  const x = clamp01(mx / sw);
+  const y = clamp01(my / sh);
+  return { x, y, w: Math.min(clamp01(mw / sw), 1 - x), h: Math.min(clamp01(mh / sh), 1 - y) };
+}
+
 if (typeof window !== 'undefined') {
   window.gv2ConfidenceTier = gv2ConfidenceTier;
   window.gv2ComputeConfidence = gv2ComputeConfidence;
@@ -1264,6 +1299,8 @@ if (typeof window !== 'undefined') {
   window.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
   window.gv2ElementKey = gv2ElementKey;
   window.gv2CropRect = gv2CropRect;
+  window.gv2TargetNormRect = gv2TargetNormRect;
+  window.gv2RegionMarkerRect = gv2RegionMarkerRect;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2ConfidenceTier = gv2ConfidenceTier;
@@ -1276,6 +1313,8 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.GV2_LAMBDA_P = GV2_LAMBDA_P;
   module.exports.GV2_LOOP_PENALTY = GV2_LOOP_PENALTY;
   module.exports.gv2CropRect = gv2CropRect;
+  module.exports.gv2TargetNormRect = gv2TargetNormRect;
+  module.exports.gv2RegionMarkerRect = gv2RegionMarkerRect;
 }
 
 /**
@@ -1404,8 +1443,15 @@ const _GV2_RISKY_PATTERN = /\b(delete|remove|permanently|pay|buy|purchase|checko
  */
 function gv2AssessRisk(step) {
   if (!step) return 'low';
+
+  // Finding reads the page and highlights text; it never mutates the DOM or submits
+  // anything, so it stays low risk even if the goal mentions a sensitive keyword
+  // (e.g. "find out how to delete your account"). visual_highlight is likewise read-only —
+  // it just crops a screenshot region to show the user.
+  if (step.action === 'find' || step.action === 'visual_highlight') return 'low';
+
   if (step.risk === 'high') return 'high';
-  
+
   // Clearing a text field is inherently a safe, reversible client-side action.
   if (step.action === 'clear_text') return 'low';
 
@@ -1431,6 +1477,138 @@ function gv2AssessRisk(step) {
 
 if (typeof window !== 'undefined') window.gv2AssessRisk = gv2AssessRisk;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2AssessRisk = gv2AssessRisk;
+
+/**
+ * Normalize a raw LLM action string to its canonical form ('click', 'type',
+ * 'clear_text', 'find', 'done').
+ *
+ * @param {string} action
+ * @param {boolean} isLastStep - used to pick the default when action is missing
+ * @returns {string}
+ */
+function gv2NormalizeAction(action, isLastStep = false) {
+  const raw = String(action || (isLastStep ? 'done' : 'click')).trim();
+  return raw.toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeAction = gv2NormalizeAction;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeAction = gv2NormalizeAction;
+
+/**
+ * Normalize a normalized bounding box { x, y, w, h } (fractions of the screenshot) — clamps each
+ * component to 0..1 and requires a positive width and height. Returns the rect or null.
+ *
+ * @param {object} r
+ * @returns {{x:number, y:number, w:number, h:number}|null}
+ */
+function gv2NormalizeRect(r) {
+  if (!r || typeof r !== 'object') return null;
+  const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null; };
+  const x = clamp(r.x), y = clamp(r.y), w = clamp(r.w), h = clamp(r.h);
+  if (x == null || y == null || w == null || h == null) return null;
+  if (!(w > 0) || !(h > 0)) return null;
+  return { x, y, w, h };
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeRect = gv2NormalizeRect;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeRect = gv2NormalizeRect;
+
+/**
+ * Normalize the LLM's per-step "visualEvidence" into { index, rect, text, reason }, or null.
+ *
+ * visualEvidence is the SEPARATE on-page proof that justifies a step (e.g. a "Sort by:
+ * Price: Low to High" control), distinct from the action target. The model points to it with
+ * EITHER a SoM `index` OR a normalized `rect {x,y,w,h}` (when no marker fits). May also arrive as
+ * a bare string (treated as the reason).
+ *
+ * @param {object|string} v
+ * @returns {{index:(number|null), rect:(object|null), text:(string|null), reason:(string|null)}|null}
+ */
+function gv2NormalizeVisualEvidence(v) {
+  const MAX = 280;
+  const clean = (s) => {
+    if (typeof s !== 'string') return null;
+    const t = s.replace(/\s+/g, ' ').trim();
+    if (!t) return null;
+    return t.length > MAX ? t.slice(0, MAX).trim() : t;
+  };
+  let obj = v;
+  if (typeof v === 'string') obj = { reason: v };
+  if (!obj || typeof obj !== 'object') return null;
+  const n = Number(obj.index);
+  const index = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  const rect = gv2NormalizeRect(obj.rect);
+  const text = clean(obj.text);
+  const reason = clean(obj.reason);
+  if (index == null && !rect && !text && !reason) return null;
+  return { index, rect, text, reason };
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeVisualEvidence = gv2NormalizeVisualEvidence;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeVisualEvidence = gv2NormalizeVisualEvidence;
+
+/**
+ * Does this step point at a single DOM element the agent must highlight and act on?
+ *
+ * `find` never does: it highlights whatever passages the reader pass cites, not one
+ * element the planner picked, so it returns false even when the model wrongly
+ * populates `element`.
+ *
+ * @param {object} step - {action, isLastStep, element:{index,text}}
+ * @returns {boolean}
+ */
+function gv2StepHasTarget(step) {
+  if (!step) return false;
+  const action = gv2NormalizeAction(step.action, step.isLastStep);
+  if (action === 'find' || action === 'visual_highlight' || action === 'done' || step.isLastStep) return false;
+  const hasIndex = step.element?.index != null && step.element?.index !== '';
+  const hasText = !!(step.element?.text && String(step.element.text).trim());
+  return hasIndex || hasText;
+}
+
+if (typeof window !== 'undefined') window.gv2StepHasTarget = gv2StepHasTarget;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2StepHasTarget = gv2StepHasTarget;
+
+/**
+ * Classify the reader pass's answer for action=find.
+ *
+ * `notOnPage` keys off the exact sentence PROMPTS.ANSWER_AND_HIGHLIGHT rule 9 mandates
+ * when the page lacks the answer — in that case the model still answers from general
+ * knowledge with markdown links, so we keep the text but skip on-page highlighting.
+ *
+ * @param {string} answer - raw LLM answer, possibly with [N:"text"] citations
+ * @returns {{answer:string, notOnPage:boolean, hasCitations:boolean}}
+ */
+function gv2ParseFindResponse(answer) {
+  const text = String(answer == null ? '' : answer);
+  return {
+    answer: text,
+    notOnPage: /the information is not provided on this page/i.test(text),
+    hasCitations: /\[\d+(?::[^\]]*)?\]/.test(text)
+  };
+}
+
+if (typeof window !== 'undefined') window.gv2ParseFindResponse = gv2ParseFindResponse;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2ParseFindResponse = gv2ParseFindResponse;
+
+/**
+ * How should Rewind replay a recorded action? 'noop' means the step changed nothing on
+ * the page (find only reads), so replay must skip it rather than fail to resolve a
+ * target and abort the whole chain.
+ *
+ * @param {string} action
+ * @returns {'noop'|'type'|'clear_text'|'select'|'check'|'click'}
+ */
+function gv2ReplayKind(action) {
+  const a = String(action || 'click').toLowerCase();
+  if (a === 'find' || a === 'visual_highlight') return 'noop';
+  if (a === 'type' || a === 'clear_text' || a === 'select') return a;
+  if (a === 'check' || a === 'toggle') return 'check';
+  return 'click';
+}
+
+if (typeof window !== 'undefined') window.gv2ReplayKind = gv2ReplayKind;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2ReplayKind = gv2ReplayKind;
 
 /**
  * Compute the visual state of each timeline dot, indexed by PLAN step, aggregating the
@@ -1485,6 +1663,189 @@ function gv2DotState(args) {
 
 if (typeof window !== 'undefined') window.gv2DotState = gv2DotState;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2DotState = gv2DotState;
+
+function gv2StepErrorLabelFromScores(rec) {
+  const num = (v) => Number.isFinite(Number(v)) ? Number(v) : null;
+  const grounded = num(rec?.mechGrounding ?? rec?.grounding ?? rec?.grounded);
+  const loop = num(rec?.mechLoop ?? rec?.loop);
+  const confidence = num(rec?.mechConfidence ?? rec?.confidence);
+  if (loop != null && loop >= 0.6) return 'loop';
+  if (grounded != null && grounded <= 0.45) return 'misgrounded';
+  if (confidence != null && confidence < 0.5) return 'low-confidence';
+  return 'other';
+}
+
+if (typeof window !== 'undefined') window.gv2StepErrorLabelFromScores = gv2StepErrorLabelFromScores;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2StepErrorLabelFromScores = gv2StepErrorLabelFromScores;
+
+// Normalize a raw end-of-task recap into { summary, milestones:[{text, step}] }. Pure — no
+// LLM/DOM — so it's unit-testable. `raw` is the parsed LLM JSON (or null). `ctx` supplies the
+// ground truth used to validate and, if needed, synthesize a deterministic fallback:
+//   ctx.validSteps  — array of step numbers that actually completed (milestones are pinned to these)
+//   ctx.plan        — the guide plan [{ n, goal }] (used for the fallback milestone text)
+//   ctx.planTitle   — optional task title (used for the fallback summary sentence)
+//   ctx.steps       — completed-step strings ["Step 2: Click Create ✓", ...] (fallback text)
+// Milestones are filtered to real completed steps, deduped by step, and clamped to 2–6. When the
+// LLM output has no usable milestones, a deterministic recap is built from the plan / step list.
+// Each milestone also carries `phrase` — the key noun phrase within `text` to turn into an inline
+// hover-link. It's kept only when it is a case-insensitive substring of `text`, else '' (the whole
+// line becomes the link at render time).
+function gv2NormalizeRecap(raw, ctx) {
+  const c = ctx || {};
+  const validSteps = (Array.isArray(c.validSteps) ? c.validSteps : [])
+    .map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0);
+  const validSet = new Set(validSteps);
+  const plan = Array.isArray(c.plan) ? c.plan : [];
+  const stepStrings = Array.isArray(c.steps) ? c.steps : [];
+  const clampText = (s) => String(s == null ? '' : s).trim().slice(0, 240);
+  const stepRecords = Array.isArray(c.stepRecords) ? c.stepRecords : [];
+  const rawVerdict = raw && (raw.verdict === 'completed' || raw.verdict === 'failed' || raw.verdict === 'unclear')
+    ? raw.verdict : null;
+  const finalVerdict = rawVerdict || (c.finalVerdict === 'completed' || c.finalVerdict === 'failed' || c.finalVerdict === 'unclear'
+    ? c.finalVerdict : null);
+  const finalReason = clampText(c.finalReason || '');
+  // Keep the phrase only when it actually appears in the text (so the link can be placed inline).
+  const validPhrase = (phrase, text) => {
+    const p = String(phrase == null ? '' : phrase).trim().slice(0, 120);
+    if (!p) return '';
+    return text.toLowerCase().includes(p.toLowerCase()) ? p : '';
+  };
+
+  // 1) Try the LLM-provided milestones, keeping only those pinned to a real completed step.
+  const seen = new Set();
+  let milestones = [];
+  const rawList = raw && Array.isArray(raw.stepEvaluations) ? raw.stepEvaluations
+    : (raw && Array.isArray(raw.milestones) ? raw.milestones : []);
+  const normalizeStatus = (status) => {
+    const s = String(status || '').toLowerCase();
+    return (s === 'correct' || s === 'wrong' || s === 'unclear') ? s : '';
+  };
+  const normalizeErrorLabel = (label, rec) => {
+    const s = String(label || '').toLowerCase().replace(/[^a-z-]/g, '');
+    const known = ['misgrounded', 'loop', 'low-confidence', 'risky', 'incomplete', 'wrong-action', 'other'];
+    if (known.includes(s)) return s;
+    return rec ? gv2StepErrorLabelFromScores(rec) : '';
+  };
+  const normalizeGoalRelated = (m) => {
+    if (typeof m?.goalRelated === 'boolean') return m.goalRelated;
+    if (typeof m?.relatedToGoal === 'boolean') return m.relatedToGoal;
+    if (typeof m?.isRelatedToGoal === 'boolean') return m.isRelatedToGoal;
+    return null;
+  };
+  const recForStep = (step) => stepRecords.find(r => Number(r?.step) === Number(step)) || null;
+  for (const m of rawList) {
+    if (!m) continue;
+    const step = Number(m.step);
+    const text = clampText(m.text);
+    if (!text || !Number.isFinite(step) || !validSet.has(step) || seen.has(step)) continue;
+    const rec = recForStep(step);
+    const status = normalizeStatus(m.status);
+    const item = { text, step, phrase: validPhrase(m.phrase, text) };
+    const goalRelated = normalizeGoalRelated(m);
+    if (goalRelated !== null) {
+      item.goalRelated = goalRelated;
+      item.goalRelatedReason = clampText(m.goalRelatedReason || m.relatedReason || '');
+    }
+    if (status) item.status = status;
+    if (status === 'wrong') {
+      item.errorLabel = normalizeErrorLabel(m.errorLabel || m.label, rec);
+      item.reason = clampText(m.reason || '');
+    }
+    seen.add(step);
+    milestones.push(item);
+  }
+
+  // 2) Fallback: synthesize milestones from the plan / completed-step strings.
+  if (milestones.length === 0) {
+    const parseStepString = (s) => {
+      const mm = /^Step\s+(\d+)\s*:\s*(.*)$/.exec(String(s || '').trim());
+      if (!mm) return null;
+      return { step: Number(mm[1]), text: clampText(mm[2].replace(/\s*[✓✔]\s*$/, '')) };
+    };
+    const fromStrings = stepStrings.map(parseStepString).filter(x => x && validSet.has(x.step) && x.text);
+    for (const x of fromStrings) {
+      if (seen.has(x.step)) continue;
+      seen.add(x.step);
+      const rec = recForStep(x.step);
+      const suspicious = finalVerdict !== 'completed' && rec && (
+        Number(rec.mechLoop ?? rec.loop) >= 0.6 ||
+        Number(rec.mechGrounding ?? rec.grounding ?? rec.grounded) <= 0.45 ||
+        Number(rec.mechConfidence ?? rec.confidence) < 0.5
+      );
+      const item = { text: x.text, step: x.step, phrase: '' };
+      item.goalRelated = true;
+      item.goalRelatedReason = 'Fallback from completed guide step.';
+      if (suspicious) {
+        item.status = 'wrong';
+        item.errorLabel = gv2StepErrorLabelFromScores(rec);
+        item.reason = 'Flagged by confidence signals.';
+      } else if (finalVerdict === 'completed') {
+        item.status = 'correct';
+      }
+      milestones.push(item);
+    }
+  }
+
+  // 3) Clamp to a readable 2–6 (only trims — never invents steps that didn't happen).
+  if (milestones.length > 6) milestones = milestones.slice(0, 6);
+
+  // Summary: prefer the LLM's; otherwise a plain deterministic sentence.
+  let summary = clampText(raw && raw.summary);
+  if (summary && finalVerdict) {
+    const donePrefix = 'I have completed the task';
+    const failedPrefix = 'I could not complete the task';
+    if (finalVerdict === 'completed' && !summary.toLowerCase().startsWith(donePrefix.toLowerCase())) {
+      summary = `${donePrefix}. ${summary}`;
+    } else if (finalVerdict !== 'completed' && !summary.toLowerCase().startsWith(failedPrefix.toLowerCase())) {
+      summary = `${failedPrefix}. ${summary}`;
+    }
+  }
+  if (!summary) {
+    const n = milestones.length || validSteps.length;
+    const title = c.planTitle ? ` for "${clampText(c.planTitle)}"` : '';
+    const prefix = finalVerdict === 'completed' ? 'I have completed the task.'
+      : 'I could not complete the task.';
+    const reason = finalReason ? ` ${finalReason}` : '';
+    summary = n > 0
+      ? `${prefix}${reason} The guide recorded ${n} step${n === 1 ? '' : 's'}${title}.`
+      : `${prefix}${reason}${title ? ` Task: ${title}.` : ''}`;
+  }
+
+  return { summary, milestones };
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeRecap = gv2NormalizeRecap;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeRecap = gv2NormalizeRecap;
+
+// Normalize the Final-State vision verdict from the LLM into a safe, renderable shape. Pure — no
+// LLM/DOM — so it's unit-testable. `raw` is the parsed JSON (or null). Returns:
+//   { verdict: 'completed'|'failed'|'unclear', reason: string,
+//     annotations: [{ x, y, w, h, label }] }   // x/y/w/h are [0,1] fractions of the screenshot
+// Annotations are filtered to valid numeric rects clamped to [0,1] (no right/bottom spill), labels
+// trimmed, count capped at 6. Malformed input yields an 'unclear' verdict with no annotations.
+function gv2NormalizeFinalVerdict(raw) {
+  const r = raw || {};
+  const verdict = (r.verdict === 'completed' || r.verdict === 'failed') ? r.verdict : 'unclear';
+  const reason = String(r.reason == null ? '' : r.reason).trim().slice(0, 400);
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+  const list = Array.isArray(r.annotations) ? r.annotations : [];
+  const annotations = [];
+  for (const a of list) {
+    if (!a) continue;
+    const x = Number(a.x), y = Number(a.y), w = Number(a.w), h = Number(a.h);
+    if (![x, y, w, h].every(n => Number.isFinite(n))) continue;
+    const cx = clamp01(x), cy = clamp01(y);
+    const cw = Math.min(clamp01(w), 1 - cx), ch = Math.min(clamp01(h), 1 - cy);
+    if (cw <= 0 || ch <= 0) continue;
+    const label = String(a.label == null ? '' : a.label).trim().slice(0, 60);
+    annotations.push({ x: cx, y: cy, w: cw, h: ch, label });
+    if (annotations.length >= 6) break;
+  }
+  return { verdict, reason, annotations };
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeFinalVerdict = gv2NormalizeFinalVerdict;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeFinalVerdict = gv2NormalizeFinalVerdict;
 
 // ===== GUIDE STEP NUMBER NORMALIZATION =====
 

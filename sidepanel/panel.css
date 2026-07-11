@@ -4882,3 +4882,408 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   margin-left: auto !important;
   grid-column: auto !important;
 }
+
+/* ===== End-of-task Visual Recap (theme-aware via --pg-* variables) ===== */
+/* --pg-som is the exact purple baked into the screenshot's SoM marker (guidev2.js), so the inline
+   links, checkpoint cards and marker overlay all match the marker in the image. */
+.pageguide-recap-message .pageguide-recap,
+.pageguide-recap-evidence-pop,
+.pageguide-memory-shot-dialog.pageguide-recap-detail {
+  --pg-som: #7857ff;
+}
+.pageguide-recap-message .pageguide-recap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pageguide-recap-summary {
+  font-weight: 600;
+  color: var(--pg-text);
+  line-height: 1.4;
+}
+
+.pageguide-recap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pageguide-recap-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* The merged visual-evidence line: the model's justification, on its own row beneath the milestone,
+   as a pink link (matching the pink SoM marker baked into the evidence crop). */
+.pageguide-recap-evidence {
+  flex: 1 0 100%;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--pg-muted);
+}
+.pageguide-recap-evidence::before {
+  content: "Evidence: ";
+  color: var(--pg-muted);
+  font-weight: 600;
+}
+.pageguide-recap-evidence-link { --pg-som: #ff2d78; }
+.pageguide-recap-evidence-pop.is-visual,
+.pageguide-recap-detail-evidence-fig { --pg-som: #ff2d78; }
+
+.pageguide-recap-text {
+  flex: 1 1 auto;
+  line-height: 1.4;
+  color: var(--pg-text);
+}
+
+.pageguide-recap-row.is-wrong .pageguide-recap-text {
+  color: var(--pg-text);
+}
+
+.pageguide-recap-error-label {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b42318;
+  background: color-mix(in srgb, #f04438 12%, transparent);
+  border: 1px solid color-mix(in srgb, #f04438 35%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+  vertical-align: baseline;
+}
+
+.pageguide-recap-error-label.unclear {
+  color: #92400e;
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  border-color: color-mix(in srgb, #f59e0b 36%, transparent);
+}
+
+.pageguide-recap-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.pageguide-recap-nav-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pg-border);
+  border-radius: 6px;
+  background: var(--pg-bg);
+  color: var(--pg-text);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pageguide-recap-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pageguide-recap-nav .pageguide-memory-shot-close {
+  position: static;
+}
+
+/* Inline key-phrase link → hover shows the step's screenshot, click opens the detail view.
+   Colored to MATCH the SoM marker baked into the screenshot (--pg-som). */
+.pageguide-recap-link {
+  color: var(--pg-som);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--pg-som) 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+.pageguide-recap-link:hover {
+  background: color-mix(in srgb, var(--pg-som) 16%, transparent);
+  text-decoration-color: var(--pg-som);
+}
+
+.pageguide-recap-step-num {
+  flex: 0 0 auto;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1px solid var(--pg-border);
+  background: color-mix(in srgb, var(--pg-som) 12%, transparent);
+  color: var(--pg-som);
+  font-weight: 800;
+  font-size: 12px;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.pageguide-recap-step-num:hover {
+  background: color-mix(in srgb, var(--pg-som) 24%, transparent);
+  transform: translateY(-1px);
+}
+
+/* Always-present closing line linking to the final checkpoint. */
+.pageguide-recap-final {
+  color: var(--pg-text);
+  font-weight: 600;
+  line-height: 1.4;
+  padding-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Numbered checkpoint cards. */
+.pageguide-recap-checkpoints-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pg-muted);
+}
+.pageguide-recap-checkpoints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pageguide-recap-checkpoint {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--pg-border);
+  background: color-mix(in srgb, var(--pg-som) 12%, transparent);
+  color: var(--pg-som);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.pageguide-recap-checkpoint:hover {
+  background: color-mix(in srgb, var(--pg-som) 24%, transparent);
+  transform: translateY(-1px);
+}
+
+/* Shared figure: an image with the SOM marker overlay positioned on top. */
+.pageguide-recap-figure {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+.pageguide-recap-figure img {
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--pg-border);
+  background: var(--pg-surface);
+}
+.pageguide-recap-marker-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--pg-som);
+  background: color-mix(in srgb, var(--pg-som) 14%, transparent);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+.pageguide-recap-marker-num {
+  position: absolute;
+  top: -9px;
+  left: -2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--pg-som);
+  color: #fff;
+  font: 700 10px/16px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+}
+.pageguide-recap-marker-num.inline {
+  position: static;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Inline hover popover for a phrase-link: a compact card showing the targeted region (with the
+   SoM marker) plus the after-action result, kept small so the marked region reads clearly. */
+.pageguide-recap-evidence-pop {
+  position: fixed;
+  z-index: 2147483000;
+  width: 190px;
+  max-width: 80vw;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--pg-surface);
+  border: 1px solid var(--pg-border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pageguide-recap-pop-fig { margin: 0; }
+.pageguide-recap-pop-fig figcaption {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--pg-muted);
+  margin-bottom: 2px;
+}
+.pageguide-recap-evidence-pop .pageguide-recap-figure { width: 100%; }
+.pageguide-recap-evidence-pop .pageguide-recap-figure img {
+  width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+  object-position: center;
+}
+.pageguide-recap-pop-cap {
+  font-size: 11px;
+  color: var(--pg-muted);
+  text-align: center;
+}
+.pageguide-recap-pop-empty {
+  padding: 14px 8px;
+  font-size: 12px;
+  color: var(--pg-muted);
+  text-align: center;
+}
+
+/* Checkpoint detail overlay (reuses the memory-shot lightbox shell). */
+.pageguide-memory-shot-dialog.pageguide-recap-detail { max-width: 720px; width: min(92vw, 720px); }
+.pageguide-recap-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+}
+.pageguide-recap-detail-shots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 520px) {
+  .pageguide-recap-detail-shots { grid-template-columns: 1fr; }
+}
+.pageguide-recap-detail-fig { margin: 0; }
+.pageguide-recap-detail-fig figcaption {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pg-muted);
+  margin-bottom: 4px;
+}
+.pageguide-recap-detail-text {
+  color: var(--pg-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.pageguide-recap-detail-instruction { margin-bottom: 4px; }
+.pageguide-recap-detail-action { color: var(--pg-muted); }
+.pageguide-recap-detail-action b { color: var(--pg-text); }
+.pageguide-recap-detail-evidence { color: var(--pg-muted); margin-top: 4px; }
+.pageguide-recap-detail-evidence b { color: #ff2d78; }
+
+/* Final State: verdict header, reason, and the model's bounding-box annotations on the shot. */
+.pageguide-recap-final-link {
+  color: var(--pg-som);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--pg-som) 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.pageguide-recap-final-link:hover { text-decoration-color: var(--pg-som); }
+.pageguide-recap-final-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  color: #fff;
+  font: 800 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 14px rgba(20, 24, 40, 0.14);
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.pageguide-recap-final-btn:hover {
+  transform: translateY(-1px);
+  text-decoration: none;
+  filter: brightness(1.04);
+}
+.pageguide-recap-final-btn.ok {
+  background: #1ea672;
+  border-color: rgba(30, 166, 114, 0.55);
+}
+.pageguide-recap-final-btn.fail {
+  background: #e0463e;
+  border-color: rgba(224, 70, 62, 0.55);
+}
+.pageguide-recap-final-btn.unclear {
+  background: #d89a1d;
+  border-color: rgba(216, 154, 29, 0.55);
+  color: #1f2435;
+}
+.pageguide-final-verdict {
+  font-weight: 700;
+  font-size: 14px;
+}
+.pageguide-final-verdict.inline { font-size: inherit; }
+.pageguide-final-verdict.ok { color: #1ea672; }
+.pageguide-final-verdict.fail { color: #e0463e; }
+.pageguide-final-verdict.unclear { color: #c98a1a; }
+.pageguide-final-reason {
+  color: var(--pg-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.pageguide-final-figure { display: block; width: 100%; }
+.pageguide-final-figure img { width: 100%; }
+.pageguide-recap-annot-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--pg-som);
+  background: color-mix(in srgb, var(--pg-som) 12%, transparent);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+.pageguide-recap-annot-label {
+  position: absolute;
+  top: -18px;
+  left: -2px;
+  max-width: 180px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--pg-som);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* When the box is near the top, drop the label just inside instead of above. */
+.pageguide-recap-annot-box:first-child .pageguide-recap-annot-label { }
+
+/* Color-matched Action line (shared by the detail view and the hover popover). The verb is
+   normal text; the target text uses the SoM color so it ties back to the marker + inline link. */
+.pageguide-recap-action-verb { color: var(--pg-text); }
+.pageguide-recap-action-target { color: var(--pg-som); font-weight: 600; }
+.pageguide-recap-pop-action {
+  font-size: 12px;
+  color: var(--pg-muted);
+  line-height: 1.4;
+}
+.pageguide-recap-pop-action b { color: var(--pg-text); }

@@ -22,6 +22,9 @@ let currentGuideRecords = [];
 let currentGuideInitial = null; // Phase 1: the "Initial state" node (step 0), kept out of the dot count
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
+let _lastFindMessageStep = null; // Step number whose find answer was already posted to chat
+let _lastVisualHighlightStep = null; // Step whose visual_highlight image was already posted to chat
+let _lastRecapKey = null; // sessionId:step of the last recap posted, so it isn't posted twice
 let panelRunning = false;        // True while the agent is generating (send button shows Stop)
 let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
 let guideStopped = false;        // True after Stop: drop late "still working" messages from an
@@ -149,6 +152,22 @@ function hideGoalStepPreview() {
   document.getElementById('pageguide-goal-step-preview')?.remove();
 }
 
+// Hover support for the checkpoint (goal-dot) preview: a short grace period on mouse-out so the
+// user can move from the dot onto the preview card without it vanishing. Reused by both the
+// dots and the preview card itself.
+let _goalPreviewHideTimer = null;
+function _cancelGoalPreviewHide() {
+  if (_goalPreviewHideTimer) { clearTimeout(_goalPreviewHideTimer); _goalPreviewHideTimer = null; }
+}
+function _scheduleGoalPreviewHide() {
+  _cancelGoalPreviewHide();
+  _goalPreviewHideTimer = setTimeout(() => hideGoalStepPreview(), 220);
+}
+function _attachDotHoverPreview(dot, step) {
+  dot.addEventListener('mouseenter', () => { _cancelGoalPreviewHide(); showGoalStepPreview(step, dot); });
+  dot.addEventListener('mouseleave', () => { _scheduleGoalPreviewHide(); });
+}
+
 function closeMemoryShotLightbox() {
   document.getElementById('pageguide-memory-shot-lightbox')?.remove();
 }
@@ -171,6 +190,351 @@ function openMemoryShotLightbox(base64, title = 'Before action — what PageGuid
     if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
   });
   document.body.appendChild(overlay);
+}
+
+const RECAP_PLACEHOLDER_SHOT = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+function _recapPickShot(v) { return (!v || v === RECAP_PLACEHOLDER_SHOT) ? null : v; }
+
+// Pick the pre-action "marked" evidence for a step. The region crop has the SoM marker baked
+// into its pixels (the "region of action"), so it is the primary evidence and needs no overlay.
+// Falls back to the full aligned shot (with an overlay box from targetNormRect), then before/after.
+// Returns { src, marker } — marker is a normalized rect to overlay, or null when already baked in.
+function _recapMarkedEvidence(rec) {
+  if (!rec) return null;
+  const region = _recapPickShot(rec.regionShot);
+  if (region) return { src: `data:image/jpeg;base64,${region}`, marker: null };
+  const marked = _recapPickShot(rec.markedShot);
+  if (marked && rec.targetNormRect) return { src: `data:image/jpeg;base64,${marked}`, marker: rec.targetNormRect };
+  const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
+  if (before) return { src: `data:image/jpeg;base64,${before}`, marker: rec.targetNormRect || null };
+  const after = _recapPickShot(rec.screenshotAfter);
+  if (after) return { src: `data:image/jpeg;base64,${after}`, marker: null };
+  return null;
+}
+
+// Pick the SEPARATE visual-evidence shot for a step (the on-page proof that justifies the action,
+// e.g. a "Sort by: Price: Low to High" control). The crop already has a pink SoM marker baked in,
+// so it needs no overlay; falls back to a normRect overlay on the before-shot. Returns { src, marker }.
+function _recapVisualEvidence(rec) {
+  if (!rec) return null;
+  const shot = _recapPickShot(rec.visualEvidenceShot);
+  if (shot) return { src: `data:image/jpeg;base64,${shot}`, marker: null };
+  const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
+  if (before && rec.visualEvidenceNormRect) return { src: `data:image/jpeg;base64,${before}`, marker: rec.visualEvidenceNormRect };
+  return null;
+}
+
+// SOM marker overlay: an absolutely-positioned box + number badge, placed from a normalized
+// { x, y, w, h } rect (fractions of the image). Empty string when there's no geometry.
+function _recapMarkerHtml(normRect, number) {
+  if (!normRect) return '';
+  const pct = (v) => (Math.max(0, Math.min(1, Number(v) || 0)) * 100).toFixed(2) + '%';
+  const num = (number != null && number !== '')
+    ? `<span class="pageguide-recap-marker-num">${escapeHtml(String(number))}</span>` : '';
+  return `<span class="pageguide-recap-marker-box" style="left:${pct(normRect.x)};top:${pct(normRect.y)};width:${pct(normRect.w)};height:${pct(normRect.h)};">${num}</span>`;
+}
+
+// An <img> wrapped in a positioned figure with the marker overlay drawn on top.
+function _recapFigureHtml(src, marker, number, alt) {
+  return `<span class="pageguide-recap-figure"><img src="${src}" alt="${escapeHtml(alt || '')}">${_recapMarkerHtml(marker, number)}</span>`;
+}
+
+// Hover popover shown when the pointer is over an inline recap phrase-link. A short grace timer
+// lets the pointer travel from the link onto the popover without it vanishing.
+let _recapEvidenceHideTimer = null;
+function _cancelRecapEvidenceHide() { if (_recapEvidenceHideTimer) { clearTimeout(_recapEvidenceHideTimer); _recapEvidenceHideTimer = null; } }
+function hideRecapEvidencePopover() { document.getElementById('pageguide-recap-evidence-pop')?.remove(); }
+function _scheduleRecapEvidenceHide() { _cancelRecapEvidenceHide(); _recapEvidenceHideTimer = setTimeout(hideRecapEvidencePopover, 200); }
+
+async function _showRecapEvidencePopover(anchor, sessionId, step) {
+  _cancelRecapEvidenceHide();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  // A visual-evidence link (the justification text) shows the SEPARATE proof region + its reason;
+  // the milestone-phrase links keep showing the action's targeted region + Action line.
+  const isVisual = anchor?.dataset?.evidence === 'visual';
+  const ev = isVisual ? _recapVisualEvidence(rec) : _recapMarkedEvidence(rec);
+  const number = isVisual ? rec?.visualEvidenceIndex : (rec?.target?.resolvedIndex ?? rec?.resolvedIndex);
+  const caption = isVisual ? 'Visual evidence' : 'Targeted region';
+  const detail = isVisual
+    ? (rec?.visualEvidenceReason ? `<div class="pageguide-recap-pop-action"><b>Why:</b> ${escapeHtml(rec.visualEvidenceReason)}</div>` : '')
+    : `<div class="pageguide-recap-pop-action"><b>Action:</b> ${_recapActionHtml(rec)}</div>`;
+  const pop = document.createElement('div');
+  pop.id = 'pageguide-recap-evidence-pop';
+  pop.className = 'pageguide-recap-evidence-pop' + (isVisual ? ' is-visual' : '');
+  const beforeFig = ev
+    ? `<figure class="pageguide-recap-pop-fig"><figcaption>${caption}</figcaption>${_recapFigureHtml(ev.src, ev.marker, number, caption.toLowerCase())}</figure>` : '';
+  pop.innerHTML = (ev || (isVisual && rec?.visualEvidenceReason))
+    ? `${beforeFig}${detail}<div class="pageguide-recap-pop-cap">Step ${escapeHtml(String(step))} · click to inspect</div>`
+    : `<div class="pageguide-recap-pop-empty">No screenshot for step ${escapeHtml(String(step))}</div>`;
+  pop.addEventListener('mouseenter', _cancelRecapEvidenceHide);
+  pop.addEventListener('mouseleave', _scheduleRecapEvidenceHide);
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  const top = Math.min(window.innerHeight - pop.offsetHeight - 8, r.bottom + 8);
+  pop.style.top = Math.max(8, top) + 'px';
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+}
+
+// The color-matched "Action: click ⟨N⟩ "text"" line for a step. The ⟨N⟩ badge and the text use the
+// SoM marker color (--pg-som) so they match the marker in the screenshot and the recap links.
+function _recapActionHtml(rec) {
+  const number = rec?.target?.resolvedIndex ?? rec?.resolvedIndex;
+  const action = rec?.action || '';
+  const typeText = rec?.typeText || '';
+  const targetText = rec?.target?.text || rec?.domElementText || rec?.llmElementText || '';
+  if (!action) return '<span class="pageguide-recap-action-val">—</span>';
+  const numHtml = (number != null && number !== '') ? ` <span class="pageguide-recap-marker-num inline">${escapeHtml(String(number))}</span>` : '';
+  const textHtml = targetText ? ` <span class="pageguide-recap-action-target">“${escapeHtml(targetText)}”</span>` : '';
+  const typeHtml = (action === 'type' && typeText) ? `: <span class="pageguide-recap-action-target">“${escapeHtml(typeText)}”</span>` : '';
+  return `<span class="pageguide-recap-action-verb">${escapeHtml(action)}</span>${numHtml}${textHtml}${typeHtml}`;
+}
+
+// Checkpoint detail overlay: the marked pre-action shot (SOM box on the chosen element) + the
+// post-action outcome shot, plus the step instruction and the action taken. Reuses the shared
+// memory-shot lightbox shell (so Escape / backdrop close still work).
+async function _recapNavigationSteps(sessionId, preferredSteps) {
+  const clean = (arr) => Array.from(new Set((Array.isArray(arr) ? arr : [])
+    .map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
+  let steps = clean(preferredSteps);
+  if (steps.length) return steps;
+  try {
+    if (sessionId && typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(sessionId);
+      steps = clean((idx?.steps || []).filter(m => !m.isInitial).map(m => m.step));
+    }
+  } catch (e) {}
+  return steps;
+}
+
+async function openRecapCheckpoint(sessionId, step, stepList) {
+  closeMemoryShotLightbox();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  const navSteps = await _recapNavigationSteps(sessionId, stepList);
+  const navIndex = navSteps.indexOf(Number(step));
+  const prevStep = navIndex > 0 ? navSteps[navIndex - 1] : null;
+  const nextStep = navIndex >= 0 && navIndex < navSteps.length - 1 ? navSteps[navIndex + 1] : null;
+  const ev = _recapMarkedEvidence(rec);
+  const number = rec?.target?.resolvedIndex ?? rec?.resolvedIndex;
+  const after = _recapPickShot(rec?.screenshotAfter);
+  const instruction = rec?.instruction || '';
+  const actionLabel = _recapActionHtml(rec);
+  // The SEPARATE visual evidence (proof that justified the action), shown as a third figure.
+  const vis = _recapVisualEvidence(rec);
+  const visNumber = rec?.visualEvidenceIndex;
+  const visReason = rec?.visualEvidenceReason || '';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.dataset.recapSession = sessionId || '';
+  overlay.dataset.recapStep = String(step);
+  overlay.dataset.recapSteps = JSON.stringify(navSteps);
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Step ${escapeHtml(String(step))} detail">
+      <div class="pageguide-memory-shot-head">
+        <span>Step ${escapeHtml(String(step))} — visual evidence</span>
+        <div class="pageguide-recap-nav">
+          <button type="button" class="pageguide-recap-nav-btn" data-step="${prevStep == null ? '' : escapeHtml(String(prevStep))}" aria-label="Previous checkpoint" ${prevStep == null ? 'disabled' : ''}>‹</button>
+          <button type="button" class="pageguide-recap-nav-btn" data-step="${nextStep == null ? '' : escapeHtml(String(nextStep))}" aria-label="Next checkpoint" ${nextStep == null ? 'disabled' : ''}>›</button>
+          <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+        </div>
+      </div>
+      <div class="pageguide-recap-detail-body">
+        <div class="pageguide-recap-detail-shots">
+          <figure class="pageguide-recap-detail-fig">
+            <figcaption>Before — chosen element</figcaption>
+            ${ev ? _recapFigureHtml(ev.src, ev.marker, number, 'before action') : '<div class="pageguide-recap-pop-empty">No screenshot</div>'}
+          </figure>
+          <figure class="pageguide-recap-detail-fig">
+            <figcaption>After — result</figcaption>
+            ${after ? `<span class="pageguide-recap-figure"><img src="data:image/jpeg;base64,${after}" alt="after action"></span>` : '<div class="pageguide-recap-pop-empty">No screenshot</div>'}
+          </figure>
+          ${vis ? `<figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig"><figcaption>Why — visual evidence</figcaption>${_recapFigureHtml(vis.src, vis.marker, visNumber, 'visual evidence')}</figure>` : ''}
+        </div>
+        <div class="pageguide-recap-detail-text">
+          ${instruction ? `<div class="pageguide-recap-detail-instruction">${escapeHtml(instruction)}</div>` : ''}
+          <div class="pageguide-recap-detail-action"><b>Action:</b> ${actionLabel}</div>
+          ${visReason ? `<div class="pageguide-recap-detail-evidence"><b>Why:</b> ${escapeHtml(visReason)}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    const nav = e.target.closest('.pageguide-recap-nav-btn');
+    if (nav && nav.dataset.step) {
+      e.stopPropagation();
+      openRecapCheckpoint(sessionId, Number(nav.dataset.step), navSteps);
+      return;
+    }
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
+}
+
+// Draw the model's Final-State annotations (bounding boxes + text labels) over a screenshot, as
+// absolutely-positioned overlays from normalized {x,y,w,h} rects. Colored with --pg-som.
+function _recapAnnotationsHtml(annotations) {
+  if (!Array.isArray(annotations) || !annotations.length) return '';
+  const pct = (v) => (Math.max(0, Math.min(1, Number(v) || 0)) * 100).toFixed(2) + '%';
+  return annotations.map((a, i) => {
+    const label = a && a.label ? a.label : '';
+    const labelHtml = label ? `<span class="pageguide-recap-annot-label">${escapeHtml(label)}</span>` : '';
+    return `<span class="pageguide-recap-annot-box" style="left:${pct(a.x)};top:${pct(a.y)};width:${pct(a.w)};height:${pct(a.h)};">${labelHtml}</span>`;
+  }).join('');
+}
+
+const RECAP_VERDICTS = {
+  completed: { icon: '✅', label: 'Completed', cls: 'ok' },
+  failed:    { icon: '❌', label: 'Incompleted', cls: 'fail' },
+  unclear:   { icon: '⚠️', label: 'Unsure', cls: 'unclear' }
+};
+
+function _recapFinalButtonHtml(sessionId, step, verdictKey) {
+  const verdict = RECAP_VERDICTS[verdictKey] || RECAP_VERDICTS.unclear;
+  return `<button type="button" class="pageguide-recap-final-link pageguide-recap-final-btn ${verdict.cls}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}" title="Final state: ${escapeHtml(verdict.label)}">F</button>`;
+}
+
+// Final State view: the final page screenshot annotated with the model's bounding-box evidence,
+// plus the completed/failed verdict and reason. Reuses the memory-shot lightbox shell.
+async function openFinalStateView(sessionId, step) {
+  closeMemoryShotLightbox();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  const shot = _recapPickShot(rec?.finalShot) || _recapPickShot(rec?.screenshotAfter) || _recapPickShot(rec?.screenshot) || _recapPickShot(rec?.screenshotBefore);
+  const verdict = RECAP_VERDICTS[rec?.finalVerdict] || RECAP_VERDICTS.unclear;
+  const reason = rec?.finalReason || '';
+  const annotations = Array.isArray(rec?.finalAnnotations) ? rec.finalAnnotations : [];
+  const imgHtml = shot
+    ? `<span class="pageguide-recap-figure pageguide-final-figure"><img src="data:image/jpeg;base64,${shot}" alt="final state">${_recapAnnotationsHtml(annotations)}</span>`
+    : '<div class="pageguide-recap-pop-empty">No final screenshot</div>';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Final state">
+      <div class="pageguide-memory-shot-head">
+        <span>Final State — visual evidence</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body">
+        <div class="pageguide-final-verdict ${verdict.cls}">${verdict.icon} ${escapeHtml(verdict.label)}</div>
+        ${reason ? `<div class="pageguide-final-reason">${escapeHtml(reason)}</div>` : ''}
+        ${imgHtml}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
+}
+
+// Standalone Final-State card for failed/stopped runs (no recap milestones). A one-line verdict
+// with a View button that opens the annotated final-state view.
+function renderGuideFinalStateCard(message) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !message || message.step == null) return;
+  const verdict = RECAP_VERDICTS[message.verdict] || RECAP_VERDICTS.unclear;
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap" data-session="${escapeHtml(String(message.sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify([Number(message.step)].filter(Number.isFinite)))}">
+      <div class="pageguide-recap-final">${_recapFinalButtonHtml(message.sessionId, message.step, message.verdict)}<span class="pageguide-final-verdict ${verdict.cls} inline">${escapeHtml(verdict.label)}</span></div>
+      ${message.reason ? `<div class="pageguide-final-reason">${escapeHtml(message.reason)}</div>` : ''}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+// Render a visual_highlight answer as a persistent assistant bubble: the cropped screenshot region
+// (with the pink evidence box baked in) plus its caption. Reuses the recap figure/bubble styling.
+function renderVisualHighlightAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result || !result.visualHighlightImage) return;
+  const src = `data:image/jpeg;base64,${result.visualHighlightImage}`;
+  const caption = result.visualHighlightCaption || '';
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-visual-highlight">
+      <div class="pageguide-recap-summary">🖼 Answer</div>
+      <figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig">${_recapFigureHtml(src, null, null, caption || 'visual answer')}</figure>
+      ${caption ? `<div class="pageguide-recap-detail-evidence"><b>Why:</b> ${escapeHtml(caption)}</div>` : ''}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+// Render an end-of-task Visual Recap into the chat: an LLM summary, milestone lines whose key
+// phrase is an inline hover-link (hover → the step's marked screenshot pops up), and a row of
+// numbered checkpoint cards that open a before/after detail view with the SOM marker + action.
+async function renderGuideRecap(recap) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !recap || !recap.summary) return;
+  const milestones = Array.isArray(recap.milestones) ? recap.milestones : [];
+  const sessionId = recap.sessionId;
+
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+
+  const displayMilestones = milestones.filter((m) => m && m.goalRelated !== false);
+
+  const rowsHtml = displayMilestones.map((m) => {
+    const text = m.text || '';
+    const phrase = (m.phrase && text.toLowerCase().includes(m.phrase.toLowerCase())) ? m.phrase : '';
+    const link = (label) => `<span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}">${escapeHtml(label)}</span>`;
+    const status = String(m.status || '').toLowerCase();
+    const errorLabel = String(m.errorLabel || '').trim();
+    const reason = String(m.reason || '').trim();
+    const labelHtml = status === 'wrong' && errorLabel
+      ? `<span class="pageguide-recap-error-label" title="${escapeHtml(reason)}">(${escapeHtml(errorLabel)})</span>`
+      : (status === 'unclear' ? `<span class="pageguide-recap-error-label unclear" title="${escapeHtml(reason)}">(unclear)</span>` : '');
+    const stepValue = String(m.step || '');
+    const stepNumHtml = stepValue
+      ? `<button type="button" class="pageguide-recap-step-num" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(stepValue)}" title="Open step ${escapeHtml(stepValue)} checkpoint">${escapeHtml(stepValue)}</button>`
+      : '';
+    let inner;
+    if (phrase) {
+      const idx = text.toLowerCase().indexOf(phrase.toLowerCase());
+      inner = `${escapeHtml(text.slice(0, idx))}${link(text.slice(idx, idx + phrase.length))}${escapeHtml(text.slice(idx + phrase.length))}`;
+    } else {
+      inner = link(text);
+    }
+    // Merge in the captured visual evidence for this step: the model's justification, rendered as a
+    // clickable link (hover → the pink-marked proof region; click → the step checkpoint).
+    const evidence = recap.evidenceByStep && recap.evidenceByStep[m.step];
+    const evidenceHtml = (evidence && (evidence.reason || evidence.hasShot))
+      ? `<div class="pageguide-recap-evidence"><span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence for step ${escapeHtml(String(m.step))}">${escapeHtml(evidence.reason || 'Why this step is correct')}</span></div>`
+      : '';
+    return `<div class="pageguide-recap-row ${status ? `is-${escapeHtml(status)}` : ''}"><span class="pageguide-recap-text">${inner} ${labelHtml}</span>${stepNumHtml}${evidenceHtml}</div>`;
+  }).join('');
+
+  const chipsHtml = milestones.map((m) =>
+    `<button type="button" class="pageguide-recap-checkpoint" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Open step ${escapeHtml(String(m.step))} detail">${escapeHtml(String(m.step))}</button>`
+  ).join('');
+
+  // Always end with a "Final State" line linking to the last checkpoint (the final step reached).
+  const finalStep = Number.isFinite(Number(recap.finalStep)) ? Number(recap.finalStep)
+    : (milestones.length ? milestones[milestones.length - 1].step : null);
+  const finalVerdict = recap?.final?.verdict || recap?.finalVerdict || 'unclear';
+  const finalHtml = (finalStep != null)
+    ? `<div class="pageguide-recap-final">${_recapFinalButtonHtml(sessionId, finalStep, finalVerdict)}</div>`
+    : '';
+  const recapSteps = recap.steps || milestones.map(m => m.step);
+
+  msg.innerHTML = `
+    <div class="pageguide-recap" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(recapSteps))}">
+      <div class="pageguide-recap-summary">${escapeHtml(recap.summary)}</div>
+      ${displayMilestones.length ? `<div class="pageguide-recap-list">${rowsHtml}</div>` : ''}
+      ${finalHtml}
+      ${milestones.length ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
 }
 
 // Compute all three confidence formula versions for a step from its stored LLM signals
@@ -308,6 +672,14 @@ async function showGoalStepPreview(step, anchor) {
     }
   });
 
+  // Keep the preview open while the pointer is over it (hover flow); hide shortly after leaving.
+  preview.addEventListener('mouseenter', _cancelGoalPreviewHide);
+  preview.addEventListener('mouseleave', _scheduleGoalPreviewHide);
+
+  // This function is async (awaits rewindGetRecord), so hover-mouseenter and click can each have
+  // an in-flight call. Remove any preview appended by an earlier call right before appending, so
+  // only the latest card survives (the initial hide at the top runs before the awaits).
+  hideGoalStepPreview();
   document.body.appendChild(preview);
   const r = anchor.getBoundingClientRect();
   const top = Math.min(window.innerHeight - preview.offsetHeight - 8, r.bottom + 10);
@@ -322,7 +694,19 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeMemoryShotLightbox();
+  if (e.key === 'Escape') { closeMemoryShotLightbox(); hideRecapEvidencePopover(); return; }
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const overlay = document.getElementById('pageguide-memory-shot-lightbox');
+  if (!overlay || !overlay.dataset.recapSession) return;
+  let steps = [];
+  try { steps = JSON.parse(overlay.dataset.recapSteps || '[]'); } catch (err) { steps = []; }
+  const current = Number(overlay.dataset.recapStep);
+  const idx = steps.indexOf(current);
+  const target = e.key === 'ArrowLeft' ? steps[idx - 1] : steps[idx + 1];
+  if (Number.isFinite(Number(target))) {
+    e.preventDefault();
+    openRecapCheckpoint(overlay.dataset.recapSession, Number(target), steps);
+  }
 });
 
 function renderGoalDots(current, total) {
@@ -351,6 +735,7 @@ function renderGoalDots(current, total) {
     idot.dataset.step = '0';
     idot.title = 'Initial state';
     idot.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(0, idot); });
+    _attachDotHoverPreview(idot, 0);
     dots.appendChild(idot);
   }
 
@@ -378,6 +763,7 @@ function renderGoalDots(current, total) {
       e.stopPropagation();
       showGoalStepPreview(i, dot);
     });
+    _attachDotHoverPreview(dot, i);
     dots.appendChild(dot);
   }
 }
@@ -638,6 +1024,9 @@ function clearGoalAndStepPanel() {
   currentGuideInitial = null;
   currentGuideVerifications = {};
   currentGuideWarnings = {};
+  _lastFindMessageStep = null;
+  _lastVisualHighlightStep = null;
+  _lastRecapKey = null;
   visibleJourneySessionId = null;
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
@@ -794,10 +1183,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     else pauseGuide('Guide paused. Resume when you are ready.');
   });
   initGuideModeToggle();
-  initConfidenceFormulaToggle();
-  initConfidenceSourceToggle();
-  initRegionCaptureToggle();
-  initPassHistoryToggle();
+  initGuideVisualInputToggle();
+  initVisualRecapToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1258,6 +1645,28 @@ function _setupMessageContainerDelegate(container) {
       return;
     }
 
+    // 1. Visual recap links/checkpoints/final-state. Delegated so restored chat HTML after a
+    // tab switch still has working screenshot hover/click behavior.
+    const recapFinal = e.target.closest('.pageguide-recap-final-link');
+    if (recapFinal) {
+      e.stopPropagation();
+      const wrap = recapFinal.closest('.pageguide-recap');
+      const sid = recapFinal.dataset.session || wrap?.dataset.session || '';
+      if (sid) openFinalStateView(sid, Number(recapFinal.dataset.step));
+      return;
+    }
+
+    const recapEl = e.target.closest('.pageguide-recap-checkpoint, .pageguide-recap-link, .pageguide-recap-step-num');
+    if (recapEl) {
+      e.stopPropagation();
+      const wrap = recapEl.closest('.pageguide-recap');
+      const sid = recapEl.dataset.session || wrap?.dataset.session || '';
+      let steps = [];
+      try { steps = JSON.parse(wrap?.dataset.steps || '[]'); } catch (err) { steps = []; }
+      if (sid) openRecapCheckpoint(sid, Number(recapEl.dataset.step), steps);
+      return;
+    }
+
     // 1. PDF citation → PDF navigation (with range cycling)
     const pdfCit = e.target.closest('.pageguide-pdf-citation');
     if (pdfCit) {
@@ -1324,6 +1733,22 @@ function _setupMessageContainerDelegate(container) {
     } else {
       msg.classList.toggle('citations-expanded');
     }
+  });
+
+  container.addEventListener('mouseover', (e) => {
+    const link = e.target.closest('.pageguide-recap-link');
+    if (!link || !container.contains(link)) return;
+    if (link.contains(e.relatedTarget)) return;
+    const wrap = link.closest('.pageguide-recap');
+    const sid = link.dataset.session || wrap?.dataset.session || '';
+    if (sid) _showRecapEvidencePopover(link, sid, Number(link.dataset.step));
+  });
+
+  container.addEventListener('mouseout', (e) => {
+    const link = e.target.closest('.pageguide-recap-link');
+    if (!link || !container.contains(link)) return;
+    if (link.contains(e.relatedTarget)) return;
+    _scheduleRecapEvidenceHide();
   });
 }
 
@@ -2540,6 +2965,104 @@ function initPassHistoryToggle() {
   });
 }
 
+// Visual Recap mode (debug-only): whether to post an end-of-task recap with screenshot
+// evidence. Stored in chrome.storage.local so the content script (guidev2.js) reads the
+// same value. Default ON.
+const GUIDE_VISUAL_RECAP_KEY = 'guideVisualRecap';
+
+// Visual input mode (debug-only): send the Guide LLM a screenshot with up to 100 SoM
+// markers alongside the normal page-index prompt. Default OFF.
+const GUIDE_VISUAL_INPUT_KEY = 'guideVisualInput';
+
+function _normalizeVisualInput(v) {
+  return v === 'on' ? 'on' : 'off';
+}
+
+function _renderVisualInput(btn, val) {
+  val = _normalizeVisualInput(val);
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Visual: ${val === 'on' ? 'On' : 'Off'} ▾`;
+  btn.title = val === 'on'
+    ? 'Guide prompts include a screenshot with up to 100 numbered SoM markers.'
+    : 'Guide prompts are text-only.';
+  document.querySelectorAll('#pageguide-visualinput-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.visualinput === val);
+  });
+}
+
+function initGuideVisualInputToggle() {
+  const btn = document.getElementById('pageguide-visualinput-toggle');
+  const menu = document.getElementById('pageguide-visualinput-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_VISUAL_INPUT_KEY)
+    .then(r => _renderVisualInput(btn, _normalizeVisualInput(r[GUIDE_VISUAL_INPUT_KEY])))
+    .catch(() => _renderVisualInput(btn, 'off'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeVisualInput(option.dataset.visualinput);
+    try { await chrome.storage.local.set({ [GUIDE_VISUAL_INPUT_KEY]: val }); } catch (err) {}
+    _renderVisualInput(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+function _normalizeRecap(v) {
+  return v === 'off' ? 'off' : 'on'; // on is default
+}
+
+function _renderRecap(btn, val) {
+  val = _normalizeRecap(val);
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>Recap: ${val === 'on' ? 'On' : 'Off'} ▾`;
+  btn.title = val === 'on'
+    ? 'A visual recap with screenshot evidence is posted when a guide task finishes.'
+    : 'No recap is posted; the task ends on its final step.';
+  document.querySelectorAll('#pageguide-recap-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.recap === val);
+  });
+}
+
+function initVisualRecapToggle() {
+  const btn = document.getElementById('pageguide-recap-toggle');
+  const menu = document.getElementById('pageguide-recap-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_VISUAL_RECAP_KEY)
+    .then(r => _renderRecap(btn, _normalizeRecap(r[GUIDE_VISUAL_RECAP_KEY])))
+    .catch(() => _renderRecap(btn, 'on'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeRecap(option.dataset.recap);
+    try { await chrome.storage.local.set({ [GUIDE_VISUAL_RECAP_KEY]: val }); } catch (err) {}
+    _renderRecap(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+// Read the Visual Recap flag for the render path (default ON). Async — resolves the flag
+// from chrome.storage.local; used to gate the end-of-task recap message.
+async function _panelIsVisualRecapOn() {
+  try {
+    const r = await chrome.storage.local.get(GUIDE_VISUAL_RECAP_KEY);
+    return _normalizeRecap(r[GUIDE_VISUAL_RECAP_KEY]) === 'on';
+  } catch (e) {
+    return true;
+  }
+}
+
 function hideMoreMenu() {
   const menu = document.getElementById('pageguide-more-menu');
   if (menu) menu.style.display = 'none';
@@ -2687,24 +3210,33 @@ function addGuideStep(result) {
     total: currentGuidePlan.length || result.totalSteps || undefined
   });
 
-  if (result.autoMode && !result.isLastStep) {
+  // Auto mode hides intermediate step cards, but a find/visual_highlight answer IS the deliverable.
+  if (result.autoMode && !result.isLastStep && !result.isFind && !result.isVisualHighlight) {
     panel.style.display = 'none';
     panel.innerHTML = '';
     return;
   }
 
-  const stepBadge = result.isLastStep ? '✅' : `Step ${result.step}`;
+  const stepBadge = result.isFind ? '🔎 Answer'
+    : (result.isVisualHighlight ? '🖼 Answer' : (result.isLastStep ? '✅' : `Step ${result.step}`));
   const targetRow = result.targetText
     ? `<div class="pageguide-step-meta-row"><span>Target</span><b>${escapeHtml(result.targetText)}</b></div>`
     : '';
   const warning = renderStepWarning(result.step);
+
+  // A find answer carries [N:"text"] citations and markdown; render them as clickable chips
+  // (already escaped by parseMarkdown). visual_highlight shows its caption (the image goes to the
+  // chat bubble below). Everything else stays plain escaped text.
+  const stepText = result.isFind
+    ? parseCitations(parseMarkdown(result.findAnswer || result.answer || ''))
+    : escapeHtml(result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || ''));
 
   panel.innerHTML = `
     <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
       <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
       <div class="pageguide-guide-step">
         <span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>
-        <span class="pageguide-step-text">${escapeHtml(result.answer || '')}</span>
+        <span class="pageguide-step-text">${stepText}</span>
       </div>
       <div class="pageguide-step-meta">
         ${targetRow}
@@ -2716,6 +3248,14 @@ function addGuideStep(result) {
   panel.style.display = '';
   panel.onclick = (e) => {
     if (e.target.closest('button')) return;
+    // The messages-container delegate doesn't cover this panel, so handle find's citation
+    // chips here: a chip scrolls to its own passage, not to the first highlight.
+    const cit = e.target.closest('.pageguide-citation');
+    if (cit) {
+      e.stopPropagation();
+      sendToContentScript({ action: 'scrollToIndex', index: parseInt(cit.dataset.index, 10) });
+      return;
+    }
     if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
   };
   // Collapse (✕) hides the current-step panel in guide mode.
@@ -2723,6 +3263,30 @@ function addGuideStep(result) {
     e.stopPropagation();
     panel.style.display = 'none';
   });
+
+  // Post the find answer to the chat so it survives collapsing the card or ending the guide.
+  // Keyed by step so a re-render of the same step doesn't post it twice.
+  if (result.isFind && result.findAnswer && _lastFindMessageStep !== result.step) {
+    _lastFindMessageStep = result.step;
+    addMessage(result.findAnswer, 'assistant', true);
+  }
+
+  // visual_highlight: the answer is a cropped screenshot region. parseMarkdown escapes <img>, so
+  // render a dedicated assistant bubble (like the recap) rather than addMessage.
+  if (result.isVisualHighlight && result.visualHighlightImage && _lastVisualHighlightStep !== result.step) {
+    _lastVisualHighlightStep = result.step;
+    renderVisualHighlightAnswer(result);
+  }
+
+  // Terminal step: post the Visual Recap (summary + hoverable evidence) once. The content
+  // script only attaches result.recap when the mode is on; re-check the panel toggle too.
+  if (result.isLastStep && result.recap && result.recap.summary) {
+    const recapKey = `${result.recap.sessionId || ''}:${result.step}`;
+    if (_lastRecapKey !== recapKey) {
+      _lastRecapKey = recapKey;
+      _panelIsVisualRecapOn().then(on => { if (on) renderGuideRecap(result.recap); }).catch(() => {});
+    }
+  }
 
   if (!result.isLastStep) {
     const btnRow = panel.querySelector('.pageguide-step-btn-row');
@@ -4577,6 +5141,8 @@ function handleContentMessage(message, sender, sendResponse) {
     } else {
       addMessage(message.content, message.type, message.clickable);
     }
+  } else if (message.action === 'guideFinalState') {
+    renderGuideFinalStateCard(message);
   } else if (message.action === 'closePanel') {
     window.close();
   } else if (message.action === 'selectedText') {
@@ -4921,22 +5487,12 @@ function updateDebugButtonVisibility(enabled, alwaysShowPromptBtn = false) {
   if (btn) {
     btn.style.display = (enabled || alwaysShowPromptBtn) ? 'inline-flex' : 'none';
   }
-  // The confidence-formula and confidence-source toggles are debug/research controls —
-  // only surface them in debug mode.
-  const confWrap = document.querySelector('.pageguide-conf-wrap');
-  if (confWrap) {
-    confWrap.style.display = enabled ? '' : 'none';
+  const visualInputWrap = document.querySelector('.pageguide-visualinput-wrap');
+  if (visualInputWrap) {
+    visualInputWrap.style.display = enabled ? '' : 'none';
   }
-  const confSrcWrap = document.querySelector('.pageguide-confsrc-wrap');
-  if (confSrcWrap) {
-    confSrcWrap.style.display = enabled ? '' : 'none';
-  }
-  const regionCapWrap = document.querySelector('.pageguide-regioncap-wrap');
-  if (regionCapWrap) {
-    regionCapWrap.style.display = enabled ? '' : 'none';
-  }
-  const passHistoryWrap = document.querySelector('.pageguide-passhistory-wrap');
-  if (passHistoryWrap) {
-    passHistoryWrap.style.display = enabled ? '' : 'none';
+  const recapWrap = document.querySelector('.pageguide-recap-wrap');
+  if (recapWrap) {
+    recapWrap.style.display = enabled ? '' : 'none';
   }
 }

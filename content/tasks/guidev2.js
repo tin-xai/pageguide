@@ -30,8 +30,10 @@ Return JSON only:
   "thought": "Your internal chain-of-thought reasoning about the page state and chosen action",
   "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
   "element": {"index": N, "text": "element text to highlight"},
-  "action": "click" | "type" | "clear_text" | "done",
+  "visualEvidence": {"index": M, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the evidence element", "reason": "one sentence: why this proves the action is correct"},
+  "action": "click" | "type" | "clear_text" | "find" | "visual_highlight" | "done",
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
+  "findQuery": "the informational question to answer from THIS page (only when action=find; null otherwise)",
   "isLastStep": false,
   "completedPlanStep": 1,
   "completedPlanStepReason": "reasoning here",
@@ -46,6 +48,7 @@ Return JSON only:
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
+"visualEvidence": ONLY populate this when the user prompt says VISUAL EVIDENCE REQUESTED: yes (otherwise set it to null). It is the SEPARATE piece of on-page proof that justifies this step — NOT the action target. Point to it with EITHER a SoM "index" (a DIFFERENT PAGE INDEX marker number than "element.index") OR, when no marker fits the region, a normalized "rect" {x,y,w,h} as fractions of the screenshot (0..1, top-left origin). Example for "add the cheapest laptop to my cart": the action target is the "Add to Cart" button but the visualEvidence is the "Sort by: Price: Low to High" control, which proves the first result is the cheapest. "text" is the evidence region's visible label and "reason" is one short sentence explaining why it justifies the chosen action. Prefer "index"; use "rect" only when the region has no SoM marker. For action="visual_highlight", visualEvidence marks the region to show the user as the answer.
 
 RULES:
 1. ONE step at a time — never list multiple things to do
@@ -59,14 +62,34 @@ RULES:
    empty/null. Use it before typing a replacement value or when the task asks to reset a field.
    Sensitive fields (passwords, payment, private data) are high risk and should be handed to the user.
 7. action="done": set isLastStep=true; no element interaction needed
-8. Highlight the element to interact with using its index from PAGE INDEX
-9. If the target is not visible, guide the user to open the relevant menu first
+8. action="find": use ONLY when the USER GOAL is INFORMATIONAL — the user wants to KNOW
+   something (a policy, an answer, an explanation), not to perform a transaction — AND the
+   current page is where that information should live according to the current PLAN step
+   (e.g. you have navigated to the Help/FAQ/policy page the plan named).
+   You do NOT need to see the page text to choose this: decide from the plan's intent plus
+   the fact that you have arrived at the page. Set findQuery to the precise question to
+   answer, and leave element null. A separate reader pass then extracts the answer and
+   highlights the passages that support it.
+   find MUST be the LAST step (always set isLastStep=true) — it is the final answer to the user.
+   NEVER use find mid-journey: complete all navigation with click/type first, then find at the end.
+   Do NOT use find for navigational or transactional goals (buy, book, sign in, change a
+   setting) — those end with click/type/done.
+9. action="visual_highlight": available ONLY when the user prompt says VISUAL EVIDENCE REQUESTED
+   includes visual input (a screenshot was provided). Use it as the LAST step (always set
+   isLastStep=true) to answer an INFORMATIONAL/visual goal by showing the user a region of the
+   screenshot. Leave element null and put the region to show in "visualEvidence" (a SoM "index" or
+   a normalized "rect"); "reason" is the caption. We crop that region and return it as the answer.
+   Like find, it is terminal and NEVER used mid-journey.
+10. Highlight the element to interact with using its index from PAGE INDEX
+11. If the target is not visible, guide the user to open the relevant menu first
 
 COMMON PATTERNS:
 - Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
 - Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
 - Replace text:   Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
 - Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
+- Info lookup:    Step 1 → click 'Help' → Step 2 → click the relevant article →
+                  Step 3 → action=find (the answer is on this page)
 
 NATIVE BROWSER DIALOGS (print, save, open file, etc.):
 When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that
@@ -340,6 +363,7 @@ let _guidev2Stopped = false;
 
 // Hard safety cap for concrete Guide v2 steps.
 let GV2_MAX_STEPS = 20;
+const GV2_LOOP_STOP_THRESHOLD = 0.3;
 try {
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
     chrome.storage.sync.get(['maxSteps']).then(res => {
@@ -410,15 +434,36 @@ function _gv2MaxStepMessage(g = window._guidev2) {
 
 function _gv2StopForMaxSteps(g = window._guidev2) {
   const message = _gv2MaxStepMessage(g);
+  // Snapshot what the Final-State verdict needs BEFORE state is cleared below.
+  let snap = null;
+  try {
+    const steps = Array.isArray(g?.previousSteps) ? g.previousSteps : [];
+    const validSteps = steps
+      .map(s => { const m = /^Step\s+(\d+)/.exec(String(s || '').trim()); return m ? Number(m[1]) : null; })
+      .filter(n => Number.isFinite(n) && n > 0);
+    snap = { sessionId: g?.sessionId, question: g?.question, steps,
+             finalStep: validSteps.length ? Math.max.apply(null, validSteps) : null };
+  } catch (e) {}
   _gv2StopInternal();
   _gv2HidePanelTyping();
   try {
-    chrome.runtime.sendMessage({
-      action: 'addMessage',
-      content: message,
-      type: 'system'
-    });
+    chrome.runtime.sendMessage({ action: 'addMessage', content: message, type: 'system' });
   } catch (e) {}
+  // Fire-and-forget a Final-State verdict so the panel can offer an annotated "why it stopped" view.
+  (async () => {
+    try {
+      if (!snap || !(await _gv2IsVisualRecapOn())) return;
+      const final = await _gv2BuildFinalVerdictFromSnapshot(snap, 'stopped');
+      if (!final) return;
+      chrome.runtime.sendMessage({
+        action: 'guideFinalState',
+        sessionId: snap.sessionId,
+        step: final.step,
+        verdict: final.verdict,
+        reason: final.reason
+      });
+    } catch (e) { /* non-fatal */ }
+  })();
   return { success: false, progressed: false, error: message, stoppedByMaxSteps: true };
 }
 
@@ -1186,6 +1231,11 @@ async function _gv2ReplayActions(records, landingUrl, log) {
 
 /** Re-apply a single recorded action. Returns false when the target can't be resolved. */
 async function _gv2ReplayOne(r) {
+  // find only reads the page — there is no target to resolve and nothing to re-apply.
+  // Must come before the target guard below, or replay would abort the whole chain.
+  const kind = (typeof gv2ReplayKind === 'function') ? gv2ReplayKind(r.action) : null;
+  if (kind === 'noop') return true;
+
   const text = r.target && r.target.text;
   if (!text) return false;
   const pageIndex = createPageIndex(5000, true);
@@ -1370,24 +1420,6 @@ async function _gv2IsAutoMode() {
   }
 }
 
-// Confidence formula preference: 'full' (grounded·loop·progress) or 'reduced' (grounded·loop, no progress).
-// Applies in both manual and auto modes; the score computation is mode-independent.
-const _GV2_CONF_FORMULA_KEY = 'guideConfidenceFormula';
-
-async function _gv2ConfidenceFormula() {
-  try {
-    const r = await chrome.storage.local.get(_GV2_CONF_FORMULA_KEY);
-    const v = r[_GV2_CONF_FORMULA_KEY];
-    return (v === 'reduced' || v === 'noloop') ? v : 'full'; // default full
-  } catch (e) {
-    return 'full';
-  }
-}
-
-// Confidence SOURCE toggle: 'llm' = self-reported grounded/loop/progress (default, original
-// behavior), 'mechanical' = rule-based grounding × loop computed from execution signals (no LLM).
-// Decides which score becomes the active `confidence` that drives the tier/pause/red-highlight logic.
-const _GV2_CONF_SOURCE_KEY = 'guideConfidenceSource';
 const _GV2_CONF_THRESHOLD_KEY = 'guideConfidenceThreshold';
 
 async function _gv2ConfidenceThreshold() {
@@ -1400,13 +1432,9 @@ async function _gv2ConfidenceThreshold() {
   }
 }
 
-async function _gv2ConfidenceSource() {
-  try {
-    const r = await chrome.storage.local.get(_GV2_CONF_SOURCE_KEY);
-    return r[_GV2_CONF_SOURCE_KEY] === 'llm' ? 'llm' : 'mechanical'; // default mechanical
-  } catch (e) {
-    return 'mechanical';
-  }
+function _gv2MaxFiniteScore(...values) {
+  const nums = values.map(v => Number(v)).filter(n => Number.isFinite(n));
+  return nums.length ? Math.max.apply(null, nums) : null;
 }
 
 // Debug-only target-region capture: 'legacy' crops the carried before-shot using immediate
@@ -1422,10 +1450,11 @@ async function _gv2IsAlignedRegionCapture() {
   }
 }
 
-/** Auto runs always use aligned capture (fresh pre-action screenshot of the target region). */
+/** Auto runs always use aligned capture (fresh pre-action screenshot of the target region).
+ * Visual Recap also needs the fresh aligned shot so its marker geometry lines up with a
+ * full pre-action screenshot. */
 async function _gv2ShouldUseAlignedRegionCapture(g) {
-  if (g?.autoMode) return true;
-  return _gv2IsAlignedRegionCapture();
+  return false;
 }
 if (typeof window !== 'undefined') window._gv2ShouldUseAlignedRegionCapture = _gv2ShouldUseAlignedRegionCapture;
 
@@ -1434,18 +1463,36 @@ const _GV2_PLANNING_KEY = 'guidePlanningEnabled';
 async function _gv2IsPlanningEnabled() {
   try {
     const r = await chrome.storage.local.get(_GV2_PLANNING_KEY);
-    return r[_GV2_PLANNING_KEY] !== false;
+    return r[_GV2_PLANNING_KEY] === true; // default OFF
   } catch (e) {
-    return true;
+    return false;
   }
 }
 
 const _GV2_PASS_HISTORY_KEY = 'guideDebugPassHistory';
 
 async function _gv2IsPassHistory() {
+  return true;
+}
+
+const _GV2_VISUAL_INPUT_KEY = 'guideVisualInput';
+const GV2_VISUAL_INPUT_MAX_MARKS = 100;
+
+async function _gv2IsVisualInputOn() {
   try {
-    const r = await chrome.storage.local.get(_GV2_PASS_HISTORY_KEY);
-    return r[_GV2_PASS_HISTORY_KEY] !== 'not_passing'; // default true
+    const r = await chrome.storage.local.get(_GV2_VISUAL_INPUT_KEY);
+    return r[_GV2_VISUAL_INPUT_KEY] === 'on';
+  } catch (e) {
+    return false;
+  }
+}
+
+const _GV2_VISUAL_RECAP_KEY = 'guideVisualRecap';
+
+async function _gv2IsVisualRecapOn() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_VISUAL_RECAP_KEY);
+    return r[_GV2_VISUAL_RECAP_KEY] !== 'off'; // default on
   } catch (e) {
     return true;
   }
@@ -1716,11 +1763,22 @@ async function _gv2ScrollRegionTargetIntoView(el) {
 
 async function gv2CaptureRegion(screenshotBase64, options = {}) {
   const aligned = options.aligned === true;
-  const out = { targetRect: null, regionShot: null, regionDom: '', regionCaptureMode: aligned ? 'aligned' : 'legacy' };
+  const out = { targetRect: null, regionShot: null, regionDom: '', regionCaptureMode: aligned ? 'aligned' : 'legacy',
+                markedShot: null, targetNormRect: null, regionMarker: null };
   try {
+    // Resolve the target element to crop/mark around. The named resolvers don't exist in this
+    // build, so fall back to the actual highlighted element the step chose (g.currentTargetEl),
+    // then any element carrying the highlight attribute. Without this the region/marker geometry
+    // is never captured and the recap falls back to a plain full screenshot with no marker.
     const resolveTarget = (typeof gv2ResolveRegionTarget === 'function')
       ? gv2ResolveRegionTarget
-      : ((typeof gv2ResolveRegionElement === 'function') ? gv2ResolveRegionElement : () => null);
+      : ((typeof gv2ResolveRegionElement === 'function')
+          ? gv2ResolveRegionElement
+          : () => {
+              const cur = window._guidev2?.currentTargetEl;
+              if (cur && document.contains(cur)) return cur;
+              return document.querySelector('[data-pageguide-styled]') || null;
+            });
 
     let el = resolveTarget();
     if (!el || !el.getBoundingClientRect) return out;
@@ -1744,47 +1802,162 @@ async function gv2CaptureRegion(screenshotBase64, options = {}) {
     const r = el.getBoundingClientRect();
     out.targetRect = { left: r.left, top: r.top, width: r.width, height: r.height };
 
+    // Marker geometry for the recap: normalized target rect over the full viewport shot, plus a
+    // full pre-action screenshot that matches it. In aligned mode `screenshotBase64` IS the fresh
+    // viewport capture (line above), so it lines up with targetRect / the current viewport.
+    if (typeof gv2TargetNormRect === 'function') {
+      out.targetNormRect = gv2TargetNormRect(out.targetRect, window.innerWidth, window.innerHeight);
+    }
+    if (aligned && screenshotBase64) out.markedShot = screenshotBase64;
+
     // Scoped DOM snapshot of the element's surrounding container (not the whole page).
     try {
       const container = el.closest('form, section, article, [role], main, li, fieldset, nav') || el.parentElement || el;
       if (typeof gv2SerializeDom === 'function') out.regionDom = gv2SerializeDom(container);
     } catch (e) { /* best-effort */ }
 
-    // Crop the viewport screenshot down to the element's region.
-    if (screenshotBase64) out.regionShot = await _gv2CropScreenshot(screenshotBase64, out.targetRect);
+    // Crop the viewport screenshot down to the element's region and bake the SoM marker into it.
+    if (screenshotBase64) {
+      const cropped = await _gv2CropScreenshot(screenshotBase64, out.targetRect, options.markerNumber);
+      out.regionShot = cropped?.base64 || null;
+      out.regionMarker = cropped?.marker || null;
+    }
   } catch (e) { /* best-effort */ }
   return out;
 }
 
-/** Crop a base64 JPEG viewport screenshot to a CSS-px rect using a canvas. Resolves base64 or null. */
-function _gv2CropScreenshot(base64, rect) {
+// Marker accent colors: purple for the action target ("region of action"), pink for the separate
+// visual-evidence region that justifies the action.
+const GV2_ACTION_MARKER_COLOR = '#7857ff';
+const GV2_ACTION_MARKER_FILL = 'rgba(120,87,255,0.16)';
+const GV2_EVIDENCE_MARKER_COLOR = '#ff2d78';
+const GV2_EVIDENCE_MARKER_FILL = 'rgba(255,45,120,0.16)';
+
+// Bake a SoM marker (box + optional number badge) onto a canvas 2D context so the "region of
+// action" is visible in the screenshot pixels themselves. `marker` is a normalized { x, y, w, h }
+// rect (fractions of the canvas). No-op when marker is missing. `color`/`fill` accent the box
+// (defaults to the purple action color; pass the evidence color for visual-evidence crops).
+function _gv2DrawMarkerOnCanvas(ctx, canvas, marker, number, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL) {
+  if (!ctx || !canvas || !marker) return;
+  try {
+    const W = canvas.width, H = canvas.height;
+    const x = marker.x * W, y = marker.y * H;
+    const w = Math.max(6, marker.w * W), h = Math.max(6, marker.h * H);
+    const lw = Math.max(3, Math.round(W * 0.006));
+    // Dark halo under the accent box so it reads on any background.
+    ctx.lineWidth = lw + 2; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.strokeRect(x, y, w, h);
+    ctx.lineWidth = lw; ctx.strokeStyle = color;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y, w, h);
+    // Number badge (the SoM index) at the box's top-left corner.
+    if (number != null && number !== '') {
+      const label = String(number);
+      const fs = Math.max(12, Math.round(W * 0.032));
+      ctx.font = `700 ${fs}px sans-serif`;
+      const padX = Math.round(fs * 0.4);
+      const bw = ctx.measureText(label).width + padX * 2;
+      const bh = Math.round(fs * 1.35);
+      let bx = x - lw / 2, by = y - bh;
+      if (by < 0) by = y;           // no room above → sit inside the top edge
+      if (bx < 0) bx = 0;
+      if (bx + bw > W) bx = W - bw;
+      const r = Math.min(6, bh / 2);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(bx + r, by);
+      ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+      ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
+      ctx.arcTo(bx, by + bh, bx, by, r);
+      ctx.arcTo(bx, by, bx + bw, by, r);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillText(label, bx + padX, by + bh / 2 + 1);
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+/** Crop a base64 JPEG viewport screenshot to a CSS-px rect using a canvas, and BAKE a SoM marker
+ * (box + optional number badge) over the target so the "region of action" is visible in the pixels
+ * themselves (no dependency on render-time geometry). Resolves { base64, marker } — base64 is the
+ * crop (or null), marker is the target's normalized rect within the crop (or null). */
+function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL) {
   return new Promise((resolve) => {
     // Hard time-box: never let a stuck Image decode hang the caller (which gates the record store).
     let done = false;
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const finish = (v) => { if (!done) { done = true; resolve(v || { base64: null, marker: null }); } };
     setTimeout(() => finish(null), 1500);
     try {
       const img = new Image();
       img.onload = () => {
         try {
-          // Zoom OUT: pad generously around the element so the crop shows surrounding context,
-          // not a tight box. Floor of 160 CSS px, scaling up for larger targets.
-          const pad = Math.round(Math.max(160, (rect.width || 0) * 0.75, (rect.height || 0) * 0.75));
+          // Zoom to the target with SOME surrounding context (not the whole page, not a tight box).
+          const dpr = window.devicePixelRatio || 1;
+          const pad = Math.round(Math.max(120, (rect.width || 0) * 0.6, (rect.height || 0) * 0.6));
           const crop = (typeof gv2CropRect === 'function')
-            ? gv2CropRect(rect, window.devicePixelRatio || 1, img.naturalWidth, img.naturalHeight, pad)
+            ? gv2CropRect(rect, dpr, img.naturalWidth, img.naturalHeight, pad)
             : null;
           if (!crop) return finish(null);
           const canvas = document.createElement('canvas');
           canvas.width = crop.sw; canvas.height = crop.sh;
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.sw, crop.sh);
-          finish(canvas.toDataURL('image/jpeg', 0.8).replace(/^data:image\/\w+;base64,/, ''));
+          const marker = (typeof gv2RegionMarkerRect === 'function') ? gv2RegionMarkerRect(rect, crop, dpr) : null;
+          _gv2DrawMarkerOnCanvas(ctx, canvas, marker, markerNumber, color, fill);
+          const base = canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/\w+;base64,/, '');
+          finish({ base64: base, marker });
         } catch (e) { finish(null); }
       };
       img.onerror = () => finish(null);
       img.src = 'data:image/jpeg;base64,' + base64;
     } catch (e) { finish(null); }
   });
+}
+
+// Crop the SEPARATE visual-evidence region (the on-page proof that justifies the step, e.g. a
+// "Sort by: Price: Low to High" control) out of a fresh viewport screenshot, with a pink marker
+// baked in. Distinct from the action-target region (gv2CaptureRegion). Takes ONE non-scrolling
+// capture so it stays aligned to the evidence element's current rect; skips when the element is
+// missing or off-screen (the reason text is still surfaced without a shot). Best-effort — never throws.
+async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = null) {
+  const out = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null };
+  try {
+    // Resolve a CSS-px viewport rect from either the live element or a normalized {x,y,w,h} box.
+    let rect = null;
+    if (evidenceEl && evidenceEl.getBoundingClientRect && document.contains(evidenceEl)) {
+      const r0 = evidenceEl.getBoundingClientRect();
+      if (!(r0.width > 0) || !(r0.height > 0)) return out;
+      // Only crop when the element is actually within the current viewport (a fresh capture shows
+      // the viewport, so an off-screen rect would crop empty/wrong pixels).
+      const visible = r0.bottom > 0 && r0.right > 0 && r0.top < window.innerHeight && r0.left < window.innerWidth;
+      if (!visible) return out;
+      rect = { left: r0.left, top: r0.top, width: r0.width, height: r0.height };
+    } else if (normRect) {
+      rect = {
+        left: normRect.x * window.innerWidth,
+        top: normRect.y * window.innerHeight,
+        width: normRect.w * window.innerWidth,
+        height: normRect.h * window.innerHeight
+      };
+      if (!(rect.width > 0) || !(rect.height > 0)) return out;
+    } else {
+      return out;
+    }
+    let shot = null;
+    try { if (typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
+    if (!shot) return out;
+    if (typeof gv2TargetNormRect === 'function') {
+      out.visualEvidenceNormRect = gv2TargetNormRect(rect, window.innerWidth, window.innerHeight);
+    }
+    const cropped = await _gv2CropScreenshot(shot, rect, markerNumber, GV2_EVIDENCE_MARKER_COLOR, GV2_EVIDENCE_MARKER_FILL);
+    out.visualEvidenceShot = cropped?.base64 || null;
+    out.visualEvidenceMarker = cropped?.marker || null;
+  } catch (e) { /* best-effort */ }
+  return out;
 }
 
 async function gv2CaptureStepRecord(data) {
@@ -1915,7 +2088,16 @@ async function gv2CaptureStepRecord(data) {
     // into view, fresh screenshot, crop) so regionShot reflects the page BEFORE the action runs.
     let region = { targetRect: null, regionShot: null, regionDom: '', regionCaptureMode: 'legacy' };
     const alignedRegion = await _gv2ShouldUseAlignedRegionCapture(g);
-    try { region = await gv2CaptureRegion(beforeShot, { aligned: alignedRegion }); } catch (e) { /* best-effort */ }
+    try { region = await gv2CaptureRegion(beforeShot, { aligned: alignedRegion, markerNumber: data.resolvedIndex }); } catch (e) { /* best-effort */ }
+
+    // Separate visual-evidence region: the on-page proof that justifies this step (distinct SoM
+    // element resolved in gv2ProcessResponse). Only captured when the model supplied one (recap on).
+    // Skip for visual_highlight: that action already cropped this exact region as its answer image
+    // (gv2ProcessResponse), so re-capturing here would just double-hit the screenshot rate limit.
+    let evidence = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null };
+    if ((data.evidenceEl || data.evidenceRect) && data.action !== 'visual_highlight') {
+      try { evidence = await gv2CaptureEvidenceRegion(data.evidenceEl, data.evidenceIndex, data.evidenceRect); } catch (e) { /* best-effort */ }
+    }
 
     const record = {
       sessionId: g.sessionId,
@@ -1964,6 +2146,25 @@ async function gv2CaptureStepRecord(data) {
       regionShot: region.regionShot,
       regionDom: region.regionDom,
       regionCaptureMode: region.regionCaptureMode || (alignedRegion ? 'aligned' : 'legacy'),
+      // Visual Recap marker evidence: full pre-action shot aligned to the target, plus normalized
+      // marker rects for the full shot (targetNormRect) and the regionShot crop (regionMarker).
+      markedShot: region.markedShot || null,
+      targetNormRect: region.targetNormRect || null,
+      regionMarker: region.regionMarker || null,
+      // Full-viewport screenshot with numbered SoM markers baked in that was sent to the LLM (only
+      // present when Visual input is on). Surfaced in the rewind inspector.
+      somInputShot: g._lastVisualInputShot || null,
+      // Visual evidence: the SEPARATE on-page proof that justifies this step (pink-marked crop of a
+      // distinct SoM element, e.g. "Sort by: Price: Low to High"), plus its reason and resolved index.
+      visualEvidenceShot: evidence.visualEvidenceShot || null,
+      visualEvidenceNormRect: evidence.visualEvidenceNormRect || null,
+      visualEvidenceMarker: evidence.visualEvidenceMarker || null,
+      visualEvidenceText: data.visualEvidenceText || null,
+      visualEvidenceReason: data.visualEvidenceReason || null,
+      visualEvidenceIndex: data.evidenceIndex != null ? data.evidenceIndex : null,
+      // visual_highlight terminal answer: the cropped screenshot region shown to the user.
+      visualHighlightImage: data.visualHighlightImage || null,
+      visualHighlightCaption: data.visualHighlightCaption || null,
       predictedGoalState: g.predictedGoalState || null,
       g_goal_relevance_score: goalRelevance,
       tutorialMatch: data.tutorialMatch || null,
@@ -2099,6 +2300,7 @@ async function _handleStepByStepGuideV2(question) {
   const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   const captureEnabled = await _gv2IsCaptureEnabled();
   const autoMode = await _gv2IsAutoMode();
+  const recapOn = await _gv2IsVisualRecapOn();
 
   window._guidev2 = {
     active: true,
@@ -2109,6 +2311,7 @@ async function _handleStepByStepGuideV2(question) {
     sessionId,
     captureEnabled,
     autoMode,
+    _recapOn: recapOn,
     paused: false,
     lowConfidenceCount: 0,
     _mechKeys: [],
@@ -2170,11 +2373,12 @@ async function gv2GenerateNextStep() {
   // interactiveOnly=true: guide only needs clickable/typeable elements, not headings,
   // paragraphs, list items, etc. This prevents the LLM from picking a text label
   // that shares the same name as the actual interactive button.
+  const visualInputOn = await _gv2IsVisualInputOn();
   let pageIndex;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (_gv2IsStopped()) return null;
     if (_gv2IsPaused()) return { success: false, progressed: false, error: 'Guide paused' };
-    pageIndex = createPageIndex(5000, true);
+    pageIndex = createPageIndex(visualInputOn ? GV2_VISUAL_INPUT_MAX_MARKS : 5000, true);
     if (pageIndex.count > 5) break;
     console.log('[guidev2] Sparse DOM (', pageIndex.count, 'el), retrying...');
     await new Promise(r => setTimeout(r, 700));
@@ -2188,8 +2392,26 @@ async function gv2GenerateNextStep() {
   g._lastPageSig = curSig;
 
   const pageBg = getPageBackground();
-  if (typeof showSomIfEnabled === 'function') await showSomIfEnabled(pageIndex);
+  let visualInputShot = null;
+  if (visualInputOn) {
+    try {
+      if (typeof showSetOfMarks === 'function') showSetOfMarks(pageIndex);
+      await new Promise(r => setTimeout(r, 80));
+      if (typeof captureScreenshot === 'function') visualInputShot = await captureScreenshot();
+    } catch (e) {
+      visualInputShot = null;
+    } finally {
+      try { if (typeof cleanupSom === 'function') cleanupSom(); } catch (e) {}
+    }
+  } else if (typeof showSomIfEnabled === 'function') {
+    await showSomIfEnabled(pageIndex);
+  }
   if (_gv2IsStopped()) return null;
+
+  // Stash the exact SoM-marked screenshot sent to the LLM so gv2CaptureStepRecord can store it on
+  // the step record (surfaced in the rewind inspector). Cleared each step so a text-only step
+  // doesn't inherit a stale shot.
+  g._lastVisualInputShot = visualInputShot || null;
 
   const stepNumber = g.previousSteps.length + 1;
   console.log('[guidev2] Generating step', stepNumber, 'with', pageIndex.count, 'elements');
@@ -2282,9 +2504,13 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
 `;
   }
 
+  const recapOn = await _gv2IsVisualRecapOn();
   const systemPrompt = GUIDE_V2_PROMPT;
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
+VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}
+VISUAL EVIDENCE REQUESTED: ${recapOn ? 'yes — also return "visualEvidence" pointing to a DIFFERENT SoM marker (not the action target) that proves this action is correct, plus a one-sentence reason' : 'no — set "visualEvidence" to null'}
+VISUAL HIGHLIGHT AVAILABLE: ${visualInputShot ? 'yes — you MAY end the trajectory with action="visual_highlight" to answer a visual/informational goal by showing a screenshot region (put the region in "visualEvidence")' : 'no — do not use action="visual_highlight"'}
 
 === PAGE INDEX ===
 ${pageIndex.indexText}
@@ -2300,8 +2526,8 @@ Return JSON for Step ${stepNumber}`;
 
   try {
 
-    const response = await safeSendMessage({
-      action: 'callLLM',
+    const llmMsg = {
+      action: visualInputShot ? 'callLLMWithImages' : 'callLLM',
       systemPrompt: systemPrompt,
       messages: [{
         role: 'user',
@@ -2312,7 +2538,14 @@ Return JSON for Step ${stepNumber}`;
         step: stepNumber,
         url: window.location.href
       }
-    });
+    };
+    if (visualInputShot) {
+      llmMsg.images = [{ base64: visualInputShot, label: `Guide viewport with up to ${GV2_VISUAL_INPUT_MAX_MARKS} SoM markers` }];
+    }
+    let response = await safeSendMessage(llmMsg);
+    if (visualInputShot && response && response.error) {
+      response = await safeSendMessage({ ...llmMsg, action: 'callLLM', images: undefined });
+    }
 
     if (_gv2IsStopped()) return null;
     if (_gv2IsPaused()) return { success: false, progressed: false, error: 'Guide paused' };
@@ -2479,26 +2712,42 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       return _gv2StopForMaxSteps(g);
     }
 
-    // LLM self-reported confidence: combine the model's grounded/loop/progress signals via the
-    // selected formula (full = G·(1−λ_L·L)·(1+λ_P·P), reduced = G·(1−λ_L·L)). Falls back to the
-    // legacy self-reported confidence when the model didn't emit a grounded score.
-    const formula = await _gv2ConfidenceFormula();
-    const conf = (typeof gv2ComputeConfidence === 'function')
-      ? gv2ComputeConfidence({ grounded: step.grounded, loop: step.loop, progress: step.progress }, formula)
-      : { confidence: null, grounded: null, loop: null, progress: null, formula };
-    const llmConfidence = conf.confidence != null ? conf.confidence
-      : ((typeof step.confidence === 'number' && isFinite(step.confidence))
-          ? Math.max(0, Math.min(1, step.confidence)) : null);
-
-    const action = String(step.action || (step.isLastStep ? 'done' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
+    const action = (typeof gv2NormalizeAction === 'function')
+      ? gv2NormalizeAction(step.action, step.isLastStep)
+      : String(step.action || (step.isLastStep ? 'done' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
+    const isFind = action === 'find';
+    const isVisualHighlight = action === 'visual_highlight';
+    // find and visual_highlight are ALWAYS the final answer to the user — never mid-journey. Coerce
+    // isLastStep so the terminal branch (recap + state clear) runs and the trajectory can't continue.
+    if (isFind || isVisualHighlight) step.isLastStep = true;
     const hasText = !!(step.element?.text && String(step.element.text).trim());
     const hasIndex = step.element?.index != null && step.element?.index !== '';
-    const hasTarget = !step.isLastStep && action !== 'done' && (hasIndex || hasText);
+    // find highlights whatever the reader pass cites, not a single planner-chosen element.
+    const hasTarget = (typeof gv2StepHasTarget === 'function')
+      ? gv2StepHasTarget({ action, isLastStep: step.isLastStep, element: step.element })
+      : (!isFind && !step.isLastStep && action !== 'done' && (hasIndex || hasText));
     const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
     const idxToUse = hasTarget
       ? (gv2PickTargetIndex(step.element?.text, step.element?.index) ?? step.element?.index ?? null)
       : null;
     const resolvedEl = idxToUse != null ? (window._pageguideIndex?.[idxToUse] || null) : null;
+
+    // Visual evidence: a SECOND, distinct SoM element the model points to as justification for the
+    // action (e.g. a "Sort by: Price: Low to High" control). Resolved the same text-first way as the
+    // action target, but must be a DIFFERENT element to count as evidence.
+    const visualEvidence = (typeof gv2NormalizeVisualEvidence === 'function')
+      ? gv2NormalizeVisualEvidence(step.visualEvidence) : null;
+    let evidenceEl = null, evidenceIndex = null;
+    if (visualEvidence && (visualEvidence.index != null || visualEvidence.text)) {
+      evidenceIndex = (gv2PickTargetIndex(visualEvidence.text, visualEvidence.index) ?? visualEvidence.index ?? null);
+      const cand = evidenceIndex != null ? (window._pageguideIndex?.[evidenceIndex] || null) : null;
+      if (cand && cand !== resolvedEl) { evidenceEl = cand; }
+      else { evidenceIndex = null; }
+    }
+    // Bounding-box fallback: when no distinct SoM element resolved, use the model's normalized rect
+    // (fractions of the screenshot) to crop the evidence region directly.
+    const evidenceRect = (!evidenceEl && visualEvidence?.rect) ? visualEvidence.rect : null;
+
     const domElementText = _gv2ElementAccessibleText(resolvedEl);
     const llmElementText = String(step.element?.text || '').trim();
     const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, step.element?.text, hasTarget);
@@ -2515,11 +2764,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       : { confidence: null, grounding: null, loop: null, loopMatches: 0 };
     if (hasTarget && currentKey) priorKeys.push(currentKey);
 
-    // The ACTIVE confidence — what drives the timeline tier, the 3-strikes pause, and the red
-    // highlight — is chosen by the source toggle: 'mechanical' uses the rule-based score, otherwise
-    // the LLM self-report (default). Both are stored on the record regardless (side-by-side).
-    const confSource = await _gv2ConfidenceSource();
-    const confidence = (confSource === 'mechanical') ? mech.confidence : llmConfidence;
+    // Active confidence is always rule-based No-LLM: grounding × loop penalty.
+    const confidence = mech.confidence;
     const rawPlanStep = Number(step.completedPlanStep);
     const planStep = step.step; // Fallback for legacy step tracking
     if (Number.isFinite(rawPlanStep) && rawPlanStep >= 1) {
@@ -2569,11 +2815,38 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     if (typeof cleanupSom === 'function') cleanupSom();
     if (_gv2IsStopped()) return null;
 
+    // find: read the page and highlight the supporting passages. Runs before
+    // _gv2HideIndicator() below so the on-page pill covers this second LLM call.
+    let findResult = null;
+    if (isFind) {
+      _gv2ShowIndicator('Reading page…');
+      findResult = await gv2RunFind(step.findQuery);
+      if (_gv2IsStopped()) return null;
+    }
+
+    // visual_highlight: crop the model's evidence region (SoM index or rect) from a clean capture
+    // (SoM markers already cleaned up above) and return it as the answer image. No second LLM pass.
+    let visualHighlightResult = null;
+    if (isVisualHighlight) {
+      _gv2ShowIndicator('Capturing…');
+      const caption = (visualEvidence?.reason || step.instruction || '').trim();
+      try {
+        const cap = await gv2CaptureEvidenceRegion(evidenceEl, evidenceIndex, evidenceRect);
+        visualHighlightResult = { image: cap?.visualEvidenceShot || null, caption };
+      } catch (e) { visualHighlightResult = { image: null, caption }; }
+      if (_gv2IsStopped()) return null;
+    }
+
     const isLast = !!step.isLastStep;
     g._activeStepNumber = Number(step.step) || (g.previousSteps.length + 1);
-    g.previousSteps.push(`Step ${step.step}: ${step.instruction}${isLast ? ' ✓' : ''}`);
+    // Mark find steps so a later step doesn't loop and re-issue find on the same page.
+    const stepSuffix = isLast ? ' ✓' : (isFind ? ' [found]' : '');
+    g.previousSteps.push(`Step ${step.step}: ${step.instruction}${stepSuffix}`);
 
-    // Simple dispatch: click | type | clear_text | done. (`action` computed above for G_ground.)
+    // Simple dispatch: click | type | clear_text | find | done. (`action` computed above for G_ground.)
+    // Pass the normalized action through so gv2AssessRisk sees 'find'/'clear_text'; it also
+    // mutates step.riskReason, which the pause messages below read, so hand it the real step.
+    step.action = action;
     const risk = (typeof gv2AssessRisk === 'function') ? gv2AssessRisk(step) : 'low';
     const isHighRisk = risk === 'high';
     g._lastAction = action;
@@ -2582,14 +2855,23 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Remember the live step so the panel "Next →" (manual mode) can perform it and advance.
     g._currentStep = { action, typeText: step.typeText, value: step.value, instruction: step.instruction, highRisk: isHighRisk };
 
-    // Pause conditions: 3 low-confidence actions, high risk (JSON), or confirmation needed (JSON)
-    const isHighRiskJson = step.risk === 'high';
-    const needsConfirmation = step.confirmation === 'needed';
+    // Pause/stop-action conditions: 3 low-confidence actions, loop score over threshold,
+    // high risk (JSON), or confirmation needed (JSON). When triggered, the proposed step is
+    // captured for review but not executed.
+    const isHighRiskJson = !isFind && !isVisualHighlight && step.risk === 'high';
+    const needsConfirmation = !isFind && !isVisualHighlight && step.confirmation === 'needed';
+    const activeLoopScore = _gv2MaxFiniteScore(mech.loop);
+    const loopStop = activeLoopScore !== null && activeLoopScore >= GV2_LOOP_STOP_THRESHOLD;
     const confidenceThreshold = await _gv2ConfidenceThreshold();
     if (confidence !== null && confidence < confidenceThreshold) {
       g.lowConfidenceCount = (g.lowConfidenceCount || 0) + 1;
     }
-    const willPause = (g.lowConfidenceCount >= 3) || isHighRiskJson || needsConfirmation;
+    // A find step never pauses for low-confidence/risk gates, but loop detection still stops it
+    // from driving another autonomous step.
+    const willPause = loopStop || (!isFind && !isVisualHighlight && ((g.lowConfidenceCount >= 3) || isHighRiskJson || needsConfirmation));
+    const loopPauseMessage = loopStop
+      ? `Page Guide paused: loop score ${activeLoopScore.toFixed(2)} is above the ${GV2_LOOP_STOP_THRESHOLD.toFixed(1)} threshold. Review and resume when ready.`
+      : '';
 
     // Gate 1 (Risk) + hand-back override: the agent auto-performs only in Auto mode, for
     // low-risk actions, and not when a prior gate handed control back for this step or we need to pause.
@@ -2598,13 +2880,20 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const autoPerform = g.autoMode && !isHighRisk && !forcedManual && !willPause;
     let pauseAfterCaptureMessage = '';
 
-    if (isLast || action === 'done') {
+    if (isFind) {
+      // Read-only: the reader pass already ran. No pendingResume (nothing navigates) and
+      // deliberately no click listener (there is nothing for the user to click).
+      if (!isLast) await _gv2SetState(false);
+      if (loopStop && !isLast) pauseAfterCaptureMessage = loopPauseMessage;
+    } else if (isLast || action === 'done') {
       // Clear state after capture runs at end of function
     } else if (action === 'type' || action === 'clear_text') {
       await _gv2SetState(false);
       if (!autoPerform) {
         if (willPause) {
-          if (needsConfirmation) {
+          if (loopStop) {
+            pauseAfterCaptureMessage = loopPauseMessage;
+          } else if (needsConfirmation) {
             pauseAfterCaptureMessage = 'Confirmation needed. Please verify and press Resume.';
           } else if (isHighRiskJson) {
             pauseAfterCaptureMessage = 'This step is high risk. Please perform it yourself, then press Resume.';
@@ -2625,7 +2914,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
         await _gv2SetState(true);
         if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
         if (willPause) {
-          if (needsConfirmation) {
+          if (loopStop) {
+            pauseAfterCaptureMessage = loopPauseMessage;
+          } else if (needsConfirmation) {
             pauseAfterCaptureMessage = 'Confirmation needed. Please verify and press Resume.';
           } else if (isHighRiskJson) {
             pauseAfterCaptureMessage = 'This step is high risk. Please perform it yourself, then press Resume.';
@@ -2649,11 +2940,10 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       completedPlanStep: step.completedPlanStep,
       completedPlanStepReason: step.completedPlanStepReason,
       confidence,
-      grounded: conf.grounded,
-      loop: conf.loop,
-      progress: conf.progress,
-      confidenceFormula: conf.formula,
-      // Mechanical ("no-LLM") confidence stored side-by-side with the LLM self-report.
+      grounded: null,
+      loop: null,
+      progress: null,
+      confidenceFormula: null,
       mechConfidence: mech.confidence,
       mechGrounding: mech.grounding,
       elementStepSimilarity,
@@ -2663,9 +2953,14 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       domElementText,
       llmElementText,
       resolvedIndex: idxToUse,
+      evidenceEl,
+      evidenceIndex,
+      evidenceRect,
+      visualEvidenceText: visualEvidence?.text || null,
+      visualEvidenceReason: visualEvidence?.reason || null,
       planTotal,
       planCompleted,
-      confidenceSource: confSource,
+      confidenceSource: 'mechanical',
       confirmation: step.confirmation || null,
       llmStep: step.llmStep,
       expectedStep: step.expectedStep,
@@ -2674,7 +2969,16 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       action,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,
       isLastStep: isLast,
-      target: { text: step.element?.text || null, domText: domElementText || null, llmIndex: step.element?.index ?? null, resolvedIndex: idxToUse },
+      isFind,
+      findQuery: isFind ? (step.findQuery || null) : null,
+      findAnswer: isFind ? (findResult?.answer || null) : null,
+      findNotOnPage: isFind ? !!findResult?.notOnPage : false,
+      findHighlightCount: isFind ? (findResult?.highlightCount || 0) : 0,
+      visualHighlightImage: isVisualHighlight ? (visualHighlightResult?.image || null) : null,
+      visualHighlightCaption: isVisualHighlight ? (visualHighlightResult?.caption || null) : null,
+      target: (isFind || isVisualHighlight)
+        ? { text: null, domText: null, llmIndex: null, resolvedIndex: null }
+        : { text: step.element?.text || null, domText: domElementText || null, llmIndex: step.element?.index ?? null, resolvedIndex: idxToUse },
       rawLlmJson: content,
       systemPrompt,
       userPrompt,
@@ -2687,7 +2991,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     });
 
     // Auto-perform only after pre-action capture completes (regionShot + before-shot are stored).
-    if (autoPerform && !isLast && action !== 'done') {
+    if (autoPerform && !isLast && action !== 'done' && !isFind) {
       if (action !== 'type') {
         await _gv2SetState(true);
         if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
@@ -2695,27 +2999,44 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       _gv2ScheduleAutoPerformAfterCapture(g, step, action);
     }
 
+    // A non-terminal find performs no DOM action — just advance the loop in Auto mode.
+    if (isFind && autoPerform && !isLast) {
+      _gv2ScheduleAutoPerformAfterCapture(g, step, 'find');
+    }
+
     if (pauseAfterCaptureMessage && !isLast && action !== 'done') {
       await gv2PauseGuide(pauseAfterCaptureMessage);
     }
 
+    // On the terminal step, synthesize the visual recap BEFORE clearing state (which wipes
+    // g.previousSteps / g.guidePlan). Guarded so a recap failure never breaks task completion.
+    let recap = null;
     if (isLast || action === 'done') {
+      try { recap = await _gv2BuildRecap(g); } catch (e) { recap = null; }
       _gv2ClearState();
     }
 
     return {
       success: true,
-      answer: step.instruction,
+      answer: isFind ? (findResult?.answer || step.instruction)
+        : (isVisualHighlight ? (visualHighlightResult?.caption || step.instruction) : step.instruction),
       step: step.step,
       isLastStep: isLast,
-      targetText: step.element?.text || null,
+      recap,
+      targetText: (isFind || isVisualHighlight) ? null : (step.element?.text || null),
       action,
       confidence,
       planStep,
-      highlightCount,
-      hasHighlights: highlightCount > 0,
+      highlightCount: isFind ? (findResult?.highlightCount || 0) : highlightCount,
+      hasHighlights: isFind ? !!findResult?.hasHighlights : (highlightCount > 0),
       autoMode: !!g.autoMode,
-      isGuide: true
+      isGuide: true,
+      isFind,
+      findAnswer: isFind ? (findResult?.answer || '') : null,
+      findNotOnPage: isFind ? !!findResult?.notOnPage : false,
+      isVisualHighlight,
+      visualHighlightImage: isVisualHighlight ? (visualHighlightResult?.image || null) : null,
+      visualHighlightCaption: isVisualHighlight ? (visualHighlightResult?.caption || null) : null
     };
 
   } catch (e) {
@@ -2723,6 +3044,312 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     _gv2HideIndicator();
     if (typeof cleanupSom === 'function') cleanupSom();
     return { success: false, error: e.message || 'Could not parse step JSON' };
+  }
+}
+
+async function _gv2IsVisionEnabled() {
+  try {
+    const r = await chrome.storage.sync.get(['visionEnabled']);
+    return r.visionEnabled !== false; // default ON
+  } catch (e) {
+    return true;
+  }
+}
+
+// Final-State vision verdict: one extra LLM pass over a fresh screenshot of the final page, asking
+// whether the task completed/failed and why, plus bounding-box annotations to draw on the shot.
+// `snap` is a plain snapshot { sessionId, question, steps, finalStep } so this works after the live
+// session is cleared (failure path). `outcome` is a hint ('done' | 'stopped'). Never throws;
+// returns { verdict, reason, annotations, shot, step } or null. Also persists the prompt/response
+// + verdict onto the final step's record for the inspector.
+async function _gv2BuildFinalVerdictFromSnapshot(snap, outcome) {
+  try {
+    if (!snap || !snap.sessionId) return null;
+    const steps = Array.isArray(snap.steps) ? snap.steps : [];
+    const finalStep = Number.isFinite(snap.finalStep) ? snap.finalStep : null;
+
+    let shot = null;
+    try { if (typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) {}
+    let initialRecord = null;
+    try {
+      if (typeof rewindGetRecord === 'function') initialRecord = await rewindGetRecord(snap.sessionId, 0);
+    } catch (e) { initialRecord = null; }
+    const initialShot = initialRecord?.screenshotBefore || initialRecord?.screenshot || null;
+
+    const useVision = shot && (await _gv2IsVisionEnabled());
+    const systemPrompt = `You verify whether a web task was completed, using INITIAL and FINAL screenshots when available.
+Reply with ONLY JSON:
+{"verdict":"completed"|"failed"|"unclear",
+ "reason":"one or two sentences citing what changed or did not change between the initial and final screenshots",
+ "annotations":[{"x":0..1,"y":0..1,"w":0..1,"h":0..1,"label":"short evidence label"}]}
+- Coordinates are fractions of the FINAL image (x,y = top-left of the box).
+- Add 1-4 annotations boxing the final-state visual evidence (the changed UI / confirmation, or what is missing if failed).
+- If you cannot see screenshots, set annotations to [] and judge from the steps.`;
+    const userPrompt = `USER GOAL: ${snap.question || ''}
+OUTCOME HINT: ${outcome === 'stopped' ? 'the run was stopped early (hit the step cap)' : 'the agent reported it finished'}
+IMAGES PROVIDED:
+- Initial state before the guide: ${initialShot ? 'yes' : 'no'}
+- Final state after the guide: ${shot ? 'yes' : 'no'}
+
+STEPS TAKEN:
+${steps.length ? steps.join('\n') : '(none)'}
+
+Compare the INITIAL and FINAL states, then return the verdict JSON.`;
+
+    let responseText = '';
+    const images = [];
+    if (useVision && initialShot) images.push({ base64: initialShot, label: 'Initial state before guide' });
+    if (useVision && shot) images.push({ base64: shot, label: 'Final state after guide' });
+    try {
+      const msg = {
+        action: images.length > 1 ? 'callLLMWithImages' : 'callLLM',
+        systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+        metadata: { mode: 'guide', step: 'final_verify', url: window.location.href }
+      };
+      if (images.length > 1) msg.images = images;
+      else if (useVision) msg.imageBase64 = shot;
+      let response = await safeSendMessage(msg);
+      // No vision-capability check exists — if the image made the call fail, retry text-only.
+      if (useVision && response && response.error) {
+        response = await safeSendMessage({ ...msg, action: 'callLLM', imageBase64: undefined, images: undefined });
+      }
+      responseText = (response && response.content) ? String(response.content) : '';
+    } catch (e) {
+      console.warn('[guidev2] final verdict LLM failed:', e);
+    }
+
+    const raw = (responseText && typeof gv2ExtractJsonObject === 'function') ? gv2ExtractJsonObject(responseText) : null;
+    const norm = (typeof gv2NormalizeFinalVerdict === 'function')
+      ? gv2NormalizeFinalVerdict(raw)
+      : { verdict: 'unclear', reason: '', annotations: [] };
+    // On a stopped run with no clear signal, prefer 'failed' over 'unclear'.
+    if (outcome === 'stopped' && norm.verdict === 'unclear') norm.verdict = 'failed';
+
+    if (typeof rewindPatchRecord === 'function' && Number.isFinite(finalStep)) {
+      try {
+        // Store text/verdict first. Full screenshots are attached best-effort afterwards so a
+        // large image payload cannot prevent the inspector from showing the prompt/response.
+        await rewindPatchRecord(snap.sessionId, finalStep, {
+          finalVerifySystemPrompt: systemPrompt,
+          finalVerifyUserPrompt: userPrompt,
+          finalVerifyResponse: responseText,
+          recapSystemPrompt: systemPrompt,
+          recapUserPrompt: userPrompt,
+          recapResponse: responseText,
+          finalVerdict: norm.verdict,
+          finalReason: norm.reason,
+          finalAnnotations: norm.annotations
+        });
+        try {
+          await rewindPatchRecord(snap.sessionId, finalStep, {
+            finalShot: shot || null,
+            recapImages: images
+          });
+        } catch (e) {
+          console.warn('[guidev2] final verification screenshots were not stored:', e);
+        }
+      } catch (e) { /* non-fatal */ }
+    }
+
+    return { verdict: norm.verdict, reason: norm.reason, annotations: norm.annotations, shot: shot || null, step: finalStep };
+  } catch (e) {
+    console.warn('[guidev2] _gv2BuildFinalVerdictFromSnapshot error:', e);
+    return null;
+  }
+}
+
+// Snapshot the live session and build the verdict (used by the completed/recap path).
+async function _gv2BuildFinalVerdict(g, outcome) {
+  if (!(await _gv2IsVisualRecapOn())) return null;
+  const steps = Array.isArray(g?.previousSteps) ? g.previousSteps : [];
+  const validSteps = steps
+    .map(s => { const m = /^Step\s+(\d+)/.exec(String(s || '').trim()); return m ? Number(m[1]) : null; })
+    .filter(n => Number.isFinite(n) && n > 0);
+  const finalStep = validSteps.length ? Math.max.apply(null, validSteps) : null;
+  return _gv2BuildFinalVerdictFromSnapshot(
+    { sessionId: g?.sessionId, question: g?.question, steps, finalStep }, outcome
+  );
+}
+
+// Build an end-of-task recap: an LLM-synthesized summary plus milestone sentences, each pinned
+// to a real completed step number so the panel can attach that step's screenshot as visual
+// evidence. Never throws — any failure yields a deterministic recap from the plan/step list.
+// Returns null when Visual Recap mode is off or there are no completed steps to recap.
+async function _gv2BuildRecap(g) {
+  try {
+    if (!(await _gv2IsVisualRecapOn())) return null;
+    const steps = Array.isArray(g?.previousSteps) ? g.previousSteps : [];
+    // Completed step numbers parsed from the "Step N: ..." trajectory strings.
+    const validSteps = steps
+      .map(s => { const m = /^Step\s+(\d+)/.exec(String(s || '').trim()); return m ? Number(m[1]) : null; })
+      .filter(n => Number.isFinite(n) && n > 0);
+    if (validSteps.length === 0) return null;
+    const plan = Array.isArray(g?.guidePlan) ? g.guidePlan : [];
+    const finalStep = Math.max.apply(null, validSteps);
+    let stepRecords = [];
+    let initialRecord = null;
+    try {
+      if (g?.sessionId && typeof rewindGetIndex === 'function') {
+        const idx = await rewindGetIndex(g.sessionId);
+        stepRecords = Array.isArray(idx?.steps) ? idx.steps.filter(m => Number(m?.step) > 0) : [];
+      }
+      if (g?.sessionId && typeof rewindGetRecord === 'function') {
+        initialRecord = await rewindGetRecord(g.sessionId, 0);
+      }
+    } catch (e) { stepRecords = []; }
+
+    let finalShot = null;
+    try { if (typeof captureScreenshot === 'function') finalShot = await captureScreenshot(); } catch (e) {}
+    const initialShot = initialRecord?.screenshotBefore || initialRecord?.screenshot || null;
+
+    const ctx = {
+      validSteps,
+      plan,
+      planTitle: g?.guideTitle || '',
+      steps,
+      stepRecords,
+      finalVerdict: null,
+      finalReason: ''
+    };
+
+    let raw = null;
+    let recapSystemPrompt = '', recapUserPrompt = '', recapResponse = '';
+    let recapImages = [];
+    try {
+      const planText = plan.length ? plan.map(p => `- ${p.goal || p.text || ''}`).join('\n') : '(no plan)';
+      const scoreText = stepRecords.length ? stepRecords.map(r => {
+        const pct = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : 'null';
+        return `Step ${r.step}: confidence=${pct(r.confidence)}, grounded=${pct(r.grounded)}, loop=${pct(r.loop)}, progress=${pct(r.progress)}, mechConfidence=${pct(r.mechConfidence)}, mechGrounding=${pct(r.mechGrounding)}, mechLoop=${pct(r.mechLoop)}, action=${r.action || ''}, instruction=${r.instruction || ''}`;
+      }).join('\n') : '(no confidence records)';
+      const stepEvidenceText = stepRecords.length ? stepRecords.map(r => {
+        const hasBefore = !!(r.screenshotBefore || r.screenshot || r.markedShot || r.regionShot);
+        const hasAfter = !!r.screenshotAfter;
+        const target = r.target?.text || r.domElementText || r.llmElementText || '';
+        // The model's own per-step justification (why the action is correct), when captured.
+        const evidence = r.visualEvidenceReason ? `, evidence="${r.visualEvidenceReason}"` : '';
+        return `Step ${r.step}: before=${hasBefore ? 'yes' : 'no'}, after=${hasAfter ? 'yes' : 'no'}, target="${target}", action=${r.action || ''}${evidence}, instruction=${r.instruction || ''}`;
+      }).join('\n') : '(no step visual evidence records)';
+      recapSystemPrompt = `You evaluate and summarize a step-by-step web guide in ONE pass. You are given INITIAL and FINAL screenshots in this same request when vision is available. Reply with ONLY JSON:
+{"verdict":"completed"|"failed"|"unclear",
+ "reason":"one or two sentences citing the initial/final screenshots",
+ "annotations":[{"x":0..1,"y":0..1,"w":0..1,"h":0..1,"label":"short final-state evidence label"}],
+ "summary": "If verdict is completed, start exactly with 'I have completed the task'. If verdict is failed or unclear, start exactly with 'I could not complete the task'. Then summarize what the guide did and, if not completed, why.",
+ "stepEvaluations": [{"step": <completed step number>, "status": "correct"|"wrong"|"unclear", "goalRelated": true|false, "goalRelatedReason": "brief reason whether this step helped the user goal", "text": "short summary of what this step did", "phrase": "<key noun phrase copied verbatim from text>", "errorLabel": "misgrounded"|"loop"|"low-confidence"|"risky"|"incomplete"|"wrong-action"|"other", "reason": "why wrong or unclear"}]}
+Rules:
+- First compare the INITIAL screenshot to the FINAL screenshot and evaluate whether the user goal is completed. Use screenshots as primary evidence; use trajectory, confidence signals, and per-step visual-evidence records to explain what happened.
+- "annotations" MUST be 1-4 bounding boxes over the FINAL screenshot only, showing evidence for completion or failure/missing state. Coordinates are fractions of the final image (x,y top-left).
+- If the screenshot proves the user goal is done, set verdict="completed" and summary starts with "I have completed the task".
+- If the screenshot does not prove the user goal is done, set verdict="failed" or "unclear" and summary starts with "I could not complete the task".
+- Use 2 to 6 stepEvaluations, each a concrete step the guide actually took.
+- Prefer steps that have visualEvidence=yes. The UI will attach that step's checkpoint screenshots as evidence.
+- For every stepEvaluation, decide whether that step is related to the USER GOAL. Set goalRelated=true only when the step plausibly helped accomplish the user goal; otherwise set goalRelated=false and explain briefly in goalRelatedReason.
+- "phrase" MUST be a short substring copied exactly from that stepEvaluation's "text" (the key thing acted on, e.g. "language settings" or "Spanish"). It becomes a hover-link to the screenshot.
+- "step" MUST be one of the completed step numbers listed below. Do not invent steps.
+- For each wrong step, set status="wrong" and include errorLabel and reason.
+- Use the confidence scores to choose labels: high loop/mechLoop suggests "loop"; low grounded/mechGrounding suggests "misgrounded"; low confidence without a clear cause suggests "low-confidence".
+- For correct steps, omit errorLabel or leave it empty.
+- Keep each "text" under 100 characters. No markdown.`;
+      recapUserPrompt = `USER GOAL: ${g?.question || ''}
+IMAGES PROVIDED:
+- Initial state before the guide: ${initialShot ? 'yes' : 'no'}
+- Final state after the guide: ${finalShot ? 'yes' : 'no'}
+
+${plan.length ? `PLAN MILESTONES:\n${planText}\n\n` : ''}COMPLETED STEPS (step number: what was done):
+${steps.join('\n')}
+
+CONFIDENCE SIGNALS BY STEP:
+${scoreText}
+
+VISUAL EVIDENCE BY STEP:
+${stepEvidenceText}
+
+Return the recap JSON.`;
+      const useVision = await _gv2IsVisionEnabled();
+      recapImages = [];
+      if (useVision && initialShot) recapImages.push({ base64: initialShot, label: 'Initial state before guide' });
+      if (useVision && finalShot) recapImages.push({ base64: finalShot, label: 'Final state after guide' });
+      const recapMsg = {
+        action: recapImages.length ? 'callLLMWithImages' : 'callLLM',
+        systemPrompt: recapSystemPrompt,
+        messages: [{ role: 'user', content: recapUserPrompt }],
+        metadata: { mode: 'guide', step: 'recap', url: window.location.href }
+      };
+      if (recapImages.length) recapMsg.images = recapImages;
+      let response = await safeSendMessage(recapMsg);
+      // If the recap multi-image call fails for model/provider reasons, retry text-only.
+      if (recapImages.length && response && response.error) {
+        response = await safeSendMessage({ ...recapMsg, action: 'callLLM', images: undefined });
+      }
+      recapResponse = (response && response.content) ? String(response.content) : '';
+      if (recapResponse && typeof gv2ExtractJsonObject === 'function') {
+        raw = gv2ExtractJsonObject(recapResponse);
+      }
+    } catch (e) {
+      console.warn('[guidev2] recap LLM failed:', e);
+    }
+
+    const final = (typeof gv2NormalizeFinalVerdict === 'function')
+      ? gv2NormalizeFinalVerdict(raw)
+      : { verdict: raw?.verdict || 'unclear', reason: raw?.reason || '', annotations: [] };
+    ctx.finalVerdict = final.verdict;
+    ctx.finalReason = final.reason;
+
+    const normalized = (typeof gv2NormalizeRecap === 'function')
+      ? gv2NormalizeRecap(raw, ctx)
+      : { summary: final?.verdict === 'completed' ? 'I have completed the task.' : 'I could not complete the task.', milestones: [] };
+    if (!normalized || !normalized.summary) return null;
+    const milestones = Array.isArray(normalized.milestones) ? normalized.milestones : [];
+
+    // Persist the recap prompt/response onto the final step's record so the step inspector can
+    // show a "Summarization" section (what we sent to the LLM and what it replied).
+    if (typeof rewindPatchRecord === 'function' && Number.isFinite(finalStep)) {
+      try {
+        // Store text/verdict first. Full screenshots can make the record large; they are attached
+        // in a second best-effort patch so a quota/size failure cannot erase the prompt/response.
+        await rewindPatchRecord(g.sessionId, finalStep, {
+          recapSystemPrompt,
+          recapUserPrompt,
+          recapResponse,
+          finalVerifySystemPrompt: recapSystemPrompt,
+          finalVerifyUserPrompt: recapUserPrompt,
+          finalVerifyResponse: recapResponse,
+          finalVerdict: final.verdict,
+          finalReason: final.reason,
+          finalAnnotations: final.annotations
+        });
+        try {
+          await rewindPatchRecord(g.sessionId, finalStep, {
+            finalShot: finalShot || null,
+            recapImages
+          });
+        } catch (e) {
+          console.warn('[guidev2] recap screenshots were not stored:', e);
+        }
+      } catch (e) { /* non-fatal */ }
+    }
+
+    // Per-step visual-evidence justifications keyed by step, so the panel can merge each step's
+    // reason (as a clickable link to its evidence crop) into the matching milestone row.
+    const evidenceByStep = {};
+    for (const r of stepRecords) {
+      if (r && r.step != null && (r.visualEvidenceReason || r.hasVisualEvidence)) {
+        evidenceByStep[r.step] = { reason: r.visualEvidenceReason || '', hasShot: !!r.hasVisualEvidence };
+      }
+    }
+
+    return {
+      summary: normalized.summary,
+      milestones,
+      sessionId: g?.sessionId,
+      finalStep: Number.isFinite(finalStep) ? finalStep : null,
+      final: { verdict: final.verdict, reason: final.reason, annotations: final.annotations, shot: finalShot || null, step: finalStep },
+      steps: milestones.map(m => m.step),
+      evidenceByStep
+    };
+  } catch (e) {
+    console.warn('[guidev2] _gv2BuildRecap error:', e);
+    return null;
   }
 }
 
@@ -2919,6 +3546,14 @@ async function _gv2WaitForNavOrSettle(startUrl) {
 function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
   if (!g || !step) return;
   _gv2ClearActionTimers();
+  if (action === 'find') {
+    // find already ran (read-only, nothing to perform) — just advance the loop.
+    g._autoClickTimer = setTimeout(() => {
+      g._autoClickTimer = null;
+      if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
+    }, 900);
+    return;
+  }
   if (action === 'type' || action === 'clear_text') {
     g._autoTypeTimer = setTimeout(() => {
       g._autoTypeTimer = null;
@@ -2935,6 +3570,61 @@ function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
   }, 900);
 }
 if (typeof window !== 'undefined') window._gv2ScheduleAutoPerformAfterCapture = _gv2ScheduleAutoPerformAfterCapture;
+
+// ===== FIND (reader pass) =====
+
+/**
+ * Second LLM pass for action=find. The planner that chose `find` only ever saw the
+ * interactive page index, so it cannot know what the page actually says. This pass reads
+ * the full text, answers the question with [N:"text"] citations, and highlights them.
+ *
+ * Reuses the Ask flow wholesale: PROMPTS.ANSWER_AND_HIGHLIGHT + applyHighlightsFromCitations.
+ *
+ * @param {string} findQuery - the question to answer (falls back to the user's goal)
+ * @returns {Promise<{answer:string, notOnPage:boolean, highlightCount:number, hasHighlights:boolean}>}
+ */
+async function gv2RunFind(findQuery) {
+  const question = String(findQuery || window._guidev2?.question || '').trim();
+  const pageContent = (typeof getVisibleText === 'function') ? getVisibleText(50000) : '';
+
+  // A CONTENT index (interactiveOnly=false) so citations can land on paragraphs and
+  // headings, not just buttons. NOTE: this overwrites window._pageguideIndex. That is
+  // fine for the usual terminal find; after a mid-journey find the next step rebuilds
+  // an interactive-only index, so citation chips from this answer go stale (their
+  // highlights are cleared by that step anyway).
+  const pageIndex = createPageIndex(5000, false);
+
+  const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+    .replace('{pageContent}', pageContent || '(No text content found)')
+    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)');
+
+  const response = await safeSendMessage({
+    action: 'callLLM',
+    systemPrompt,
+    messages: [{ role: 'user', content: question }],
+    metadata: { mode: 'guide_find', url: window.location.href }
+  });
+
+  if (response?.error) {
+    console.warn('[guidev2] find: LLM error', response.error);
+    return { answer: '', notOnPage: false, highlightCount: 0, hasHighlights: false };
+  }
+
+  const answer = response?.content?.trim() || '';
+  const { notOnPage } = gv2ParseFindResponse(answer);
+
+  let highlightCount = 0;
+  if (answer && !notOnPage && typeof applyHighlightsFromCitations === 'function') {
+    highlightCount = applyHighlightsFromCitations(answer);
+    if (highlightCount > 0 && typeof scrollToHighlight === 'function') {
+      setTimeout(() => scrollToHighlight(0), 300);
+    }
+  }
+
+  console.log('[guidev2] find:', notOnPage ? 'not on page' : `${highlightCount} passage(s) highlighted`);
+  return { answer, notOnPage, highlightCount, hasHighlights: highlightCount > 0 };
+}
+if (typeof window !== 'undefined') window.gv2RunFind = gv2RunFind;
 
 // ===== AUTO FORM EDITING =====
 
@@ -3122,6 +3812,15 @@ window.gv2NextStep = async function (options = {}) {
   if (_gv2IsPaused()) {
     _gv2HidePanelTyping();
     return { success: false, progressed: false, error: 'Guide paused' };
+  }
+
+  // find already did its work (read + highlight) in gv2ProcessResponse — there is nothing to
+  // click. Handled before the click-resolution path below because find's highlights carry
+  // data-pageguide-styled, which that path would otherwise click as a fallback target.
+  if (g?.active && cur && cur.action === 'find') {
+    _gv2RemoveClickListeners();
+    _guidev2WaitingForClick = false;
+    return continueGuide();
   }
 
   if (!_guidev2WaitingForClick) {

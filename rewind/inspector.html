@@ -131,6 +131,12 @@
     pre { white-space: pre-wrap; word-break: break-word; background: var(--pg-card); border: 1px solid var(--pg-border); padding: 12px;
           border-radius: 8px; overflow: auto; font: 12px/1.5 monospace; }
     .empty { color: var(--pg-muted); padding: 40px; text-align: center; }
+    .recap-sub-label { font-size: 12px; font-weight: 600; color: var(--pg-muted); margin: 10px 0 4px; }
+    .recap-sub-label:first-child { margin-top: 4px; }
+    .recap-images { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin:6px 0 12px; }
+    .recap-image { margin:0; border:1px solid var(--pg-border); border-radius:10px; background:var(--pg-card); padding:8px; }
+    .recap-image figcaption { color:var(--pg-muted); font:700 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin-bottom:6px; }
+    .recap-image img { width:100%; max-height:260px; object-fit:contain; border-radius:8px; border:1px solid var(--pg-border); background:rgba(0,0,0,.04); display:block; }
     .ico { width:15px; height:15px; display:inline-flex; flex:0 0 15px; align-items:center; justify-content:center; }
     .ico svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; display:block; }
     .tab-label { display:inline-block; min-width:0; overflow:hidden; text-overflow:ellipsis; }
@@ -175,6 +181,37 @@
       <details id="raw-wrap" style="display:none">
         <summary>Raw agent response</summary>
         <pre id="raw"></pre>
+      </details>
+      <details id="som-wrap" style="display:none">
+        <summary>Screenshot sent to LLM (SoM markers)</summary>
+        <div class="recap-sub">
+          <div class="recap-sub-label">Viewport with numbered SoM markers sent to the LLM (visual input)</div>
+          <div id="som-image" class="recap-images"></div>
+        </div>
+      </details>
+      <details id="recap-wrap" style="display:none">
+        <summary>Summarize</summary>
+        <div class="recap-sub">
+          <div class="recap-sub-label">System prompt sent to summarization LLM</div>
+          <pre id="recap-system"></pre>
+          <div class="recap-sub-label">User/Page prompt sent to summarization LLM</div>
+          <pre id="recap-user"></pre>
+          <div class="recap-sub-label">Screenshots sent to summarization LLM</div>
+          <div id="recap-images" class="recap-images"></div>
+          <div class="recap-sub-label">Agent response from summarization LLM</div>
+          <pre id="recap-response"></pre>
+        </div>
+      </details>
+      <details id="final-verify-wrap" style="display:none">
+        <summary>Final State verification (vision)</summary>
+        <div class="recap-sub">
+          <div class="recap-sub-label">System prompt sent to LLM</div>
+          <pre id="final-verify-system"></pre>
+          <div class="recap-sub-label">User prompt sent to LLM</div>
+          <pre id="final-verify-user"></pre>
+          <div class="recap-sub-label">LLM response</div>
+          <pre id="final-verify-response"></pre>
+        </div>
       </details>
       <details id="record-wrap" style="display:none">
         <summary>Full step record (memory)</summary>

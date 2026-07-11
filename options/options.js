@@ -67,7 +67,7 @@ async function loadSettings() {
     const local = await chrome.storage.local.get(['rewindCaptureEnabled', 'guidePlanningEnabled', 'guideConfidenceThreshold']);
     document.getElementById('rewindCaptureEnabled').checked = local.rewindCaptureEnabled !== false;
     const planningToggle = document.getElementById('guidePlanningEnabled');
-    if (planningToggle) planningToggle.checked = local.guidePlanningEnabled !== false;
+    if (planningToggle) planningToggle.checked = local.guidePlanningEnabled === true;
     const thresholdInput = document.getElementById('guideConfidenceThreshold');
     if (thresholdInput) thresholdInput.value = Number.isFinite(Number(local.guideConfidenceThreshold)) ? Number(local.guideConfidenceThreshold) : 0.7;
   } catch (e) {}

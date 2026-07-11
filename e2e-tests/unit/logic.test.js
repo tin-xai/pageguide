@@ -883,6 +883,190 @@ describe('gv2AssessRisk (content/utils.js)', () => {
     expect(window.gv2AssessRisk({ instruction: 'Toggle dark mode on' })).toBe('low');
     expect(window.gv2AssessRisk(null)).toBe('low');
   });
+
+  test('find is always low risk — it only reads the page', () => {
+    // The instruction mentions a keyword the scanner would otherwise escalate on.
+    expect(window.gv2AssessRisk({
+      action: 'find',
+      instruction: 'Find out how to delete your account'
+    })).toBe('low');
+    // Even a model self-report of high risk cannot make a read-only step dangerous.
+    expect(window.gv2AssessRisk({ action: 'find', risk: 'high', instruction: 'Find the refund policy' })).toBe('low');
+  });
+});
+
+describe('gv2NormalizeAction (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('normalizes case and surrounding whitespace', () => {
+    expect(window.gv2NormalizeAction('find')).toBe('find');
+    expect(window.gv2NormalizeAction('FIND')).toBe('find');
+    expect(window.gv2NormalizeAction('  find ')).toBe('find');
+  });
+
+  test('normalizes separators to underscores', () => {
+    expect(window.gv2NormalizeAction('clear text')).toBe('clear_text');
+    expect(window.gv2NormalizeAction('clear-text')).toBe('clear_text');
+  });
+
+  test('defaults to click, or done on the last step', () => {
+    expect(window.gv2NormalizeAction(null, false)).toBe('click');
+    expect(window.gv2NormalizeAction(null, true)).toBe('done');
+  });
+});
+
+describe('gv2NormalizeVisualEvidence (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('normalizes the object form into {index,rect,text,reason}', () => {
+    const r = window.gv2NormalizeVisualEvidence({ index: 7, text: '  Sort by:  Price ', reason: 'sorted low to high\nso first is cheapest' });
+    expect(r).toEqual({ index: 7, rect: null, text: 'Sort by: Price', reason: 'sorted low to high so first is cheapest' });
+  });
+
+  test('treats a bare string as the reason', () => {
+    expect(window.gv2NormalizeVisualEvidence('proves it')).toEqual({ index: null, rect: null, text: null, reason: 'proves it' });
+  });
+
+  test('accepts a normalized bounding box rect', () => {
+    const r = window.gv2NormalizeVisualEvidence({ rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, reason: 'here' });
+    expect(r.rect).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+  });
+
+  test('clamps rect components to 0..1 and rejects a zero-area rect', () => {
+    const clamped = window.gv2NormalizeVisualEvidence({ rect: { x: -1, y: 2, w: 0.5, h: 0.5 } });
+    expect(clamped.rect).toEqual({ x: 0, y: 1, w: 0.5, h: 0.5 });
+    const bad = window.gv2NormalizeVisualEvidence({ rect: { x: 0.1, y: 0.1, w: 0, h: 0.5 }, text: '' });
+    expect(bad).toBeNull();
+  });
+
+  test('an object with only a rect is kept', () => {
+    const r = window.gv2NormalizeVisualEvidence({ rect: { x: 0, y: 0, w: 1, h: 1 } });
+    expect(r).toEqual({ index: null, rect: { x: 0, y: 0, w: 1, h: 1 }, text: null, reason: null });
+  });
+
+  test('coerces index to a positive integer, else null', () => {
+    expect(window.gv2NormalizeVisualEvidence({ index: '4', reason: 'x' }).index).toBe(4);
+    expect(window.gv2NormalizeVisualEvidence({ index: 3.9, reason: 'x' }).index).toBe(3);
+    expect(window.gv2NormalizeVisualEvidence({ index: 0, reason: 'x' }).index).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence({ index: -2, reason: 'x' }).index).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence({ index: 'abc', reason: 'x' }).index).toBeNull();
+  });
+
+  test('caps overlong text and reason at 280 chars', () => {
+    const long = 'a'.repeat(400);
+    const r = window.gv2NormalizeVisualEvidence({ text: long, reason: long });
+    expect(r.text.length).toBe(280);
+    expect(r.reason.length).toBe(280);
+  });
+
+  test('returns null when nothing usable is present', () => {
+    expect(window.gv2NormalizeVisualEvidence(null)).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence(undefined)).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence('   ')).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence({ index: null, text: '  ', reason: '' })).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence(42)).toBeNull();
+  });
+});
+
+describe('visual_highlight action (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('gv2NormalizeAction canonicalizes the label', () => {
+    expect(window.gv2NormalizeAction('Visual Highlight')).toBe('visual_highlight');
+    expect(window.gv2NormalizeAction('visual-highlight')).toBe('visual_highlight');
+    expect(window.gv2NormalizeAction('visual_highlight')).toBe('visual_highlight');
+  });
+
+  test('is read-only: no planner target, low risk, noop replay', () => {
+    expect(window.gv2StepHasTarget({ action: 'visual_highlight', element: { index: 4, text: 'x' } })).toBe(false);
+    expect(window.gv2AssessRisk({ action: 'visual_highlight', risk: 'high' })).toBe('low');
+    expect(window.gv2ReplayKind('visual_highlight')).toBe('noop');
+  });
+});
+
+describe('gv2StepHasTarget (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('a click step with an element has a target', () => {
+    expect(window.gv2StepHasTarget({ action: 'click', element: { index: 4, text: 'Help' } })).toBe(true);
+    expect(window.gv2StepHasTarget({ action: 'click', element: { text: 'Help' } })).toBe(true);
+  });
+
+  test('find never has a target, even when the model populates element', () => {
+    // find highlights whatever the reader pass cites — not one planner-chosen element.
+    expect(window.gv2StepHasTarget({ action: 'find', element: { index: 4, text: 'Lost property' } })).toBe(false);
+  });
+
+  test('done and last steps have no target', () => {
+    expect(window.gv2StepHasTarget({ action: 'done', element: { index: 1, text: 'x' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'click', isLastStep: true, element: { index: 1, text: 'x' } })).toBe(false);
+  });
+
+  test('a click step without an element has no target', () => {
+    expect(window.gv2StepHasTarget({ action: 'click', element: {} })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'click', element: { text: '   ' } })).toBe(false);
+    expect(window.gv2StepHasTarget(null)).toBe(false);
+  });
+});
+
+describe('gv2ParseFindResponse (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('detects the "not provided on this page" escape hatch', () => {
+    const r = window.gv2ParseFindResponse('The information is not provided on this page.');
+    expect(r.notOnPage).toBe(true);
+  });
+
+  test('detects the escape hatch case-insensitively and mid-answer', () => {
+    const answer = 'Sorry — the Information Is Not Provided On This Page. However, see [Megabus](https://uk.megabus.com).';
+    expect(window.gv2ParseFindResponse(answer).notOnPage).toBe(true);
+  });
+
+  test('a normal cited answer is on-page and has citations', () => {
+    const r = window.gv2ParseFindResponse('Contact the depot [12:"within 30 days"] of travel.');
+    expect(r.notOnPage).toBe(false);
+    expect(r.hasCitations).toBe(true);
+  });
+
+  test('recognizes bare [N] citations', () => {
+    expect(window.gv2ParseFindResponse('See the policy [7].').hasCitations).toBe(true);
+  });
+
+  test('an uncited answer reports no citations', () => {
+    const r = window.gv2ParseFindResponse('Call the depot as soon as possible.');
+    expect(r.notOnPage).toBe(false);
+    expect(r.hasCitations).toBe(false);
+  });
+
+  test('is safe on empty/undefined answers', () => {
+    expect(window.gv2ParseFindResponse(undefined)).toEqual({ answer: '', notOnPage: false, hasCitations: false });
+    expect(window.gv2ParseFindResponse(null)).toEqual({ answer: '', notOnPage: false, hasCitations: false });
+    expect(window.gv2ParseFindResponse('')).toEqual({ answer: '', notOnPage: false, hasCitations: false });
+  });
+});
+
+// Regression: a find record carries no target text. Before gv2ReplayKind, _gv2ReplayOne's
+// `if (!text) return false` made replay report failure and abort the whole rewind chain.
+describe('gv2ReplayKind (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('find replays as a no-op', () => {
+    expect(window.gv2ReplayKind('find')).toBe('noop');
+    expect(window.gv2ReplayKind('FIND')).toBe('noop');
+  });
+
+  test('mutating actions keep their own replay kind', () => {
+    expect(window.gv2ReplayKind('type')).toBe('type');
+    expect(window.gv2ReplayKind('clear_text')).toBe('clear_text');
+    expect(window.gv2ReplayKind('select')).toBe('select');
+    expect(window.gv2ReplayKind('check')).toBe('check');
+    expect(window.gv2ReplayKind('toggle')).toBe('check');
+  });
+
+  test('anything else — including a missing action — replays as a click', () => {
+    expect(window.gv2ReplayKind('click')).toBe('click');
+    expect(window.gv2ReplayKind(undefined)).toBe('click');
+  });
 });
 
 // Auto-mode Gate 2: page-change detection.
@@ -947,6 +1131,266 @@ describe('gv2DotState (content/utils.js)', () => {
     const records = [{ step: 1 }, { step: 2 }];
     const dots = window.gv2DotState({ plan: [], records, verifications: {}, current: 2, guideActive: false });
     expect(dots.map(d => d.status)).toEqual(['done', 'done']);
+  });
+});
+
+describe('gv2NormalizeRecap (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  const ctx = {
+    validSteps: [2, 4],
+    plan: [{ n: 1, goal: 'Create view' }, { n: 2, goal: 'Mark completed' }],
+    planTitle: 'Completed tasks view',
+    steps: ['Step 2: Create a view ✓', 'Step 4: Mark it completed ✓']
+  };
+
+  test('keeps LLM milestones pinned to real completed steps and passes summary through', () => {
+    const raw = {
+      summary: 'I have finished the task.',
+      milestones: [
+        { text: 'I have created a view', step: 2 },
+        { text: 'I have marked it completed', step: 4 }
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, ctx);
+    expect(r.summary).toBe('I have finished the task.');
+    expect(r.milestones).toEqual([
+      { text: 'I have created a view', step: 2, phrase: '' },
+      { text: 'I have marked it completed', step: 4, phrase: '' }
+    ]);
+  });
+
+  test('keeps wrong-step labels and reasons from stepEvaluations', () => {
+    const raw = {
+      verdict: 'failed',
+      summary: 'I could not complete the task. The final page did not show the requested result.',
+      stepEvaluations: [
+        { text: 'Clicked the wrong Settings button', step: 2, status: 'wrong', goalRelated: false, goalRelatedReason: 'Settings was unrelated to the requested view.', errorLabel: 'misgrounded', reason: 'Low grounding score.' },
+        { text: 'Repeated the same menu click', step: 4, status: 'wrong', goalRelated: true, goalRelatedReason: 'It attempted the requested language menu.', errorLabel: 'loop', reason: 'High loop score.' }
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, {
+      ...ctx,
+      finalVerdict: 'failed',
+      stepRecords: [
+        { step: 2, mechGrounding: 0.2, mechLoop: 0.0, mechConfidence: 0.2 },
+        { step: 4, mechGrounding: 0.9, mechLoop: 0.8, mechConfidence: 0.5 }
+      ]
+    });
+    expect(r.summary).toContain('I could not complete the task');
+    expect(r.milestones).toEqual([
+      { text: 'Clicked the wrong Settings button', step: 2, phrase: '', goalRelated: false, goalRelatedReason: 'Settings was unrelated to the requested view.', status: 'wrong', errorLabel: 'misgrounded', reason: 'Low grounding score.' },
+      { text: 'Repeated the same menu click', step: 4, phrase: '', goalRelated: true, goalRelatedReason: 'It attempted the requested language menu.', status: 'wrong', errorLabel: 'loop', reason: 'High loop score.' }
+    ]);
+  });
+
+  test('infers wrong-step labels from confidence scores when the label is missing', () => {
+    const raw = {
+      verdict: 'failed',
+      summary: 'I could not complete the task.',
+      stepEvaluations: [
+        { text: 'Clicked a repeated target', step: 2, status: 'wrong' },
+        { text: 'Clicked an unrelated target', step: 4, status: 'wrong' }
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, {
+      ...ctx,
+      finalVerdict: 'failed',
+      stepRecords: [
+        { step: 2, mechGrounding: 0.9, mechLoop: 0.7, mechConfidence: 0.6 },
+        { step: 4, mechGrounding: 0.2, mechLoop: 0.0, mechConfidence: 0.2 }
+      ]
+    });
+    expect(r.milestones[0].errorLabel).toBe('loop');
+    expect(r.milestones[1].errorLabel).toBe('misgrounded');
+  });
+
+  test('drops milestones that reference steps that never happened', () => {
+    const raw = {
+      summary: 'done',
+      milestones: [
+        { text: 'real', step: 2 },
+        { text: 'hallucinated', step: 9 },   // 9 is not a completed step
+        { text: 'no step' }                  // missing step
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, ctx);
+    expect(r.milestones).toEqual([{ text: 'real', step: 2, phrase: '' }]);
+  });
+
+  test('carries a phrase only when it is a substring of the milestone text', () => {
+    const raw = {
+      summary: 'done',
+      milestones: [
+        { text: 'I have opened the language settings', phrase: 'language settings', step: 2 },
+        { text: 'I have confirmed the change', phrase: 'not in text', step: 4 }
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, ctx);
+    expect(r.milestones).toEqual([
+      { text: 'I have opened the language settings', step: 2, phrase: 'language settings' },
+      { text: 'I have confirmed the change', step: 4, phrase: '' }  // phrase not in text → dropped
+    ]);
+  });
+
+  test('dedupes repeated steps and clamps to at most 6 milestones', () => {
+    const validSteps = [1, 2, 3, 4, 5, 6, 7, 8];
+    const raw = {
+      milestones: [
+        ...validSteps.map(s => ({ text: 'm' + s, step: s })),
+        { text: 'dup of 1', step: 1 }
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, { validSteps, plan: [], steps: [] });
+    expect(r.milestones).toHaveLength(6);
+    expect(r.milestones.filter(m => m.step === 1)).toHaveLength(1);
+  });
+
+  test('falls back to a deterministic recap built from completed-step strings when LLM output is malformed', () => {
+    const r = window.gv2NormalizeRecap(null, ctx);
+    expect(r.milestones).toEqual([
+      { text: 'Create a view', step: 2, phrase: '', goalRelated: true, goalRelatedReason: 'Fallback from completed guide step.' },
+      { text: 'Mark it completed', step: 4, phrase: '', goalRelated: true, goalRelatedReason: 'Fallback from completed guide step.' }
+    ]);
+    // Synthesized summary references the task title.
+    expect(r.summary).toContain('Completed tasks view');
+    expect(r.summary.startsWith('I could not complete the task')).toBe(true);
+  });
+
+  test('never invents steps: no valid completed steps yields an empty milestone list', () => {
+    const r = window.gv2NormalizeRecap({ milestones: [{ text: 'x', step: 3 }] }, { validSteps: [], plan: [], steps: [] });
+    expect(r.milestones).toEqual([]);
+    expect(typeof r.summary).toBe('string');
+  });
+});
+
+describe('gv2StepErrorLabelFromScores (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('prioritizes high loop, then low grounding, then low confidence', () => {
+    expect(window.gv2StepErrorLabelFromScores({ mechGrounding: 0.9, mechLoop: 0.8, mechConfidence: 0.6 })).toBe('loop');
+    expect(window.gv2StepErrorLabelFromScores({ mechGrounding: 0.2, mechLoop: 0.1, mechConfidence: 0.2 })).toBe('misgrounded');
+    expect(window.gv2StepErrorLabelFromScores({ mechGrounding: 0.8, mechLoop: 0.1, mechConfidence: 0.3 })).toBe('low-confidence');
+    expect(window.gv2StepErrorLabelFromScores({ mechGrounding: 0.8, mechLoop: 0.1, mechConfidence: 0.8 })).toBe('other');
+  });
+});
+
+describe('gv2NormalizeFinalVerdict (content/utils.js — final-state vision verdict)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('keeps a valid verdict, reason, and clamped annotations', () => {
+    const raw = {
+      verdict: 'completed',
+      reason: 'The interface language is now Spanish.',
+      annotations: [
+        { x: 0.1, y: 0.2, w: 0.3, h: 0.1, label: 'Language set to Español' },
+        { x: 0.5, y: 0.5, w: 0.2, h: 0.2, label: 'Confirmation checkmark' }
+      ]
+    };
+    const r = window.gv2NormalizeFinalVerdict(raw);
+    expect(r.verdict).toBe('completed');
+    expect(r.reason).toBe('The interface language is now Spanish.');
+    expect(r.annotations).toEqual([
+      { x: 0.1, y: 0.2, w: 0.3, h: 0.1, label: 'Language set to Español' },
+      { x: 0.5, y: 0.5, w: 0.2, h: 0.2, label: 'Confirmation checkmark' }
+    ]);
+  });
+
+  test('defaults an unknown verdict to "unclear"', () => {
+    expect(window.gv2NormalizeFinalVerdict({ verdict: 'maybe' }).verdict).toBe('unclear');
+    expect(window.gv2NormalizeFinalVerdict({}).verdict).toBe('unclear');
+    expect(window.gv2NormalizeFinalVerdict(null)).toEqual({ verdict: 'unclear', reason: '', annotations: [] });
+    expect(window.gv2NormalizeFinalVerdict({ verdict: 'failed' }).verdict).toBe('failed');
+  });
+
+  test('clamps annotations to [0,1], prevents spill, and drops invalid boxes', () => {
+    const raw = {
+      verdict: 'failed',
+      annotations: [
+        { x: 0.9, y: 0.9, w: 0.5, h: 0.5, label: 'near edge' },   // clamped so no spill
+        { x: 0.2, y: 0.2, w: 0, h: 0.1, label: 'zero width' },     // dropped
+        { x: 'nope', y: 0.1, w: 0.1, h: 0.1, label: 'bad' }        // dropped
+      ]
+    };
+    const r = window.gv2NormalizeFinalVerdict(raw);
+    expect(r.annotations).toHaveLength(1);
+    const a = r.annotations[0];
+    expect(a.x + a.w).toBeLessThanOrEqual(1);
+    expect(a.y + a.h).toBeLessThanOrEqual(1);
+  });
+
+  test('caps the annotation count at 6 and trims labels', () => {
+    const annotations = Array.from({ length: 10 }, (_, i) => ({ x: 0.1, y: 0.1, w: 0.1, h: 0.1, label: 'x'.repeat(200) + i }));
+    const r = window.gv2NormalizeFinalVerdict({ verdict: 'completed', annotations });
+    expect(r.annotations).toHaveLength(6);
+    expect(r.annotations[0].label.length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe('gv2TargetNormRect / gv2RegionMarkerRect (content/utils.js — recap marker geometry)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('gv2TargetNormRect normalizes a viewport rect to [0,1] fractions', () => {
+    const r = window.gv2TargetNormRect({ left: 100, top: 50, width: 200, height: 40 }, 1000, 800);
+    expect(r).toEqual({ x: 0.1, y: 0.0625, w: 0.2, h: 0.05 });
+  });
+
+  test('gv2TargetNormRect clamps out-of-bounds rects and prevents right/bottom spill', () => {
+    // Element wider than the viewport and offset near the right edge.
+    const r = window.gv2TargetNormRect({ left: 900, top: 780, width: 400, height: 400 }, 1000, 800);
+    expect(r.x).toBeCloseTo(0.9, 5);
+    expect(r.y).toBeCloseTo(0.975, 5);
+    expect(r.x + r.w).toBeLessThanOrEqual(1);   // no horizontal spill
+    expect(r.y + r.h).toBeLessThanOrEqual(1);   // no vertical spill
+  });
+
+  test('gv2TargetNormRect returns null on bad viewport', () => {
+    expect(window.gv2TargetNormRect({ left: 0, top: 0, width: 10, height: 10 }, 0, 800)).toBeNull();
+    expect(window.gv2TargetNormRect(null, 1000, 800)).toBeNull();
+  });
+
+  test('gv2RegionMarkerRect maps a target into in-crop fractions (dpr aware)', () => {
+    // dpr=2. Crop origin at image px (100,100), size 400×300. Target at CSS (80,70,50,20).
+    // In-crop px: (80*2-100, 70*2-100) = (60,40); size (100,40). Fractions: (0.15,0.1333,0.25,0.1333).
+    const crop = { sx: 100, sy: 100, sw: 400, sh: 300 };
+    const r = window.gv2RegionMarkerRect({ left: 80, top: 70, width: 50, height: 20 }, crop, 2);
+    expect(r.x).toBeCloseTo(0.15, 5);
+    expect(r.y).toBeCloseTo(0.13333, 4);
+    expect(r.w).toBeCloseTo(0.25, 5);
+    expect(r.h).toBeCloseTo(0.13333, 4);
+  });
+
+  test('gv2RegionMarkerRect clamps a target sitting past the crop edge', () => {
+    const crop = { sx: 0, sy: 0, sw: 200, sh: 200 };
+    const r = window.gv2RegionMarkerRect({ left: 150, top: 150, width: 100, height: 100 }, crop, 1);
+    expect(r.x).toBeCloseTo(0.75, 5);
+    expect(r.x + r.w).toBeLessThanOrEqual(1);
+    expect(r.y + r.h).toBeLessThanOrEqual(1);
+  });
+
+  test('gv2RegionMarkerRect returns null on bad crop', () => {
+    expect(window.gv2RegionMarkerRect({ left: 0, top: 0, width: 10, height: 10 }, { sw: 0, sh: 0 }, 1)).toBeNull();
+    expect(window.gv2RegionMarkerRect(null, { sw: 100, sh: 100 }, 1)).toBeNull();
+  });
+});
+
+describe('Guide default-flag predicates (planning off / recap on)', () => {
+  // The runtime gates use the same storage idioms; assert the pure default semantics so a
+  // regression that flips a default is caught. Planning is now OFF unless explicitly true;
+  // Visual Recap is ON unless explicitly 'off'.
+  const planningEnabled = (v) => v === true;               // guidev2 _gv2IsPlanningEnabled
+  const recapOn = (v) => v !== 'off';                      // guidev2 _gv2IsVisualRecapOn / panel _normalizeRecap
+
+  test('planning defaults OFF when unset', () => {
+    expect(planningEnabled(undefined)).toBe(false);
+    expect(planningEnabled(false)).toBe(false);
+    expect(planningEnabled(true)).toBe(true);
+  });
+
+  test('visual recap defaults ON when unset, off only when explicitly disabled', () => {
+    expect(recapOn(undefined)).toBe(true);
+    expect(recapOn('on')).toBe(true);
+    expect(recapOn('off')).toBe(false);
   });
 });
 
@@ -1020,6 +1464,33 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
 
     expect(result.success).toBe(false);
     expect(result.progressed).toBe(false);
+  });
+
+  // Regression: find's highlights carry data-pageguide-styled, which is the click path's
+  // fallback selector. A find step must continue without ever dispatching a click, or the
+  // agent would click the very paragraph it just highlighted.
+  test('a find step continues without clicking the highlighted passage', async () => {
+    const para = document.createElement('p');
+    para.setAttribute('data-pageguide-styled', 'true');
+    para.textContent = 'Contact the depot within 30 days.';
+    const onClick = jest.fn();
+    para.addEventListener('click', onClick);
+    document.body.appendChild(para);
+
+    window._guidev2._currentStep = { action: 'find', instruction: 'Here is the lost-items policy' };
+    const continueGuide = jest.fn(async () => ({ success: true, progressed: true }));
+
+    // Arm the click-wait flag as a preceding click step would, so the find guard has to be
+    // what prevents the click — not merely the "not waiting for a click" early return.
+    window._gv2SetupClickListener();
+
+    const result = await window.gv2NextStep({ generateAndDispatch: continueGuide });
+
+    expect(continueGuide).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: true, progressed: true });
+
+    para.remove();
   });
 
   test('stop clears pending auto-click and auto-type timers', () => {
@@ -1475,6 +1946,26 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     expect(getPauseMessage()).toBe('Confirmation needed. Please verify and press Resume.');
   });
 
+  test('loop score at or above 0.3 pauses before action', async () => {
+    const originalCompute = window.gv2ComputeMechanicalConfidence;
+    window.gv2ComputeMechanicalConfidence = () => ({ confidence: 0.95, grounding: 0.95, loop: 0.31, loopMatches: 4 });
+    try {
+      const stepJson = JSON.stringify({
+        step: 1,
+        thought: 'Potential loop',
+        instruction: 'Click the same menu again',
+        element: { index: 2, text: 'Languages' },
+        action: 'click'
+      });
+
+      await window.gv2ProcessResponse(stepJson);
+      expect(window._guidev2.paused).toBe(true);
+      expect(getPauseMessage()).toBe('Page Guide paused: loop score 0.31 is above the 0.3 threshold. Review and resume when ready.');
+    } finally {
+      window.gv2ComputeMechanicalConfidence = originalCompute;
+    }
+  });
+
   test('normalizes skipped LLM step numbers before storing records', async () => {
     window._guidev2.previousSteps = ['Step 1: Enter pickup location'];
     window._guidev2.captureEnabled = true;
@@ -1525,5 +2016,141 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     } catch (e) {}
     
     expect(window._guidev2.lowConfidenceCount).toBe(0);
+  });
+});
+
+// The find action end-to-end through gv2ProcessResponse, with the reader-pass LLM stubbed.
+// Covers the wiring that the pure-helper tests above cannot reach: the second LLM call, the
+// content index, highlight application, and the read-only dispatch path.
+describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
+  const CITED_ANSWER = 'Contact the depot [12:"within 30 days"] of travel.';
+
+  function findStep(overrides = {}) {
+    return JSON.stringify({
+      step: 1,
+      thought: 'Arrived at the lost property page',
+      instruction: 'Here is what to do about lost items',
+      action: 'find',
+      findQuery: 'what to do when I have lost items',
+      isLastStep: true,
+      ...overrides
+    });
+  }
+
+  beforeAll(() => {
+    window.chrome = {
+      runtime: { sendMessage: jest.fn() },
+      storage: {
+        session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) }
+      }
+    };
+    window.getPageBackground = () => ({ isDark: false });
+    window.gv2FindElementByText = () => null;
+    window.applyIndexedHighlight = () => 0;
+    window.cleanupSom = () => {};
+    window.clearHighlights = () => {};
+    window.rewindPutRecord = jest.fn(async () => {});
+    window.captureScreenshot = jest.fn(async () => 'PLACEHOLDER');
+    window.PROMPTS = { ANSWER_AND_HIGHLIGHT: 'CONTENT:{pageContent}\nINDEX:{pageIndex}' };
+    // guidev2.js calls gv2ParseFindResponse/gv2StepHasTarget, which utils.js defines — the
+    // same order manifest.json loads them in. Load it here so this block stands alone.
+    loadScript('content/utils.js');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    window.getVisibleText = jest.fn(() => 'Lost property. Contact the depot within 30 days of travel.');
+    window.createPageIndex = jest.fn(() => ({ indexText: '[12] Contact the depot within 30 days', count: 1 }));
+    window.safeSendMessage = jest.fn(async () => ({ content: CITED_ANSWER }));
+    window.applyHighlightsFromCitations = jest.fn(() => 2);
+    window.scrollToHighlight = jest.fn();
+    window._guidev2 = {
+      active: true,
+      question: 'Find out what to do when I have lost items',
+      previousSteps: [],
+      autoMode: true,
+      paused: false,
+      lowConfidenceCount: 0
+    };
+  });
+
+  test('reads the page with a CONTENT index and highlights the cited passages', async () => {
+    const result = await window.gv2ProcessResponse(findStep());
+
+    // interactiveOnly=false — citations must be able to land on paragraphs, not just buttons.
+    expect(window.createPageIndex).toHaveBeenCalledWith(5000, false);
+    expect(window.applyHighlightsFromCitations).toHaveBeenCalledWith(CITED_ANSWER);
+
+    expect(result.isFind).toBe(true);
+    expect(result.action).toBe('find');
+    expect(result.answer).toBe(CITED_ANSWER);
+    expect(result.findAnswer).toBe(CITED_ANSWER);
+    expect(result.highlightCount).toBe(2);
+    expect(result.hasHighlights).toBe(true);
+    expect(result.findNotOnPage).toBe(false);
+    // No single planner-chosen element: the citations own the highlighting.
+    expect(result.targetText).toBeNull();
+  });
+
+  test('sends the findQuery to the reader pass, not the raw instruction', async () => {
+    await window.gv2ProcessResponse(findStep());
+
+    const call = window.safeSendMessage.mock.calls.find(c => c[0]?.metadata?.mode === 'guide_find');
+    expect(call).toBeTruthy();
+    expect(call[0].messages[0].content).toBe('what to do when I have lost items');
+    expect(call[0].systemPrompt).toContain('Lost property. Contact the depot');
+  });
+
+  test('falls back to the user goal when the model omits findQuery', async () => {
+    await window.gv2ProcessResponse(findStep({ findQuery: null }));
+
+    const call = window.safeSendMessage.mock.calls.find(c => c[0]?.metadata?.mode === 'guide_find');
+    expect(call[0].messages[0].content).toBe('Find out what to do when I have lost items');
+  });
+
+  test('skips highlighting when the answer is not on the page', async () => {
+    window.safeSendMessage = jest.fn(async () => ({
+      content: 'The information is not provided on this page. However, see [Megabus](https://uk.megabus.com).'
+    }));
+
+    const result = await window.gv2ProcessResponse(findStep());
+
+    expect(window.applyHighlightsFromCitations).not.toHaveBeenCalled();
+    expect(result.findNotOnPage).toBe(true);
+    expect(result.hasHighlights).toBe(false);
+    expect(result.answer).toContain('not provided on this page');
+  });
+
+  test('survives a reader-pass LLM error without failing the step', async () => {
+    window.safeSendMessage = jest.fn(async () => ({ error: 'rate limited' }));
+
+    const result = await window.gv2ProcessResponse(findStep());
+
+    expect(window.applyHighlightsFromCitations).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(result.hasHighlights).toBe(false);
+    // With no answer, the card falls back to the planner's instruction.
+    expect(result.answer).toBe('Here is what to do about lost items');
+  });
+
+  test('a find requested mid-journey is coerced to the terminal (final answer) step', async () => {
+    // Req 4: find is ALWAYS the last step — the model may not run it mid-journey. Even when the
+    // model returns isLastStep=false, we force it terminal so the trajectory cannot continue.
+    const result = await window.gv2ProcessResponse(findStep({ isLastStep: false }));
+
+    expect(result.isLastStep).toBe(true);
+    expect(window._guidev2.previousSteps[0]).toContain('✓');
+  });
+
+  test('never pauses, even on a carried-over 3-strikes count or a high-risk self-report', async () => {
+    window._guidev2.lowConfidenceCount = 3;
+
+    const result = await window.gv2ProcessResponse(findStep({ risk: 'high', confirmation: 'needed' }));
+
+    expect(window._guidev2.paused).toBe(false);
+    expect(result.isFind).toBe(true);
+    const paused = window.chrome.runtime.sendMessage.mock.calls.find(c => c[0]?.action === 'guidePaused');
+    expect(paused).toBeUndefined();
   });
 });

@@ -175,59 +175,28 @@
             </div>
           </div>
 
-          <!-- Confidence-score formula selector: Full (grounded·loop·progress) vs Reduced (no progress).
-               Hidden by default; only shown in debug mode (see updateDebugButtonVisibility). -->
-          <div class="pageguide-mode-wrap pageguide-conf-wrap" style="display:none;">
-            <button class="pageguide-mode-btn" id="pageguide-conf-toggle" title="Choose how step confidence is scored"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a4 4 0 1 0-4-4"/><path d="M12 14v-4"/><path d="M3 21a9 9 0 0 1 18 0"/></svg></span>Confidence: Full ▾</button>
-            <div class="pageguide-mode-menu" id="pageguide-conf-menu" style="display:none;">
-              <button class="pageguide-mode-option" data-formula="full">
-                <span class="pageguide-mode-opt-text"><b>Full (grounded · loop · progress)</b><small>Confidence = grounding × loop penalty × progress. Uses all three signals.</small></span>
+          <!-- Visual input mode (debug-only): send a screenshot with up to 100 SoM markers to Guide LLM. -->
+          <div class="pageguide-mode-wrap pageguide-visualinput-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-visualinput-toggle" title="Send a marked screenshot with Guide step prompts"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Visual: Off ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-visualinput-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-visualinput="on">
+                <span class="pageguide-mode-opt-text"><b>Visual On</b><small>Send the Guide LLM a screenshot with up to 100 numbered SoM markers.</small></span>
               </button>
-              <button class="pageguide-mode-option" data-formula="reduced">
-                <span class="pageguide-mode-opt-text"><b>No-progress (grounded · loop)</b><small>Confidence = grounding × loop penalty. Ignores the progress signal.</small></span>
-              </button>
-              <button class="pageguide-mode-option" data-formula="noloop">
-                <span class="pageguide-mode-opt-text"><b>No-loop (grounded · progress)</b><small>Confidence = grounding × progress. Ignores the loop signal.</small></span>
+              <button class="pageguide-mode-option" data-visualinput="off">
+                <span class="pageguide-mode-opt-text"><b>Visual Off</b><small>Use text-only Guide prompts.</small></span>
               </button>
             </div>
           </div>
 
-          <!-- Confidence-score SOURCE selector: LLM self-report vs rule-based (no-LLM) grounding × loop.
-               Hidden by default; only shown in debug mode (see updateDebugButtonVisibility). -->
-          <div class="pageguide-mode-wrap pageguide-confsrc-wrap" style="display:none;">
-            <button class="pageguide-mode-btn" id="pageguide-confsrc-toggle" title="Choose where step confidence comes from"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg></span>Source: No-LLM ▾</button>
-            <div class="pageguide-mode-menu" id="pageguide-confsrc-menu" style="display:none;">
-              <button class="pageguide-mode-option" data-source="llm">
-                <span class="pageguide-mode-opt-text"><b>LLM-reported</b><small>Confidence from the model's self-reported grounded/loop/progress signals.</small></span>
+          <!-- Visual Recap mode (debug-only): post an end-of-task recap with hoverable visual evidence. -->
+          <div class="pageguide-mode-wrap pageguide-recap-wrap" style="display:none;">
+            <button class="pageguide-mode-btn" id="pageguide-recap-toggle" title="Post a visual recap with screenshot evidence when a guide task finishes"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>Recap: On ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-recap-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-recap="on">
+                <span class="pageguide-mode-opt-text"><b>Recap On</b><small>When a task finishes, summarize what was done with hoverable screenshot evidence (default).</small></span>
               </button>
-              <button class="pageguide-mode-option" data-source="mechanical">
-                <span class="pageguide-mode-opt-text"><b>No-LLM (grounding × loop)</b><small>Rule-based: SoM grounding × loop penalty computed from execution signals. No model self-grading.</small></span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Target-region capture mode (debug-only): legacy carried-shot crop vs aligned scroll+fresh crop. -->
-          <div class="pageguide-mode-wrap pageguide-regioncap-wrap" style="display:none;">
-            <button class="pageguide-mode-btn" id="pageguide-regioncap-toggle" title="How target-region screenshots are captured"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>Target: Legacy ▾</button>
-            <div class="pageguide-mode-menu" id="pageguide-regioncap-menu" style="display:none;">
-              <button class="pageguide-mode-option" data-mode="legacy">
-                <span class="pageguide-mode-opt-text"><b>Legacy crop</b><small>Crop the carried before-shot using immediate element bounds (may misalign).</small></span>
-              </button>
-              <button class="pageguide-mode-option" data-mode="aligned">
-                <span class="pageguide-mode-opt-text"><b>Aligned crop (debug)</b><small>Scroll target into view, take a fresh screenshot, then crop before the action.</small></span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Pass History mode (debug-only): whether to include previous steps in LLM prompt. -->
-          <div class="pageguide-mode-wrap pageguide-passhistory-wrap" style="display:none;">
-            <button class="pageguide-mode-btn" id="pageguide-passhistory-toggle" title="Whether to pass observed steps and redirection history to LLM"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>History: No ▾</button>
-            <div class="pageguide-mode-menu" id="pageguide-passhistory-menu" style="display:none;">
-              <button class="pageguide-mode-option" data-mode="passing">
-                <span class="pageguide-mode-opt-text"><b>Include History</b><small>Pass past observed number of steps and user redirection to LLM.</small></span>
-              </button>
-              <button class="pageguide-mode-option" data-mode="not_passing">
-                <span class="pageguide-mode-opt-text"><b>Not Include History</b><small>Do not pass history to LLM (default).</small></span>
+              <button class="pageguide-mode-option" data-recap="off">
+                <span class="pageguide-mode-opt-text"><b>Recap Off</b><small>End the task on the final step without a recap message.</small></span>
               </button>
             </div>
           </div>

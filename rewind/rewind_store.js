@@ -104,6 +104,11 @@
       cost: record.cost,
       title: record.title,
       isInitial: record.isInitial,
+      // Visual-evidence justification (short text) + a flag for whether a cropped evidence shot was
+      // stored. Kept in the lightweight index so the recap builder can surface it without loading
+      // full records; the shot itself stays in the full record (loaded lazily on hover/click).
+      visualEvidenceReason: record.visualEvidenceReason || null,
+      hasVisualEvidence: !!record.visualEvidenceShot,
       // Verification flag: does this step have any screenshot? Steps without one are "void" and
       // get pruned from the timeline / recall.
       hasShot: !!rewindResolveScreenshot(record)

@@ -43,6 +43,15 @@
     return idx >= 0 ? idx : 0;
   }
 
+  function isFinalStepRecord(rec) {
+    if (!rec) return false;
+    if (rec.isLastStep) return true;
+    const concrete = indexSteps
+      .map(s => Number(s.step))
+      .filter(n => Number.isFinite(n) && n > 0);
+    return concrete.length ? Number(rec.step) === Math.max.apply(null, concrete) : false;
+  }
+
   async function populateStepSelect() {
     let index = null;
     try {
@@ -342,7 +351,36 @@
     }
   }
 
-  function renderRawAndRecord(rec) {
+  async function loadInitialRecord(rec) {
+    const sid = rec?.sessionId || sessionId;
+    if (!sid || Number(rec?.step) === 0) return null;
+    try { return await rewindGetRecord(sid, 0); } catch (e) { return null; }
+  }
+
+  async function renderRecapImages(rec) {
+    let imgs = Array.isArray(rec?.recapImages) ? rec.recapImages.filter(img => img && img.base64) : [];
+    if (!imgs.length) {
+      const initial = await loadInitialRecord(rec);
+      const initialShot = initial?.screenshotBefore || initial?.screenshot || null;
+      const finalShot = rec?.finalShot || rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot || null;
+      imgs = [];
+      if (initialShot) imgs.push({ base64: initialShot, label: 'Initial state before guide' });
+      if (finalShot) imgs.push({ base64: finalShot, label: 'Final state after guide' });
+    }
+    if (!imgs.length) return '<div class="empty" style="padding:10px">No screenshots were stored for this combined call.</div>';
+    return imgs.map((img) => {
+      if (!img || !img.base64) return '';
+      const src = String(img.base64).startsWith('data:') ? img.base64 : `data:image/jpeg;base64,${img.base64}`;
+      const label = img.label || 'Screenshot sent to LLM';
+      return `
+        <figure class="recap-image">
+          <figcaption>${esc(label)}</figcaption>
+          <img src="${src}" alt="${esc(label)}">
+        </figure>`;
+    }).join('');
+  }
+
+  async function renderRawAndRecord(rec) {
     if (rec.systemPrompt) {
       $('prompt-system-wrap').style.display = '';
       $('prompt-system').textContent = rec.systemPrompt;
@@ -364,6 +402,54 @@
       $('raw-wrap').style.display = 'none';
     }
 
+    // The exact SoM-marked screenshot sent to the LLM (only present when Visual input is on).
+    const somWrap = $('som-wrap');
+    if (somWrap) {
+      const somShot = rec.somInputShot || null;
+      if (somShot) {
+        somWrap.style.display = '';
+        const src = String(somShot).startsWith('data:') ? somShot : `data:image/jpeg;base64,${somShot}`;
+        if ($('som-image')) $('som-image').innerHTML = `<figure class="recap-image"><figcaption>Viewport with SoM markers sent to LLM</figcaption><img src="${src}" alt="SoM screenshot sent to LLM"></figure>`;
+      } else {
+        somWrap.style.display = 'none';
+      }
+    }
+
+    // Summarize: the end-of-task recap LLM call. On the final step, always show this
+    // section even if the call was not stored, so missing evidence is explicit instead of hidden.
+    const recapWrap = $('recap-wrap');
+    if (recapWrap) {
+      const recapSystemPrompt = rec.recapSystemPrompt || rec.finalVerifySystemPrompt || '';
+      const recapUserPrompt = rec.recapUserPrompt || rec.finalVerifyUserPrompt || '';
+      const recapResponse = rec.recapResponse || rec.finalVerifyResponse || '';
+      const shouldShowRecap = !!(recapSystemPrompt || recapUserPrompt || recapResponse || isFinalStepRecord(rec));
+      if (shouldShowRecap) {
+        recapWrap.style.display = '';
+        recapWrap.open = true;
+        if ($('recap-images')) $('recap-images').innerHTML = await renderRecapImages(rec);
+        if ($('recap-system')) $('recap-system').textContent = recapSystemPrompt || '(no summarization/evaluation system prompt was stored on this final step record)';
+        if ($('recap-user')) $('recap-user').textContent = recapUserPrompt || '(no summarization/evaluation user prompt was stored on this final step record)';
+        if ($('recap-response')) $('recap-response').textContent = recapResponse || '(no summarization/evaluation LLM response was stored on this final step record)';
+      } else {
+        recapWrap.style.display = 'none';
+        recapWrap.open = false;
+      }
+    }
+
+    // Final State verification: the vision LLM pass over the final screenshot.
+    const finalWrap = $('final-verify-wrap');
+    if (finalWrap) {
+      const combinedFinal = !!rec.recapResponse && rec.finalVerifyResponse === rec.recapResponse;
+      if (!combinedFinal && (rec.finalVerifySystemPrompt || rec.finalVerifyUserPrompt || rec.finalVerifyResponse)) {
+        finalWrap.style.display = '';
+        if ($('final-verify-system')) $('final-verify-system').textContent = rec.finalVerifySystemPrompt || '(none)';
+        if ($('final-verify-user')) $('final-verify-user').textContent = rec.finalVerifyUserPrompt || '(none)';
+        if ($('final-verify-response')) $('final-verify-response').textContent = rec.finalVerifyResponse || '(no response)';
+      } else {
+        finalWrap.style.display = 'none';
+      }
+    }
+
     const recordWrap = $('record-wrap'), recordPre = $('record');
     if (!recordWrap || !recordPre) return;
     try {
@@ -373,6 +459,21 @@
       }
       for (const k of ['domSnapshot', 'domSnapshotAfter', 'regionDom']) {
         if (copy[k]) copy[k] = '[html ' + copy[k].length + ' chars]';
+      }
+      for (const k of ['markedShot', 'finalShot', 'somInputShot', 'visualEvidenceShot', 'visualHighlightImage']) {
+        if (copy[k]) copy[k] = '[base64 ' + copy[k].length + ' chars]';
+      }
+      if (Array.isArray(copy.recapImages)) {
+        copy.recapImages = copy.recapImages.map(img => ({
+          label: img?.label || '',
+          base64: img?.base64 ? '[base64 ' + img.base64.length + ' chars — see Summarization]' : null
+        }));
+      }
+      for (const k of ['recapSystemPrompt', 'recapUserPrompt', 'recapResponse']) {
+        if (copy[k]) copy[k] = '[text ' + copy[k].length + ' chars — see Summarization]';
+      }
+      for (const k of ['finalVerifySystemPrompt', 'finalVerifyUserPrompt', 'finalVerifyResponse']) {
+        if (copy[k]) copy[k] = '[text ' + copy[k].length + ' chars — see Final State verification]';
       }
       recordPre.textContent = JSON.stringify(copy, null, 2);
       recordWrap.style.display = '';
@@ -546,7 +647,7 @@
     renderTaskPanel(rec);
     renderMemoryPanel(rec);
     showView(currentView || defaultView(rec));
-    renderRawAndRecord(rec);
+    await renderRawAndRecord(rec);
   }
 
   (async function init() {
