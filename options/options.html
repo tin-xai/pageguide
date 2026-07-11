@@ -497,13 +497,6 @@
         </div>
         <input type="number" id="maxSteps" min="1" max="100" value="20" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
       </div>
-      <div class="form-group">
-        <label for="guideConfidenceThreshold">Yellow Confidence Threshold</label>
-        <div class="toggle-info" style="margin-bottom: 8px;">
-          <span class="toggle-desc">Guide steps below this confidence score show yellow status and count toward low-confidence pauses. Use a value from 0 to 1.</span>
-        </div>
-        <input type="number" id="guideConfidenceThreshold" min="0" max="1" step="0.05" value="0.7" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
-      </div>
     </div>
 
     <!-- Rewind Capture Section -->
@@ -542,27 +535,43 @@
         <label for="debugCode">Enter Debug Code</label>
         <input type="text" id="debugCode" placeholder="Enter code to unlock debugging...">
       </div>
-      <div class="toggle-group" id="debugToggleGroup" style="display: none;">
-        <label class="toggle-label">
-          <div class="toggle-info">
-            <span class="toggle-title">Enable Debug Mode</span>
-            <span class="toggle-desc">When enabled, a special debug button appears in the side panel to view full agent prompts.</span>
+      <div id="debugToggleGroup" style="display: none;">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label for="guideLowConfidenceActionThreshold">Low Confidence Action Pause Threshold</label>
+          <div class="toggle-info" style="margin-bottom: 8px;">
+            <span class="toggle-desc">Number of consecutive low-confidence actions allowed before the guide pauses for user review.</span>
           </div>
-          <div class="toggle-switch">
-            <input type="checkbox" id="debugEnabled">
-            <span class="toggle-slider"></span>
+          <input type="number" id="guideLowConfidenceActionThreshold" min="1" max="10" step="1" value="5" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label for="guideConfidenceThreshold">Yellow Confidence Threshold</label>
+          <div class="toggle-info" style="margin-bottom: 8px;">
+            <span class="toggle-desc">Guide steps below this confidence score show yellow status and count toward low-confidence pauses. Use a value from 0 to 1.</span>
           </div>
-        </label>
-        <label class="toggle-label">
-          <div class="toggle-info">
-            <span class="toggle-title">Include steer context in prompts</span>
-            <span class="toggle-desc">When enabled in debug mode, restored branches add the observed journey length and steered step to the agent prompt.</span>
-          </div>
-          <div class="toggle-switch">
-            <input type="checkbox" id="debugSteerContextEnabled">
-            <span class="toggle-slider"></span>
-          </div>
-        </label>
+          <input type="number" id="guideConfidenceThreshold" min="0" max="1" step="0.05" value="0.7" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
+        </div>
+        <div class="toggle-group">
+          <label class="toggle-label">
+            <div class="toggle-info">
+              <span class="toggle-title">Enable Debug Mode</span>
+              <span class="toggle-desc">When enabled, a special debug button appears in the side panel to view full agent prompts.</span>
+            </div>
+            <div class="toggle-switch">
+              <input type="checkbox" id="debugEnabled">
+              <span class="toggle-slider"></span>
+            </div>
+          </label>
+          <label class="toggle-label">
+            <div class="toggle-info">
+              <span class="toggle-title">Include steer context in prompts</span>
+              <span class="toggle-desc">When enabled in debug mode, restored branches add the observed journey length and steered step to the agent prompt.</span>
+            </div>
+            <div class="toggle-switch">
+              <input type="checkbox" id="debugSteerContextEnabled">
+              <span class="toggle-slider"></span>
+            </div>
+          </label>
+        </div>
       </div>
     </div>
 

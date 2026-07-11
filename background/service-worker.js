@@ -251,6 +251,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
+  if (request.action === 'callEmbed') {
+    callOpenAIEmbeddings(request.texts || [])
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   if (request.action === 'captureScreenshot') {
     const targetTabId = request.tabId || sender.tab?.id;
     const targetWindowId = sender.tab?.windowId;
@@ -309,7 +315,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Content script saves guidance state to SW memory.
     // Kept in sync by guidev2.js whenever the step changes.
     _gv2State = request.state || null;
-    _gv2TabId = sender.tab?.id ?? _gv2TabId;
+    _gv2TabId = request.tabId ?? sender.tab?.id ?? _gv2TabId;
     // Synchronous response — do NOT return true (that keeps the channel open and
     // causes "message channel closed before response received" warnings).
     sendResponse({ success: true });
@@ -433,6 +439,50 @@ async function _doCaptureScreenshot(tabId, windowId) {
     _lastCaptureTs = Date.now();
     console.error('📸 Screenshot error:', error);
     return { error: `Screenshot failed: ${error.message}` };
+  }
+}
+
+async function callOpenAIEmbeddings(texts = []) {
+  let settings = {};
+  try {
+    settings = await chrome.storage.sync.get(['openaiApiKey']);
+  } catch (e) {
+    return { error: 'Failed to load OpenAI settings' };
+  }
+  const config = CONFIG.providers.openai;
+  const apiKey = (settings.openaiApiKey || config.defaultApiKey || '').trim();
+  if (!apiKey) return { error: 'OpenAI API key not configured. Click ⚙️ Settings.' };
+
+  const input = (Array.isArray(texts) ? texts : [texts])
+    .map(t => String(t || '').trim())
+    .filter(Boolean);
+  if (!input.length) return { embeddings: [] };
+
+  startKeepAlive();
+  try {
+    const response = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'text-embedding-ada-002',
+        input
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      return { error: `OpenAI embedding API error: ${data.error?.message || response.status}` };
+    }
+    const embeddings = Array.isArray(data.data)
+      ? data.data.sort((a, b) => (a.index || 0) - (b.index || 0)).map(item => item.embedding)
+      : [];
+    return { embeddings, model: 'text-embedding-ada-002' };
+  } catch (error) {
+    return { error: `OpenAI embedding network error: ${error.message}` };
+  } finally {
+    stopKeepAlive();
   }
 }
 

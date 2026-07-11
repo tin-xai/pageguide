@@ -80,6 +80,14 @@ async function handleMessage(request) {
       else if (window._guidev2) window._guidev2.active = false;
       return { success: true };
 
+    case 'stopGuideWithRecap':
+      if (typeof gv2StopGuideWithRecap === 'function') {
+        return await gv2StopGuideWithRecap();
+      }
+      if (typeof gv2StopGuide === 'function') gv2StopGuide();
+      else if (window._guidev2) window._guidev2.active = false;
+      return { success: true, stopped: true, recap: null };
+
     case 'pauseGuide':
       if (typeof gv2PauseGuide === 'function') {
         return await gv2PauseGuide(request.reason);

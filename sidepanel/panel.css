@@ -413,11 +413,25 @@ body.light-mode .pageguide-history-load-btn:hover {
 
 .pageguide-message.assistant {
   align-self: flex-start;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--pg-som) 6%, rgba(255, 255, 255, 0.04));
   color: #e0e0e0;
   border-bottom-left-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid color-mix(in srgb, var(--pg-som) 15%, rgba(255, 255, 255, 0.08));
 }
+
+.pageguide-message.assistant a {
+  color: var(--pg-som);
+  text-decoration: none;
+  border-bottom: 1.5px solid color-mix(in srgb, var(--pg-som) 30%, transparent);
+  font-weight: 600;
+  transition: border-bottom-color 0.15s ease, opacity 0.15s ease;
+}
+
+.pageguide-message.assistant a:hover {
+  border-bottom-color: var(--pg-som);
+  opacity: 0.85;
+}
+
 
 /* Markdown formatting in messages */
 .pageguide-message strong {
@@ -1382,6 +1396,15 @@ body.light-mode .pageguide-history-load-btn:hover {
   border-color: rgba(34, 197, 94, 0.42);
   background: rgba(34, 197, 94, 0.13);
 }
+.pageguide-guide-stop-paused-btn {
+  border-color: color-mix(in srgb, #ef4444 38%, transparent);
+  background: color-mix(in srgb, #ef4444 11%, transparent);
+  color: #d73434;
+}
+.pageguide-guide-stop-paused-btn:hover {
+  background: color-mix(in srgb, #ef4444 18%, transparent);
+  border-color: color-mix(in srgb, #ef4444 55%, transparent);
+}
 .pageguide-guide-pause-btn:disabled {
   opacity: 0.55;
   cursor: default;
@@ -1589,9 +1612,9 @@ body.light-mode .pageguide-chat-messages::-webkit-scrollbar-thumb {
 }
 
 body.light-mode .pageguide-message.assistant {
-  background: rgba(0, 0, 0, 0.05);
+  background: color-mix(in srgb, var(--pg-som) 6%, rgba(0, 0, 0, 0.03));
   color: #2a2a40;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid color-mix(in srgb, var(--pg-som) 15%, rgba(0, 0, 0, 0.06));
 }
 
 body.light-mode .pageguide-message strong {
@@ -3205,11 +3228,17 @@ body {
 .pageguide-goal-step-preview img,
 .pageguide-goal-step-preview-empty {
   width: 100%;
-  height: 116px;
-  object-fit: cover;
+  max-height: 120px;
+  height: auto;
+  object-fit: contain;
+  object-position: center;
   border-radius: 8px;
   background: #f4f5f9;
   border: 1px solid #eceef5;
+}
+
+.pageguide-goal-step-preview-empty {
+  height: 116px;
 }
 
 .pageguide-goal-step-preview-empty {
@@ -3941,6 +3970,59 @@ body:not(.light-mode) .pageguide-step-meta-row b,
 body:not(.light-mode) .pageguide-goal-step-preview-empty {
   background: var(--pg-surface-strong);
   color: var(--pg-muted);
+}
+
+/* Guide-mode answer cards: keep final LLM answers visually aligned with recap cards. */
+body.light-mode .pageguide-step-card,
+body:not(.light-mode) .pageguide-step-card {
+  border: 1px solid var(--pg-border);
+  background: var(--pg-surface);
+  color: var(--pg-text);
+  border-radius: 8px;
+  box-shadow: var(--pg-shadow);
+}
+
+body.light-mode .pageguide-guide-step,
+body:not(.light-mode) .pageguide-guide-step {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+}
+
+body.light-mode .pageguide-step-badge,
+body:not(.light-mode) .pageguide-step-badge {
+  width: max-content;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pg-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pg-accent) 32%, transparent);
+  color: var(--pg-accent);
+  box-shadow: none;
+}
+
+body.light-mode .pageguide-step-text,
+body:not(.light-mode) .pageguide-step-text {
+  color: var(--pg-text);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.42;
+}
+
+body.light-mode .pageguide-step-meta-row span,
+body:not(.light-mode) .pageguide-step-meta-row span {
+  color: var(--pg-muted);
+}
+
+body.light-mode .pageguide-step-meta-row b,
+body:not(.light-mode) .pageguide-step-meta-row b {
+  background: var(--pg-surface-strong);
+  color: var(--pg-muted);
+}
+
+body.light-mode .pageguide-step-warning,
+body:not(.light-mode) .pageguide-step-warning {
+  border-color: color-mix(in srgb, #f59e0b 35%, var(--pg-border));
+  background: color-mix(in srgb, #f59e0b 12%, var(--pg-surface));
+  color: var(--pg-text);
 }
 
 /* ---- Bottom composer refinement ---- */
@@ -4895,40 +4977,100 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  border: 1px solid var(--pg-border);
+  border-radius: 16px;
+  background: var(--pg-bg);
+  overflow: hidden;
+  box-shadow: 0 12px 34px color-mix(in srgb, var(--pg-som) 8%, transparent);
+}
+
+.pageguide-recap-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 10px 14px;
+  padding: 14px 16px 13px;
+  background: color-mix(in srgb, var(--pg-som) 5%, var(--pg-bg));
+  border-bottom: 1px solid var(--pg-border);
+}
+
+.pageguide-recap-kicker {
+  grid-column: 1 / 2;
+  color: var(--pg-som);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .pageguide-recap-summary {
-  font-weight: 600;
+  grid-column: 1 / 2;
+  font-weight: 800;
   color: var(--pg-text);
-  line-height: 1.4;
+  font-size: 16px;
+  line-height: 1.28;
+}
+
+.pageguide-recap-hero > .pageguide-final-verdict {
+  grid-column: 2 / 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.pageguide-recap-body-note {
+  padding: 0 16px;
+  color: var(--pg-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .pageguide-recap-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  padding: 0 16px;
 }
 
 .pageguide-recap-row {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: 8px;
-  flex-wrap: wrap;
+  padding: 10px;
+  border: 1px solid var(--pg-border);
+  border-radius: 12px;
+  background: var(--pg-surface);
+}
+
+.pageguide-recap-row-head {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 8px;
 }
 
 /* The merged visual-evidence line: the model's justification, on its own row beneath the milestone,
    as a pink link (matching the pink SoM marker baked into the evidence crop). */
 .pageguide-recap-evidence {
-  flex: 1 0 100%;
-  margin-top: 2px;
-  font-size: 12px;
-  line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-left: 32px;
+  padding: 8px 9px;
+  border-left: 3px solid #ff2d78;
+  border-radius: 0 10px 10px 0;
+  background: color-mix(in srgb, #ff2d78 7%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--pg-muted);
 }
-.pageguide-recap-evidence::before {
-  content: "Evidence: ";
-  color: var(--pg-muted);
+.pageguide-recap-evidence-label {
+  color: #b51655;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
 }
 .pageguide-recap-evidence-link { --pg-som: #ff2d78; }
 .pageguide-recap-evidence-pop.is-visual,
@@ -4936,8 +5078,9 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 
 .pageguide-recap-text {
   flex: 1 1 auto;
-  line-height: 1.4;
+  line-height: 1.35;
   color: var(--pg-text);
+  font-size: 12px;
 }
 
 .pageguide-recap-row.is-wrong .pageguide-recap-text {
@@ -5012,8 +5155,8 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 
 .pageguide-recap-step-num {
   flex: 0 0 auto;
-  min-width: 24px;
-  height: 24px;
+  min-width: 26px;
+  height: 26px;
   padding: 0 7px;
   border-radius: 8px;
   border: 1px solid var(--pg-border);
@@ -5021,7 +5164,7 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   color: var(--pg-som);
   font-weight: 800;
   font-size: 12px;
-  line-height: 22px;
+  line-height: 24px;
   cursor: pointer;
   transition: background 0.12s ease, transform 0.12s ease;
 }
@@ -5041,8 +5184,48 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   gap: 8px;
 }
 
+.pageguide-recap-final-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 18px;
+  padding: 12px;
+  border: 1px solid var(--pg-border);
+  border-radius: 12px;
+  background: var(--pg-surface);
+}
+
+.pageguide-recap-final-card.ok {
+  border-color: color-mix(in srgb, #20a464 28%, var(--pg-border));
+  background: color-mix(in srgb, #20a464 8%, var(--pg-surface));
+}
+
+.pageguide-recap-final-card.fail {
+  border-color: color-mix(in srgb, #e5484d 30%, var(--pg-border));
+  background: color-mix(in srgb, #e5484d 8%, var(--pg-surface));
+}
+
+.pageguide-recap-final-card.unclear {
+  border-color: color-mix(in srgb, #d99a00 30%, var(--pg-border));
+  background: color-mix(in srgb, #d99a00 9%, var(--pg-surface));
+}
+
+.pageguide-recap-final-copy {
+  min-width: 0;
+  color: var(--pg-text);
+  line-height: 1.35;
+}
+
+.pageguide-recap-final-title {
+  font-weight: 700;
+}
+
 /* Numbered checkpoint cards. */
 .pageguide-recap-checkpoints-label {
+  margin: 0 16px;
+  padding-top: 2px;
+  border-top: 1px solid var(--pg-border);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -5053,6 +5236,7 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  padding: 0 16px 16px;
 }
 .pageguide-recap-checkpoint {
   min-width: 26px;
@@ -5070,6 +5254,30 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 .pageguide-recap-checkpoint:hover {
   background: color-mix(in srgb, var(--pg-som) 24%, transparent);
   transform: translateY(-1px);
+}
+
+@media (max-width: 520px) {
+  .pageguide-recap-hero {
+    grid-template-columns: 1fr;
+  }
+  .pageguide-recap-hero > .pageguide-final-verdict {
+    grid-column: 1 / 2;
+    grid-row: auto;
+    justify-self: start;
+  }
+  .pageguide-recap-summary {
+    font-size: 15px;
+  }
+  .pageguide-recap-evidence {
+    margin-left: 0;
+  }
+  .pageguide-recap-final-card {
+    grid-template-columns: auto 1fr;
+  }
+  .pageguide-recap-final-card > .pageguide-final-verdict {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
 }
 
 /* Shared figure: an image with the SOM marker overlay positioned on top. */
@@ -5235,10 +5443,21 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   color: #1f2435;
 }
 .pageguide-final-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 9%, transparent);
   font-weight: 700;
   font-size: 14px;
 }
-.pageguide-final-verdict.inline { font-size: inherit; }
+.pageguide-final-verdict.inline {
+  padding: 4px 9px;
+  font-size: 12px;
+}
 .pageguide-final-verdict.ok { color: #1ea672; }
 .pageguide-final-verdict.fail { color: #e0463e; }
 .pageguide-final-verdict.unclear { color: #c98a1a; }
@@ -5287,3 +5506,12 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   line-height: 1.4;
 }
 .pageguide-recap-pop-action b { color: var(--pg-text); }
+
+.pageguide-message.pageguide-recap-message {
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  max-width: 95% !important;
+}
+

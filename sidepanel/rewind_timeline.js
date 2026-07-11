@@ -264,6 +264,18 @@
     const shot = _recordShot(rec);
     const hasShot = !!shot;
     const hasSnap = !!rec.domSnapshot;
+    const verifyShot = rec.verifyResultShot
+      ? (String(rec.verifyResultShot).startsWith('data:') ? rec.verifyResultShot : `data:image/jpeg;base64,${rec.verifyResultShot}`)
+      : '';
+    const verifyHtml = (rec.verifyResultSystemPrompt || rec.verifyResultUserPrompt || rec.verifyResultRawResponse || rec.verifyResultShot || rec.verifyResultError)
+      ? `<details open><summary>Verify Result</summary>
+          <div style="font:400 12px/1.45 system-ui;opacity:.85;margin:6px 0;">Action: ${_escape(rec.verifyResultAction || 'terminal')} · Scroll Y: ${_escape(rec.verifyResultScrollY == null ? 'unknown' : String(rec.verifyResultScrollY))}${rec.verifyResultError ? ` · Error: ${_escape(rec.verifyResultError)}` : ''}</div>
+          ${rec.verifyResultSystemPrompt ? `<div style="font-weight:700;margin-top:6px;">System prompt sent to verification LLM</div><pre>${_escape(rec.verifyResultSystemPrompt)}</pre>` : ''}
+          ${rec.verifyResultUserPrompt ? `<div style="font-weight:700;margin-top:6px;">User/Page prompt sent to verification LLM</div><pre>${_escape(rec.verifyResultUserPrompt)}</pre>` : ''}
+          ${verifyShot ? `<div style="font-weight:700;margin-top:6px;">Screenshot sent to verification LLM</div><img src="${verifyShot}" style="max-width:100%;max-height:260px;object-fit:contain;border:1px solid #444;border-radius:6px;margin-top:6px;">` : ''}
+          ${rec.verifyResultRawResponse ? `<div style="font-weight:700;margin-top:6px;">Raw verification LLM response</div><pre>${_escape(rec.verifyResultRawResponse)}</pre>` : ''}
+        </details>`
+      : '';
 
     wrap.innerHTML = `
       <div class="rw-ins-hdr">
@@ -291,6 +303,7 @@
         ${rec.systemPrompt ? `<details><summary>System prompt sent to AI</summary><pre>${_escape(rec.systemPrompt)}</pre></details>` : ''}
         ${rec.userPrompt ? `<details><summary>User/Page prompt sent to AI</summary><pre>${_escape(rec.userPrompt)}</pre></details>` : ''}
         ${rec.rawLlmJson ? `<details><summary>Raw agent response</summary><pre>${_escape(rec.rawLlmJson)}</pre></details>` : ''}
+        ${verifyHtml}
       </div>`;
     document.body.appendChild(wrap);
 

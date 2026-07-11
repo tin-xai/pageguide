@@ -64,12 +64,14 @@ async function loadSettings() {
   // Kept in chrome.storage.local (not sync) because the capture writes large
   // snapshots locally and the content script reads the flag from local too.
   try {
-    const local = await chrome.storage.local.get(['rewindCaptureEnabled', 'guidePlanningEnabled', 'guideConfidenceThreshold']);
+    const local = await chrome.storage.local.get(['rewindCaptureEnabled', 'guidePlanningEnabled', 'guideConfidenceThreshold', 'guideLowConfidenceActionThreshold']);
     document.getElementById('rewindCaptureEnabled').checked = local.rewindCaptureEnabled !== false;
     const planningToggle = document.getElementById('guidePlanningEnabled');
     if (planningToggle) planningToggle.checked = local.guidePlanningEnabled === true;
     const thresholdInput = document.getElementById('guideConfidenceThreshold');
     if (thresholdInput) thresholdInput.value = Number.isFinite(Number(local.guideConfidenceThreshold)) ? Number(local.guideConfidenceThreshold) : 0.7;
+    const actionThresholdInput = document.getElementById('guideLowConfidenceActionThreshold');
+    if (actionThresholdInput) actionThresholdInput.value = Number.isFinite(Number(local.guideLowConfidenceActionThreshold)) ? Number(local.guideLowConfidenceActionThreshold) : 5;
   } catch (e) {}
 }
 
@@ -310,6 +312,19 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         await chrome.storage.local.set({ guideConfidenceThreshold: value });
         showStatus(`Confidence threshold set to ${value}`, 'success');
+      } catch (e) {}
+    });
+  }
+
+  const actionThresholdInput = document.getElementById('guideLowConfidenceActionThreshold');
+  if (actionThresholdInput) {
+    actionThresholdInput.addEventListener('change', async () => {
+      const raw = Number(actionThresholdInput.value);
+      const value = Number.isFinite(raw) ? Math.max(1, Math.round(raw)) : 5;
+      actionThresholdInput.value = value;
+      try {
+        await chrome.storage.local.set({ guideLowConfidenceActionThreshold: value });
+        showStatus(`Low confidence action threshold set to ${value}`, 'success');
       } catch (e) {}
     });
   }

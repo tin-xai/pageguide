@@ -224,6 +224,34 @@ function _recapVisualEvidence(rec) {
   return null;
 }
 
+function _recapVisualEvidenceItems(rec) {
+  if (!rec) return [];
+  const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
+  const rawItems = Array.isArray(rec.visualEvidenceItems) ? rec.visualEvidenceItems.slice(0, 5) : [];
+  const items = rawItems.map((item) => {
+    const shot = _recapPickShot(item.visualEvidenceShot);
+    const marker = item.visualEvidenceNormRect || null;
+    const ev = shot
+      ? { src: `data:image/jpeg;base64,${shot}`, marker: null }
+      : (before && marker ? { src: `data:image/jpeg;base64,${before}`, marker } : null);
+    return {
+      ev,
+      number: item.visualEvidenceIndex != null ? item.visualEvidenceIndex : null,
+      reason: item.visualEvidenceReason || '',
+      text: item.visualEvidenceText || ''
+    };
+  }).filter(item => item.ev || item.reason || item.text);
+  if (items.length) return items;
+  const single = _recapVisualEvidence(rec);
+  if (!single && !rec.visualEvidenceReason && !rec.visualEvidenceText) return [];
+  return [{
+    ev: single,
+    number: rec.visualEvidenceIndex != null ? rec.visualEvidenceIndex : null,
+    reason: rec.visualEvidenceReason || '',
+    text: rec.visualEvidenceText || ''
+  }];
+}
+
 // SOM marker overlay: an absolutely-positioned box + number badge, placed from a normalized
 // { x, y, w, h } rect (fractions of the image). Empty string when there's no geometry.
 function _recapMarkerHtml(normRect, number) {
@@ -254,18 +282,25 @@ async function _showRecapEvidencePopover(anchor, sessionId, step) {
   // A visual-evidence link (the justification text) shows the SEPARATE proof region + its reason;
   // the milestone-phrase links keep showing the action's targeted region + Action line.
   const isVisual = anchor?.dataset?.evidence === 'visual';
-  const ev = isVisual ? _recapVisualEvidence(rec) : _recapMarkedEvidence(rec);
-  const number = isVisual ? rec?.visualEvidenceIndex : (rec?.target?.resolvedIndex ?? rec?.resolvedIndex);
+  const visualItems = isVisual ? _recapVisualEvidenceItems(rec) : [];
+  const requestedItem = Number(anchor?.dataset?.evidenceItem);
+  const selectedVisual = Number.isFinite(requestedItem) && requestedItem >= 0 && requestedItem < visualItems.length
+    ? visualItems[requestedItem]
+    : visualItems[0];
+  const ev = isVisual ? (selectedVisual?.ev || null) : _recapMarkedEvidence(rec);
+  const number = isVisual ? selectedVisual?.number : (rec?.target?.resolvedIndex ?? rec?.resolvedIndex);
   const caption = isVisual ? 'Visual evidence' : 'Targeted region';
   const detail = isVisual
-    ? (rec?.visualEvidenceReason ? `<div class="pageguide-recap-pop-action"><b>Why:</b> ${escapeHtml(rec.visualEvidenceReason)}</div>` : '')
+    ? (selectedVisual
+        ? `<div class="pageguide-recap-pop-action"><b>Why:</b> ${escapeHtml(selectedVisual.reason || selectedVisual.text || 'Visual evidence')}</div>`
+        : '')
     : `<div class="pageguide-recap-pop-action"><b>Action:</b> ${_recapActionHtml(rec)}</div>`;
   const pop = document.createElement('div');
   pop.id = 'pageguide-recap-evidence-pop';
   pop.className = 'pageguide-recap-evidence-pop' + (isVisual ? ' is-visual' : '');
   const beforeFig = ev
     ? `<figure class="pageguide-recap-pop-fig"><figcaption>${caption}</figcaption>${_recapFigureHtml(ev.src, ev.marker, number, caption.toLowerCase())}</figure>` : '';
-  pop.innerHTML = (ev || (isVisual && rec?.visualEvidenceReason))
+  pop.innerHTML = (ev || (isVisual && visualItems.length))
     ? `${beforeFig}${detail}<div class="pageguide-recap-pop-cap">Step ${escapeHtml(String(step))} · click to inspect</div>`
     : `<div class="pageguide-recap-pop-empty">No screenshot for step ${escapeHtml(String(step))}</div>`;
   pop.addEventListener('mouseenter', _cancelRecapEvidenceHide);
@@ -288,7 +323,9 @@ function _recapActionHtml(rec) {
   const numHtml = (number != null && number !== '') ? ` <span class="pageguide-recap-marker-num inline">${escapeHtml(String(number))}</span>` : '';
   const textHtml = targetText ? ` <span class="pageguide-recap-action-target">“${escapeHtml(targetText)}”</span>` : '';
   const typeHtml = (action === 'type' && typeText) ? `: <span class="pageguide-recap-action-target">“${escapeHtml(typeText)}”</span>` : '';
-  return `<span class="pageguide-recap-action-verb">${escapeHtml(action)}</span>${numHtml}${textHtml}${typeHtml}`;
+  const navigateUrl = rec?.navigateUrl || '';
+  const navigateHtml = (action === 'navigate' && navigateUrl) ? `: <span class="pageguide-recap-action-target">${escapeHtml(navigateUrl)}</span>` : '';
+  return `<span class="pageguide-recap-action-verb">${escapeHtml(action)}</span>${numHtml}${textHtml}${typeHtml}${navigateHtml}`;
 }
 
 // Checkpoint detail overlay: the marked pre-action shot (SOM box on the chosen element) + the
@@ -323,9 +360,12 @@ async function openRecapCheckpoint(sessionId, step, stepList) {
   const instruction = rec?.instruction || '';
   const actionLabel = _recapActionHtml(rec);
   // The SEPARATE visual evidence (proof that justified the action), shown as a third figure.
-  const vis = _recapVisualEvidence(rec);
-  const visNumber = rec?.visualEvidenceIndex;
-  const visReason = rec?.visualEvidenceReason || '';
+  const visualItems = _recapVisualEvidenceItems(rec);
+  const visReason = visualItems.map((item, i) => `${i + 1}. ${item.reason || item.text || 'Visual evidence'}`).join('\n');
+  const visualFiguresHtml = visualItems.map((item, i) => item.ev
+    ? `<figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig"><figcaption>Why ${escapeHtml(String(i + 1))} — visual evidence</figcaption>${_recapFigureHtml(item.ev.src, item.ev.marker, item.number, 'visual evidence')}</figure>`
+    : ''
+  ).join('');
 
   const overlay = document.createElement('div');
   overlay.id = 'pageguide-memory-shot-lightbox';
@@ -353,12 +393,12 @@ async function openRecapCheckpoint(sessionId, step, stepList) {
             <figcaption>After — result</figcaption>
             ${after ? `<span class="pageguide-recap-figure"><img src="data:image/jpeg;base64,${after}" alt="after action"></span>` : '<div class="pageguide-recap-pop-empty">No screenshot</div>'}
           </figure>
-          ${vis ? `<figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig"><figcaption>Why — visual evidence</figcaption>${_recapFigureHtml(vis.src, vis.marker, visNumber, 'visual evidence')}</figure>` : ''}
+          ${visualFiguresHtml}
         </div>
         <div class="pageguide-recap-detail-text">
           ${instruction ? `<div class="pageguide-recap-detail-instruction">${escapeHtml(instruction)}</div>` : ''}
           <div class="pageguide-recap-detail-action"><b>Action:</b> ${actionLabel}</div>
-          ${visReason ? `<div class="pageguide-recap-detail-evidence"><b>Why:</b> ${escapeHtml(visReason)}</div>` : ''}
+          ${visReason ? `<div class="pageguide-recap-detail-evidence"><b>Why:</b> ${escapeHtml(visReason).replace(/\n/g, '<br>')}</div>` : ''}
         </div>
       </div>
     </div>`;
@@ -391,6 +431,18 @@ const RECAP_VERDICTS = {
   failed:    { icon: '❌', label: 'Incompleted', cls: 'fail' },
   unclear:   { icon: '⚠️', label: 'Unsure', cls: 'unclear' }
 };
+
+function _recapStatusText(recap) {
+  const verdictKey = recap?.final?.verdict || recap?.finalVerdict || 'unclear';
+  const verdict = RECAP_VERDICTS[verdictKey] || RECAP_VERDICTS.unclear;
+  const summary = String(recap?.summary || '').trim();
+  const lower = summary.toLowerCase();
+  let title = summary;
+  if (lower.startsWith('i have completed the task.')) title = summary.slice('I have completed the task.'.length).trim();
+  if (lower.startsWith('i could not complete the task.')) title = summary.slice('I could not complete the task.'.length).trim();
+  title = title || summary || verdict.label;
+  return { verdictKey, verdict, title, summary };
+}
 
 function _recapFinalButtonHtml(sessionId, step, verdictKey) {
   const verdict = RECAP_VERDICTS[verdictKey] || RECAP_VERDICTS.unclear;
@@ -460,14 +512,40 @@ function renderVisualHighlightAnswer(result) {
   const msg = document.createElement('div');
   msg.className = 'pageguide-message assistant pageguide-recap-message';
   msg.innerHTML = `
-    <div class="pageguide-recap pageguide-visual-highlight">
-      <div class="pageguide-recap-summary">🖼 Answer</div>
-      <figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig">${_recapFigureHtml(src, null, null, caption || 'visual answer')}</figure>
-      ${caption ? `<div class="pageguide-recap-detail-evidence"><b>Why:</b> ${escapeHtml(caption)}</div>` : ''}
+    <div class="pageguide-recap pageguide-visual-highlight" style="border: 2px solid var(--pg-som);">
+      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
+        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Visual Highlight Answer</div>
+      </div>
+      <div style="padding: 16px; background: var(--pg-bg); display: flex; flex-direction: column; gap: 8px;">
+        <figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig" style="margin: 0;">${_recapFigureHtml(src, null, null, caption || 'visual answer')}</figure>
+        ${caption ? `<div style="font-size: 13px; line-height: 1.4; color: var(--pg-text); font-weight: 500;"><b>Why:</b> ${escapeHtml(caption)}</div>` : ''}
+      </div>
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
 }
+
+// Render a find answer as a persistent assistant bubble using the recap styling.
+function renderFindAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result || !result.findAnswer) return;
+  const answerText = parseCitations(parseMarkdown(result.findAnswer));
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-find-answer" style="border: 2px solid var(--pg-som);">
+      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
+        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Highlight Answer</div>
+      </div>
+      <div style="font-size: 14px; line-height: 1.5; color: var(--pg-text); padding: 16px; background: var(--pg-bg); font-weight: 500;">
+        ${answerText}
+      </div>
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+
 
 // Render an end-of-task Visual Recap into the chat: an LLM summary, milestone lines whose key
 // phrase is an inline hover-link (hover → the step's marked screenshot pops up), and a row of
@@ -483,10 +561,50 @@ async function renderGuideRecap(recap) {
 
   const displayMilestones = milestones.filter((m) => m && m.goalRelated !== false);
 
-  const rowsHtml = displayMilestones.map((m) => {
+  const collapsedMilestones = [];
+  for (let i = 0; i < displayMilestones.length; i++) {
+    const current = displayMilestones[i];
+    const isScrollDown = String(current.text || '').toLowerCase().includes('scroll down');
+    if (isScrollDown) {
+      let j = i + 1;
+      while (j < displayMilestones.length) {
+        const next = displayMilestones[j];
+        const nextIsScrollDown = String(next.text || '').toLowerCase().includes('scroll down');
+        if (nextIsScrollDown) {
+          j++;
+        } else {
+          break;
+        }
+      }
+      const count = j - i;
+      if (count > 1) {
+        collapsedMilestones.push({
+          ...current,
+          step: `${current.step} - ${displayMilestones[j - 1].step}`,
+          firstStep: current.step,
+          isCollapsedScroll: true,
+          mergedEvidenceSteps: displayMilestones.slice(i, j).map(m => m.step)
+        });
+        i = j - 1;
+      } else {
+        collapsedMilestones.push({
+          ...current,
+          firstStep: current.step
+        });
+      }
+    } else {
+      collapsedMilestones.push({
+        ...current,
+        firstStep: current.step
+      });
+    }
+  }
+
+  const rowsHtml = collapsedMilestones.map((m) => {
     const text = m.text || '';
     const phrase = (m.phrase && text.toLowerCase().includes(m.phrase.toLowerCase())) ? m.phrase : '';
-    const link = (label) => `<span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}">${escapeHtml(label)}</span>`;
+    const clickStep = m.firstStep != null ? m.firstStep : m.step;
+    const link = (label) => `<span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}">${escapeHtml(label)}</span>`;
     const status = String(m.status || '').toLowerCase();
     const errorLabel = String(m.errorLabel || '').trim();
     const reason = String(m.reason || '').trim();
@@ -495,7 +613,7 @@ async function renderGuideRecap(recap) {
       : (status === 'unclear' ? `<span class="pageguide-recap-error-label unclear" title="${escapeHtml(reason)}">(unclear)</span>` : '');
     const stepValue = String(m.step || '');
     const stepNumHtml = stepValue
-      ? `<button type="button" class="pageguide-recap-step-num" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(stepValue)}" title="Open step ${escapeHtml(stepValue)} checkpoint">${escapeHtml(stepValue)}</button>`
+      ? `<button type="button" class="pageguide-recap-step-num" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}" title="Open step ${escapeHtml(stepValue)} checkpoint">${escapeHtml(stepValue)}</button>`
       : '';
     let inner;
     if (phrase) {
@@ -504,34 +622,58 @@ async function renderGuideRecap(recap) {
     } else {
       inner = link(text);
     }
-    // Merge in the captured visual evidence for this step: the model's justification, rendered as a
-    // clickable link (hover → the pink-marked proof region; click → the step checkpoint).
-    const evidence = recap.evidenceByStep && recap.evidenceByStep[m.step];
-    const evidenceHtml = (evidence && (evidence.reason || evidence.hasShot))
-      ? `<div class="pageguide-recap-evidence"><span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence for step ${escapeHtml(String(m.step))}">${escapeHtml(evidence.reason || 'Why this step is correct')}</span></div>`
-      : '';
-    return `<div class="pageguide-recap-row ${status ? `is-${escapeHtml(status)}` : ''}"><span class="pageguide-recap-text">${inner} ${labelHtml}</span>${stepNumHtml}${evidenceHtml}</div>`;
+    // Merge in the captured visual evidence for this step
+    let evidenceHtml = '';
+    if (m.isCollapsedScroll) {
+      const allEvItems = [];
+      (m.mergedEvidenceSteps || []).forEach(stepNum => {
+        const ev = recap.evidenceByStep && recap.evidenceByStep[stepNum];
+        const items = Array.isArray(ev?.items) ? ev.items : [];
+        allEvItems.push(...items.map(item => ({ ...item, stepNum })));
+      });
+      const evidenceItems = allEvItems.slice(0, 5);
+      if (evidenceItems.length) {
+        evidenceHtml = `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div>${evidenceItems.map((item, i) => `<span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-evidence-item="${escapeHtml(String(i))}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(item.stepNum))}" title="Visual evidence ${escapeHtml(String(i + 1))} for step ${escapeHtml(String(item.stepNum))}">${escapeHtml(`${i + 1}. ${item.index != null ? `[${item.index}] ` : ''}${item.reason || 'Why this step is correct'}`)}</span>`).join(' ')}</div>`;
+      }
+    } else {
+      const evidence = recap.evidenceByStep && recap.evidenceByStep[m.step];
+      const evidenceItems = Array.isArray(evidence?.items) ? evidence.items.slice(0, 5) : [];
+      evidenceHtml = evidenceItems.length
+        ? `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div>${evidenceItems.map((item, i) => `<span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-evidence-item="${escapeHtml(String(i))}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence ${escapeHtml(String(i + 1))} for step ${escapeHtml(String(m.step))}">${escapeHtml(`${i + 1}. ${item.index != null ? `[${item.index}] ` : ''}${item.reason || 'Why this step is correct'}`)}</span>`).join(' ')}</div>`
+        : ((evidence && (evidence.reason || evidence.hasShot))
+            ? `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div><span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence for step ${escapeHtml(String(m.step))}">${escapeHtml(evidence.reason || 'Why this step is correct')}</span></div>`
+            : '');
+    }
+    return `<div class="pageguide-recap-row ${status ? `is-${escapeHtml(status)}` : ''}">
+      <div class="pageguide-recap-row-head">${stepNumHtml}<span class="pageguide-recap-text">${inner} ${labelHtml}</span></div>
+      ${evidenceHtml}
+    </div>`;
   }).join('');
 
-  const chipsHtml = milestones.map((m) =>
-    `<button type="button" class="pageguide-recap-checkpoint" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Open step ${escapeHtml(String(m.step))} detail">${escapeHtml(String(m.step))}</button>`
-  ).join('');
-
-  // Always end with a "Final State" line linking to the last checkpoint (the final step reached).
+  // Final State links to the last checkpoint reached, and is displayed at the end of the checkpoint row.
   const finalStep = Number.isFinite(Number(recap.finalStep)) ? Number(recap.finalStep)
     : (milestones.length ? milestones[milestones.length - 1].step : null);
   const finalVerdict = recap?.final?.verdict || recap?.finalVerdict || 'unclear';
-  const finalHtml = (finalStep != null)
-    ? `<div class="pageguide-recap-final">${_recapFinalButtonHtml(sessionId, finalStep, finalVerdict)}</div>`
+  const finalChipHtml = (finalStep != null) ? _recapFinalButtonHtml(sessionId, finalStep, finalVerdict) : '';
+  const statusInfo = _recapStatusText(recap);
+  const bodyNote = (statusInfo.summary && statusInfo.summary !== statusInfo.title && !statusInfo.summary.endsWith(statusInfo.title))
+    ? statusInfo.summary
     : '';
+  const chipsHtml = milestones.map((m) =>
+    `<button type="button" class="pageguide-recap-checkpoint" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Open step ${escapeHtml(String(m.step))} detail">${escapeHtml(String(m.step))}</button>`
+  ).join('') + finalChipHtml;
   const recapSteps = recap.steps || milestones.map(m => m.step);
 
   msg.innerHTML = `
     <div class="pageguide-recap" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(recapSteps))}">
-      <div class="pageguide-recap-summary">${escapeHtml(recap.summary)}</div>
+      <div class="pageguide-recap-hero">
+        <div class="pageguide-recap-kicker">${escapeHtml(statusInfo.verdictKey === 'completed' ? 'Task Complete' : (statusInfo.verdictKey === 'failed' ? 'Task Incomplete' : 'Task Review'))}</div>
+        <div class="pageguide-recap-summary">${escapeHtml(statusInfo.title)}</div>
+        <span class="pageguide-final-verdict ${escapeHtml(statusInfo.verdict.cls)}">${escapeHtml(statusInfo.verdict.label)}</span>
+      </div>
+      ${bodyNote ? `<div class="pageguide-recap-body-note">${escapeHtml(bodyNote)}</div>` : ''}
       ${displayMilestones.length ? `<div class="pageguide-recap-list">${rowsHtml}</div>` : ''}
-      ${finalHtml}
-      ${milestones.length ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
+      ${(milestones.length || finalChipHtml) ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
@@ -1083,6 +1225,7 @@ function refreshGuideOnlyActions() {
 
 function updateGuidePauseButton() {
   const btn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
   if (!btn) return;
   const show = !!(guideActive || guidePaused);
   btn.style.display = show ? '' : 'none';
@@ -1091,6 +1234,10 @@ function updateGuidePauseButton() {
   btn.title = guidePaused ? 'Resume guide' : 'Pause guide';
   btn.setAttribute('aria-label', guidePaused ? 'Resume guide' : 'Pause guide');
   btn.disabled = false;
+  if (stopBtn) {
+    stopBtn.style.display = guidePaused ? '' : 'none';
+    stopBtn.disabled = false;
+  }
 }
 
 // Initialize
@@ -1181,6 +1328,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-guide-pause')?.addEventListener('click', () => {
     if (guidePaused) resumeGuideFromPanel();
     else pauseGuide('Guide paused. Resume when you are ready.');
+  });
+  document.getElementById('pageguide-guide-stop-paused')?.addEventListener('click', () => {
+    stopPausedGuideWithRecap();
   });
   initGuideModeToggle();
   initGuideVisualInputToggle();
@@ -3150,7 +3300,9 @@ function addGuidePausedMessage(reason = '') {
 
 async function resumeGuideFromPanel() {
   const btn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
   if (btn) btn.disabled = true;
+  if (stopBtn) stopBtn.disabled = true;
   showTyping();
   try {
     const res = await sendToContentScript({ action: 'resumeGuide' });
@@ -3166,6 +3318,7 @@ async function resumeGuideFromPanel() {
       updateGuidePauseButton();
     } else if (btn) {
       btn.disabled = false;
+      if (stopBtn) stopBtn.disabled = false;
     }
     addMessage(`Could not resume the guide: ${err.message}`, 'system');
   }
@@ -3173,7 +3326,9 @@ async function resumeGuideFromPanel() {
 
 async function pauseGuide(message = 'Guide paused.') {
   const btn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
   if (btn) btn.disabled = true;
+  if (stopBtn) stopBtn.disabled = true;
   try {
     const res = await sendToContentScript({ action: 'pauseGuide', reason: message });
     if (!res || res.success === false) throw new Error(res?.error || 'Guide not active');
@@ -3183,7 +3338,39 @@ async function pauseGuide(message = 'Guide paused.') {
     updateGuidePauseButton();
   } catch (e) {
     if (btn) btn.disabled = false;
+    if (stopBtn) stopBtn.disabled = false;
     addMessage(`Could not pause the guide: ${e.message}`, 'system');
+  }
+}
+
+async function stopPausedGuideWithRecap() {
+  const resumeBtn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
+  if (resumeBtn) resumeBtn.disabled = true;
+  if (stopBtn) stopBtn.disabled = true;
+  showTyping();
+  try {
+    const res = await sendToContentScript({ action: 'stopGuideWithRecap' });
+    if (!res || res.success === false) throw new Error(res?.error || 'Could not stop guide');
+    guideActive = false;
+    guidePaused = false;
+    guideStopped = true;
+    hideTyping();
+    updateGuidePauseButton();
+    try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
+    try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+    if (res.recap && res.recap.summary) {
+      await renderGuideRecap(res.recap);
+    } else {
+      addMessage('⏹ Guide stopped. No completed checkpoint was available to summarize.', 'system');
+    }
+  } catch (err) {
+    hideTyping();
+    guideStopped = false;
+    if (resumeBtn) resumeBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = false;
+    addMessage(`Could not stop and summarize the guide: ${err.message}`, 'system');
   }
 }
 
@@ -3217,19 +3404,28 @@ function addGuideStep(result) {
     return;
   }
 
-  const stepBadge = result.isFind ? '🔎 Answer'
+  const stepBadge = result.isFind ? '🔎 Highlight'
     : (result.isVisualHighlight ? '🖼 Answer' : (result.isLastStep ? '✅' : `Step ${result.step}`));
   const targetRow = result.targetText
     ? `<div class="pageguide-step-meta-row"><span>Target</span><b>${escapeHtml(result.targetText)}</b></div>`
     : '';
   const warning = renderStepWarning(result.step);
+  const urlRow = (result.action === 'navigate' && result.navigateUrl)
+    ? `<div class="pageguide-step-meta-row"><span>URL</span><b>${escapeHtml(result.navigateUrl)}</b></div>`
+    : '';
 
   // A find answer carries [N:"text"] citations and markdown; render them as clickable chips
   // (already escaped by parseMarkdown). visual_highlight shows its caption (the image goes to the
   // chat bubble below). Everything else stays plain escaped text.
-  const stepText = result.isFind
-    ? parseCitations(parseMarkdown(result.findAnswer || result.answer || ''))
-    : escapeHtml(result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || ''));
+  let stepText = '';
+  const rawAnswer = result.findAnswer || result.answer || '';
+  const isTruncated = false;
+
+  if (result.isFind) {
+    stepText = '✅ I have completed your request and you can see the highlight answer in the chat panel.';
+  } else {
+    stepText = escapeHtml(result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || ''));
+  }
 
   panel.innerHTML = `
     <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
@@ -3240,12 +3436,25 @@ function addGuideStep(result) {
       </div>
       <div class="pageguide-step-meta">
         ${targetRow}
+        ${urlRow}
       </div>
       ${warning}
       <div class="pageguide-step-btn-row"></div>
     </div>
   `;
   panel.style.display = '';
+
+  if (isTruncated) {
+    const expandBtn = panel.querySelector('.pageguide-step-expand');
+    expandBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const contentSpan = panel.querySelector('.pageguide-step-text-content');
+      if (contentSpan) {
+        contentSpan.innerHTML = parseCitations(parseMarkdown(rawAnswer));
+      }
+      expandBtn.style.display = 'none';
+    });
+  }
   panel.onclick = (e) => {
     if (e.target.closest('button')) return;
     // The messages-container delegate doesn't cover this panel, so handle find's citation
@@ -3268,7 +3477,7 @@ function addGuideStep(result) {
   // Keyed by step so a re-render of the same step doesn't post it twice.
   if (result.isFind && result.findAnswer && _lastFindMessageStep !== result.step) {
     _lastFindMessageStep = result.step;
-    addMessage(result.findAnswer, 'assistant', true);
+    renderFindAnswer(result);
   }
 
   // visual_highlight: the answer is a cropped screenshot region. parseMarkdown escapes <img>, so
@@ -4183,42 +4392,269 @@ async function sendMessage() {
         };
       }
     } else if (currentTab?.url && (currentTab.url.startsWith('chrome://') || currentTab.url.startsWith('chrome-extension://') || currentTab.url.startsWith('edge://'))) {
-      // Restricted page - cannot run content scripts. Default to Knowledge Base fallback.
-      console.log('🛡️ Restricted page detected. Bypassing content script and using Knowledge Base.');
-      
-      const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
-        .replace('{pageContent}', '(No text content found - restricted browser page)')
-        .replace('{pageIndex}', '(No elements indexed)');
-        
-      const messages = [
-        ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-        { role: 'user', content: effectiveQuery }
-      ];
-      
-      const response = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({
-          action: 'callLLM',
-          systemPrompt: systemPrompt,
-          messages: messages,
-          metadata: {
-            mode: 'ask_panel_restricted',
-            url: currentTab?.url || ''
-          }
-        }, (res) => {
-          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-          else resolve(res);
+      // Restricted page - cannot run content scripts directly.
+      let route = forcedRoute;
+      if (!route) {
+        try {
+          const routerResponse = await new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({
+              action: 'callLLM',
+              systemPrompt: PROMPTS.ROUTER,
+              messages: [{ role: 'user', content: effectiveQuery }],
+              metadata: {
+                mode: 'ask_panel_restricted_route',
+                url: currentTab?.url || ''
+              }
+            }, (res) => {
+              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+              else resolve(res);
+            });
+          });
+          const cleanRoute = (routerResponse?.content || '').trim().replace(/```json|```/g, '').trim();
+          const routeJson = JSON.parse(cleanRoute);
+          route = routeJson.route;
+        } catch (e) {
+          route = 'ask';
+        }
+      }
+
+      if (route === 'guide') {
+        console.log('🛡️ Restricted page in Guide mode. Generating initial step directly from panel.');
+        const systemPrompt = PROMPTS.GUIDE_V2_PROMPT;
+        const userPrompt = `PAGE BACKGROUND: LIGHT
+CURRENT URL: ${currentTab.url}
+VISUAL SCREENSHOT PROVIDED: no
+VISUAL EVIDENCE REQUESTED: no
+
+=== PAGE INDEX ===
+(No elements indexed - restricted browser page)
+
+=== USER GOAL ===
+${effectiveQuery}
+
+=== CURRENT STEP ===
+Step 1
+Previous steps: None`;
+
+        const response = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            action: 'callLLM',
+            systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+            metadata: {
+              mode: 'guide_restricted_init',
+              url: currentTab.url
+            }
+          }, (res) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(res);
+          });
         });
-      });
-      
-      if (response && !response.error) {
-        result = {
-          success: true,
-          answer: response.content || "Could not generate an answer.",
-          highlightCount: 0,
-          hasHighlights: false
-        };
+
+        if (response && !response.error) {
+          const content = response.content?.trim() || '';
+          try {
+            const cleanJson = content.replace(/```json|```/g, '').trim();
+            const step = JSON.parse(cleanJson);
+            const normalizedAction = String(step.action || '').toLowerCase().replace(/[\s-]+/g, '_');
+            const targetUrl = step.url;
+
+            if (normalizedAction === 'navigate' && targetUrl) {
+              const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+              const autoModeResult = await chrome.storage.local.get('guideAutoMode');
+              const autoMode = autoModeResult.guideAutoMode === true;
+              
+              let screenshotBefore = null;
+              try {
+                const capResponse = await new Promise((resolve) => {
+                  chrome.runtime.sendMessage({ action: 'captureScreenshot' }, resolve);
+                });
+                if (capResponse && capResponse.success) {
+                  screenshotBefore = capResponse.imageBase64;
+                }
+              } catch (err) {
+                console.warn('Failed to capture initial screenshot:', err);
+              }
+
+              if (typeof rewindStartSession === 'function') {
+                await rewindStartSession(sessionId, effectiveQuery);
+              }
+
+              const initialRecord = {
+                sessionId,
+                step: 0,
+                planStep: 0,
+                timestamp: Date.now(),
+                url: currentTab.url,
+                title: currentTab.title || 'New Tab',
+                instruction: 'Initial state',
+                action: null,
+                isInitial: true,
+                isLastStep: false,
+                target: null,
+                confidence: null,
+                durationMs: 0,
+                screenshot: screenshotBefore || null,
+                screenshotBefore: screenshotBefore || null,
+                domSnapshot: '',
+                restore: null,
+                rawLlmJson: '',
+                systemPrompt: '',
+                userPrompt: ''
+              };
+              if (typeof rewindPutRecord === 'function') {
+                await rewindPutRecord(initialRecord);
+              }
+
+              const stepRecord = {
+                sessionId,
+                step: 1,
+                planStep: 1,
+                timestamp: Date.now(),
+                url: currentTab.url,
+                title: currentTab.title || 'New Tab',
+                instruction: step.instruction || `Navigate to ${targetUrl}`,
+                action: 'navigate',
+                navigateUrl: targetUrl,
+                isLastStep: false,
+                target: null,
+                confidence: 1.0,
+                durationMs: 0,
+                screenshot: screenshotBefore || null,
+                screenshotBefore: screenshotBefore || null,
+                domSnapshot: '',
+                restore: null,
+                rawLlmJson: JSON.stringify(step),
+                systemPrompt,
+                userPrompt
+              };
+              if (typeof rewindPutRecord === 'function') {
+                await rewindPutRecord(stepRecord);
+              }
+
+              try {
+                chrome.runtime.sendMessage({
+                  action: 'guideStepRecord',
+                  meta: {
+                    sessionId,
+                    step: 0,
+                    planStep: 0,
+                    instruction: 'Initial state',
+                    isInitial: true,
+                    url: currentTab.url,
+                    title: currentTab.title || 'New Tab',
+                    timestamp: Date.now(),
+                    hasShot: !!screenshotBefore
+                  }
+                });
+
+                chrome.runtime.sendMessage({
+                  action: 'guideStepRecord',
+                  meta: {
+                    sessionId,
+                    step: 1,
+                    planStep: 1,
+                    instruction: step.instruction || `Navigate to ${targetUrl}`,
+                    url: currentTab.url,
+                    title: currentTab.title || 'New Tab',
+                    timestamp: Date.now(),
+                    action: 'navigate',
+                    navigateUrl: targetUrl,
+                    hasShot: !!screenshotBefore
+                  }
+                });
+              } catch (e) {
+                console.warn('Failed to emit initial step records:', e);
+              }
+
+              const state = {
+                active: true,
+                question: effectiveQuery,
+                previousSteps: [`Step 1: Navigate to ${targetUrl}`],
+                sessionId,
+                captureEnabled: true,
+                autoMode: autoMode,
+                currentPlanStep: 1,
+                pendingResume: true,
+                timestamp: Date.now()
+              };
+
+              await chrome.storage.session.set({ pageguideGuidanceV2: state });
+              try {
+                await new Promise((resolve) => {
+                  chrome.runtime.sendMessage({
+                    action: 'guidanceV2_setState',
+                    state: state,
+                    tabId: currentTab.id
+                  }, resolve);
+                });
+              } catch (err) {
+                console.warn('Failed to set SW state:', err);
+              }
+              chrome.tabs.update(currentTab.id, { url: targetUrl });
+
+              result = {
+                success: true,
+                isGuide: true,
+                answer: step.instruction || `Navigating to ${targetUrl}`,
+                action: 'navigate',
+                navigateUrl: targetUrl,
+                step: 1,
+                isLastStep: false
+              };
+            } else {
+              result = {
+                success: true,
+                isGuide: true,
+                answer: step.instruction || 'Please navigate to the target site.',
+                action: step.action || 'done',
+                step: 1,
+                isLastStep: step.isLastStep || false
+              };
+            }
+          } catch (e) {
+            console.error('Failed to parse Guide step JSON:', e);
+            throw new Error('Guide generation failed: invalid response schema');
+          }
+        } else {
+          throw new Error(response?.error || 'Failed to call LLM');
+        }
       } else {
-        throw new Error(response?.error || 'Failed to call LLM');
+        console.log('🛡️ Restricted page detected. Bypassing content script and using Knowledge Base.');
+        const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+          .replace('{pageContent}', '(No text content found - restricted browser page)')
+          .replace('{pageIndex}', '(No elements indexed)');
+
+        const messages = [
+          ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+          { role: 'user', content: effectiveQuery }
+        ];
+
+        const response = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            action: 'callLLM',
+            systemPrompt: systemPrompt,
+            messages: messages,
+            metadata: {
+              mode: 'ask_panel_restricted',
+              url: currentTab?.url || ''
+            }
+          }, (res) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(res);
+          });
+        });
+
+        if (response && !response.error) {
+          result = {
+            success: true,
+            answer: response.content || "Could not generate an answer.",
+            highlightCount: 0,
+            hasHighlights: false
+          };
+        } else {
+          throw new Error(response?.error || 'Failed to call LLM');
+        }
       }
     } else {
       // Normal routing via content script
@@ -5348,7 +5784,27 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
     contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">Loading step prompt details...</div>';
 
     if (stepInfo.type === 'live') {
-      renderPromptDetails(stepInfo.data);
+      const rec = currentGuideRecords.find(r => Number(r.step) === Number(stepInfo.data.metadata?.step)) || {};
+      const promptData = {
+        ...stepInfo.data,
+        verifyResult: (rec.verifyResultSystemPrompt || rec.verifyResultUserPrompt || rec.verifyResultRawResponse || rec.verifyResultShot) ? {
+          systemPrompt: rec.verifyResultSystemPrompt || '',
+          userPrompt: rec.verifyResultUserPrompt || '',
+          rawResponse: rec.verifyResultRawResponse || '',
+          screenshot: rec.verifyResultShot || null,
+          action: rec.verifyResultAction || '',
+          scrollY: rec.verifyResultScrollY,
+          error: rec.verifyResultError || ''
+        } : null,
+        findSystemPrompt: rec.findSystemPrompt || '',
+        findUserPrompt: rec.findUserPrompt || '',
+        findRawResponse: rec.findRawResponse || '',
+        visualFallbackSystemPrompt: rec.visualFallbackSystemPrompt || '',
+        visualFallbackUserPrompt: rec.visualFallbackUserPrompt || '',
+        visualFallbackRawResponse: rec.visualFallbackRawResponse || '',
+        visualFallbackShot: rec.visualFallbackShot || null,
+      };
+      renderPromptDetails(promptData);
     } else {
       try {
         if (typeof rewindGetRecord === 'function') {
@@ -5367,7 +5823,30 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
                 mode: rec.mode || 'guide',
                 step: rec.step,
                 url: rec.url
-              }
+              },
+              verifyResult: (rec.verifyResultSystemPrompt || rec.verifyResultUserPrompt || rec.verifyResultRawResponse || rec.verifyResultShot) ? {
+                systemPrompt: rec.verifyResultSystemPrompt || '',
+                userPrompt: rec.verifyResultUserPrompt || '',
+                rawResponse: rec.verifyResultRawResponse || '',
+                screenshot: rec.verifyResultShot || null,
+                action: rec.verifyResultAction || '',
+                scrollY: rec.verifyResultScrollY,
+                error: rec.verifyResultError || ''
+              } : null,
+              finalVerify: (rec.finalVerifySystemPrompt || rec.finalVerifyUserPrompt || rec.finalVerifyResponse || rec.finalShot) ? {
+                systemPrompt: rec.finalVerifySystemPrompt || '',
+                userPrompt: rec.finalVerifyUserPrompt || '',
+                rawResponse: rec.finalVerifyResponse || '',
+                screenshot: rec.finalShot || null,
+                verdict: rec.finalVerdict || ''
+              } : null,
+              findSystemPrompt: rec.findSystemPrompt || '',
+              findUserPrompt: rec.findUserPrompt || '',
+              findRawResponse: rec.findRawResponse || '',
+              visualFallbackSystemPrompt: rec.visualFallbackSystemPrompt || '',
+              visualFallbackUserPrompt: rec.visualFallbackUserPrompt || '',
+              visualFallbackRawResponse: rec.visualFallbackRawResponse || '',
+              visualFallbackShot: rec.visualFallbackShot || null,
             };
             renderPromptDetails(promptData);
           } else {
@@ -5464,6 +5943,104 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
           <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Attached Screenshots/Images (${imagesList.length})</summary>
           <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 8px;">
             ${imgHtml}
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.verifyResult) {
+      const v = p.verifyResult;
+      const vsrc = v.screenshot ? (v.screenshot.startsWith('data:') ? v.screenshot : `data:image/jpeg;base64,${v.screenshot}`) : '';
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Verify Result (Mid-journey)</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div style="font-size: 12px; color: var(--pg-muted);">Action: ${escapeHtml(v.action || 'terminal')} · Scroll Y: ${escapeHtml(String(v.scrollY ?? 'unknown'))}${v.error ? ` · Error: ${escapeHtml(v.error)}` : ''}</div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.systemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User/Page prompt sent to verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.userPrompt || '(none)')}</pre>
+            </div>
+            ${vsrc ? `<div><div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Screenshot sent to verification LLM</div><img src="${vsrc}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${vsrc}')" /></div>` : ''}
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw verification LLM response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.rawResponse || '(none)')}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.finalVerify) {
+      const v = p.finalVerify;
+      const vsrc = v.screenshot ? (v.screenshot.startsWith('data:') ? v.screenshot : `data:image/jpeg;base64,${v.screenshot}`) : '';
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Final Verify Result</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div style="font-size: 12px; color: var(--pg-muted);">Verdict: ${escapeHtml(v.verdict || 'unclear')}</div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to final verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.systemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User/Page prompt sent to final verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.userPrompt || '(none)')}</pre>
+            </div>
+            ${vsrc ? `<div><div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Screenshot sent to final verification LLM</div><img src="${vsrc}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${vsrc}')" /></div>` : ''}
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw final verification LLM response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.rawResponse || '(none)')}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.findSystemPrompt || p.findUserPrompt || p.findRawResponse) {
+      html += `
+        <details open style="margin-top: 12px; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Highlight Reader Pass Details</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to Highlight reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.findSystemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User prompt sent to Highlight reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.findUserPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw Highlight reader response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.findRawResponse || '(none)')}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.visualFallbackSystemPrompt || p.visualFallbackUserPrompt || p.visualFallbackRawResponse || p.visualFallbackShot) {
+      const fsrc = p.visualFallbackShot ? (p.visualFallbackShot.startsWith('data:') ? p.visualFallbackShot : `data:image/jpeg;base64,${p.visualFallbackShot}`) : '';
+      html += `
+        <details open style="margin-top: 12px; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Visual Fallback Reader Details</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to Visual fallback reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.visualFallbackSystemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User prompt sent to Visual fallback reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.visualFallbackUserPrompt || '(none)')}</pre>
+            </div>
+            ${fsrc ? `<div><div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Screenshot (with SoM) sent to Visual fallback reader</div><img src="${fsrc}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${fsrc}')" /></div>` : ''}
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw Visual fallback reader response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.visualFallbackRawResponse || '(none)')}</pre>
+            </div>
           </div>
         </details>
       `;

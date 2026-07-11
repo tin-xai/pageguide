@@ -1178,6 +1178,21 @@ function gv2LoopScore(priorKeys, currentKey) {
 
 const GV2_LOOP_PENALTY = 0.5;
 
+function gv2CosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || a.length !== b.length) return null;
+  let dot = 0, aa = 0, bb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = Number(a[i]);
+    const y = Number(b[i]);
+    if (!isFinite(x) || !isFinite(y)) return null;
+    dot += x * y;
+    aa += x * x;
+    bb += y * y;
+  }
+  if (aa <= 0 || bb <= 0) return null;
+  return Math.max(0, Math.min(1, dot / (Math.sqrt(aa) * Math.sqrt(bb))));
+}
+
 function gv2GroundingScore(parts) {
   if (!parts || !parts.hasTarget) return null;
   const v = parts.grounding;
@@ -1295,6 +1310,7 @@ if (typeof window !== 'undefined') {
   window.gv2ConfidenceTier = gv2ConfidenceTier;
   window.gv2ComputeConfidence = gv2ComputeConfidence;
   window.gv2GroundingScore = gv2GroundingScore;
+  window.gv2CosineSimilarity = gv2CosineSimilarity;
   window.gv2LoopScore = gv2LoopScore;
   window.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
   window.gv2ElementKey = gv2ElementKey;
@@ -1306,6 +1322,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2ConfidenceTier = gv2ConfidenceTier;
   module.exports.gv2ComputeConfidence = gv2ComputeConfidence;
   module.exports.gv2GroundingScore = gv2GroundingScore;
+  module.exports.gv2CosineSimilarity = gv2CosineSimilarity;
   module.exports.gv2LoopScore = gv2LoopScore;
   module.exports.gv2ComputeMechanicalConfidence = gv2ComputeMechanicalConfidence;
   module.exports.gv2ElementKey = gv2ElementKey;
@@ -1514,7 +1531,7 @@ if (typeof window !== 'undefined') window.gv2NormalizeRect = gv2NormalizeRect;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeRect = gv2NormalizeRect;
 
 /**
- * Normalize the LLM's per-step "visualEvidence" into { index, rect, text, reason }, or null.
+ * Normalize one LLM per-step "visualEvidence" item into { index, rect, text, reason }, or null.
  *
  * visualEvidence is the SEPARATE on-page proof that justifies a step (e.g. a "Sort by:
  * Price: Low to High" control), distinct from the action target. The model points to it with
@@ -1546,6 +1563,59 @@ function gv2NormalizeVisualEvidence(v) {
 
 if (typeof window !== 'undefined') window.gv2NormalizeVisualEvidence = gv2NormalizeVisualEvidence;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeVisualEvidence = gv2NormalizeVisualEvidence;
+
+/**
+ * Normalize visual evidence into a capped array. Accepts either:
+ * - a single object: { index, rect, text, reason }
+ * - an array of those objects
+ * - grouped fields: { indexes: [..], rects: [..], reasons: [..], texts: [..] }
+ *
+ * Each returned item may use either an SoM index or a rect. Indexes are preferred downstream; rects
+ * remain per-item fallbacks when no usable marker exists.
+ *
+ * @param {object|string|Array} v
+ * @param {number} maxItems
+ * @returns {Array<{index:(number|null), rect:(object|null), text:(string|null), reason:(string|null)}>}
+ */
+function gv2NormalizeVisualEvidenceList(v, maxItems = 5) {
+  const cap = Math.max(1, Math.min(5, Number(maxItems) || 5));
+  if (v == null) return [];
+  let raw = [];
+  if (Array.isArray(v)) {
+    raw = v;
+  } else if (v && typeof v === 'object' && (Array.isArray(v.indexes) || Array.isArray(v.indices) || Array.isArray(v.rects))) {
+    const indexes = Array.isArray(v.indexes) ? v.indexes : (Array.isArray(v.indices) ? v.indices : []);
+    const rects = Array.isArray(v.rects) ? v.rects : [];
+    const texts = Array.isArray(v.texts) ? v.texts : [];
+    const reasons = Array.isArray(v.reasons) ? v.reasons : [];
+    const count = Math.max(indexes.length, rects.length, texts.length, reasons.length);
+    raw = Array.from({ length: count }, (_, i) => ({
+      index: indexes[i],
+      rect: rects[i],
+      text: texts[i],
+      reason: reasons[i]
+    }));
+  } else {
+    raw = [v];
+  }
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    if (out.length >= cap) break;
+    const norm = gv2NormalizeVisualEvidence(item);
+    if (!norm) continue;
+    const key = norm.index != null
+      ? `i:${norm.index}`
+      : (norm.rect ? `r:${norm.rect.x},${norm.rect.y},${norm.rect.w},${norm.rect.h}` : `t:${norm.text || ''}|${norm.reason || ''}`);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(norm);
+  }
+  return out;
+}
+
+if (typeof window !== 'undefined') window.gv2NormalizeVisualEvidenceList = gv2NormalizeVisualEvidenceList;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeVisualEvidenceList = gv2NormalizeVisualEvidenceList;
 
 /**
  * Does this step point at a single DOM element the agent must highlight and act on?

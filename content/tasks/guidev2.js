@@ -21,83 +21,7 @@ const GV2_GOAL_RELEVANCE_ENABLED = false;
 
 // ===== PROMPT (inline to keep guidev2.js self-contained) =====
 
-const GUIDE_V2_PROMPT = `You are a helpful guide assistant providing step-by-step interactive guidance.
-
-Given the current page and the user's goal, provide ONE step at a time.
-
-Return JSON only:
-{
-  "thought": "Your internal chain-of-thought reasoning about the page state and chosen action",
-  "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
-  "element": {"index": N, "text": "element text to highlight"},
-  "visualEvidence": {"index": M, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the evidence element", "reason": "one sentence: why this proves the action is correct"},
-  "action": "click" | "type" | "clear_text" | "find" | "visual_highlight" | "done",
-  "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
-  "findQuery": "the informational question to answer from THIS page (only when action=find; null otherwise)",
-  "isLastStep": false,
-  "completedPlanStep": 1,
-  "completedPlanStepReason": "reasoning here",
-  "risk": "low" | "high",
-  "riskReason": "short reason for the risk level",
-  "confirmation": "needed" | "no need"
-}
-
-"thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
-"completedPlanStep": the highest plan step number completed by this action, or null if none is completed yet.
-"completedPlanStepReason": short explanation for that completion value.
-"instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
-"risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
-"confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
-"visualEvidence": ONLY populate this when the user prompt says VISUAL EVIDENCE REQUESTED: yes (otherwise set it to null). It is the SEPARATE piece of on-page proof that justifies this step — NOT the action target. Point to it with EITHER a SoM "index" (a DIFFERENT PAGE INDEX marker number than "element.index") OR, when no marker fits the region, a normalized "rect" {x,y,w,h} as fractions of the screenshot (0..1, top-left origin). Example for "add the cheapest laptop to my cart": the action target is the "Add to Cart" button but the visualEvidence is the "Sort by: Price: Low to High" control, which proves the first result is the cheapest. "text" is the evidence region's visible label and "reason" is one short sentence explaining why it justifies the chosen action. Prefer "index"; use "rect" only when the region has no SoM marker. For action="visual_highlight", visualEvidence marks the region to show the user as the answer.
-
-RULES:
-1. ONE step at a time — never list multiple things to do
-2. "thought": write your internal chain-of-thought/reasoning here first (analyzing the page state, completed steps, user goals, and candidate actions).
-3. "instruction": must be a very concise, direct action-oriented instruction (1-2 sentences maximum, e.g. "Click on 'Languages' to open the language settings"). Do NOT put any chain-of-thought, reasoning, meta-commentary, or explanation here. Keep it short and readable for the user.
-4. action="click": click the highlighted element (the agent does this for low-risk steps;
-   the user does it for high-risk ones)
-5. action="type": provide typeText; the agent auto-fills low-risk fields, and lets the user
-   type high-risk ones (e.g. passwords)
-6. action="clear_text": clear the highlighted form field's current value; leave typeText
-   empty/null. Use it before typing a replacement value or when the task asks to reset a field.
-   Sensitive fields (passwords, payment, private data) are high risk and should be handed to the user.
-7. action="done": set isLastStep=true; no element interaction needed
-8. action="find": use ONLY when the USER GOAL is INFORMATIONAL — the user wants to KNOW
-   something (a policy, an answer, an explanation), not to perform a transaction — AND the
-   current page is where that information should live according to the current PLAN step
-   (e.g. you have navigated to the Help/FAQ/policy page the plan named).
-   You do NOT need to see the page text to choose this: decide from the plan's intent plus
-   the fact that you have arrived at the page. Set findQuery to the precise question to
-   answer, and leave element null. A separate reader pass then extracts the answer and
-   highlights the passages that support it.
-   find MUST be the LAST step (always set isLastStep=true) — it is the final answer to the user.
-   NEVER use find mid-journey: complete all navigation with click/type first, then find at the end.
-   Do NOT use find for navigational or transactional goals (buy, book, sign in, change a
-   setting) — those end with click/type/done.
-9. action="visual_highlight": available ONLY when the user prompt says VISUAL EVIDENCE REQUESTED
-   includes visual input (a screenshot was provided). Use it as the LAST step (always set
-   isLastStep=true) to answer an INFORMATIONAL/visual goal by showing the user a region of the
-   screenshot. Leave element null and put the region to show in "visualEvidence" (a SoM "index" or
-   a normalized "rect"); "reason" is the caption. We crop that region and return it as the answer.
-   Like find, it is terminal and NEVER used mid-journey.
-10. Highlight the element to interact with using its index from PAGE INDEX
-11. If the target is not visible, guide the user to open the relevant menu first
-
-COMMON PATTERNS:
-- Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
-- Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
-- Replace text:   Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
-- Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
-- Info lookup:    Step 1 → click 'Help' → Step 2 → click the relevant article →
-                  Step 3 → action=find (the answer is on this page)
-
-NATIVE BROWSER DIALOGS (print, save, open file, etc.):
-When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that
-step MUST be the last step (isLastStep=true, action="done"). Explain what the user will see in
-the dialog and what they should do, but do NOT attempt to guide actions inside the dialog — the
-extension cannot access native browser UI. Example last-step instruction:
-"Click 'Print' in the File menu. Your browser's print dialog will open — choose your printer and
-settings there, then click the Print or Save button to finish."`;
+const GUIDE_V2_PROMPT = PROMPTS.GUIDE_V2_PROMPT;
 if (typeof window !== 'undefined') window.GUIDE_V2_PROMPT = GUIDE_V2_PROMPT;
 
 // ===== CONSTANTS =====
@@ -648,6 +572,21 @@ function gv2WaitForDomStable(maxWait = 6000, stableMs = 300) {
     // Hard cap
     giveUpTimer = setTimeout(done, maxWait);
   });
+}
+
+async function _gv2WaitForPageReady(maxWait = 10000) {
+  try {
+    if (document.readyState === 'loading') {
+      await new Promise(resolve => {
+        const t = setTimeout(resolve, maxWait);
+        window.addEventListener('load', () => {
+          clearTimeout(t);
+          resolve();
+        }, { once: true });
+      });
+    }
+  } catch (e) { /* best-effort */ }
+  try { await gv2WaitForDomStable(Math.min(maxWait, 8000), 700); } catch (e) { /* best-effort */ }
 }
 
 // ===== RESUME AFTER NAVIGATION =====
@@ -1421,6 +1360,7 @@ async function _gv2IsAutoMode() {
 }
 
 const _GV2_CONF_THRESHOLD_KEY = 'guideConfidenceThreshold';
+const _GV2_ACTION_THRESHOLD_KEY = 'guideLowConfidenceActionThreshold';
 
 async function _gv2ConfidenceThreshold() {
   try {
@@ -1429,6 +1369,16 @@ async function _gv2ConfidenceThreshold() {
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.7;
   } catch (e) {
     return 0.7;
+  }
+}
+
+async function _gv2LowConfidenceActionThreshold() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_ACTION_THRESHOLD_KEY);
+    const n = Number(r[_GV2_ACTION_THRESHOLD_KEY]);
+    return Number.isFinite(n) ? Math.max(1, Math.round(n)) : 5;
+  } catch (e) {
+    return 5;
   }
 }
 
@@ -1568,6 +1518,70 @@ function _gv2ElementAccessibleText(el) {
   }
 }
 
+function _gv2TextFallbackSimilarity(a, b) {
+  const norm = (s) => String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const left = norm(a);
+  const right = norm(b);
+  if (!left || !right) return 0.0;
+  if (left === right) return 1.0;
+  if (left.includes(right) || right.includes(left)) {
+    const shorter = Math.min(left.length, right.length);
+    const longer = Math.max(left.length, right.length);
+    return Math.max(0.65, Math.min(0.95, shorter / Math.max(1, longer)));
+  }
+  const stop = new Set(['a', 'an', 'the', 'to', 'for', 'on', 'in', 'of', 'and', 'or', 'with', 'click', 'select', 'choose', 'open', 'change', 'begin', 'search', 'please']);
+  const aw = left.split(' ').filter(w => w.length > 1 && !stop.has(w));
+  const bw = right.split(' ').filter(w => w.length > 1 && !stop.has(w));
+  if (!aw.length || !bw.length) return 0.0;
+  const bset = new Set(bw);
+  const overlap = aw.filter(w => bset.has(w)).length;
+  return Math.max(0, Math.min(1, overlap / Math.max(aw.length, bw.length)));
+}
+
+function _gv2EvidenceItemKey(item) {
+  const el = item?.evidenceEl || null;
+  if (el) {
+    for (const [key, idxEl] of Object.entries(window._pageguideIndex || {})) {
+      if (idxEl === el) return `i:${key}`;
+    }
+  }
+  const r = item?.evidenceRect;
+  if (r) return `r:${r.x},${r.y},${r.w},${r.h}`;
+  return `t:${item?.text || ''}|${item?.reason || ''}`;
+}
+
+function _gv2DedupeEvidenceItems(items) {
+  const out = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(items) ? items : [])) {
+    const key = _gv2EvidenceItemKey(item);
+    if (seen.has(key)) continue;
+    const el = item?.evidenceEl || null;
+    let skip = false;
+    for (let i = 0; i < out.length; i++) {
+      const existing = out[i];
+      const ex = existing?.evidenceEl || null;
+      if (el && ex && (el.contains(ex) || ex.contains(el))) {
+        if (el.contains(ex) && el !== ex) {
+          out[i] = item;
+          seen.add(key);
+        }
+        skip = true;
+        break;
+      }
+    }
+    if (skip) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
 async function _gv2ElementStepSimilarity(instruction, elementText, hasIndex) {
   if (!hasIndex) return null;
   const instr = String(instruction || '').trim();
@@ -1579,10 +1593,14 @@ async function _gv2ElementStepSimilarity(instruction, elementText, hasIndex) {
       action: 'callEmbed',
       texts: [instr, elem]
     });
-    if (resp?.error || !Array.isArray(resp.embeddings) || resp.embeddings.length < 2) return null;
+    if (resp?.error || !Array.isArray(resp.embeddings) || resp.embeddings.length < 2) {
+      try { window._guidev2._lastEmbeddingError = resp?.error || 'Embedding response missing vectors'; } catch (e) {}
+      return _gv2TextFallbackSimilarity(instr, elem);
+    }
     return gv2CosineSimilarity(resp.embeddings[0], resp.embeddings[1]);
   } catch (e) {
-    return null;
+    try { window._guidev2._lastEmbeddingError = e?.message || String(e); } catch (_) {}
+    return _gv2TextFallbackSimilarity(instr, elem);
   }
 }
 
@@ -1960,6 +1978,105 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
   return out;
 }
 
+async function gv2CaptureEvidenceItems(items) {
+  const input = Array.isArray(items) ? items.slice(0, 5) : [];
+  const out = [];
+  for (const item of input) {
+    if (!item || (!item.evidenceEl && !item.evidenceRect)) {
+      out.push({
+        visualEvidenceShot: null,
+        visualEvidenceNormRect: item?.evidenceRect || null,
+        visualEvidenceMarker: null,
+        visualEvidenceText: item?.text || null,
+        visualEvidenceReason: item?.reason || null,
+        visualEvidenceIndex: item?.evidenceIndex != null ? item.evidenceIndex : null
+      });
+      continue;
+    }
+    let cap = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null };
+    try { cap = await gv2CaptureEvidenceRegion(item.evidenceEl, item.evidenceIndex, item.evidenceRect); } catch (e) { /* best-effort */ }
+    out.push({
+      visualEvidenceShot: cap.visualEvidenceShot || null,
+      visualEvidenceNormRect: cap.visualEvidenceNormRect || item.evidenceRect || null,
+      visualEvidenceMarker: cap.visualEvidenceMarker || null,
+      visualEvidenceText: item.text || null,
+      visualEvidenceReason: item.reason || null,
+      visualEvidenceIndex: item.evidenceIndex != null ? item.evidenceIndex : null
+    });
+  }
+  return out;
+}
+
+async function gv2RunTerminalVerifyResult({ action, instruction, findQuery, visualEvidenceItems, restoreScroll = false } = {}) {
+  const startX = window.scrollX || 0;
+  const startY = window.scrollY || 0;
+  const out = {
+    verifyResultSystemPrompt: '',
+    verifyResultUserPrompt: '',
+    verifyResultRawResponse: '',
+    verifyResultShot: null,
+    verifyResultScrollY: startY,
+    verifyResultAction: action || '',
+    verifyResultError: null
+  };
+  try {
+    await _gv2WaitForPageReady(10000);
+    const scroller = document.scrollingElement || document.documentElement || document.body;
+    const amount = Math.max(240, Math.min(800, Math.round((window.innerHeight || 800) * 0.8)));
+    try { scroller.scrollTop = (scroller.scrollTop || 0) + amount; } catch (e) { /* best-effort */ }
+    await gv2WaitForDomStable(4000, 500);
+    out.verifyResultScrollY = window.scrollY || scroller?.scrollTop || startY;
+    let shot = null;
+    try { if (typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
+    out.verifyResultShot = shot || null;
+
+    const evidenceText = Array.isArray(visualEvidenceItems) && visualEvidenceItems.length
+      ? visualEvidenceItems.slice(0, 5).map((item, i) => {
+          const pointer = item?.evidenceIndex != null ? `index ${item.evidenceIndex}` : (item?.evidenceRect ? 'rect' : 'unknown');
+          return `${i + 1}. ${pointer}: ${item?.reason || item?.text || ''}`;
+        }).join('\n')
+      : '(none)';
+    out.verifyResultSystemPrompt = `You are verifying a terminal browser-guide result before the guide returns its final answer. The page has been allowed to load, then scrolled down at least once. Use the screenshot as primary evidence. Reply with ONLY JSON:
+{"status":"ready"|"not_ready"|"unclear","reason":"one sentence","visibleEvidence":"short evidence seen in the scrolled screenshot"}
+- status="ready" means the page appears loaded and likely contains enough visible context for the terminal action.
+- status="not_ready" means the page is still loading, wrong, empty, or visibly missing needed context.
+- Do not perform the task and do not write the final user answer.`;
+    out.verifyResultUserPrompt = `USER GOAL: ${window._guidev2?.question || ''}
+TERMINAL ACTION: ${action || ''}
+PLANNED INSTRUCTION: ${instruction || ''}
+FIND QUERY: ${findQuery || ''}
+VISUAL EVIDENCE TARGETS:
+${evidenceText}
+
+Verify whether this scrolled page state is ready for the terminal ${action || 'answer'} action.`;
+    const msg = {
+      action: shot ? 'callLLMWithImages' : 'callLLM',
+      systemPrompt: out.verifyResultSystemPrompt,
+      messages: [{ role: 'user', content: out.verifyResultUserPrompt }],
+      metadata: { mode: 'guide_verify_result', step: window._guidev2?._activeStepNumber || null, url: window.location.href }
+    };
+    if (shot) msg.images = [{ base64: shot, label: 'Scrolled page screenshot for Verify Result' }];
+    let response = await safeSendMessage(msg);
+    if (shot && response?.error) {
+      response = await safeSendMessage({ ...msg, action: 'callLLM', images: undefined });
+    }
+    out.verifyResultRawResponse = response?.content ? String(response.content) : '';
+    if (response?.error) out.verifyResultError = response.error;
+  } catch (e) {
+    out.verifyResultError = e?.message || String(e);
+  } finally {
+    if (restoreScroll) {
+      try {
+        const scroller = document.scrollingElement || document.documentElement || document.body;
+        if (scroller) scroller.scrollTop = startY;
+        if (scroller) scroller.scrollLeft = startX;
+      } catch (e) {}
+      try { await gv2WaitForDomStable(2000, 250); } catch (e) {}
+    }
+  }
+  return out;
+}
+
 async function gv2CaptureStepRecord(data) {
   const g = window._guidev2;
   if (!g || !g.active || !g.captureEnabled || !g.sessionId) return;
@@ -2055,6 +2172,7 @@ async function gv2CaptureStepRecord(data) {
         mechGrounding: data.mechGrounding != null ? data.mechGrounding : null,
         elementStepSimilarity: data.elementStepSimilarity != null ? data.elementStepSimilarity : null,
         element_step_similarity: data.element_step_similarity != null ? data.element_step_similarity : null,
+        embeddingError: data.embeddingError || null,
         mechLoop: data.mechLoop != null ? data.mechLoop : null,
         loopMatches: data.loopMatches != null ? data.loopMatches : null,
         domElementText: data.domElementText || null,
@@ -2094,10 +2212,27 @@ async function gv2CaptureStepRecord(data) {
     // element resolved in gv2ProcessResponse). Only captured when the model supplied one (recap on).
     // Skip for visual_highlight: that action already cropped this exact region as its answer image
     // (gv2ProcessResponse), so re-capturing here would just double-hit the screenshot rate limit.
-    let evidence = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null };
-    if ((data.evidenceEl || data.evidenceRect) && data.action !== 'visual_highlight') {
-      try { evidence = await gv2CaptureEvidenceRegion(data.evidenceEl, data.evidenceIndex, data.evidenceRect); } catch (e) { /* best-effort */ }
+    let evidenceItems = [];
+    if (data.action !== 'visual_highlight') {
+      const rawEvidenceItems = Array.isArray(data.visualEvidenceItems)
+        ? data.visualEvidenceItems
+        : ((data.evidenceEl || data.evidenceRect) ? [{
+            evidenceEl: data.evidenceEl,
+            evidenceIndex: data.evidenceIndex,
+            evidenceRect: data.evidenceRect,
+            text: data.visualEvidenceText || null,
+            reason: data.visualEvidenceReason || null
+          }] : []);
+      evidenceItems = await gv2CaptureEvidenceItems(rawEvidenceItems);
     }
+    const firstEvidence = evidenceItems[0] || {
+      visualEvidenceShot: null,
+      visualEvidenceNormRect: null,
+      visualEvidenceMarker: null,
+      visualEvidenceText: data.visualEvidenceText || null,
+      visualEvidenceReason: data.visualEvidenceReason || null,
+      visualEvidenceIndex: data.evidenceIndex != null ? data.evidenceIndex : null
+    };
 
     const record = {
       sessionId: g.sessionId,
@@ -2111,6 +2246,7 @@ async function gv2CaptureStepRecord(data) {
       instruction: data.instruction || '',
       action: data.action || null,
       typeText: data.typeText != null ? data.typeText : null,
+      navigateUrl: data.navigateUrl || null,
       isLastStep: !!data.isLastStep,
       target: data.target || null,
       confidence: data.confidence != null ? data.confidence : null,
@@ -2122,6 +2258,7 @@ async function gv2CaptureStepRecord(data) {
       mechGrounding: data.mechGrounding != null ? data.mechGrounding : null,
       elementStepSimilarity: data.elementStepSimilarity != null ? data.elementStepSimilarity : null,
       element_step_similarity: data.element_step_similarity != null ? data.element_step_similarity : null,
+      embeddingError: data.embeddingError || null,
       mechLoop: data.mechLoop != null ? data.mechLoop : null,
       loopMatches: data.loopMatches != null ? data.loopMatches : null,
       domElementText: data.domElementText || null,
@@ -2156,15 +2293,32 @@ async function gv2CaptureStepRecord(data) {
       somInputShot: g._lastVisualInputShot || null,
       // Visual evidence: the SEPARATE on-page proof that justifies this step (pink-marked crop of a
       // distinct SoM element, e.g. "Sort by: Price: Low to High"), plus its reason and resolved index.
-      visualEvidenceShot: evidence.visualEvidenceShot || null,
-      visualEvidenceNormRect: evidence.visualEvidenceNormRect || null,
-      visualEvidenceMarker: evidence.visualEvidenceMarker || null,
-      visualEvidenceText: data.visualEvidenceText || null,
-      visualEvidenceReason: data.visualEvidenceReason || null,
-      visualEvidenceIndex: data.evidenceIndex != null ? data.evidenceIndex : null,
+      visualEvidenceItems: evidenceItems,
+      visualEvidenceShot: firstEvidence.visualEvidenceShot || null,
+      visualEvidenceNormRect: firstEvidence.visualEvidenceNormRect || null,
+      visualEvidenceMarker: firstEvidence.visualEvidenceMarker || null,
+      visualEvidenceText: firstEvidence.visualEvidenceText || null,
+      visualEvidenceReason: firstEvidence.visualEvidenceReason || null,
+      visualEvidenceIndex: firstEvidence.visualEvidenceIndex != null ? firstEvidence.visualEvidenceIndex : null,
       // visual_highlight terminal answer: the cropped screenshot region shown to the user.
       visualHighlightImage: data.visualHighlightImage || null,
       visualHighlightCaption: data.visualHighlightCaption || null,
+      // Terminal Verify Result pass: page-ready wait + one scroll-down + screenshot + LLM response,
+      // run before returning a find/visual_highlight answer.
+      verifyResultSystemPrompt: data.verifyResultSystemPrompt || '',
+      verifyResultUserPrompt: data.verifyResultUserPrompt || '',
+      verifyResultRawResponse: data.verifyResultRawResponse || '',
+      verifyResultShot: data.verifyResultShot || null,
+      verifyResultScrollY: data.verifyResultScrollY != null ? data.verifyResultScrollY : null,
+      verifyResultAction: data.verifyResultAction || null,
+      verifyResultError: data.verifyResultError || null,
+      findSystemPrompt: data.findSystemPrompt || '',
+      findUserPrompt: data.findUserPrompt || '',
+      findRawResponse: data.findRawResponse || '',
+      visualFallbackSystemPrompt: data.visualFallbackSystemPrompt || '',
+      visualFallbackUserPrompt: data.visualFallbackUserPrompt || '',
+      visualFallbackRawResponse: data.visualFallbackRawResponse || '',
+      visualFallbackShot: data.visualFallbackShot || null,
       predictedGoalState: g.predictedGoalState || null,
       g_goal_relevance_score: goalRelevance,
       tutorialMatch: data.tutorialMatch || null,
@@ -2509,8 +2663,7 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
 VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}
-VISUAL EVIDENCE REQUESTED: ${recapOn ? 'yes — also return "visualEvidence" pointing to a DIFFERENT SoM marker (not the action target) that proves this action is correct, plus a one-sentence reason' : 'no — set "visualEvidence" to null'}
-VISUAL HIGHLIGHT AVAILABLE: ${visualInputShot ? 'yes — you MAY end the trajectory with action="visual_highlight" to answer a visual/informational goal by showing a screenshot region (put the region in "visualEvidence")' : 'no — do not use action="visual_highlight"'}
+VISUAL EVIDENCE REQUESTED: ${recapOn ? 'yes — return "visualEvidence" as an array of up to 5 proof items; each item should prefer a DIFFERENT SoM marker index, fall back to rect only when no marker fits, and include its own one-sentence reason' : 'no — set "visualEvidence" to null'}
 
 === PAGE INDEX ===
 ${pageIndex.indexText}
@@ -2715,8 +2868,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const action = (typeof gv2NormalizeAction === 'function')
       ? gv2NormalizeAction(step.action, step.isLastStep)
       : String(step.action || (step.isLastStep ? 'done' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
-    const isFind = action === 'find';
-    const isVisualHighlight = action === 'visual_highlight';
+    let isFind = action === 'highlight' || action === 'find';
+    let isVisualHighlight = false; // resolved dynamically if highlight falls back
     // find and visual_highlight are ALWAYS the final answer to the user — never mid-journey. Coerce
     // isLastStep so the terminal branch (recap + state clear) runs and the trajectory can't continue.
     if (isFind || isVisualHighlight) step.isLastStep = true;
@@ -2732,32 +2885,52 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       : null;
     const resolvedEl = idxToUse != null ? (window._pageguideIndex?.[idxToUse] || null) : null;
 
-    // Visual evidence: a SECOND, distinct SoM element the model points to as justification for the
-    // action (e.g. a "Sort by: Price: Low to High" control). Resolved the same text-first way as the
-    // action target, but must be a DIFFERENT element to count as evidence.
-    const visualEvidence = (typeof gv2NormalizeVisualEvidence === 'function')
-      ? gv2NormalizeVisualEvidence(step.visualEvidence) : null;
-    let evidenceEl = null, evidenceIndex = null;
-    if (visualEvidence && (visualEvidence.index != null || visualEvidence.text)) {
-      evidenceIndex = (gv2PickTargetIndex(visualEvidence.text, visualEvidence.index) ?? visualEvidence.index ?? null);
-      const cand = evidenceIndex != null ? (window._pageguideIndex?.[evidenceIndex] || null) : null;
-      if (cand && cand !== resolvedEl) { evidenceEl = cand; }
-      else { evidenceIndex = null; }
+    // Visual evidence: SECOND, distinct SoM elements or rects the model points to as justification
+    // for the action. Resolve each item independently: prefer index/text, then use that item's rect
+    // only when no distinct SoM element resolves. Cap at five.
+    const visualEvidenceItems = (typeof gv2NormalizeVisualEvidenceList === 'function')
+      ? gv2NormalizeVisualEvidenceList(step.visualEvidence, 5)
+      : ((typeof gv2NormalizeVisualEvidence === 'function' && gv2NormalizeVisualEvidence(step.visualEvidence))
+          ? [gv2NormalizeVisualEvidence(step.visualEvidence)] : []);
+    const resolvedEvidenceItemsRaw = [];
+    for (const item of visualEvidenceItems) {
+      let itemEl = null;
+      let itemIndex = null;
+      if (item?.index != null) {
+        itemIndex = item.index;
+        itemEl = window._pageguideIndex?.[itemIndex] || null;
+      } else if (item?.text) {
+        itemIndex = gv2PickTargetIndex(item.text, null);
+        const cand = itemIndex != null ? (window._pageguideIndex?.[itemIndex] || null) : null;
+        if (cand) { itemEl = cand; }
+        else { itemIndex = null; }
+      }
+      resolvedEvidenceItemsRaw.push({
+        evidenceEl: itemEl,
+        evidenceIndex: itemIndex,
+        evidenceRect: (!itemEl && item?.rect) ? item.rect : null,
+        text: item?.text || null,
+        reason: item?.reason || null
+      });
     }
-    // Bounding-box fallback: when no distinct SoM element resolved, use the model's normalized rect
-    // (fractions of the screenshot) to crop the evidence region directly.
-    const evidenceRect = (!evidenceEl && visualEvidence?.rect) ? visualEvidence.rect : null;
+    let resolvedEvidenceItems = _gv2DedupeEvidenceItems(resolvedEvidenceItemsRaw);
+    let firstEvidenceItem = resolvedEvidenceItems[0] || null;
+    let evidenceEl = firstEvidenceItem?.evidenceEl || null;
+    let evidenceIndex = firstEvidenceItem?.evidenceIndex != null ? firstEvidenceItem.evidenceIndex : null;
+    let evidenceRect = firstEvidenceItem?.evidenceRect || null;
+    let visualEvidence = visualEvidenceItems[0] || null;
 
     const domElementText = _gv2ElementAccessibleText(resolvedEl);
     const llmElementText = String(step.element?.text || '').trim();
-    const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, step.element?.text, hasTarget);
-    let internalGrounding = await _gv2ElementGroundingSimilarity(llmElementText, domElementText);
+    const resolvedElementText = domElementText || llmElementText;
+    const elementStepSimilarity = await _gv2ElementStepSimilarity(step.instruction, resolvedElementText, hasTarget);
+    let internalGrounding = elementStepSimilarity;
     if (internalGrounding == null) {
-      const a = _gv2NormalizeDomText(llmElementText);
-      const b = _gv2NormalizeDomText(domElementText);
+      const a = _gv2NormalizeDomText(step.instruction);
+      const b = _gv2NormalizeDomText(resolvedElementText);
       internalGrounding = (a && b && (a === b || a.includes(b) || b.includes(a))) ? 1.0 : 0.0;
     }
-    const currentKey = _gv2NormalizeDomText(domElementText);
+    const currentKey = _gv2NormalizeDomText(resolvedElementText);
     const priorKeys = Array.isArray(g._mechElementTexts) ? g._mechElementTexts : (g._mechElementTexts = []);
     const mech = (typeof gv2ComputeMechanicalConfidence === 'function')
       ? gv2ComputeMechanicalConfidence({ hasTarget, grounding: internalGrounding, priorKeys, currentKey })
@@ -2815,13 +2988,53 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     if (typeof cleanupSom === 'function') cleanupSom();
     if (_gv2IsStopped()) return null;
 
-    // find: read the page and highlight the supporting passages. Runs before
+    g._activeStepNumber = Number(step.step) || (g.previousSteps.length + 1);
+
+    let verifyResult = null;
+
+    // find/highlight: read the page and highlight the supporting passages. Runs before
     // _gv2HideIndicator() below so the on-page pill covers this second LLM call.
     let findResult = null;
+    let findSystemPrompt = '';
+    let findUserPrompt = '';
+    let findRawResponse = '';
+    let visualFallbackSystemPrompt = '';
+    let visualFallbackUserPrompt = '';
+    let visualFallbackRawResponse = '';
+    let visualFallbackShot = null;
+
     if (isFind) {
       _gv2ShowIndicator('Reading page…');
       findResult = await gv2RunFind(step.findQuery);
       if (_gv2IsStopped()) return null;
+
+      findSystemPrompt = findResult.systemPrompt || '';
+      findUserPrompt = findResult.userPrompt || '';
+      findRawResponse = findResult.rawResponse || '';
+
+      if (findResult.notOnPage) {
+        _gv2ShowIndicator('Looking visually…');
+        const visualFallback = await gv2RunVisualFallbackHighlight(step.findQuery || window._guidev2?.question);
+        if (_gv2IsStopped()) return null;
+
+        if (visualFallback) {
+          isFind = false;
+          isVisualHighlight = true;
+          visualFallbackSystemPrompt = visualFallback.systemPrompt || '';
+          visualFallbackUserPrompt = visualFallback.userPrompt || '';
+          visualFallbackRawResponse = visualFallback.rawResponse || '';
+          visualFallbackShot = visualFallback.shot || null;
+
+          evidenceIndex = visualFallback.index != null ? visualFallback.index : null;
+          evidenceRect = visualFallback.rect || null;
+          evidenceEl = (evidenceIndex != null) ? (window._pageguideIndex?.[evidenceIndex] || null) : null;
+          visualEvidence = {
+            index: evidenceIndex,
+            rect: evidenceRect,
+            reason: visualFallback.reason || 'visual answer'
+          };
+        }
+      }
     }
 
     // visual_highlight: crop the model's evidence region (SoM index or rect) from a clean capture
@@ -2838,7 +3051,6 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     }
 
     const isLast = !!step.isLastStep;
-    g._activeStepNumber = Number(step.step) || (g.previousSteps.length + 1);
     // Mark find steps so a later step doesn't loop and re-issue find on the same page.
     const stepSuffix = isLast ? ' ✓' : (isFind ? ' [found]' : '');
     g.previousSteps.push(`Step ${step.step}: ${step.instruction}${stepSuffix}`);
@@ -2868,7 +3080,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     }
     // A find step never pauses for low-confidence/risk gates, but loop detection still stops it
     // from driving another autonomous step.
-    const willPause = loopStop || (!isFind && !isVisualHighlight && ((g.lowConfidenceCount >= 3) || isHighRiskJson || needsConfirmation));
+    const actionThreshold = await _gv2LowConfidenceActionThreshold();
+    const willPause = loopStop || (!isFind && !isVisualHighlight && ((g.lowConfidenceCount >= actionThreshold) || isHighRiskJson || needsConfirmation));
     const loopPauseMessage = loopStop
       ? `Page Guide paused: loop score ${activeLoopScore.toFixed(2)} is above the ${GV2_LOOP_STOP_THRESHOLD.toFixed(1)} threshold. Review and resume when ready.`
       : '';
@@ -2887,6 +3100,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       if (loopStop && !isLast) pauseAfterCaptureMessage = loopPauseMessage;
     } else if (isLast || action === 'done') {
       // Clear state after capture runs at end of function
+    } else if (action === 'scroll_down' || action === 'navigate') {
+      await _gv2SetState(false);
     } else if (action === 'type' || action === 'clear_text') {
       await _gv2SetState(false);
       if (!autoPerform) {
@@ -2898,7 +3113,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
           } else if (isHighRiskJson) {
             pauseAfterCaptureMessage = 'This step is high risk. Please perform it yourself, then press Resume.';
           } else {
-            pauseAfterCaptureMessage = 'Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.';
+            pauseAfterCaptureMessage = `Page Guide paused: ${actionThreshold} low-confidence actions detected. Review and resume when ready.`;
           }
         } else if (g.autoMode && isHighRisk) {
           const reason = step.riskReason ? ` (${step.riskReason})` : '';
@@ -2921,7 +3136,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
           } else if (isHighRiskJson) {
             pauseAfterCaptureMessage = 'This step is high risk. Please perform it yourself, then press Resume.';
           } else {
-            pauseAfterCaptureMessage = 'Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.';
+            pauseAfterCaptureMessage = `Page Guide paused: ${actionThreshold} low-confidence actions detected. Review and resume when ready.`;
           }
         } else if (g.autoMode && isHighRisk) {
           // High-risk click in auto mode → hand control back for this one.
@@ -2948,6 +3163,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       mechGrounding: mech.grounding,
       elementStepSimilarity,
       element_step_similarity: elementStepSimilarity,
+      embeddingError: g._lastEmbeddingError || null,
       mechLoop: mech.loop,
       loopMatches: mech.loopMatches,
       domElementText,
@@ -2956,6 +3172,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       evidenceEl,
       evidenceIndex,
       evidenceRect,
+      visualEvidenceItems: resolvedEvidenceItems,
       visualEvidenceText: visualEvidence?.text || null,
       visualEvidenceReason: visualEvidence?.reason || null,
       planTotal,
@@ -2968,6 +3185,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       instruction: step.instruction,
       action,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,
+      navigateUrl: step.url || null,
       isLastStep: isLast,
       isFind,
       findQuery: isFind ? (step.findQuery || null) : null,
@@ -2976,6 +3194,20 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       findHighlightCount: isFind ? (findResult?.highlightCount || 0) : 0,
       visualHighlightImage: isVisualHighlight ? (visualHighlightResult?.image || null) : null,
       visualHighlightCaption: isVisualHighlight ? (visualHighlightResult?.caption || null) : null,
+      findSystemPrompt,
+      findUserPrompt,
+      findRawResponse,
+      visualFallbackSystemPrompt,
+      visualFallbackUserPrompt,
+      visualFallbackRawResponse,
+      visualFallbackShot,
+      verifyResultSystemPrompt: verifyResult?.verifyResultSystemPrompt || '',
+      verifyResultUserPrompt: verifyResult?.verifyResultUserPrompt || '',
+      verifyResultRawResponse: verifyResult?.verifyResultRawResponse || '',
+      verifyResultShot: verifyResult?.verifyResultShot || null,
+      verifyResultScrollY: verifyResult?.verifyResultScrollY != null ? verifyResult.verifyResultScrollY : null,
+      verifyResultAction: verifyResult?.verifyResultAction || null,
+      verifyResultError: verifyResult?.verifyResultError || null,
       target: (isFind || isVisualHighlight)
         ? { text: null, domText: null, llmIndex: null, resolvedIndex: null }
         : { text: step.element?.text || null, domText: domElementText || null, llmIndex: step.element?.index ?? null, resolvedIndex: idxToUse },
@@ -2999,9 +3231,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       _gv2ScheduleAutoPerformAfterCapture(g, step, action);
     }
 
-    // A non-terminal find performs no DOM action — just advance the loop in Auto mode.
+    // A non-terminal highlight performs no DOM action — just advance the loop in Auto mode.
     if (isFind && autoPerform && !isLast) {
-      _gv2ScheduleAutoPerformAfterCapture(g, step, 'find');
+      _gv2ScheduleAutoPerformAfterCapture(g, step, 'highlight');
     }
 
     if (pauseAfterCaptureMessage && !isLast && action !== 'done') {
@@ -3226,8 +3458,15 @@ async function _gv2BuildRecap(g) {
         const hasBefore = !!(r.screenshotBefore || r.screenshot || r.markedShot || r.regionShot);
         const hasAfter = !!r.screenshotAfter;
         const target = r.target?.text || r.domElementText || r.llmElementText || '';
-        // The model's own per-step justification (why the action is correct), when captured.
-        const evidence = r.visualEvidenceReason ? `, evidence="${r.visualEvidenceReason}"` : '';
+        const visualEvidenceItems = Array.isArray(r.visualEvidenceItems) ? r.visualEvidenceItems.slice(0, 5) : [];
+        const evidenceReasons = visualEvidenceItems.length
+          ? visualEvidenceItems.map((ev, i) => {
+              const pointer = ev.visualEvidenceIndex != null ? `index ${ev.visualEvidenceIndex}` : (ev.visualEvidenceNormRect ? 'rect' : 'unknown');
+              return `${i + 1}) ${pointer}: ${ev.visualEvidenceReason || ''}`;
+            }).join(' | ')
+          : (r.visualEvidenceReason ? `1) ${r.visualEvidenceIndex != null ? `index ${r.visualEvidenceIndex}` : 'rect'}: ${r.visualEvidenceReason}` : '');
+        // The model's own per-step justifications (why each visual evidence target was chosen).
+        const evidence = evidenceReasons ? `, evidence="${evidenceReasons}"` : '';
         return `Step ${r.step}: before=${hasBefore ? 'yes' : 'no'}, after=${hasAfter ? 'yes' : 'no'}, target="${target}", action=${r.action || ''}${evidence}, instruction=${r.instruction || ''}`;
       }).join('\n') : '(no step visual evidence records)';
       recapSystemPrompt = `You evaluate and summarize a step-by-step web guide in ONE pass. You are given INITIAL and FINAL screenshots in this same request when vision is available. Reply with ONLY JSON:
@@ -3330,10 +3569,23 @@ Return the recap JSON.`;
     }
 
     // Per-step visual-evidence justifications keyed by step, so the panel can merge each step's
-    // reason (as a clickable link to its evidence crop) into the matching milestone row.
+    // reasons (as clickable links to evidence crops) into the matching milestone row.
     const evidenceByStep = {};
     for (const r of stepRecords) {
-      if (r && r.step != null && (r.visualEvidenceReason || r.hasVisualEvidence)) {
+      if (!r || r.step == null) continue;
+      const items = Array.isArray(r.visualEvidenceItems) ? r.visualEvidenceItems.slice(0, 5) : [];
+      if (items.length) {
+        evidenceByStep[r.step] = {
+          reason: items.map(it => it.visualEvidenceReason).filter(Boolean).join(' | '),
+          items: items.map((it) => ({
+            reason: it.visualEvidenceReason || '',
+            index: it.visualEvidenceIndex != null ? it.visualEvidenceIndex : null,
+            hasShot: !!it.visualEvidenceShot,
+            hasRect: !!it.visualEvidenceNormRect
+          })),
+          hasShot: items.some(it => !!it.visualEvidenceShot || !!it.visualEvidenceNormRect)
+        };
+      } else if (r.visualEvidenceReason || r.hasVisualEvidence) {
         evidenceByStep[r.step] = { reason: r.visualEvidenceReason || '', hasShot: !!r.hasVisualEvidence };
       }
     }
@@ -3546,8 +3798,8 @@ async function _gv2WaitForNavOrSettle(startUrl) {
 function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
   if (!g || !step) return;
   _gv2ClearActionTimers();
-  if (action === 'find') {
-    // find already ran (read-only, nothing to perform) — just advance the loop.
+  if (action === 'highlight') {
+    // highlight already ran (read-only, nothing to perform) — just advance the loop.
     g._autoClickTimer = setTimeout(() => {
       g._autoClickTimer = null;
       if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
@@ -3561,6 +3813,28 @@ function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
       if (action === 'clear_text') _gv2AutoClearText(step);
       else _gv2AutoType(step);
     }, 200);
+    return;
+  }
+  if (action === 'scroll_down') {
+    g._autoClickTimer = setTimeout(() => {
+      g._autoClickTimer = null;
+      if (_gv2IsStopped()) return;
+      const scroller = document.scrollingElement || document.documentElement || document.body;
+      const amount = Math.max(240, Math.min(800, Math.round((window.innerHeight || 800) * 0.8)));
+      try { scroller.scrollTop = (scroller.scrollTop || 0) + amount; } catch (e) {}
+      if (typeof gv2NextStep === 'function') setTimeout(gv2NextStep, 500);
+    }, 200);
+    return;
+  }
+  if (action === 'navigate') {
+    g._autoClickTimer = setTimeout(() => {
+      g._autoClickTimer = null;
+      if (_gv2IsStopped()) return;
+      const targetUrl = step.url;
+      if (targetUrl) {
+        window.location.href = targetUrl;
+      }
+    }, 500);
     return;
   }
   console.log('[guidev2] Auto mode: auto-performing low-risk click step', step.step);
@@ -3607,7 +3881,15 @@ async function gv2RunFind(findQuery) {
 
   if (response?.error) {
     console.warn('[guidev2] find: LLM error', response.error);
-    return { answer: '', notOnPage: false, highlightCount: 0, hasHighlights: false };
+    return {
+      answer: '',
+      notOnPage: false,
+      highlightCount: 0,
+      hasHighlights: false,
+      systemPrompt,
+      userPrompt: question,
+      rawResponse: response.error
+    };
   }
 
   const answer = response?.content?.trim() || '';
@@ -3622,9 +3904,92 @@ async function gv2RunFind(findQuery) {
   }
 
   console.log('[guidev2] find:', notOnPage ? 'not on page' : `${highlightCount} passage(s) highlighted`);
-  return { answer, notOnPage, highlightCount, hasHighlights: highlightCount > 0 };
+  return {
+    answer,
+    notOnPage,
+    highlightCount,
+    hasHighlights: highlightCount > 0,
+    systemPrompt,
+    userPrompt: question,
+    rawResponse: response?.content || ''
+  };
 }
 if (typeof window !== 'undefined') window.gv2RunFind = gv2RunFind;
+
+async function gv2RunVisualFallbackHighlight(findQuery) {
+  const question = String(findQuery || window._guidev2?.question || '').trim();
+
+  // 1. Show SoM markers
+  const pageIndex = createPageIndex(5000, false);
+  if (typeof showSomIfEnabled === 'function') {
+    await showSomIfEnabled(pageIndex);
+  }
+  await new Promise(r => setTimeout(r, 200));
+
+  // 2. Capture screenshot
+  let shot = null;
+  try {
+    if (typeof captureScreenshot === 'function') {
+      shot = await captureScreenshot();
+    }
+  } catch (e) {
+    console.warn('[guidev2] fallback visual capture failed:', e);
+  }
+
+  // 3. Cleanup SoM
+  if (typeof cleanupSom === 'function') {
+    cleanupSom();
+  }
+
+  if (!shot) {
+    return null;
+  }
+
+  // 4. Call Visual LLM
+  const systemPrompt = `You are a visual highlight assistant. The text-based reader has failed to find the answer on the page. Use the screenshot (which has numbered on-page tags) to find the answer.
+Return ONLY JSON containing the following keys:
+- "index": the SoM index number containing the answer (or null if none fits)
+- "rect": a normalized bounding box {"x", "y", "w", "h"} as fractions (0..1) of the page screenshot for the answer region (use only if no tag fits)
+- "reason": a short explanation of the answer (will be used as the image caption)
+
+Example response:
+{"index": 12, "rect": null, "reason": "The chart shows the operating hours."}`;
+
+  const userPrompt = `USER GOAL/QUESTION: ${question}
+
+Find the visual answer on this page screenshot and return the JSON object.`;
+
+  const msg = {
+    action: 'callLLMWithImages',
+    systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+    images: [{ base64: shot, label: 'Page screenshot with SoM markers for visual search' }],
+    metadata: { mode: 'guide_visual_fallback', url: window.location.href }
+  };
+
+  try {
+    const response = await safeSendMessage(msg);
+    const content = response?.content?.trim() || '';
+    if (!content) return null;
+
+    const cleanJson = content.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
+    return {
+      index: parsed.index != null ? Number(parsed.index) : null,
+      rect: parsed.rect || null,
+      reason: parsed.reason || '',
+      systemPrompt,
+      userPrompt,
+      rawResponse: content,
+      shot
+    };
+  } catch (e) {
+    console.warn('[guidev2] visual fallback LLM call failed:', e);
+    return null;
+  }
+}
+if (typeof window !== 'undefined') window.gv2RunVisualFallbackHighlight = gv2RunVisualFallbackHighlight;
+
 
 // ===== AUTO FORM EDITING =====
 
@@ -3972,6 +4337,9 @@ async function _gv2HydrateResumeState() {
     paused: !!saved.paused,
     lowConfidenceCount: saved.lowConfidenceCount || 0,
     predictedGoalState: saved.predictedGoalState || null,
+    guidePlan: Array.isArray(saved.guidePlan) ? saved.guidePlan : [],
+    guideTitle: saved.guideTitle || '',
+    _mechElementTexts: Array.isArray(saved.mechElementTexts) ? saved.mechElementTexts : [],
     _lastActionStepNumber: saved.lastActionStepNumber || saved.activeStepNumber || (saved.previousSteps || []).length || null,
     _activeStepNumber: saved.activeStepNumber || null
   };
@@ -4020,6 +4388,21 @@ window.gv2StopGuide = function () {
   _gv2StopInternal();
   _gv2HidePanelTyping();
 };
+
+async function gv2StopGuideWithRecap() {
+  const g = await _gv2HydrateResumeState();
+  if (!g || !g.active) {
+    _gv2StopInternal();
+    _gv2HidePanelTyping();
+    return { success: true, stopped: true, recap: null };
+  }
+  let recap = null;
+  try { recap = await _gv2BuildRecap(g); } catch (e) { recap = null; }
+  _gv2StopInternal();
+  _gv2HidePanelTyping();
+  return { success: true, stopped: true, recap };
+}
+if (typeof window !== 'undefined') window.gv2StopGuideWithRecap = gv2StopGuideWithRecap;
 
 // ===== CONTINUATION HELPER =====
 // Generates the next step and dispatches it to the panel (used after auto-type / manual

@@ -966,6 +966,33 @@ describe('gv2NormalizeVisualEvidence (content/utils.js)', () => {
     expect(window.gv2NormalizeVisualEvidence({ index: null, text: '  ', reason: '' })).toBeNull();
     expect(window.gv2NormalizeVisualEvidence(42)).toBeNull();
   });
+
+  test('normalizes a capped list of visual evidence items', () => {
+    const items = window.gv2NormalizeVisualEvidenceList([
+      { index: 3, reason: 'first marker' },
+      { rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, reason: 'fallback rect' },
+      { index: 3, reason: 'duplicate marker' },
+      { index: 4, reason: 'extra marker' }
+    ], 3);
+    expect(items).toEqual([
+      { index: 3, rect: null, text: null, reason: 'first marker' },
+      { index: null, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, text: null, reason: 'fallback rect' },
+      { index: 4, rect: null, text: null, reason: 'extra marker' }
+    ]);
+  });
+
+  test('normalizes grouped visual evidence fields', () => {
+    const items = window.gv2NormalizeVisualEvidenceList({
+      indexes: [8, null],
+      rects: [null, { x: 0, y: 0, w: 0.5, h: 0.5 }],
+      texts: ['price sort', 'first result'],
+      reasons: ['sort order proves cheapest', 'item shown after sorting']
+    });
+    expect(items).toEqual([
+      { index: 8, rect: null, text: 'price sort', reason: 'sort order proves cheapest' },
+      { index: null, rect: { x: 0, y: 0, w: 0.5, h: 0.5 }, text: 'first result', reason: 'item shown after sorting' }
+    ]);
+  });
 });
 
 describe('visual_highlight action (content/utils.js)', () => {
@@ -1516,6 +1543,24 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
     expect(overlay.style.pointerEvents).toBe('none');
   });
 
+  test('paused stop builds a recap before clearing guide state', async () => {
+    window._guidev2 = {
+      active: true,
+      question: 'change language',
+      previousSteps: ['Step 1: Open language settings'],
+      currentPlanStep: 1,
+      autoMode: false,
+      paused: true
+    };
+
+    const result = await window.gv2StopGuideWithRecap();
+
+    expect(result.success).toBe(true);
+    expect(result.stopped).toBe(true);
+    expect(result.recap?.summary).toContain('The guide recorded 1 step');
+    expect(window._guidev2.active).toBe(false);
+  });
+
   test('blocks step 16 before generating another guide step', async () => {
     window._guidev2 = {
       active: true,
@@ -1963,6 +2008,48 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
       expect(getPauseMessage()).toBe('Page Guide paused: loop score 0.31 is above the 0.3 threshold. Review and resume when ready.');
     } finally {
       window.gv2ComputeMechanicalConfidence = originalCompute;
+    }
+  });
+
+  test('uses instruction-to-element embedding similarity as mechanical grounding', async () => {
+    const button = document.createElement('button');
+    button.textContent = 'Languages';
+    document.body.appendChild(button);
+    window._pageguideIndex = { 1: button };
+    window.chrome.runtime.sendMessage.mockImplementation(async (msg) => {
+      if (msg?.action === 'callEmbed') {
+        return { embeddings: [[1, 0], [0.6, 0.8]] };
+      }
+      return {};
+    });
+    window._guidev2.captureEnabled = true;
+    window._guidev2.sessionId = 'embedding-grounding-test';
+    const originalCompute = window.gv2ComputeMechanicalConfidence;
+    const computeSpy = jest.fn(originalCompute);
+    window.gv2ComputeMechanicalConfidence = computeSpy;
+    try {
+      const stepJson = JSON.stringify({
+        step: 1,
+        thought: 'Open the language menu',
+        instruction: 'Click Languages to change the language',
+        element: { index: 1, text: 'Languages' },
+        action: 'click'
+      });
+
+      await window.gv2ProcessResponse(stepJson);
+
+      expect(window.chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'callEmbed',
+        texts: ['Click Languages to change the language', 'Languages']
+      }));
+      const computeArg = computeSpy.mock.calls.at(-1)[0];
+      expect(computeArg.grounding).toBeCloseTo(0.6, 6);
+      const record = window.rewindPutRecord.mock.calls.at(-1)[0];
+      expect(record.mechGrounding).toBeCloseTo(0.6, 6);
+      expect(record.elementStepSimilarity).toBeCloseTo(0.6, 6);
+    } finally {
+      window.gv2ComputeMechanicalConfidence = originalCompute;
+      button.remove();
     }
   });
 
