@@ -1965,12 +1965,12 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     } else {
       return out;
     }
-    let shot = null;
-    try { if (typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
-    if (!shot) return out;
     if (typeof gv2TargetNormRect === 'function') {
       out.visualEvidenceNormRect = gv2TargetNormRect(rect, window.innerWidth, window.innerHeight);
     }
+    let shot = null;
+    try { if (typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
+    if (!shot) return out;
     const cropped = await _gv2CropScreenshot(shot, rect, markerNumber, GV2_EVIDENCE_MARKER_COLOR, GV2_EVIDENCE_MARKER_FILL);
     out.visualEvidenceShot = cropped?.base64 || null;
     out.visualEvidenceMarker = cropped?.marker || null;
@@ -2937,8 +2937,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       : { confidence: null, grounding: null, loop: null, loopMatches: 0 };
     if (hasTarget && currentKey) priorKeys.push(currentKey);
 
-    // Active confidence is always rule-based No-LLM: grounding × loop penalty.
-    const confidence = mech.confidence;
+    const isClickOrType = (action === 'click' || action === 'type');
+    const confidence = isClickOrType ? mech.confidence : null;
+    const mechConfidence = isClickOrType ? mech.confidence : null;
+    const mechGrounding = isClickOrType ? mech.grounding : null;
+    const mechLoop = isClickOrType ? mech.loop : null;
+    const elementStepSimilarityValue = isClickOrType ? elementStepSimilarity : null;
     const rawPlanStep = Number(step.completedPlanStep);
     const planStep = step.step; // Fallback for legacy step tracking
     if (Number.isFinite(rawPlanStep) && rawPlanStep >= 1) {
@@ -3159,12 +3163,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       loop: null,
       progress: null,
       confidenceFormula: null,
-      mechConfidence: mech.confidence,
-      mechGrounding: mech.grounding,
-      elementStepSimilarity,
-      element_step_similarity: elementStepSimilarity,
+      mechConfidence: mechConfidence,
+      mechGrounding: mechGrounding,
+      elementStepSimilarity: elementStepSimilarityValue,
+      element_step_similarity: elementStepSimilarityValue,
       embeddingError: g._lastEmbeddingError || null,
-      mechLoop: mech.loop,
+      mechLoop: mechLoop,
       loopMatches: mech.loopMatches,
       domElementText,
       llmElementText,

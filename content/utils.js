@@ -1735,6 +1735,8 @@ if (typeof window !== 'undefined') window.gv2DotState = gv2DotState;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2DotState = gv2DotState;
 
 function gv2StepErrorLabelFromScores(rec) {
+  const action = rec?.action || '';
+  if (action !== 'click' && action !== 'type') return '';
   const num = (v) => Number.isFinite(Number(v)) ? Number(v) : null;
   const grounded = num(rec?.mechGrounding ?? rec?.grounding ?? rec?.grounded);
   const loop = num(rec?.mechLoop ?? rec?.loop);
@@ -1791,6 +1793,8 @@ function gv2NormalizeRecap(raw, ctx) {
     return (s === 'correct' || s === 'wrong' || s === 'unclear') ? s : '';
   };
   const normalizeErrorLabel = (label, rec) => {
+    const action = rec?.action || '';
+    if (action !== 'click' && action !== 'type') return '';
     const s = String(label || '').toLowerCase().replace(/[^a-z-]/g, '');
     const known = ['misgrounded', 'loop', 'low-confidence', 'risky', 'incomplete', 'wrong-action', 'other'];
     if (known.includes(s)) return s;
@@ -1837,7 +1841,7 @@ function gv2NormalizeRecap(raw, ctx) {
       if (seen.has(x.step)) continue;
       seen.add(x.step);
       const rec = recForStep(x.step);
-      const suspicious = finalVerdict !== 'completed' && rec && (
+      const suspicious = finalVerdict !== 'completed' && rec && (rec.action === 'click' || rec.action === 'type') && (
         Number(rec.mechLoop ?? rec.loop) >= 0.6 ||
         Number(rec.mechGrounding ?? rec.grounding ?? rec.grounded) <= 0.45 ||
         Number(rec.mechConfidence ?? rec.confidence) < 0.5

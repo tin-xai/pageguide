@@ -5007,10 +5007,10 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 
 .pageguide-recap-summary {
   grid-column: 1 / 2;
-  font-weight: 800;
+  font-weight: 600;
   color: var(--pg-text);
-  font-size: 16px;
-  line-height: 1.28;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .pageguide-recap-hero > .pageguide-final-verdict {
@@ -5266,7 +5266,7 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
     justify-self: start;
   }
   .pageguide-recap-summary {
-    font-size: 15px;
+    font-size: 13px;
   }
   .pageguide-recap-evidence {
     margin-left: 0;
@@ -5433,14 +5433,15 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   background: #1ea672;
   border-color: rgba(30, 166, 114, 0.55);
 }
-.pageguide-recap-final-btn.fail {
+.pageguide-recap-final-btn.fail,
+.pageguide-recap-final-btn.wrong {
   background: #e0463e;
   border-color: rgba(224, 70, 62, 0.55);
 }
 .pageguide-recap-final-btn.unclear {
   background: #d89a1d;
   border-color: rgba(216, 154, 29, 0.55);
-  color: #1f2435;
+  color: #fff;
 }
 .pageguide-final-verdict {
   display: inline-flex;
@@ -5459,7 +5460,8 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   font-size: 12px;
 }
 .pageguide-final-verdict.ok { color: #1ea672; }
-.pageguide-final-verdict.fail { color: #e0463e; }
+.pageguide-final-verdict.fail,
+.pageguide-final-verdict.wrong { color: #e0463e; }
 .pageguide-final-verdict.unclear { color: #c98a1a; }
 .pageguide-final-reason {
   color: var(--pg-text);

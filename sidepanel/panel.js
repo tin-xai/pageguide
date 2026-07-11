@@ -745,10 +745,12 @@ async function showGoalStepPreview(step, anchor) {
   if (beforeShot === PLACEHOLDER_SHOT) beforeShot = null;
   let regionShot = rec?.regionShot || null;
   if (regionShot === PLACEHOLDER_SHOT) regionShot = null;
-  const topShot = regionShot || beforeShot;
+  let afterShot = rec?.screenshotAfter || null;
+  if (afterShot === PLACEHOLDER_SHOT) afterShot = null;
+  const topShot = regionShot || beforeShot || afterShot;
   const topImg = topShot
-    ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>`
-    : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>';
+    ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && (beforeShot || afterShot)) ? `class="pageguide-memory-shot-trigger" data-shot-kind="${beforeShot ? 'before' : 'after'}"` : ''}>`
+    : '';
   // Only show the collapsible before-shot when it isn't already the top image.
   const beforeHtml = (beforeShot && regionShot)
     ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
@@ -2633,10 +2635,12 @@ async function showBranchTree(keepZoom = false) {
       if (beforeShot === PLACEHOLDER_SHOT) beforeShot = null;
       let regionShot = rec?.regionShot || null;
       if (regionShot === PLACEHOLDER_SHOT) regionShot = null;
-      const topShot = regionShot || beforeShot;
+      let afterShot = rec?.screenshotAfter || null;
+      if (afterShot === PLACEHOLDER_SHOT) afterShot = null;
+      const topShot = regionShot || beforeShot || afterShot;
       const imgHtml = topShot 
-        ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && beforeShot) ? 'class="pageguide-memory-shot-trigger" data-shot-kind="before"' : ''}>` 
-        : '<div class="pageguide-goal-step-preview-empty">No screenshot yet</div>';
+        ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && (beforeShot || afterShot)) ? `class="pageguide-memory-shot-trigger" data-shot-kind="${beforeShot ? 'before' : 'after'}"` : ''}>` 
+        : '';
 
       const beforeHtml = (beforeShot && regionShot)
         ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
@@ -4596,6 +4600,7 @@ Previous steps: None`;
               result = {
                 success: true,
                 isGuide: true,
+                autoMode: autoMode,
                 answer: step.instruction || `Navigating to ${targetUrl}`,
                 action: 'navigate',
                 navigateUrl: targetUrl,
@@ -4606,6 +4611,7 @@ Previous steps: None`;
               result = {
                 success: true,
                 isGuide: true,
+                autoMode: autoMode,
                 answer: step.instruction || 'Please navigate to the target site.',
                 action: step.action || 'done',
                 step: 1,
