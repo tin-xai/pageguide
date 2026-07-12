@@ -433,8 +433,8 @@ Return JSON only:
   "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
   "element": {"index": N, "text": "element text to highlight"},
   "dropTarget": {"index": N|null, "text": "drop destination text", "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}},
-  "evidence": {"key": "slug_safe_key", "note": "short evidence note", "region_bbox": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "som_id": "optional marker id or null"},
-  "visualEvidence": [{"index": M|null, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the evidence element", "reason": "one sentence: how this region confirms the final answer"}],
+  "evidence": [{"key": "slug_safe_key", "note": "short evidence note", "region_bbox": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "som_id": "optional SoM marker id or null"}],
+  "confirmationEvidence": [{"index": M|null, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the confirmation region", "reason": "one sentence: how this region confirms the final answer"}],
   "action": "click" | "type" | "clear_text" | "drag_drop" | "scroll_down" | "scroll_up" | "navigate" | "save_evidence" | "finish",
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
   "url": "the target URL (only when action=navigate; null otherwise)",
@@ -447,12 +447,12 @@ Return JSON only:
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "dropTarget": ONLY populate this when action="drag_drop"; otherwise set it to null. "element" is always the draggable source. The drop target may use a PAGE INDEX marker, text, a normalized screenshot rect, or both index and rect. If the drop target has no SoM marker, set "index": null and provide "rect".
-"evidence": ONLY populate this when action="save_evidence"; otherwise set it to null. save_evidence is only available when Recap is on (see the EVIDENCE SCRATCHPAD section of the user prompt). Save a compact, important fact that may be needed in the final answer. The key must be short and slug-safe. The note must be short. region_bbox is optional but should be provided for visual evidence when possible.
+"evidence": ONLY populate this when action="save_evidence"; otherwise set it to null. When action="save_evidence", evidence MUST be an array with 1-5 items, even when saving one item. save_evidence is only available when Recap is on (see the EVIDENCE SCRATCHPAD section of the user prompt). Save compact facts that may be needed in the final answer: labels, values, visible states, prices, colors, selected options, image/object details, warnings, confirmations, or text spans. Each item needs a short slug-safe key and a short note. Use som_id for DOM/SoM evidence: text spans, images, buttons, labels, cards, table cells, selected controls, or any indexed page element. Use region_bbox for screenshot-only evidence with no DOM/SoM marker, such as an unindexed image detail, chart region, icon, canvas content, visual state, or other visible region. region_bbox is always relative to the CURRENT screenshot/viewport and is not scrollable; if screenshot-only evidence is not currently visible, first use scroll_down/scroll_up, then save_evidence on the later visible viewport.
 "answer": ONLY populate this when action="finish", and it is ALWAYS required then (never null). Every task ends with a finish that states the result. For information tasks, the answer is the info you found. For action/navigation tasks, the answer confirms the completed state (e.g. "The page language is now English."). May cite saved evidence with [ev:key].
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
-"visualEvidence": ONLY populate this on the FINAL step (action="finish"); otherwise set it to null. It is the on-page CONFIRMATION of your answer — the region(s) on the CURRENT page that prove the answer is correct (the information you are reporting, or the resulting state that shows the action succeeded). Return an array with up to 5 items. Each item may include BOTH a SoM "index" and a normalized "rect" {x,y,w,h} as fractions of the screenshot (0..1, top-left origin). Use "index": null when no marker fits that region. Each item MUST include "reason", one short sentence explaining how that region confirms the answer. Example: for "change the language to English" finish with answer "The page language is now English." and visualEvidence pointing at the language selector now reading "English".
+"confirmationEvidence": ONLY populate this on the FINAL step (action="finish"); otherwise set it to null. It is the on-page CONFIRMATION of your answer — the region(s) on the CURRENT page that prove the answer is correct (the information you are reporting, or the resulting state that shows the action succeeded). Return an array with up to 5 items. Each item may include BOTH a SoM "index" and a normalized "rect" {x,y,w,h} as fractions of the screenshot (0..1, top-left origin). Use "index": null when no marker fits that region. Each item MUST include "reason", one short sentence explaining how that region confirms the answer. Example: for "change the language to English" finish with answer "The page language is now English." and confirmationEvidence pointing at the language selector now reading "English".
 
 RULES:
 1. ONE step at a time — never list multiple things to do
@@ -468,20 +468,28 @@ RULES:
 7. action="drag_drop": drag the highlighted source element to dropTarget. Use this for reorder, move, kanban, upload drop zones, sliders that require dragging, or drag-based placement.
 8. action="scroll_down" or action="scroll_up": scroll the page to reveal more content.
 9. action="navigate": navigate the browser to the specified URL. Provide the target URL in "url".
-10. action="save_evidence": save one important visual or page-state fact to the evidence scratchpad, then continue. This is not terminal.
-11. action="finish": terminal action. ALWAYS provide an "answer" (never null), and provide "visualEvidence" confirming the answer on the current page. For information tasks the answer is what you found; for action/navigation tasks the answer confirms the completed state.
+10. action="save_evidence": save 1-5 important visual or page-state facts to the evidence scratchpad, then continue. evidence must be an array. This is not terminal.
+11. action="finish": terminal action. ALWAYS provide an "answer" (never null), and provide "confirmationEvidence" confirming the answer on the current page. For information tasks the answer is what you found; for action/navigation tasks the answer confirms the completed state.
 12. Final answers may cite saved evidence with [ev:key], e.g. "Team A is red [ev:team_a_color]."
 13. Highlight the element to interact with using its index from PAGE INDEX
 14. If the target is not visible, guide the user to open the relevant menu first
 
 COMMON PATTERNS:
-- Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
-- Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
-- Replace text:   Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
-- Drag/drop:      Step 1 → drag the source card/file/item to the destination (action=drag_drop)
-- Visual answer:  Step 1 → save_evidence for each important observation → final Step → finish(answer with [ev:key] citations)
-- Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
-- Navigation:     Final Step → finish(answer describing the reached state, visualEvidence=[the region that confirms it]) once the requested page state is reached
+- Hidden options:       Step 1 → click three-dot menu → Step 2 → click the option
+- Forms:                Step 1 → type in field (action=type) → Step 2 → click submit
+- Replace text:         Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
+- Drag/drop:            Step 1 → drag the source card/file/item to the destination (action=drag_drop)
+- Save page evidence:   Step 1 → save_evidence with evidence=[1-5 facts visible now] → later finish(answer with [ev:key] citations)
+- DOM/SoM evidence:     save_evidence item uses som_id when evidence is an indexed text span, image, button, label, card, row, cell, selected control, or other DOM target
+- Screenshot evidence:  save_evidence item uses region_bbox when evidence is visible in the current screenshot but has no DOM/SoM marker; do not use region_bbox for offscreen evidence
+- More visual evidence: Step 1 → scroll_down/scroll_up to reveal more → Step 2 → save_evidence with region_bbox for evidence now visible in the screenshot
+- Settings:             Step 1 → click profile/settings icon → Step 2 → click specific option
+- Navigation:           Final Step → finish(answer describing the reached state, confirmationEvidence=[the region that confirms it]) once the requested page state is reached
+
+SAVE_EVIDENCE EXAMPLES:
+- DOM/SoM text evidence: {"key":"team_a_score","note":"Team A score is 74.","som_id":"12","region_bbox":null}
+- DOM/SoM image/card evidence: {"key":"red_shirt","note":"The product image shows a red shirt.","som_id":"18","region_bbox":null}
+- Screenshot-only evidence: {"key":"chart_peak","note":"The line chart peaks near March.","som_id":null,"region_bbox":{"x":0.42,"y":0.28,"w":0.22,"h":0.18}}
 
 NATIVE BROWSER DIALOGS (print, save, open file, etc.):
 When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that

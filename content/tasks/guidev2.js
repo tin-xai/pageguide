@@ -1626,6 +1626,13 @@ function _gv2SomIdExists(somId) {
 }
 if (typeof window !== 'undefined') window._gv2SomIdExists = _gv2SomIdExists;
 
+function _gv2SomIdToIndex(somId) {
+  const m = String(somId || '').match(/(\d+)$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Cap text sent to the embedding model. Long element text (verbose aria-labels, concatenated node
 // text) dilutes the cosine similarity and wastes tokens (ada-002 caps at 8191 tokens); ~300 chars
 // captures the meaningful label without the noise.
@@ -1993,25 +2000,36 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
 
 // Crop the SEPARATE visual-evidence region (the on-page proof that justifies the step, e.g. a
 // "Sort by: Price: Low to High" control) out of a fresh viewport screenshot, with a pink marker
-// baked in. Distinct from the action-target region (gv2CaptureRegion). Takes ONE non-scrolling
-// capture so it stays aligned to the evidence element's current rect; skips when the element is
-// missing or off-screen (the reason text is still surfaced without a shot). Best-effort — never throws.
-async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = null) {
-  const out = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null };
+// baked in. Distinct from the action-target region (gv2CaptureRegion). For saved evidence this can
+// scroll a DOM/SoM target into view before capture; bbox-only evidence remains current-viewport only.
+// Best-effort — never throws.
+async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = null, options = {}) {
+  const out = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureMode: null, captureError: null };
   try {
     // Resolve a CSS-px viewport rect from either the live element or a normalized {x,y,w,h} box,
     // plus the marker target (the element when we have one, else the normalized rect).
     let rect = null;
     let markerTarget = null;
     if (evidenceEl && evidenceEl.getBoundingClientRect && document.contains(evidenceEl)) {
+      if (options.scrollIntoView) {
+        await _gv2ScrollRegionTargetIntoView(evidenceEl);
+        await _gv2WaitForLayoutSettle();
+      }
       const r0 = evidenceEl.getBoundingClientRect();
-      if (!(r0.width > 0) || !(r0.height > 0)) return out;
+      if (!(r0.width > 0) || !(r0.height > 0)) {
+        out.captureError = 'empty-dom-rect';
+        return out;
+      }
       // Only crop when the element is actually within the current viewport (a fresh capture shows
       // the viewport, so an off-screen rect would crop empty/wrong pixels).
       const visible = r0.bottom > 0 && r0.right > 0 && r0.top < window.innerHeight && r0.left < window.innerWidth;
-      if (!visible) return out;
+      if (!visible) {
+        out.captureError = 'dom-target-offscreen';
+        return out;
+      }
       rect = { left: r0.left, top: r0.top, width: r0.width, height: r0.height };
       markerTarget = evidenceEl;
+      out.captureMode = options.scrollIntoView ? 'som_scroll' : 'som_viewport';
     } else if (normRect) {
       rect = {
         left: normRect.x * window.innerWidth,
@@ -2019,19 +2037,24 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
         width: normRect.w * window.innerWidth,
         height: normRect.h * window.innerHeight
       };
-      if (!(rect.width > 0) || !(rect.height > 0)) return out;
+      if (!(rect.width > 0) || !(rect.height > 0)) {
+        out.captureError = 'empty-bbox';
+        return out;
+      }
       markerTarget = normRect;
+      out.captureMode = 'bbox_viewport';
     } else {
+      out.captureError = 'missing-target';
       return out;
     }
     if (typeof gv2TargetNormRect === 'function') {
       out.visualEvidenceNormRect = gv2TargetNormRect(rect, window.innerWidth, window.innerHeight);
     }
 
-    // Vision-on: draw the marker as a real DOM overlay (nanobrowser method) and let the screenshot
-    // capture it naturally, then crop WITHOUT canvas baking. Vision-off keeps the canvas bake. Either
-    // way the marker ends up in visualEvidenceShot's pixels, which is how the panel renders it.
-    const useDomMarker = !!(window._guidev2 && window._guidev2._lastVisualInputOn) && typeof gv2DrawDomMarker === 'function';
+    // For saved evidence, force a real DOM overlay before capture so text spans / DOM targets are
+    // visibly highlighted in the screenshot pixels. Recap-only evidence keeps the older Vision-on
+    // overlay behavior and otherwise falls back to canvas baking after capture.
+    const useDomMarker = !!(options.forceDomMarker || (window._guidev2 && window._guidev2._lastVisualInputOn)) && typeof gv2DrawDomMarker === 'function';
     let markerNode = null;
     if (useDomMarker) {
       markerNode = gv2DrawDomMarker(markerTarget, markerNumber, GV2_EVIDENCE_MARKER_COLOR);
@@ -2041,40 +2064,67 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     let shot = null;
     try { if (typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
     if (markerNode && typeof gv2RemoveDomMarker === 'function') gv2RemoveDomMarker(markerNode);
-    if (!shot) return out;
+    if (!shot) {
+      out.captureError = 'screenshot-failed';
+      return out;
+    }
     const bakeMarker = !markerNode; // DOM overlay already in pixels → don't also bake on canvas
     const cropped = await _gv2CropScreenshot(shot, rect, markerNumber, GV2_EVIDENCE_MARKER_COLOR, GV2_EVIDENCE_MARKER_FILL, bakeMarker);
     out.visualEvidenceShot = cropped?.base64 || null;
     out.visualEvidenceMarker = cropped?.marker || null;
-  } catch (e) { /* best-effort */ }
+    if (!out.visualEvidenceShot && !out.captureError) out.captureError = 'crop-failed';
+  } catch (e) { out.captureError = e?.message || 'capture-failed'; }
   return out;
 }
 
-async function gv2CaptureEvidenceItems(items) {
+async function gv2CaptureEvidenceItems(items, options = {}) {
   const input = Array.isArray(items) ? items.slice(0, 5) : [];
   const out = [];
+  const startX = window.scrollX || 0;
+  const startY = window.scrollY || 0;
+  const shouldRestore = options.restoreScroll === true;
   for (const item of input) {
     if (!item || (!item.evidenceEl && !item.evidenceRect)) {
       out.push({
+        key: item?.key || null,
+        note: item?.note || null,
+        som_id: item?.som_id || null,
+        region_bbox: item?.region_bbox || item?.evidenceRect || null,
         visualEvidenceShot: null,
         visualEvidenceNormRect: item?.evidenceRect || null,
         visualEvidenceMarker: null,
         visualEvidenceText: item?.text || null,
         visualEvidenceReason: item?.reason || null,
-        visualEvidenceIndex: item?.evidenceIndex != null ? item.evidenceIndex : null
+        visualEvidenceIndex: item?.evidenceIndex != null ? item.evidenceIndex : null,
+        captureMode: item?.evidenceRect ? 'bbox_viewport' : null,
+        captureError: item?.evidenceRect ? null : 'missing-target'
       });
       continue;
     }
-    let cap = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null };
-    try { cap = await gv2CaptureEvidenceRegion(item.evidenceEl, item.evidenceIndex, item.evidenceRect); } catch (e) { /* best-effort */ }
+    let cap = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureMode: null, captureError: null };
+    try {
+      cap = await gv2CaptureEvidenceRegion(item.evidenceEl, item.evidenceIndex, item.evidenceRect, {
+        scrollIntoView: !!item.scrollIntoView,
+        forceDomMarker: !!item.forceDomMarker
+      });
+    } catch (e) { cap.captureError = e?.message || 'capture-failed'; }
     out.push({
+      key: item.key || null,
+      note: item.note || null,
+      som_id: item.som_id || null,
+      region_bbox: item.region_bbox || item.evidenceRect || null,
       visualEvidenceShot: cap.visualEvidenceShot || null,
       visualEvidenceNormRect: cap.visualEvidenceNormRect || item.evidenceRect || null,
       visualEvidenceMarker: cap.visualEvidenceMarker || null,
       visualEvidenceText: item.text || null,
       visualEvidenceReason: item.reason || null,
-      visualEvidenceIndex: item.evidenceIndex != null ? item.evidenceIndex : null
+      visualEvidenceIndex: item.evidenceIndex != null ? item.evidenceIndex : null,
+      captureMode: cap.captureMode || (item.evidenceRect ? 'bbox_viewport' : null),
+      captureError: cap.captureError || null
     });
+  }
+  if (shouldRestore) {
+    try { window.scrollTo(startX, startY); } catch (e) { /* best-effort */ }
   }
   return out;
 }
@@ -2298,6 +2348,20 @@ async function gv2CaptureStepRecord(data) {
           }] : []);
       evidenceItems = await gv2CaptureEvidenceItems(rawEvidenceItems);
     }
+    const savedEvidenceItems = Array.isArray(data.savedEvidenceItems) ? data.savedEvidenceItems.slice(0, 5) : [];
+    const savedEvidenceCapturesRaw = savedEvidenceItems.length
+      ? await gv2CaptureEvidenceItems(savedEvidenceItems, { restoreScroll: true })
+      : [];
+    const savedEvidenceCaptures = savedEvidenceCapturesRaw.map(item => ({
+      key: item.key || null,
+      note: item.note || null,
+      shot: item.visualEvidenceShot || null,
+      marker: item.visualEvidenceMarker || null,
+      region_bbox: item.region_bbox || item.visualEvidenceNormRect || null,
+      som_id: item.som_id || null,
+      captureMode: item.captureMode || null,
+      captureError: item.captureError || null
+    }));
     const firstEvidence = evidenceItems[0] || {
       visualEvidenceShot: null,
       visualEvidenceNormRect: null,
@@ -2374,6 +2438,7 @@ async function gv2CaptureStepRecord(data) {
       visualEvidenceText: firstEvidence.visualEvidenceText || null,
       visualEvidenceReason: firstEvidence.visualEvidenceReason || null,
       visualEvidenceIndex: firstEvidence.visualEvidenceIndex != null ? firstEvidence.visualEvidenceIndex : null,
+      savedEvidenceCaptures,
       // visual_highlight terminal answer: the cropped screenshot region shown to the user.
       visualHighlightImage: data.visualHighlightImage || null,
       visualHighlightCaption: data.visualHighlightCaption || null,
@@ -2745,7 +2810,7 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
 VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}
-ON FINISH: always return a non-null "answer", and return "visualEvidence" as up to 5 items pointing at the region(s) on THIS page that confirm the answer (each may include a SoM index and/or a rect, index:null when no marker fits, plus a one-sentence reason). On non-finish steps set "visualEvidence" to null.
+ON FINISH: always return a non-null "answer", and return "confirmationEvidence" as up to 5 items pointing at the region(s) on THIS page that confirm the answer (each may include a SoM index and/or a rect, index:null when no marker fits, plus a one-sentence reason). On non-finish steps set "confirmationEvidence" to null.
 
 === PAGE INDEX ===
 ${pageIndex.indexText}
@@ -2927,7 +2992,10 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       ? gv2NormalizeAction(step.action, step.isLastStep)
       : String(step.action || (step.isLastStep ? 'finish' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
     if (!step.instruction) {
-      if (action === 'save_evidence') step.instruction = `Save evidence: ${step.evidence?.note || step.evidence?.key || 'important finding'}`;
+      if (action === 'save_evidence') {
+        const firstEvidence = Array.isArray(step.evidence) ? step.evidence[0] : step.evidence;
+        step.instruction = `Save evidence: ${firstEvidence?.note || firstEvidence?.key || 'important finding'}`;
+      }
       else if (action === 'finish') step.instruction = step.answer ? 'Finish with the final answer.' : 'Finish the task.';
       else throw new Error('LLM response JSON is missing instruction field');
     }
@@ -2961,6 +3029,13 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     if (isSaveEvidence && !recapOnForEvidence) {
       throw new Error('save_evidence is only available when Recap is on');
     }
+    const normalizedSaveEvidence = isSaveEvidence && typeof gv2NormalizeEvidenceList === 'function'
+      ? gv2NormalizeEvidenceList(step.evidence, {
+          ref_step_id: step.step,
+          maxItems: 5,
+          existingKeys: (Array.isArray(g.evidenceScratchpad) ? g.evidenceScratchpad : []).map(e => e?.key)
+        })
+      : { ok: false, entries: [], errors: [] };
     const isFinish = action === 'finish';
     let isVisualHighlight = false; // resolved dynamically if highlight falls back
     // find and visual_highlight are ALWAYS the final answer to the user — never mid-journey. Coerce
@@ -2979,13 +3054,14 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const resolvedEl = idxToUse != null ? (window._pageguideIndex?.[idxToUse] || null) : null;
     const resolvedDropTarget = action === 'drag_drop' ? _gv2ResolveDropTarget(step.dropTarget) : null;
 
-    // Visual evidence: SECOND, distinct SoM elements or rects the model points to as justification
+    // Confirmation evidence: SECOND, distinct SoM elements or rects the model points to as justification
     // for the action. Resolve each item independently: prefer index/text, then use that item's rect
     // only when no distinct SoM element resolves. Cap at five.
+    const rawConfirmationEvidence = step.confirmationEvidence != null ? step.confirmationEvidence : step.visualEvidence;
     const visualEvidenceItems = (typeof gv2NormalizeVisualEvidenceList === 'function')
-      ? gv2NormalizeVisualEvidenceList(step.visualEvidence, 5)
-      : ((typeof gv2NormalizeVisualEvidence === 'function' && gv2NormalizeVisualEvidence(step.visualEvidence))
-          ? [gv2NormalizeVisualEvidence(step.visualEvidence)] : []);
+      ? gv2NormalizeVisualEvidenceList(rawConfirmationEvidence, 5)
+      : ((typeof gv2NormalizeVisualEvidence === 'function' && gv2NormalizeVisualEvidence(rawConfirmationEvidence))
+          ? [gv2NormalizeVisualEvidence(rawConfirmationEvidence)] : []);
     const resolvedEvidenceItemsRaw = [];
     for (const item of visualEvidenceItems) {
       let itemEl = null;
@@ -3013,6 +3089,34 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     let evidenceIndex = firstEvidenceItem?.evidenceIndex != null ? firstEvidenceItem.evidenceIndex : null;
     let evidenceRect = firstEvidenceItem?.evidenceRect || null;
     let visualEvidence = visualEvidenceItems[0] || null;
+
+    const resolvedSavedEvidenceItems = [];
+    if (isSaveEvidence && normalizedSaveEvidence.ok) {
+      for (const entry of normalizedSaveEvidence.entries) {
+        const somIndex = _gv2SomIdToIndex(entry.som_id);
+        const somEl = somIndex != null ? (window._pageguideIndex?.[somIndex] || null) : null;
+        resolvedSavedEvidenceItems.push({
+          key: entry.key,
+          note: entry.note,
+          som_id: entry.som_id || null,
+          region_bbox: entry.region_bbox || null,
+          evidenceEl: somEl || null,
+          evidenceIndex: somEl && somIndex != null ? somIndex : null,
+          evidenceRect: somEl ? null : (entry.region_bbox || null),
+          text: entry.note,
+          reason: entry.note,
+          scrollIntoView: !!somEl,
+          forceDomMarker: true
+        });
+      }
+      resolvedSavedEvidenceItems.sort((a, b) => {
+        const ar = a.evidenceEl?.getBoundingClientRect ? a.evidenceEl.getBoundingClientRect() : null;
+        const br = b.evidenceEl?.getBoundingClientRect ? b.evidenceEl.getBoundingClientRect() : null;
+        const ay = ar ? ar.top + (window.scrollY || 0) : Number.MAX_SAFE_INTEGER;
+        const by = br ? br.top + (window.scrollY || 0) : Number.MAX_SAFE_INTEGER;
+        return ay - by;
+      });
+    }
 
     const domElementText = _gv2ElementAccessibleText(resolvedEl);
     const llmElementText = String(step.element?.text || '').trim();
@@ -3283,9 +3387,10 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       evidenceEl,
       evidenceIndex,
       evidenceRect,
-      visualEvidenceItems: resolvedEvidenceItems,
-      visualEvidenceText: visualEvidence?.text || null,
-      visualEvidenceReason: visualEvidence?.reason || null,
+	      visualEvidenceItems: resolvedEvidenceItems,
+	      savedEvidenceItems: resolvedSavedEvidenceItems,
+	      visualEvidenceText: visualEvidence?.text || null,
+	      visualEvidenceReason: visualEvidence?.reason || null,
       planTotal,
       planCompleted,
       confidenceSource: 'mechanical',
@@ -3295,8 +3400,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       stepNumberCorrected: step.stepNumberCorrected,
       instruction: step.instruction,
       action,
-      evidenceKey: isSaveEvidence ? (step.evidence?.key || null) : null,
-      evidenceNote: isSaveEvidence ? (step.evidence?.note || null) : null,
+	      evidenceKey: isSaveEvidence ? (normalizedSaveEvidence.entries?.[0]?.key || null) : null,
+	      evidenceNote: isSaveEvidence ? (normalizedSaveEvidence.entries?.[0]?.note || null) : null,
       finishAnswer: isFinish ? (step.answer || null) : null,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,
       navigateUrl: step.url || null,
@@ -3341,30 +3446,31 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       } : null
     });
 
-    // Auto-perform only after pre-action capture completes (regionShot + before-shot are stored).
-    if (isSaveEvidence && g.sessionId) {
-      try {
-        const normalizedEvidence = (typeof gv2NormalizeEvidenceEntry === 'function')
-          ? gv2NormalizeEvidenceEntry(step.evidence || {}, { ref_step_id: step.step })
-          : { ok: false };
-        const somOk = normalizedEvidence.ok && _gv2SomIdExists(normalizedEvidence.entry.som_id);
-        if (normalizedEvidence.ok && somOk && typeof rewindPutEvidence === 'function') {
-          const saved = await rewindPutEvidence(g.sessionId, normalizedEvidence.entry);
-          g.evidenceScratchpad = await _gv2LoadEvidenceScratchpad(g.sessionId);
-          try {
-            if (typeof rewindPatchRecord === 'function') {
-              await rewindPatchRecord(g.sessionId, step.step, {
-                evidenceKey: saved?.key || normalizedEvidence.entry.key,
-                evidenceNote: saved?.note || normalizedEvidence.entry.note,
-                savedEvidence: saved || normalizedEvidence.entry
-              });
-            }
-          } catch (e) {}
-        } else {
-          console.warn('[guidev2] save_evidence rejected:', normalizedEvidence.errors || (somOk ? [] : ['som_id']));
-        }
-      } catch (e) {
-        console.warn('[guidev2] save_evidence failed:', e);
+	    // Auto-perform only after pre-action capture completes (regionShot + before-shot are stored).
+	    if (isSaveEvidence && g.sessionId) {
+	      try {
+	        if (normalizedSaveEvidence.ok && typeof rewindPutEvidence === 'function') {
+	          const savedEntries = [];
+	          for (const entry of normalizedSaveEvidence.entries) {
+	            const saved = await rewindPutEvidence(g.sessionId, entry);
+	            if (saved) savedEntries.push(saved);
+	          }
+	          g.evidenceScratchpad = await _gv2LoadEvidenceScratchpad(g.sessionId);
+	          try {
+	            if (typeof rewindPatchRecord === 'function') {
+	              await rewindPatchRecord(g.sessionId, step.step, {
+	                evidenceKey: savedEntries[0]?.key || normalizedSaveEvidence.entries[0]?.key || null,
+	                evidenceNote: savedEntries[0]?.note || normalizedSaveEvidence.entries[0]?.note || null,
+	                savedEvidence: savedEntries[0] || normalizedSaveEvidence.entries[0] || null,
+	                savedEvidenceEntries: savedEntries.length ? savedEntries : normalizedSaveEvidence.entries
+	              });
+	            }
+	          } catch (e) {}
+	        } else {
+	          console.warn('[guidev2] save_evidence rejected:', normalizedSaveEvidence.errors || []);
+	        }
+	      } catch (e) {
+	        console.warn('[guidev2] save_evidence failed:', e);
       }
     }
 
@@ -3405,7 +3511,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // self-reported by the model — it's derived after the fact from the trajectory: S3 is whatever
     // finishes with an empty evidence scratchpad (see gv2BuildAnswerEvidence's action-fallback path).
     const finalAnswer = isFinish ? (step.answer || step.instruction || 'Task completed.') : '';
-    // Finish-time confirmation: the visualEvidence the agent attached to the finish step to justify
+    // Finish-time confirmation: the confirmationEvidence the agent attached to the finish step to justify
     // its answer. It becomes the top-priority evidence link on the answer card.
     const confirmationEvidence = (isFinish && Array.isArray(resolvedEvidenceItems) && resolvedEvidenceItems.length)
       ? [{ step: step.step, note: (resolvedEvidenceItems.find(it => it && it.reason)?.reason) || 'Confirmation of the answer' }]

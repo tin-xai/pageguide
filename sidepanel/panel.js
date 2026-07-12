@@ -673,12 +673,16 @@ async function _answerEvidenceFigureHtml(item, sessionId) {
   const step = Number(entry.ref_step_id);
   let rec = null;
   try { if (sessionId && Number.isFinite(step) && typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
-  const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+  const savedCapture = (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+    .find(cap => cap && entry.key && String(cap.key || '').toLowerCase() === String(entry.key || '').toLowerCase());
+  const dedicatedShot = _recapPickShot(savedCapture?.shot);
+  const shot = dedicatedShot || _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
   const bbox = entry.region_bbox || null;
   const note = entry.note || entry.key || 'Saved evidence';
   const bboxData = bbox ? JSON.stringify(bbox) : '';
+  const marker = dedicatedShot ? (savedCapture?.marker || null) : bbox;
   const figure = shot
-    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, bbox, null, note)
+    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, marker, null, note)
     : '<div class="pageguide-recap-pop-empty">No screenshot for this evidence</div>';
   return `<section class="pageguide-answer-evidence-item">
     <div class="pageguide-answer-evidence-shot">${figure}</div>
@@ -4753,7 +4757,6 @@ async function sendMessage() {
         const userPrompt = `PAGE BACKGROUND: LIGHT
 CURRENT URL: ${currentTab.url}
 VISUAL SCREENSHOT PROVIDED: no
-VISUAL EVIDENCE REQUESTED: no
 
 === PAGE INDEX ===
 (No elements indexed - restricted browser page)

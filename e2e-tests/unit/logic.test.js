@@ -944,6 +944,47 @@ describe('Evidence scratchpad helpers (content/utils.js)', () => {
     expect(out.entry.updated_at_step_id).toBe(7);
   });
 
+  test('normalizes evidence arrays with cap and unique duplicate-key suffixes', () => {
+    const out = window.gv2NormalizeEvidenceList([
+      { key: 'team_a', note: 'red', som_id: '12' },
+      { key: 'team_b', note: 'blue', region_bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 } },
+      { key: 'team_a', note: 'crimson', som_id: '13' },
+      { key: 'team_c', note: 'green' },
+      { key: 'team_d', note: 'yellow' },
+      { key: 'team_e', note: 'black' }
+    ], { ref_step_id: 3, maxItems: 5 });
+
+    expect(out.ok).toBe(true);
+    expect(out.truncated).toBe(true);
+    expect(out.entries).toHaveLength(5);
+    expect(out.entries.map(e => e.key)).toEqual(['team_a', 'team_b', 'team_a_2', 'team_c', 'team_d']);
+    expect(out.entries[0].note).toBe('red');
+    expect(out.entries[2].note).toBe('crimson');
+    expect(out.entries[1].region_bbox).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+  });
+
+  test('avoids existing scratchpad keys when normalizing evidence arrays', () => {
+    const out = window.gv2NormalizeEvidenceList([
+      { key: 'team_a', note: 'new red' },
+      { key: 'team_a', note: 'new crimson' }
+    ], { ref_step_id: 4, existingKeys: ['team_a', 'team_a_2'] });
+
+    expect(out.ok).toBe(true);
+    expect(out.entries.map(e => e.key)).toEqual(['team_a_3', 'team_a_4']);
+  });
+
+  test('normalizes a legacy single evidence object defensively', () => {
+    const out = window.gv2NormalizeEvidenceList({
+      key: 'single_ev',
+      note: 'single note',
+      region_bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }
+    }, { ref_step_id: 4 });
+
+    expect(out.ok).toBe(true);
+    expect(out.entries).toHaveLength(1);
+    expect(out.entries[0].key).toBe('single_ev');
+  });
+
   test('rejects missing note and zero-area bbox', () => {
     const out = window.gv2NormalizeEvidenceEntry({
       key: 'x',
@@ -995,6 +1036,15 @@ describe('gv2BuildAnswerEvidence (content/utils.js)', () => {
       fallbackStep: { step: 5 }
     });
     expect(out.map(i => [i.source, i.key])).toEqual([['cited', 'a'], ['scratchpad', 'c']]);
+  });
+
+  test('keeps multiple evidence keys from the same step without bboxes', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'See [ev:a] and [ev:b].',
+      scratchpad: [scratch('a', 2), scratch('b', 2)],
+      fallbackStep: { step: 5 }
+    });
+    expect(out.map(i => i.key)).toEqual(['a', 'b']);
   });
 
   test('S3: navigate-only with no scratchpad falls back to action grounding', () => {

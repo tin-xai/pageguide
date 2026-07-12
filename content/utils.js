@@ -1367,19 +1367,19 @@ function gv2ExtractJsonObject(content) {
   };
 
   // Fix 1: Missing colon and quotes after key, e.g. "thought The user wants..."
-  json = json.replace(/("(?:thought|instruction|riskReason|answer))(\s+[\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, key, val, next) => {
+  json = json.replace(/("(?:thought|instruction|riskReason|answer))(\s+[\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|confirmationEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, key, val, next) => {
     return `${key}": "${escapeJsonVal(val)}` + next;
   });
 
   // Fix 2: Missing quotes on value, e.g. "thought": The user wants..."
-  json = json.replace(/("(?:thought|instruction|riskReason|answer)"\s*:\s*)([a-zA-Z][\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, keyCol, val, next) => {
+  json = json.replace(/("(?:thought|instruction|riskReason|answer)"\s*:\s*)([a-zA-Z][\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|confirmationEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, keyCol, val, next) => {
     return `${keyCol}"${escapeJsonVal(val)}` + next;
   });
 
   try { return JSON.parse(json); } catch (e) {
     try {
       // Fix 3: Escape unescaped double quotes in middle of double-quoted text fields
-      let fixedJson = json.replace(/("(?:thought|instruction|riskReason|answer)"\s*:\s*")([\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, prefix, val, suffix) => {
+      let fixedJson = json.replace(/("(?:thought|instruction|riskReason|answer)"\s*:\s*")([\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|confirmationEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, prefix, val, suffix) => {
         const escapedVal = val.replace(/(?<!\\)"/g, '\\"');
         return prefix + escapedVal + suffix;
       });
@@ -1582,6 +1582,53 @@ function gv2NormalizeEvidenceEntry(input, ctx = {}) {
   };
 }
 
+function gv2NormalizeEvidenceList(input, ctx = {}) {
+  const cap = Math.max(1, Math.min(5, Number(ctx.maxItems) || 5));
+  const raw = Array.isArray(input) ? input : (input && typeof input === 'object' ? [input] : []);
+  const entries = [];
+  const errors = [];
+  const usedKeys = new Set((Array.isArray(ctx.existingKeys) ? ctx.existingKeys : [])
+    .map(k => gv2NormalizeEvidenceKey(k))
+    .filter(Boolean));
+  const uniqueKey = (base) => {
+    const root = gv2NormalizeEvidenceKey(base);
+    if (!root) return '';
+    if (!usedKeys.has(root)) {
+      usedKeys.add(root);
+      return root;
+    }
+    const prefix = root.slice(0, 58).replace(/_+$/g, '') || 'ev';
+    for (let i = 2; i < 1000; i++) {
+      const candidate = `${prefix}_${i}`;
+      if (!usedKeys.has(candidate)) {
+        usedKeys.add(candidate);
+        return candidate;
+      }
+    }
+    return '';
+  };
+  const capped = raw.slice(0, cap);
+  for (let i = 0; i < capped.length; i++) {
+    const normalized = gv2NormalizeEvidenceEntry(capped[i], ctx);
+    if (!normalized.ok) {
+      errors.push({ index: i, errors: normalized.errors || [] });
+      continue;
+    }
+    const key = uniqueKey(normalized.entry.key);
+    if (!key) {
+      errors.push({ index: i, errors: ['key_unique'] });
+      continue;
+    }
+    entries.push(Object.assign({}, normalized.entry, { key }));
+  }
+  return {
+    ok: entries.length > 0,
+    entries,
+    errors,
+    truncated: raw.length > cap
+  };
+}
+
 function gv2EvidenceMemoryText(entries) {
   const list = Array.isArray(entries) ? entries : [];
   const clean = list
@@ -1612,7 +1659,7 @@ function gv2ParseEvidenceRefs(text) {
  * testable. It emits lightweight DESCRIPTORS only — the panel resolves the actual screenshot
  * bytes lazily by step number at render time.
  *
- * Aggregation order (deduped by step + region_bbox):
+	 * Aggregation order (deduped by step + region_bbox + evidence key):
  *   0. confirmation — finish-time visualEvidence the working agent attached to justify its answer
  *                     (the on-page region that confirms the result); highest priority.
  *   1. cited        — [ev:key] tokens in the answer that resolve to a scratchpad entry
@@ -1644,12 +1691,12 @@ function gv2BuildAnswerEvidence(input) {
   const items = [];
   const emittedKeys = new Set();
   const seenStepBbox = new Set();
-  const stepBboxKey = (step, bbox) => `${step}|${bbox ? JSON.stringify(bbox) : 'null'}`;
+	  const stepBboxKey = (step, bbox, key = '') => `${step}|${bbox ? JSON.stringify(bbox) : 'null'}|${key || ''}`;
 
   const push = (entry, source, extra) => {
     const step = Number(entry.ref_step_id);
     if (!Number.isFinite(step)) return;
-    const sbKey = stepBboxKey(step, entry.region_bbox || null);
+	    const sbKey = stepBboxKey(step, entry.region_bbox || null, entry.key || extra?.key || '');
     if (seenStepBbox.has(sbKey)) return;
     seenStepBbox.add(sbKey);
     items.push(Object.assign({
@@ -1667,7 +1714,7 @@ function gv2BuildAnswerEvidence(input) {
     const step = Number(c.step);
     if (!Number.isFinite(step)) return;
     const bbox = c.region_bbox || null;
-    const sbKey = stepBboxKey(step, bbox);
+	    const sbKey = stepBboxKey(step, bbox);
     if (seenStepBbox.has(sbKey)) return;
     seenStepBbox.add(sbKey);
     items.push({ source: 'confirmation', step, region_bbox: bbox, note: c.note || 'Confirmation' });
@@ -1707,6 +1754,7 @@ if (typeof window !== 'undefined') {
   window.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
   window.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
   window.gv2NormalizeEvidenceEntry = gv2NormalizeEvidenceEntry;
+  window.gv2NormalizeEvidenceList = gv2NormalizeEvidenceList;
   window.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
   window.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
   window.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
@@ -1715,15 +1763,16 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
   module.exports.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
   module.exports.gv2NormalizeEvidenceEntry = gv2NormalizeEvidenceEntry;
+  module.exports.gv2NormalizeEvidenceList = gv2NormalizeEvidenceList;
   module.exports.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
   module.exports.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
   module.exports.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
 }
 
 /**
- * Normalize one LLM per-step "visualEvidence" item into { index, rect, text, reason }, or null.
+ * Normalize one LLM per-step confirmationEvidence item into { index, rect, text, reason }, or null.
  *
- * visualEvidence is the SEPARATE on-page proof that justifies a step (e.g. a "Sort by:
+ * confirmationEvidence is the SEPARATE on-page proof that justifies a step (e.g. a "Sort by:
  * Price: Low to High" control), distinct from the action target. The model points to it with
  * EITHER a SoM `index` OR a normalized `rect {x,y,w,h}` (when no marker fits). May also arrive as
  * a bare string (treated as the reason).
