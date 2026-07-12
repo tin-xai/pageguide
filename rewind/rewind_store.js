@@ -15,7 +15,7 @@
 // journey can be recalled later):
 //   RW_SESSIONS                  -> [{ sessionId, goal, startedAt, ...branchMeta }] oldest→newest (capped)
 //   RW_CURRENT                   -> sessionId of the active/most-recent session
-//   RW_IDX::<sessionId>          -> { sessionId, goal, startedAt, steps:[lightweight meta], ...branchMeta }
+//   RW_IDX::<sessionId>          -> { sessionId, goal, startedAt, steps:[lightweight meta], evidenceScratchpad:[...], ...branchMeta }
 //   RW_REC::<sessionId>::<step>  -> full record (incl. screenshot + domSnapshot)
 //
 // The lightweight index keeps the timeline fast to render; full records (with the heavy
@@ -104,6 +104,8 @@
       cost: record.cost,
       title: record.title,
       isInitial: record.isInitial,
+      evidenceKey: record.evidenceKey || null,
+      evidenceNote: record.evidenceNote || null,
       // Visual-evidence justification (short text) + a flag for whether a cropped evidence shot was
       // stored. Kept in the lightweight index so the recap builder can surface it without loading
       // full records; the shot itself stays in the full record (loaded lazily on hover/click).
@@ -146,7 +148,7 @@
     await _set({
       [RW_SESSIONS_KEY]: sessions,
       [RW_CURRENT_KEY]: sessionId,
-      [_idxKey(sessionId)]: { sessionId, goal: goal || '', startedAt: Date.now(), steps: [] }
+      [_idxKey(sessionId)]: { sessionId, goal: goal || '', startedAt: Date.now(), steps: [], evidenceScratchpad: [] }
     });
   }
 
@@ -175,6 +177,13 @@
       startedAt,
       guidePlan: Array.isArray(parent.guidePlan) ? parent.guidePlan : (Array.isArray(parent.plan) ? parent.plan : []),
       guideTitle: parent.guideTitle || '',
+      evidenceScratchpad: (Array.isArray(parent.evidenceScratchpad) ? parent.evidenceScratchpad : [])
+        .filter(e => e && Number(e.ref_step_id) <= n)
+        .map(e => Object.assign({}, e, {
+          previous_ref_step_ids: Array.isArray(e.previous_ref_step_ids)
+            ? e.previous_ref_step_ids.filter(s => Number(s) <= n)
+            : []
+        })),
       steps: []
     }, branchMeta);
 
@@ -219,6 +228,40 @@
     sessions = sessions.map(s => s.sessionId === sessionId ? Object.assign({}, s, patch) : s);
     await _set({ [_idxKey(sessionId)]: index, [RW_SESSIONS_KEY]: sessions });
     return index;
+  }
+
+  async function rewindPutEvidence(sessionId, entry) {
+    if (!sessionId || !entry || !entry.key) return null;
+    const res = await _get(_idxKey(sessionId));
+    const index = res[_idxKey(sessionId)];
+    if (!index) return null;
+    const list = Array.isArray(index.evidenceScratchpad) ? index.evidenceScratchpad.slice() : [];
+    const next = Object.assign({ previous_ref_step_ids: [] }, entry);
+    next.updated_at_step_id = next.updated_at_step_id != null ? next.updated_at_step_id : next.ref_step_id;
+    const existing = list.findIndex(e => e && e.key === next.key);
+    if (existing >= 0) {
+      const prev = list[existing];
+      const previous = Array.isArray(prev.previous_ref_step_ids) ? prev.previous_ref_step_ids.slice() : [];
+      if (prev.ref_step_id != null && !previous.includes(prev.ref_step_id)) previous.push(prev.ref_step_id);
+      next.previous_ref_step_ids = Array.from(new Set(previous.concat(
+        Array.isArray(next.previous_ref_step_ids) ? next.previous_ref_step_ids : []
+      ))).filter(n => Number.isFinite(Number(n))).map(n => Number(n));
+      list[existing] = Object.assign({}, prev, next);
+    } else {
+      list.push(next);
+    }
+    index.evidenceScratchpad = list;
+    let sessions = await _getSessions();
+    sessions = sessions.map(s => s.sessionId === sessionId ? Object.assign({}, s, { evidenceScratchpad: list }) : s);
+    await _set({ [_idxKey(sessionId)]: index, [RW_SESSIONS_KEY]: sessions });
+    return next;
+  }
+
+  async function rewindGetEvidence(sessionId, key) {
+    const index = await rewindGetIndex(sessionId);
+    const list = Array.isArray(index?.evidenceScratchpad) ? index.evidenceScratchpad : [];
+    if (key == null) return list;
+    return list.find(e => e && e.key === key) || null;
   }
 
   // Store (or overwrite) the full record for a step and update the session's index meta.
@@ -367,6 +410,8 @@
     rewindStartSession,
     rewindCreateBranchSession,
     rewindUpdateSessionMeta,
+    rewindPutEvidence,
+    rewindGetEvidence,
     rewindPutRecord,
     rewindGetIndex,
     rewindGetSessions,

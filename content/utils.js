@@ -975,6 +975,10 @@ function gv2DescribeRestoreAction(e) {
     case 'form':           return `${mark} Set ${e.sel}${val}`;
     case 'replay': {
       const tgt = e.sel || (e.target && e.target.text) || e.target || 'element';
+      const dest = e.dropTarget && (e.dropTarget.text || e.dropTarget);
+      if (String(e.action || '').toLowerCase() === 'drag_drop') {
+        return `${mark} Drag ${typeof tgt === 'string' ? tgt : JSON.stringify(tgt)} to ${dest ? (typeof dest === 'string' ? dest : JSON.stringify(dest)) : 'drop target'}`;
+      }
       const verb = ({ type: 'Type into', select: 'Select in', check: 'Toggle', toggle: 'Toggle' })[e.action] || 'Click';
       return `${mark} ${verb} ${typeof tgt === 'string' ? tgt : JSON.stringify(tgt)}${val}`;
     }
@@ -1044,6 +1048,10 @@ function gv2FriendlyRestoreAction(e) {
       if (action === 'type') return ok ? `Filled “${target}”` : `Fill “${target}” did not apply`;
       if (action === 'select') return ok ? `Selected “${target}”` : `Select “${target}” did not apply`;
       if (action === 'check' || action === 'toggle') return ok ? `Toggled “${target}”` : `Toggle “${target}” did not apply`;
+      if (action === 'drag_drop') {
+        const dest = gv2TruncateRestoreText((e.dropTarget && e.dropTarget.text) || e.dropTarget || 'the drop target');
+        return ok ? `Dragged “${target}” to “${dest}”` : `Drag “${target}” to “${dest}” did not apply`;
+      }
       if (/\b(menu|dropdown|settings|panel)\b/i.test(target)) return ok ? `Opened “${target}”` : `Open “${target}” did not apply`;
       return ok ? `Clicked “${target}”` : `Click “${target}” did not apply`;
     }
@@ -1359,19 +1367,19 @@ function gv2ExtractJsonObject(content) {
   };
 
   // Fix 1: Missing colon and quotes after key, e.g. "thought The user wants..."
-  json = json.replace(/("(?:thought|instruction|riskReason))(\s+[\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, key, val, next) => {
+  json = json.replace(/("(?:thought|instruction|riskReason|answer))(\s+[\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, key, val, next) => {
     return `${key}": "${escapeJsonVal(val)}` + next;
   });
 
   // Fix 2: Missing quotes on value, e.g. "thought": The user wants..."
-  json = json.replace(/("(?:thought|instruction|riskReason)"\s*:\s*)([a-zA-Z][\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, keyCol, val, next) => {
+  json = json.replace(/("(?:thought|instruction|riskReason|answer)"\s*:\s*)([a-zA-Z][\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, keyCol, val, next) => {
     return `${keyCol}"${escapeJsonVal(val)}` + next;
   });
 
   try { return JSON.parse(json); } catch (e) {
     try {
       // Fix 3: Escape unescaped double quotes in middle of double-quoted text fields
-      let fixedJson = json.replace(/("(?:thought|instruction|riskReason)"\s*:\s*")([\s\S]*?)("\s*,\s*"(?:step|instruction|element|action|typeText|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, prefix, val, suffix) => {
+      let fixedJson = json.replace(/("(?:thought|instruction|riskReason|answer)"\s*:\s*")([\s\S]*?)("\s*,\s*"(?:step|instruction|element|dropTarget|evidence|visualEvidence|action|typeText|url|findQuery|answer|isLastStep|confidence|grounded|loop|progress|risk|riskReason|confirmation)"\s*:)/g, (match, prefix, val, suffix) => {
         const escapedVal = val.replace(/(?<!\\)"/g, '\\"');
         return prefix + escapedVal + suffix;
       });
@@ -1465,7 +1473,7 @@ function gv2AssessRisk(step) {
   // anything, so it stays low risk even if the goal mentions a sensitive keyword
   // (e.g. "find out how to delete your account"). visual_highlight is likewise read-only —
   // it just crops a screenshot region to show the user.
-  if (step.action === 'find' || step.action === 'visual_highlight') return 'low';
+  if (step.action === 'find' || step.action === 'visual_highlight' || step.action === 'save_evidence' || step.action === 'finish') return 'low';
 
   if (step.risk === 'high') return 'high';
 
@@ -1477,6 +1485,7 @@ function gv2AssessRisk(step) {
     step.typeText,
     step.value,              // canonical ACT value (Slice 5) — carries typed/selected text
     step.element && step.element.text,
+    step.dropTarget && step.dropTarget.text,
     step.riskReason
   ].filter(Boolean).join(' ');
 
@@ -1496,16 +1505,17 @@ if (typeof window !== 'undefined') window.gv2AssessRisk = gv2AssessRisk;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2AssessRisk = gv2AssessRisk;
 
 /**
- * Normalize a raw LLM action string to its canonical form ('click', 'type',
- * 'clear_text', 'find', 'done').
+ * Normalize a raw LLM action string to its canonical form.
  *
  * @param {string} action
  * @param {boolean} isLastStep - used to pick the default when action is missing
  * @returns {string}
  */
 function gv2NormalizeAction(action, isLastStep = false) {
-  const raw = String(action || (isLastStep ? 'done' : 'click')).trim();
-  return raw.toLowerCase().replace(/[\s-]+/g, '_');
+  const raw = String(action || (isLastStep ? 'finish' : 'click')).trim();
+  const norm = raw.toLowerCase().replace(/[\s-]+/g, '_');
+  if (norm === 'done') return 'finish';
+  return norm;
 }
 
 if (typeof window !== 'undefined') window.gv2NormalizeAction = gv2NormalizeAction;
@@ -1529,6 +1539,195 @@ function gv2NormalizeRect(r) {
 
 if (typeof window !== 'undefined') window.gv2NormalizeRect = gv2NormalizeRect;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeRect = gv2NormalizeRect;
+
+function gv2NormalizeEvidenceKey(key) {
+  const raw = String(key == null ? '' : key).trim().toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+  return /^[a-z][a-z0-9_-]{0,63}$/.test(raw) ? raw : '';
+}
+
+function gv2NormalizeEvidenceBbox(box) {
+  if (!box || typeof box !== 'object') return null;
+  const rect = gv2NormalizeRect({
+    x: box.x,
+    y: box.y,
+    w: box.w != null ? box.w : box.width,
+    h: box.h != null ? box.h : box.height
+  });
+  return rect ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h } : null;
+}
+
+function gv2NormalizeEvidenceEntry(input, ctx = {}) {
+  const obj = input && typeof input === 'object' ? input : {};
+  const key = gv2NormalizeEvidenceKey(obj.key);
+  const note = String(obj.note == null ? '' : obj.note).replace(/\s+/g, ' ').trim().slice(0, 220);
+  const ref = Number(ctx.ref_step_id != null ? ctx.ref_step_id : obj.ref_step_id);
+  const ref_step_id = Number.isFinite(ref) && ref >= 0 ? Math.floor(ref) : null;
+  const region_bbox = gv2NormalizeEvidenceBbox(obj.region_bbox || obj.region || obj.bbox);
+  const somRaw = obj.som_id != null ? String(obj.som_id).trim() : '';
+  const som_id = somRaw ? somRaw.slice(0, 80) : null;
+  const errors = [];
+  if (!key) errors.push('key');
+  if (!note) errors.push('note');
+  if (ref_step_id == null) errors.push('ref_step_id');
+  if (obj.region_bbox || obj.region || obj.bbox) {
+    if (!region_bbox) errors.push('region_bbox');
+  }
+  return errors.length ? { ok: false, errors, entry: null } : {
+    ok: true,
+    errors: [],
+    entry: { key, note, ref_step_id, updated_at_step_id: ref_step_id, previous_ref_step_ids: [], region_bbox, som_id }
+  };
+}
+
+function gv2EvidenceMemoryText(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const clean = list
+    .filter(e => e && e.key && e.note)
+    .slice(-12)
+    .map(e => `- ${e.key}: ${e.note}, captured at step ${e.ref_step_id}`);
+  return clean.length ? clean.join('\n') : '(none)';
+}
+
+function gv2ParseEvidenceRefs(text) {
+  const out = [];
+  const seen = new Set();
+  const re = /\[ev:([a-zA-Z0-9_-]+)\]/g;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const key = gv2NormalizeEvidenceKey(m[1]);
+    if (key && !seen.has(key)) { seen.add(key); out.push(key); }
+  }
+  return out;
+}
+
+/**
+ * Build the guaranteed "answer evidence" link list for a finished guide task. This is the
+ * single source of truth that ensures every terminal deliverable (answer card or navigate-only
+ * summary card) links back to at least one on-page visual proof.
+ *
+ * Pure & synchronous (no DOM, no async) so it runs in the content-script context AND is unit
+ * testable. It emits lightweight DESCRIPTORS only — the panel resolves the actual screenshot
+ * bytes lazily by step number at render time.
+ *
+ * Aggregation order (deduped by step + region_bbox):
+ *   0. confirmation — finish-time visualEvidence the working agent attached to justify its answer
+ *                     (the on-page region that confirms the result); highest priority.
+ *   1. cited        — [ev:key] tokens in the answer that resolve to a scratchpad entry
+ *   2. scratchpad   — any remaining saved evidence entry (the agent collected it but did not cite)
+ *   3. action-fallback — the action-grounding step (e.g. the clicked button), used only when the
+ *                        above produced nothing (e.g. navigate-only S3, or an uncited answer)
+ *
+ * Guarantee: callers pass a `fallbackStep`, so the result is non-empty. It returns [] only when
+ * even `fallbackStep` is null (and there is no confirmation / scratchpad evidence).
+ *
+ * @param {{finalAnswer?:string, scratchpad?:Array, confirmation?:Array<{step:number, region_bbox?:object, note?:string}>, fallbackStep?:({step:number, note?:string}|null)}} input
+ * @returns {Array<{source:string, step:number, region_bbox:(object|null), note:string, key?:string, number?:number}>}
+ */
+function gv2BuildAnswerEvidence(input) {
+  const opts = input && typeof input === 'object' ? input : {};
+  const finalAnswer = String(opts.finalAnswer == null ? '' : opts.finalAnswer);
+  const scratchpad = Array.isArray(opts.scratchpad) ? opts.scratchpad : [];
+  const confirmation = Array.isArray(opts.confirmation) ? opts.confirmation : [];
+  const fallbackStep = opts.fallbackStep && typeof opts.fallbackStep === 'object' ? opts.fallbackStep : null;
+
+  // Index scratchpad by normalized key; only entries pinned to a real step are linkable.
+  const byKey = {};
+  scratchpad.forEach(e => {
+    if (!e || e.ref_step_id == null) return;
+    const k = gv2NormalizeEvidenceKey(e.key);
+    if (k && !byKey[k]) byKey[k] = e;
+  });
+
+  const items = [];
+  const emittedKeys = new Set();
+  const seenStepBbox = new Set();
+  const stepBboxKey = (step, bbox) => `${step}|${bbox ? JSON.stringify(bbox) : 'null'}`;
+
+  const push = (entry, source, extra) => {
+    const step = Number(entry.ref_step_id);
+    if (!Number.isFinite(step)) return;
+    const sbKey = stepBboxKey(step, entry.region_bbox || null);
+    if (seenStepBbox.has(sbKey)) return;
+    seenStepBbox.add(sbKey);
+    items.push(Object.assign({
+      source,
+      step,
+      region_bbox: entry.region_bbox || null,
+      note: entry.note || entry.key || 'Saved evidence'
+    }, extra || {}));
+  };
+
+  // 0. Finish-time confirmation evidence — the agent's own justification for the answer. Highest
+  // priority so a state-change task ("language is now English") links straight to the proof region.
+  confirmation.forEach(c => {
+    if (!c) return;
+    const step = Number(c.step);
+    if (!Number.isFinite(step)) return;
+    const bbox = c.region_bbox || null;
+    const sbKey = stepBboxKey(step, bbox);
+    if (seenStepBbox.has(sbKey)) return;
+    seenStepBbox.add(sbKey);
+    items.push({ source: 'confirmation', step, region_bbox: bbox, note: c.note || 'Confirmation' });
+  });
+
+  // 1. Cited [ev:key], in citation order → numbered.
+  gv2ParseEvidenceRefs(finalAnswer).forEach(key => {
+    const entry = byKey[key];
+    if (!entry || emittedKeys.has(key)) return;
+    emittedKeys.add(key);
+    push(entry, 'cited', { key, number: items.length + 1 });
+  });
+
+  // 2. Remaining scratchpad entries the agent saved but did not cite.
+  scratchpad.forEach(e => {
+    if (!e || e.ref_step_id == null) return;
+    const key = gv2NormalizeEvidenceKey(e.key);
+    if (!key || emittedKeys.has(key)) return;
+    emittedKeys.add(key);
+    push(e, 'scratchpad', { key });
+  });
+
+  // 3. Action grounding — only when nothing above resolved.
+  if (items.length === 0 && fallbackStep && Number.isFinite(Number(fallbackStep.step))) {
+    items.push({
+      source: 'action-fallback',
+      step: Number(fallbackStep.step),
+      region_bbox: null,
+      note: fallbackStep.note || 'Final step evidence'
+    });
+  }
+
+  return items;
+}
+
+// Normalize the working agent's finish `answerType`. 'confirmation' means the answer confirms an
+// action/state change completed (S3); anything else (including missing) is an 'information' answer
+// (S1/S2). Pure — unit-testable. Drives the answer-card wording only.
+function gv2NormalizeAnswerType(v) {
+  return String(v == null ? '' : v).trim().toLowerCase() === 'confirmation' ? 'confirmation' : 'information';
+}
+
+if (typeof window !== 'undefined') {
+  window.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
+  window.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
+  window.gv2NormalizeEvidenceEntry = gv2NormalizeEvidenceEntry;
+  window.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
+  window.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
+  window.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
+  window.gv2NormalizeAnswerType = gv2NormalizeAnswerType;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
+  module.exports.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
+  module.exports.gv2NormalizeEvidenceEntry = gv2NormalizeEvidenceEntry;
+  module.exports.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
+  module.exports.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
+  module.exports.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
+  module.exports.gv2NormalizeAnswerType = gv2NormalizeAnswerType;
+}
 
 /**
  * Normalize one LLM per-step "visualEvidence" item into { index, rect, text, reason }, or null.
@@ -1630,7 +1829,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports.gv2Normalize
 function gv2StepHasTarget(step) {
   if (!step) return false;
   const action = gv2NormalizeAction(step.action, step.isLastStep);
-  if (action === 'find' || action === 'visual_highlight' || action === 'done' || step.isLastStep) return false;
+  if (action === 'find' || action === 'visual_highlight' || action === 'finish' || action === 'save_evidence' || step.isLastStep) return false;
   const hasIndex = step.element?.index != null && step.element?.index !== '';
   const hasText = !!(step.element?.text && String(step.element.text).trim());
   return hasIndex || hasText;
@@ -1667,12 +1866,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports.gv2ParseFind
  * target and abort the whole chain.
  *
  * @param {string} action
- * @returns {'noop'|'type'|'clear_text'|'select'|'check'|'click'}
+ * @returns {'noop'|'type'|'clear_text'|'select'|'check'|'drag_drop'|'click'}
  */
 function gv2ReplayKind(action) {
-  const a = String(action || 'click').toLowerCase();
-  if (a === 'find' || a === 'visual_highlight') return 'noop';
+  const a = String(action || 'click').toLowerCase().replace(/[\s-]+/g, '_');
+  if (a === 'find' || a === 'visual_highlight' || a === 'save_evidence' || a === 'finish' || a === 'done') return 'noop';
   if (a === 'type' || a === 'clear_text' || a === 'select') return a;
+  if (a === 'drag_drop') return 'drag_drop';
   if (a === 'check' || a === 'toggle') return 'check';
   return 'click';
 }
@@ -1890,6 +2090,16 @@ function gv2NormalizeRecap(raw, ctx) {
 
 if (typeof window !== 'undefined') window.gv2NormalizeRecap = gv2NormalizeRecap;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeRecap = gv2NormalizeRecap;
+
+// Deterministic binary verdict: the WORKING agent's own terminal action decides success, not the
+// summarization LLM. 'completed' only when the agent emitted a literal finish action (outcome
+// 'completed'); every other ending — stopped early, hit the step cap, errored — is 'failed'.
+// Pure — unit-testable. The summarization agent is now a summarizer/diagnoser, never the judge.
+function gv2DeterministicVerdict(outcome) {
+  return outcome === 'completed' ? 'completed' : 'failed';
+}
+if (typeof window !== 'undefined') window.gv2DeterministicVerdict = gv2DeterministicVerdict;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2DeterministicVerdict = gv2DeterministicVerdict;
 
 // Normalize the Final-State vision verdict from the LLM into a safe, renderable shape. Pure — no
 // LLM/DOM — so it's unit-testable. `raw` is the parsed JSON (or null). Returns:

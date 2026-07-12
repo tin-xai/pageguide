@@ -432,26 +432,29 @@ Return JSON only:
   "thought": "Your internal chain-of-thought reasoning about the page state and chosen action",
   "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
   "element": {"index": N, "text": "element text to highlight"},
-  "visualEvidence": [{"index": M, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the evidence element", "reason": "one sentence: why this proves the action is correct"}],
-  "action": "click" | "type" | "clear_text" | "highlight" | "scroll_down" | "navigate" | "done",
+  "dropTarget": {"index": N|null, "text": "drop destination text", "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}},
+  "evidence": {"key": "slug_safe_key", "note": "short evidence note", "region_bbox": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "som_id": "optional marker id or null"},
+  "visualEvidence": [{"index": M|null, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the evidence element", "reason": "one sentence: how this region confirms the final answer"}],
+  "action": "click" | "type" | "clear_text" | "drag_drop" | "scroll_down" | "scroll_up" | "navigate" | "save_evidence" | "finish",
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
   "url": "the target URL (only when action=navigate; null otherwise)",
-  "findQuery": "the informational question to answer from THIS page (only when action=highlight; null otherwise)",
+  "answer": "final answer text, ALWAYS required when action=finish (never null); may use [ev:key] citations",
+  "answerType": "information" | "confirmation",
   "isLastStep": false,
-  "completedPlanStep": 1,
-  "completedPlanStepReason": "reasoning here",
   "risk": "low" | "high",
   "riskReason": "short reason for the risk level",
   "confirmation": "needed" | "no need"
 }
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
-"completedPlanStep": the highest plan step number completed by this action, or null if none is completed yet.
-"completedPlanStepReason": short explanation for that completion value.
+"dropTarget": ONLY populate this when action="drag_drop"; otherwise set it to null. "element" is always the draggable source. The drop target may use a PAGE INDEX marker, text, a normalized screenshot rect, or both index and rect. If the drop target has no SoM marker, set "index": null and provide "rect".
+"evidence": ONLY populate this when action="save_evidence"; otherwise set it to null. Use save_evidence only when VISUAL EVIDENCE REQUESTED is yes. Save a compact, important fact that may be needed in the final answer. The key must be short and slug-safe. The note must be short. region_bbox is optional but should be provided for visual evidence when possible.
+"answer": ONLY populate this when action="finish", and it is ALWAYS required then (never null). Every task ends with a finish that states the result. For information tasks, the answer is the info you found. For action/navigation tasks, the answer confirms the completed state (e.g. "The page language is now English."). May cite saved evidence with [ev:key].
+"answerType": ONLY populate this when action="finish". "information" when the answer is information read from the page (a question answered). "confirmation" when the answer confirms that an action or state change completed (navigation, a setting changed, an item added).
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
-"visualEvidence": ONLY populate this when the user prompt says VISUAL EVIDENCE REQUESTED: yes (otherwise set it to null). It is the SEPARATE on-page proof that justifies this step — NOT the action target. Return an array with up to 5 evidence items. Each item points to EITHER a SoM "index" (a DIFFERENT PAGE INDEX marker number than "element.index") OR, when no marker fits that evidence region, a normalized "rect" {x,y,w,h} as fractions of the screenshot (0..1, top-left origin). If there are multiple proof regions, return multiple items. Each item MUST include "reason", one short sentence explaining why that specific index or rect was chosen. Example for "add the cheapest laptop to my cart": the action target is the "Add to Cart" button but visualEvidence can include the "Sort by: Price: Low to High" control and the first result price. Prefer "index"; use "rect" only when that evidence region has no SoM marker.
+"visualEvidence": ONLY populate this on the FINAL step (action="finish"); otherwise set it to null. It is the on-page CONFIRMATION of your answer — the region(s) on the CURRENT page that prove the answer is correct (the information you are reporting, or the resulting state that shows the action succeeded). Return an array with up to 5 items. Each item may include BOTH a SoM "index" and a normalized "rect" {x,y,w,h} as fractions of the screenshot (0..1, top-left origin). Use "index": null when no marker fits that region. Each item MUST include "reason", one short sentence explaining how that region confirms the answer. Example: for "change the language to English" finish with answer "The page language is now English." and visualEvidence pointing at the language selector now reading "English".
 
 RULES:
 1. ONE step at a time — never list multiple things to do
@@ -464,35 +467,27 @@ RULES:
 6. action="clear_text": clear the highlighted form field's current value; leave typeText
    empty/null. Use it before typing a replacement value or when the task asks to reset a field.
    Sensitive fields (passwords, payment, private data) are high risk and should be handed to the user.
-7. action="scroll_down": scroll the page down to reveal more content.
-8. action="navigate": navigate the browser to the specified URL. Provide the target URL in "url".
-9. action="done": set isLastStep=true; no element interaction needed
-8. action="highlight": use ONLY when the USER GOAL is INFORMATIONAL — the user wants to KNOW
-   something (a policy, an answer, an explanation), not to perform a transaction — AND the
-   current page is where that information should live according to the current PLAN step
-   (e.g. you have navigated to the Help/FAQ/policy page the plan named).
-   You do NOT need to see the page text to choose this: decide from the plan's intent plus
-   the fact that you have arrived at the page. Set findQuery to the precise question to
-   answer, and leave element null. A separate reader pass then extracts the answer and
-   highlights the passages that support it.
-   highlight MUST be the LAST step (always set isLastStep=true) — it is the final answer to the user.
-   NEVER use highlight mid-journey: complete all navigation with click/type first, then highlight at the end.
-   Do NOT use highlight for navigational or transactional goals (buy, book, sign in, change a
-   setting) — those end with click/type/done.
-10. Highlight the element to interact with using its index from PAGE INDEX
-11. If the target is not visible, guide the user to open the relevant menu first
+7. action="drag_drop": drag the highlighted source element to dropTarget. Use this for reorder, move, kanban, upload drop zones, sliders that require dragging, or drag-based placement.
+8. action="scroll_down" or action="scroll_up": scroll the page to reveal more content.
+9. action="navigate": navigate the browser to the specified URL. Provide the target URL in "url".
+10. action="save_evidence": save one important visual or page-state fact to the evidence scratchpad, then continue. This is not terminal.
+11. action="finish": terminal action. ALWAYS provide an "answer" (never null), set "answerType", and provide "visualEvidence" confirming the answer on the current page. For information tasks the answer is what you found; for action/navigation tasks the answer confirms the completed state.
+12. Final answers may cite saved evidence with [ev:key], e.g. "Team A is red [ev:team_a_color]."
+13. Highlight the element to interact with using its index from PAGE INDEX
+14. If the target is not visible, guide the user to open the relevant menu first
 
 COMMON PATTERNS:
 - Hidden options: Step 1 → click three-dot menu → Step 2 → click the option
 - Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
 - Replace text:   Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
+- Drag/drop:      Step 1 → drag the source card/file/item to the destination (action=drag_drop)
+- Visual answer:  Step 1 → save_evidence for each important observation → final Step → finish(answer with [ev:key], answerType="information")
 - Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
-- Info lookup:    Step 1 → click 'Help' → Step 2 → click the relevant article →
-                  Step 3 → action=highlight (the answer is on this page)
+- Navigation:     Final Step → finish(answer describing the reached state, answerType="confirmation", visualEvidence=[the region that confirms it]) once the requested page state is reached
 
 NATIVE BROWSER DIALOGS (print, save, open file, etc.):
 When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that
-step MUST be the last step (isLastStep=true, action="done"). Explain what the user will see in
+step MUST be the last step (isLastStep=true, action="finish"). Explain what the user will see in
 the dialog and what they should do, but do NOT attempt to guide actions inside the dialog — the
 extension cannot access native browser UI. Example last-step instruction:
 "Click 'Print' in the File menu. Your browser's print dialog will open — choose your printer and

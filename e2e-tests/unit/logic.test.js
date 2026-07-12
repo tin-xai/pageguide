@@ -480,6 +480,8 @@ describe('gv2DescribeRestoreAction (content/utils.js)', () => {
       .toBe('✓ Type into #q → "hi"');
     expect(window.gv2DescribeRestoreAction({ kind: 'replay', action: 'click', target: { text: 'Continue' }, ok: true }))
       .toBe('✓ Click Continue');
+    expect(window.gv2DescribeRestoreAction({ kind: 'replay', action: 'drag_drop', target: { text: 'Task A' }, dropTarget: { text: 'Done' }, ok: true }))
+      .toBe('✓ Drag Task A to Done');
   });
 
   test('renders a note verbatim and is safe on empty input', () => {
@@ -505,6 +507,8 @@ describe('gv2DescribeRestoreAction (content/utils.js)', () => {
       .toBe('Restored “email address” field');
     expect(window.gv2FriendlyRestoreAction({ kind: 'replay', action: 'click', target: { text: 'Account menu' }, ok: true }))
       .toBe('Opened “Account menu”');
+    expect(window.gv2FriendlyRestoreAction({ kind: 'replay', action: 'drag_drop', target: { text: 'Task A' }, dropTarget: { text: 'Done' }, ok: true }))
+      .toBe('Dragged “Task A” to “Done”');
 
     const technical = window.gv2RestoreTechnicalDetail(entry);
     expect(technical).toContain('#cf-chl-widget-tdsao_response');
@@ -867,6 +871,7 @@ describe('gv2AssessRisk (content/utils.js)', () => {
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Delete your account' })).toBe('high');
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Click Pay now' })).toBe('high');
     expect(window.gv2AssessRisk({ risk: 'low', action: 'type', typeText: 'hunter2', element: { text: 'Password' } })).toBe('high');
+    expect(window.gv2AssessRisk({ risk: 'low', action: 'drag_drop', instruction: 'Move this to Delete', element: { text: 'File' }, dropTarget: { text: 'Delete' } })).toBe('high');
     expect(window.gv2AssessRisk({ risk: 'low', instruction: 'Send the message' })).toBe('high');
   });
 
@@ -907,11 +912,146 @@ describe('gv2NormalizeAction (content/utils.js)', () => {
   test('normalizes separators to underscores', () => {
     expect(window.gv2NormalizeAction('clear text')).toBe('clear_text');
     expect(window.gv2NormalizeAction('clear-text')).toBe('clear_text');
+    expect(window.gv2NormalizeAction('drag drop')).toBe('drag_drop');
+    expect(window.gv2NormalizeAction('scroll up')).toBe('scroll_up');
   });
 
-  test('defaults to click, or done on the last step', () => {
+  test('defaults to click, or finish on the last step', () => {
     expect(window.gv2NormalizeAction(null, false)).toBe('click');
-    expect(window.gv2NormalizeAction(null, true)).toBe('done');
+    expect(window.gv2NormalizeAction(null, true)).toBe('finish');
+    expect(window.gv2NormalizeAction('done')).toBe('finish');
+  });
+});
+
+describe('Evidence scratchpad helpers (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('normalizes evidence keys and bboxes', () => {
+    expect(window.gv2NormalizeEvidenceKey('Team A Color!')).toBe('team_a_color');
+    expect(window.gv2NormalizeEvidenceBbox({ x: 0.1, y: 0.2, width: 0.3, height: 0.4 }))
+      .toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+  });
+
+  test('validates evidence entries', () => {
+    const out = window.gv2NormalizeEvidenceEntry({
+      key: 'team_a_color',
+      note: 'Team A shirt is red',
+      region_bbox: { x: 0.42, y: 0.31, w: 0.18, h: 0.22 },
+      som_id: null
+    }, { ref_step_id: 7 });
+    expect(out.ok).toBe(true);
+    expect(out.entry.ref_step_id).toBe(7);
+    expect(out.entry.updated_at_step_id).toBe(7);
+  });
+
+  test('rejects missing note and zero-area bbox', () => {
+    const out = window.gv2NormalizeEvidenceEntry({
+      key: 'x',
+      note: '',
+      region_bbox: { x: 0.1, y: 0.1, w: 0, h: 0.2 }
+    }, { ref_step_id: 1 });
+    expect(out.ok).toBe(false);
+    expect(out.errors).toContain('note');
+    expect(out.errors).toContain('region_bbox');
+  });
+
+  test('builds compact memory text and parses evidence refs', () => {
+    const entries = [{ key: 'team_a_color', note: 'Team A shirt is red', ref_step_id: 7 }];
+    expect(window.gv2EvidenceMemoryText(entries)).toContain('team_a_color: Team A shirt is red, captured at step 7');
+    expect(window.gv2ParseEvidenceRefs('Team A [ev:team_a_color] and missing [ev:other].'))
+      .toEqual(['team_a_color', 'other']);
+  });
+});
+
+describe('gv2BuildAnswerEvidence (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  const scratch = (key, step, bbox) => ({ key, note: `${key} note`, ref_step_id: step, region_bbox: bbox || null });
+
+  test('S1/S2: cited [ev:key] resolve to numbered "cited" items in citation order', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'Team A is red [ev:a] and B is blue [ev:b].',
+      scratchpad: [scratch('a', 2), scratch('b', 3)],
+      fallbackStep: { step: 5 }
+    });
+    expect(out.map(i => [i.source, i.key, i.number, i.step]))
+      .toEqual([['cited', 'a', 1, 2], ['cited', 'b', 2, 3]]);
+  });
+
+  test('uncited scratchpad still linked (agent saved but did not cite)', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: '',
+      scratchpad: [scratch('a', 2), scratch('c', 4)],
+      fallbackStep: { step: 5 }
+    });
+    expect(out.map(i => i.source)).toEqual(['scratchpad', 'scratchpad']);
+    expect(out.map(i => i.step)).toEqual([2, 4]);
+  });
+
+  test('cited first, then remaining uncited scratchpad', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'See [ev:a].',
+      scratchpad: [scratch('a', 2), scratch('c', 4)],
+      fallbackStep: { step: 5 }
+    });
+    expect(out.map(i => [i.source, i.key])).toEqual([['cited', 'a'], ['scratchpad', 'c']]);
+  });
+
+  test('S3: navigate-only with no scratchpad falls back to action grounding', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: '',
+      scratchpad: [],
+      fallbackStep: { step: 4, note: 'Clicked World Cup' }
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('action-fallback');
+    expect(out[0].step).toBe(4);
+    expect(out[0].note).toBe('Clicked World Cup');
+  });
+
+  test('guarantee contract: non-empty with fallbackStep, empty without', () => {
+    expect(window.gv2BuildAnswerEvidence({ finalAnswer: '', scratchpad: [], fallbackStep: { step: 1 } }))
+      .toHaveLength(1);
+    expect(window.gv2BuildAnswerEvidence({ finalAnswer: '', scratchpad: [], fallbackStep: null }))
+      .toHaveLength(0);
+  });
+
+  test('dedup: cited entry sharing the fallback step does not double-emit; fallback suppressed', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'See [ev:a].',
+      scratchpad: [scratch('a', 4)],
+      fallbackStep: { step: 4 }
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('cited');
+    expect(out[0].step).toBe(4);
+  });
+
+  test('missing/unpinned keys are skipped without throwing', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'Missing [ev:x] and unpinned [ev:y].',
+      scratchpad: [{ key: 'y', note: 'no step', ref_step_id: null }],
+      fallbackStep: { step: 3 }
+    });
+    // x has no entry, y has no ref_step_id → both skipped → fallback fires.
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('action-fallback');
+  });
+});
+
+describe('gv2DeterministicVerdict (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('only a completed outcome (literal finish) maps to completed', () => {
+    expect(window.gv2DeterministicVerdict('completed')).toBe('completed');
+  });
+
+  test('every non-finish ending is failed (binary, no unclear)', () => {
+    expect(window.gv2DeterministicVerdict('failed')).toBe('failed');
+    expect(window.gv2DeterministicVerdict('stopped')).toBe('failed');
+    expect(window.gv2DeterministicVerdict('unclear')).toBe('failed');
+    expect(window.gv2DeterministicVerdict(undefined)).toBe('failed');
+    expect(window.gv2DeterministicVerdict('')).toBe('failed');
   });
 });
 
@@ -930,6 +1070,11 @@ describe('gv2NormalizeVisualEvidence (content/utils.js)', () => {
   test('accepts a normalized bounding box rect', () => {
     const r = window.gv2NormalizeVisualEvidence({ rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, reason: 'here' });
     expect(r.rect).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+  });
+
+  test('keeps both index and rect when both are provided', () => {
+    const r = window.gv2NormalizeVisualEvidence({ index: 9, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, reason: 'marker plus precise region' });
+    expect(r).toEqual({ index: 9, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, text: null, reason: 'marker plus precise region' });
   });
 
   test('clamps rect components to 0..1 and rejects a zero-area rect', () => {
@@ -1019,6 +1164,10 @@ describe('gv2StepHasTarget (content/utils.js)', () => {
     expect(window.gv2StepHasTarget({ action: 'click', element: { text: 'Help' } })).toBe(true);
   });
 
+  test('a drag_drop step uses element as the draggable source target', () => {
+    expect(window.gv2StepHasTarget({ action: 'drag_drop', element: { index: 4, text: 'Task A' }, dropTarget: { text: 'Done' } })).toBe(true);
+  });
+
   test('find never has a target, even when the model populates element', () => {
     // find highlights whatever the reader pass cites — not one planner-chosen element.
     expect(window.gv2StepHasTarget({ action: 'find', element: { index: 4, text: 'Lost property' } })).toBe(false);
@@ -1088,6 +1237,10 @@ describe('gv2ReplayKind (content/utils.js)', () => {
     expect(window.gv2ReplayKind('select')).toBe('select');
     expect(window.gv2ReplayKind('check')).toBe('check');
     expect(window.gv2ReplayKind('toggle')).toBe('check');
+    expect(window.gv2ReplayKind('drag_drop')).toBe('drag_drop');
+    expect(window.gv2ReplayKind('drag drop')).toBe('drag_drop');
+    expect(window.gv2ReplayKind('save_evidence')).toBe('noop');
+    expect(window.gv2ReplayKind('finish')).toBe('noop');
   });
 
   test('anything else — including a missing action — replays as a click', () => {
@@ -1645,6 +1798,72 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
     const idx = await window.rewindGetIndex();
     expect(idx.steps.length).toBe(1);
     expect(idx.steps[0].instruction).toBe('after');
+  });
+
+  test('stores evidence scratchpad entries and updates duplicate keys with prior refs', async () => {
+    await window.rewindStartSession('s1', 'compare teams');
+    await window.rewindPutEvidence('s1', {
+      key: 'team_a_color',
+      note: 'Team A shirt is red',
+      ref_step_id: 7,
+      updated_at_step_id: 7,
+      previous_ref_step_ids: [],
+      region_bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
+      som_id: null
+    });
+    await window.rewindPutEvidence('s1', {
+      key: 'team_a_color',
+      note: 'Team A shirt is crimson',
+      ref_step_id: 9,
+      updated_at_step_id: 9,
+      previous_ref_step_ids: [],
+      region_bbox: { x: 0.2, y: 0.2, w: 0.3, h: 0.4 },
+      som_id: null
+    });
+
+    const idx = await window.rewindGetIndex('s1');
+    expect(idx.evidenceScratchpad).toHaveLength(1);
+    expect(idx.evidenceScratchpad[0].note).toBe('Team A shirt is crimson');
+    expect(idx.evidenceScratchpad[0].ref_step_id).toBe(9);
+    expect(idx.evidenceScratchpad[0].previous_ref_step_ids).toEqual([7]);
+    expect(await window.rewindGetEvidence('s1', 'team_a_color')).toEqual(idx.evidenceScratchpad[0]);
+  });
+
+  test('stores multi-page evidence keys for final cited answers', async () => {
+    await window.rewindStartSession('s1', 'compare three teams');
+    await window.rewindPutEvidence('s1', {
+      key: 'team_a_color',
+      note: 'Team A shirt is red',
+      ref_step_id: 1,
+      updated_at_step_id: 1,
+      previous_ref_step_ids: [],
+      region_bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+      som_id: null
+    });
+    await window.rewindPutEvidence('s1', {
+      key: 'team_b_color',
+      note: 'Team B shirt is blue',
+      ref_step_id: 3,
+      updated_at_step_id: 3,
+      previous_ref_step_ids: [],
+      region_bbox: { x: 0.2, y: 0.2, w: 0.2, h: 0.2 },
+      som_id: null
+    });
+    await window.rewindPutEvidence('s1', {
+      key: 'team_c_color',
+      note: 'Team C shirt is green',
+      ref_step_id: 5,
+      updated_at_step_id: 5,
+      previous_ref_step_ids: [],
+      region_bbox: { x: 0.3, y: 0.3, w: 0.2, h: 0.2 },
+      som_id: null
+    });
+
+    const evidence = await window.rewindGetEvidence('s1');
+    expect(evidence.map(e => e.key)).toEqual(['team_a_color', 'team_b_color', 'team_c_color']);
+    expect(window.gv2EvidenceMemoryText(evidence)).toContain('team_c_color: Team C shirt is green, captured at step 5');
+    expect(window.gv2ParseEvidenceRefs('A [ev:team_a_color], B [ev:team_b_color], C [ev:team_c_color].'))
+      .toEqual(['team_a_color', 'team_b_color', 'team_c_color']);
   });
 
   test('clear removes index and all records', async () => {

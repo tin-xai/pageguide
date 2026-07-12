@@ -22,9 +22,12 @@ let currentGuideRecords = [];
 let currentGuideInitial = null; // Phase 1: the "Initial state" node (step 0), kept out of the dot count
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
+let goalDotsExpanded = false;
+let guideTimelineCheckpointSteps = null;
 let _lastFindMessageStep = null; // Step number whose find answer was already posted to chat
 let _lastVisualHighlightStep = null; // Step whose visual_highlight image was already posted to chat
 let _lastRecapKey = null; // sessionId:step of the last recap posted, so it isn't posted twice
+let _lastAnswerCardKey = null; // sessionId:step of the last finish(answer) card posted
 let panelRunning = false;        // True while the agent is generating (send button shows Stop)
 let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
 let guideStopped = false;        // True after Stop: drop late "still working" messages from an
@@ -227,7 +230,11 @@ function _recapVisualEvidence(rec) {
 function _recapVisualEvidenceItems(rec) {
   if (!rec) return [];
   const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
-  const rawItems = Array.isArray(rec.visualEvidenceItems) ? rec.visualEvidenceItems.slice(0, 5) : [];
+  // Keep only items backed by real evidence (a captured crop or a marker rect), matching the link
+  // filter in renderGuideRecap — so a hovered/clicked link's data-evidence-item index lines up with
+  // this list. Reason-only items are excluded (they'd be "fake" links that show nothing).
+  const rawItems = (Array.isArray(rec.visualEvidenceItems) ? rec.visualEvidenceItems.slice(0, 5) : [])
+    .filter(item => item && (item.visualEvidenceShot || item.visualEvidenceNormRect));
   const items = rawItems.map((item) => {
     const shot = _recapPickShot(item.visualEvidenceShot);
     const marker = item.visualEvidenceNormRect || null;
@@ -240,10 +247,10 @@ function _recapVisualEvidenceItems(rec) {
       reason: item.visualEvidenceReason || '',
       text: item.visualEvidenceText || ''
     };
-  }).filter(item => item.ev || item.reason || item.text);
+  });
   if (items.length) return items;
   const single = _recapVisualEvidence(rec);
-  if (!single && !rec.visualEvidenceReason && !rec.visualEvidenceText) return [];
+  if (!single) return [];
   return [{
     ev: single,
     number: rec.visualEvidenceIndex != null ? rec.visualEvidenceIndex : null,
@@ -282,19 +289,29 @@ async function _showRecapEvidencePopover(anchor, sessionId, step) {
   // A visual-evidence link (the justification text) shows the SEPARATE proof region + its reason;
   // the milestone-phrase links keep showing the action's targeted region + Action line.
   const isVisual = anchor?.dataset?.evidence === 'visual';
+  const isScratchpad = anchor?.dataset?.evidence === 'scratchpad';
   const visualItems = isVisual ? _recapVisualEvidenceItems(rec) : [];
   const requestedItem = Number(anchor?.dataset?.evidenceItem);
   const selectedVisual = Number.isFinite(requestedItem) && requestedItem >= 0 && requestedItem < visualItems.length
     ? visualItems[requestedItem]
     : visualItems[0];
-  const ev = isVisual ? (selectedVisual?.ev || null) : _recapMarkedEvidence(rec);
-  const number = isVisual ? selectedVisual?.number : (rec?.target?.resolvedIndex ?? rec?.resolvedIndex);
-  const caption = isVisual ? 'Visual evidence' : 'Targeted region';
-  const detail = isVisual
+  let scratchEv = null;
+  if (isScratchpad) {
+    let bbox = null;
+    try { bbox = JSON.parse(anchor?.dataset?.bbox || 'null'); } catch (e) { bbox = null; }
+    const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+    if (shot && bbox) scratchEv = { src: `data:image/jpeg;base64,${shot}`, marker: bbox };
+  }
+  const ev = isScratchpad ? (scratchEv || _recapMarkedEvidence(rec)) : (isVisual ? (selectedVisual?.ev || null) : _recapMarkedEvidence(rec));
+  const number = isScratchpad ? null : (isVisual ? selectedVisual?.number : (rec?.target?.resolvedIndex ?? rec?.resolvedIndex));
+  const caption = isScratchpad ? 'Saved evidence' : (isVisual ? 'Visual evidence' : 'Targeted region');
+  const detail = isScratchpad
+    ? `<div class="pageguide-recap-pop-action"><b>Evidence:</b> ${escapeHtml(anchor?.dataset?.note || 'Saved evidence')}</div>`
+    : (isVisual
     ? (selectedVisual
         ? `<div class="pageguide-recap-pop-action"><b>Why:</b> ${escapeHtml(selectedVisual.reason || selectedVisual.text || 'Visual evidence')}</div>`
         : '')
-    : `<div class="pageguide-recap-pop-action"><b>Action:</b> ${_recapActionHtml(rec)}</div>`;
+    : `<div class="pageguide-recap-pop-action"><b>Action:</b> ${_recapActionHtml(rec)}</div>`);
   const pop = document.createElement('div');
   pop.id = 'pageguide-recap-evidence-pop';
   pop.className = 'pageguide-recap-evidence-pop' + (isVisual ? ' is-visual' : '');
@@ -409,6 +426,40 @@ async function openRecapCheckpoint(sessionId, step, stepList) {
       openRecapCheckpoint(sessionId, Number(nav.dataset.step), navSteps);
       return;
     }
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
+}
+
+async function openScratchpadEvidenceView(anchor, sessionId, step) {
+  closeMemoryShotLightbox();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  let bbox = null;
+  try { bbox = JSON.parse(anchor?.dataset?.bbox || 'null'); } catch (e) { bbox = null; }
+  const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+  const note = anchor?.dataset?.note || 'Saved evidence';
+  const imgHtml = shot
+    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, bbox, null, 'saved evidence')
+    : '<div class="pageguide-recap-pop-empty">No screenshot</div>';
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Saved evidence">
+      <div class="pageguide-memory-shot-head">
+        <span>Saved evidence — step ${escapeHtml(String(step))}</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body">
+        ${imgHtml}
+        <div class="pageguide-recap-detail-text">
+          <div class="pageguide-recap-detail-evidence"><b>Evidence:</b> ${escapeHtml(note)}</div>
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
     if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
   });
   document.body.appendChild(overlay);
@@ -545,6 +596,207 @@ function renderFindAnswer(result) {
   container.scrollTop = container.scrollHeight;
 }
 
+function _buildAnswerEvidenceModel(answer, scratchpad) {
+  const byKey = {};
+  (Array.isArray(scratchpad) ? scratchpad : []).forEach(e => {
+    if (e && e.key) byKey[String(e.key).toLowerCase()] = e;
+  });
+  const evidence = [];
+  const byEvidenceKey = {};
+  const text = String(answer || '');
+  const re = /\[ev:([a-zA-Z0-9_-]+)\]/g;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    out += escapeHtml(text.slice(last, m.index));
+    const rawKey = m[1];
+    const key = rawKey.toLowerCase();
+    const ev = byKey[key];
+    if (ev && ev.ref_step_id != null) {
+      if (!byEvidenceKey[key]) {
+        byEvidenceKey[key] = { number: evidence.length + 1, key, entry: ev };
+        evidence.push(byEvidenceKey[key]);
+      }
+      const item = byEvidenceKey[key];
+      const label = ev.note || key;
+      const bbox = ev.region_bbox ? JSON.stringify(ev.region_bbox) : '';
+      out += `<span class="pageguide-recap-link pageguide-answer-citation-chip" data-evidence="scratchpad" data-step="${escapeHtml(String(ev.ref_step_id))}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(label)}" title="${escapeHtml(label)}">📷 ${escapeHtml(String(item.number))}</span>`;
+    } else {
+      out += `<span class="pageguide-evidence-missing">[missing evidence: ${escapeHtml(key)}]</span>`;
+    }
+    last = re.lastIndex;
+  }
+  out += escapeHtml(text.slice(last));
+  return { answerHtml: out.replace(/\n/g, '<br>'), evidence };
+}
+
+function _stripEvidenceRefs(text) {
+  return String(text || '').replace(/\s*\[ev:[a-zA-Z0-9_-]+\]/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+function _answerVerdictInfo(result) {
+  const recap = result?.recap || {};
+  // Verdict is deterministic: a finish answer is a completed run. Fall back to that when the recap
+  // (which only builds with Visual Recap on) is absent, rather than showing "Unsure".
+  const verdictKey = recap?.final?.verdict || recap?.finalVerdict || (result?.isFinish ? 'completed' : 'unclear');
+  const verdict = RECAP_VERDICTS[verdictKey] || RECAP_VERDICTS.unclear;
+  return { verdictKey, verdict };
+}
+
+function _answerReasoningTrailHtml(recap, sessionId) {
+  const milestones = Array.isArray(recap?.milestones) ? recap.milestones.filter(m => m && m.goalRelated !== false) : [];
+  if (!milestones.length) return '';
+  const rows = milestones.map((m, idx) => {
+    const step = m.firstStep != null ? m.firstStep : m.step;
+    const stepLabel = Number.isFinite(Number(step)) ? String(Number(step)) : String(idx + 1);
+    const status = String(m.status || '').toLowerCase();
+    const cls = status === 'wrong' ? 'is-wrong' : (status === 'unclear' ? 'is-unclear' : 'is-ok');
+    const score = m.errorLabel ? `<span class="pageguide-answer-trail-pill">${escapeHtml(m.errorLabel)}</span>` : '';
+    const completed = status === 'wrong' ? '' : (status === 'unclear'
+      ? '<span class="pageguide-answer-trail-pill is-unclear">Review</span>'
+      : (idx === milestones.length - 1 ? '<span class="pageguide-answer-trail-pill is-complete">Completed</span>' : ''));
+    return `<div class="pageguide-answer-trail-row ${cls}">
+      <span class="pageguide-answer-trail-dot">${escapeHtml(stepLabel)}</span>
+      <span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}">${escapeHtml(m.text || '')}</span>
+      ${score || completed}
+    </div>`;
+  }).join('');
+  return `<details class="pageguide-reasoning-trail">
+    <summary><span>Reasoning Trail</span><span class="pageguide-reasoning-trail-chevron">⌄</span></summary>
+    <div class="pageguide-reasoning-trail-body">${rows}</div>
+  </details>`;
+}
+
+async function _answerEvidenceFigureHtml(item, sessionId) {
+  const entry = item?.entry || {};
+  const step = Number(entry.ref_step_id);
+  let rec = null;
+  try { if (sessionId && Number.isFinite(step) && typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+  const bbox = entry.region_bbox || null;
+  const note = entry.note || entry.key || 'Saved evidence';
+  const bboxData = bbox ? JSON.stringify(bbox) : '';
+  const figure = shot
+    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, bbox, null, note)
+    : '<div class="pageguide-recap-pop-empty">No screenshot for this evidence</div>';
+  return `<section class="pageguide-answer-evidence-item">
+    <div class="pageguide-answer-evidence-shot">${figure}</div>
+    <div class="pageguide-answer-evidence-caption">${escapeHtml(note)}</div>
+    <div class="pageguide-answer-evidence-links">
+      <span>Captured at checkpoint ${escapeHtml(String(step || ''))}</span>
+      <span class="pageguide-recap-link" data-evidence="scratchpad" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}" data-bbox="${escapeHtml(bboxData)}" data-note="${escapeHtml(note)}">Open full screenshot ↗</span>
+    </div>
+  </section>`;
+}
+
+async function _fallbackActionEvidenceHtml(result, sessionId) {
+  const recap = result?.recap || {};
+  const finalStep = Number.isFinite(Number(recap.finalStep)) ? Number(recap.finalStep) : Number(result?.step);
+  if (!sessionId || !Number.isFinite(finalStep)) return '';
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, finalStep); } catch (e) {}
+  const ev = _recapMarkedEvidence(rec) || (() => {
+    const shot = _recapPickShot(rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot);
+    return shot ? { src: `data:image/jpeg;base64,${shot}`, marker: null } : null;
+  })();
+  if (!ev) return '';
+  const caption = rec?.instruction || 'Final task evidence';
+  return `<section class="pageguide-answer-evidence-item">
+    <div class="pageguide-answer-evidence-shot">${_recapFigureHtml(ev.src, ev.marker, rec?.target?.resolvedIndex ?? rec?.resolvedIndex, caption)}</div>
+    <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+    <div class="pageguide-answer-evidence-links">
+      <span>Captured at checkpoint ${escapeHtml(String(finalStep))}</span>
+      <span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId))}" data-step="${escapeHtml(String(finalStep))}">Open full screenshot ↗</span>
+    </div>
+  </section>`;
+}
+
+// Render a single action-grounding figure (the SoM-marked screenshot of a clicked/targeted step).
+// Used for the "action-fallback" descriptor — navigate-only tasks or answers the model did not
+// cite — so the card always has a visual link even with no saved scratchpad evidence.
+async function _answerActionGroundingHtml(step, note, sessionId) {
+  const stepNum = Number(step);
+  if (!sessionId || !Number.isFinite(stepNum)) return '';
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, stepNum); } catch (e) {}
+  const ev = _recapMarkedEvidence(rec) || (() => {
+    const shot = _recapPickShot(rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot);
+    return shot ? { src: `data:image/jpeg;base64,${shot}`, marker: null } : null;
+  })();
+  const caption = note || rec?.instruction || 'Final task evidence';
+  const figure = ev
+    ? _recapFigureHtml(ev.src, ev.marker, rec?.target?.resolvedIndex ?? rec?.resolvedIndex, caption)
+    : '<div class="pageguide-recap-pop-empty">No screenshot for this step</div>';
+  return `<section class="pageguide-answer-evidence-item">
+    <div class="pageguide-answer-evidence-shot">${figure}</div>
+    <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+    <div class="pageguide-answer-evidence-links">
+      <span>Captured at checkpoint ${escapeHtml(String(stepNum))}</span>
+      <span class="pageguide-recap-link" data-evidence="scratchpad" data-session="${escapeHtml(String(sessionId))}" data-step="${escapeHtml(String(stepNum))}" data-note="${escapeHtml(caption)}">Open full screenshot ↗</span>
+    </div>
+  </section>`;
+}
+
+// Render the guaranteed evidence strip from a gv2BuildAnswerEvidence() descriptor list. Cited /
+// scratchpad items resolve to a screenshot cropped to their region_bbox; action-fallback items
+// resolve to the clicked step's marked screenshot. Non-empty whenever `items` is non-empty.
+async function _answerEvidenceStripHtml(items, sessionId) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return '';
+  const parts = await Promise.all(list.map((it) => {
+    if (it && it.source === 'action-fallback') {
+      return _answerActionGroundingHtml(it.step, it.note, sessionId);
+    }
+    const item = {
+      number: it.number || null,
+      key: it.key || '',
+      entry: { ref_step_id: it.step, region_bbox: it.region_bbox || null, note: it.note, key: it.key || '' }
+    };
+    return _answerEvidenceFigureHtml(item, sessionId);
+  }));
+  return parts.join('');
+}
+
+async function renderGuideFinalAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result || !result.finalAnswer) return;
+  const sessionId = result.sessionId || result.recap?.sessionId || '';
+  const model = _buildAnswerEvidenceModel(result.finalAnswer, result.evidenceScratchpad || []);
+  // Guaranteed visual link: prefer the aggregated answerEvidence list (cited → saved → action
+  // grounding), falling back to the legacy inline model / final-step evidence if it is absent.
+  const evidenceHtml = (Array.isArray(result.answerEvidence) && result.answerEvidence.length)
+    ? await _answerEvidenceStripHtml(result.answerEvidence, sessionId)
+    : (model.evidence.length
+      ? (await Promise.all(model.evidence.map(item => _answerEvidenceFigureHtml(item, sessionId)))).join('')
+      : await _fallbackActionEvidenceHtml(result, sessionId));
+  const { verdict, verdictKey } = _answerVerdictInfo(result);
+  const trailHtml = _answerReasoningTrailHtml(result.recap, sessionId);
+  const checkpointSteps = Array.isArray(result.recap?.milestones)
+    ? result.recap.milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n) && n > 0)
+    : [];
+  if (checkpointSteps.length) {
+    guideTimelineCheckpointSteps = checkpointSteps;
+    goalDotsExpanded = false;
+    if (currentGuideStep) renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
+  }
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-answer-card" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(result.recap?.steps || result.recap?.milestones?.map(m => m.step) || []))}">
+      <div class="pageguide-answer-head">
+        <div class="pageguide-recap-kicker">Answer</div>
+        <span class="pageguide-answer-status ${escapeHtml(verdict.cls)}">${escapeHtml(verdict.label)}</span>
+      </div>
+      <div class="pageguide-answer-copy">${model.answerHtml}</div>
+      ${evidenceHtml ? `<div class="pageguide-answer-evidence">${evidenceHtml}</div>` : ''}
+      ${trailHtml}
+      <span class="pageguide-answer-verdict-key" hidden>${escapeHtml(verdictKey)}</span>
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
 
 
 // Render an end-of-task Visual Recap into the chat: an LLM summary, milestone lines whose key
@@ -555,6 +807,9 @@ async function renderGuideRecap(recap) {
   if (!container || !recap || !recap.summary) return;
   const milestones = Array.isArray(recap.milestones) ? recap.milestones : [];
   const sessionId = recap.sessionId;
+  guideTimelineCheckpointSteps = milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n) && n > 0);
+  goalDotsExpanded = false;
+  if (currentGuideStep) renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
 
   const msg = document.createElement('div');
   msg.className = 'pageguide-message assistant pageguide-recap-message';
@@ -628,7 +883,9 @@ async function renderGuideRecap(recap) {
       const allEvItems = [];
       (m.mergedEvidenceSteps || []).forEach(stepNum => {
         const ev = recap.evidenceByStep && recap.evidenceByStep[stepNum];
-        const items = Array.isArray(ev?.items) ? ev.items : [];
+        // Only real evidence (a captured shot or a marker rect) becomes a link. Reason-only items
+        // have nothing to show on hover/click — they render as "fake" links, so drop them.
+        const items = (Array.isArray(ev?.items) ? ev.items : []).filter(it => it.hasShot || it.hasRect);
         allEvItems.push(...items.map(item => ({ ...item, stepNum })));
       });
       const evidenceItems = allEvItems.slice(0, 5);
@@ -637,10 +894,12 @@ async function renderGuideRecap(recap) {
       }
     } else {
       const evidence = recap.evidenceByStep && recap.evidenceByStep[m.step];
-      const evidenceItems = Array.isArray(evidence?.items) ? evidence.items.slice(0, 5) : [];
+      // Only real evidence (a captured shot or marker rect) becomes a clickable link; reason-only
+      // items are dropped so they don't render as "fake" links that pop nothing on hover/click.
+      const evidenceItems = (Array.isArray(evidence?.items) ? evidence.items : []).filter(it => it.hasShot || it.hasRect).slice(0, 5);
       evidenceHtml = evidenceItems.length
         ? `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div>${evidenceItems.map((item, i) => `<span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-evidence-item="${escapeHtml(String(i))}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence ${escapeHtml(String(i + 1))} for step ${escapeHtml(String(m.step))}">${escapeHtml(`${i + 1}. ${item.index != null ? `[${item.index}] ` : ''}${item.reason || 'Why this step is correct'}`)}</span>`).join(' ')}</div>`
-        : ((evidence && (evidence.reason || evidence.hasShot))
+        : (evidence && evidence.hasShot
             ? `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div><span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence for step ${escapeHtml(String(m.step))}">${escapeHtml(evidence.reason || 'Why this step is correct')}</span></div>`
             : '');
     }
@@ -663,6 +922,9 @@ async function renderGuideRecap(recap) {
     `<button type="button" class="pageguide-recap-checkpoint" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Open step ${escapeHtml(String(m.step))} detail">${escapeHtml(String(m.step))}</button>`
   ).join('') + finalChipHtml;
   const recapSteps = recap.steps || milestones.map(m => m.step);
+  // Guaranteed action-grounding evidence link for navigate-only tasks (S3): the marked screenshot
+  // of the clicked step, or saved scratchpad evidence when present.
+  const answerEvidenceStripHtml = await _answerEvidenceStripHtml(recap.answerEvidence || [], sessionId);
 
   msg.innerHTML = `
     <div class="pageguide-recap" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(recapSteps))}">
@@ -672,6 +934,7 @@ async function renderGuideRecap(recap) {
         <span class="pageguide-final-verdict ${escapeHtml(statusInfo.verdict.cls)}">${escapeHtml(statusInfo.verdict.label)}</span>
       </div>
       ${bodyNote ? `<div class="pageguide-recap-body-note">${escapeHtml(bodyNote)}</div>` : ''}
+      ${answerEvidenceStripHtml ? `<div class="pageguide-answer-evidence pageguide-recap-answer-evidence">${answerEvidenceStripHtml}</div>` : ''}
       ${displayMilestones.length ? `<div class="pageguide-recap-list">${rowsHtml}</div>` : ''}
       ${(milestones.length || finalChipHtml) ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
     </div>`;
@@ -885,7 +1148,23 @@ function renderGoalDots(current, total) {
 
   // Always render at least `total` dots so the count matches the "Step X of N" text.
   const count = Math.max(total || 0, states.length);
-  for (let i = 1; i <= count; i++) {
+  const checkpointSteps = Array.isArray(guideTimelineCheckpointSteps)
+    ? guideTimelineCheckpointSteps.filter(n => Number.isFinite(Number(n)) && Number(n) >= 1 && Number(n) <= count).map(n => Number(n))
+    : [];
+  const compact = !goalDotsExpanded && count > 8 && checkpointSteps.length > 0 && !guideActive;
+  const important = new Set([1, current, count]);
+  checkpointSteps.forEach(n => important.add(n));
+  currentGuideRecords.forEach(r => {
+    const n = Number(r.step);
+    if (!Number.isFinite(n) || n < 1 || n > count) return;
+    if (r.evidenceKey || r.hasVisualEvidence || r.isLastStep || r.finalVerdict || r.verification) important.add(n);
+  });
+  const visibleSteps = compact
+    ? Array.from(important).filter(n => Number.isFinite(n)).sort((a, b) => a - b).slice(0, 10)
+    : Array.from({ length: count }, (_, i) => i + 1);
+  dots.classList.toggle('is-compact', compact);
+  dots.title = compact ? 'Showing checkpoints. Use Show all steps to expand.' : '';
+  for (const i of visibleSteps) {
     const st = states[i - 1] || { status: i < current ? 'done' : (i === current ? 'current' : 'pending'), review: false, verify: null };
     const rec = getGuideStepMeta(i);
     const dot = document.createElement('button');
@@ -1114,6 +1393,26 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
         : `Step ${safeStep} of ${totalSteps}`;
     }
     if (fill) fill.style.width = `${Math.round(((planTotal ? Math.min(planCompleted, planTotal) : safeStep) / (planTotal || totalSteps)) * 100)}%`;
+    let dotsToggle = document.getElementById('pageguide-goal-dots-toggle');
+    const hasSummaryCheckpoints = Array.isArray(guideTimelineCheckpointSteps) && guideTimelineCheckpointSteps.length > 0 && !guideActive;
+    if (progress && totalSteps > 8 && hasSummaryCheckpoints) {
+      if (!dotsToggle) {
+        dotsToggle = document.createElement('button');
+        dotsToggle.type = 'button';
+        dotsToggle.id = 'pageguide-goal-dots-toggle';
+        dotsToggle.className = 'pageguide-goal-dots-toggle';
+        dotsToggle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          goalDotsExpanded = !goalDotsExpanded;
+          renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
+        });
+        progress.insertBefore(dotsToggle, document.getElementById('pageguide-goal-dots'));
+      }
+      dotsToggle.textContent = goalDotsExpanded ? 'Show checkpoints' : 'Show all steps';
+      dotsToggle.style.display = '';
+    } else if (dotsToggle) {
+      dotsToggle.style.display = 'none';
+    }
     renderGoalDots(safeStep, totalSteps);
     renderConfChart();
   } else if (progress) {
@@ -1168,9 +1467,12 @@ function clearGoalAndStepPanel() {
   currentGuideInitial = null;
   currentGuideVerifications = {};
   currentGuideWarnings = {};
+  goalDotsExpanded = false;
+  guideTimelineCheckpointSteps = null;
   _lastFindMessageStep = null;
   _lastVisualHighlightStep = null;
   _lastRecapKey = null;
+  _lastAnswerCardKey = null;
   visibleJourneySessionId = null;
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
@@ -1815,7 +2117,11 @@ function _setupMessageContainerDelegate(container) {
       const sid = recapEl.dataset.session || wrap?.dataset.session || '';
       let steps = [];
       try { steps = JSON.parse(wrap?.dataset.steps || '[]'); } catch (err) { steps = []; }
-      if (sid) openRecapCheckpoint(sid, Number(recapEl.dataset.step), steps);
+      if (sid && recapEl.dataset.evidence === 'scratchpad') {
+        openScratchpadEvidenceView(recapEl, sid, Number(recapEl.dataset.step));
+      } else if (sid) {
+        openRecapCheckpoint(sid, Number(recapEl.dataset.step), steps);
+      }
       return;
     }
 
@@ -2013,13 +2319,12 @@ function addJourneyRecallMessage(sessionId, title, label = 'View journey') {
   if (!container || !sessionId) return;
   const msg = document.createElement('div');
   msg.className = 'pageguide-journey-recall';
-  const sub = title ? `<span class="pageguide-journey-recall-sub">${escapeHtml(_truncateText(title))}</span>` : '';
   msg.innerHTML = `
     <button type="button" class="pageguide-journey-recall-btn" data-session="${escapeHtml(sessionId)}">
-      <span class="pageguide-journey-recall-ico">🧭</span>
+      <span class="pageguide-journey-recall-ico">↗</span>
       <span class="pageguide-journey-recall-text">
         <span class="pageguide-journey-recall-title">${escapeHtml(label || 'View journey')}</span>
-        ${sub}
+        <span class="pageguide-journey-recall-sub">Replay every step of this task</span>
       </span>
       <span class="pageguide-journey-recall-arrow">→</span>
     </button>`;
@@ -3427,8 +3732,16 @@ function addGuideStep(result) {
 
   if (result.isFind) {
     stepText = '✅ I have completed your request and you can see the highlight answer in the chat panel.';
+  } else if (result.isFinish && result.finalAnswer) {
+    // The full answer lives in the chatbox ANSWER card (with its guaranteed evidence link); the
+    // under-timeline box is just a terse pointer so it doesn't duplicate the whole answer.
+    stepText = '✅ I have completed your task. Please see the answer in the chatbox.';
+  } else if (result.isLastStep && !result.isVisualHighlight) {
+    // Navigate-only / recap terminal: point to the summary of completed steps in the chatbox.
+    stepText = '✅ I have completed your task. Please see the summary of completed steps in the chatbox. You can now continue with these answers in mind.';
   } else {
-    stepText = escapeHtml(result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || ''));
+    const displayAnswer = result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || '');
+    stepText = escapeHtml(_stripEvidenceRefs(displayAnswer));
   }
 
   panel.innerHTML = `
@@ -3491,9 +3804,17 @@ function addGuideStep(result) {
     renderVisualHighlightAnswer(result);
   }
 
+  if (result.isFinish && result.finalAnswer) {
+    const answerKey = `${result.sessionId || result.recap?.sessionId || ''}:${result.step}`;
+    if (_lastAnswerCardKey !== answerKey) {
+      _lastAnswerCardKey = answerKey;
+      renderGuideFinalAnswer(result).catch((e) => console.warn('[panel] answer card render failed:', e));
+    }
+  }
+
   // Terminal step: post the Visual Recap (summary + hoverable evidence) once. The content
   // script only attaches result.recap when the mode is on; re-check the panel toggle too.
-  if (result.isLastStep && result.recap && result.recap.summary) {
+  if (result.isLastStep && result.recap && result.recap.summary && !(result.isFinish && result.finalAnswer)) {
     const recapKey = `${result.recap.sessionId || ''}:${result.step}`;
     if (_lastRecapKey !== recapKey) {
       _lastRecapKey = recapKey;
@@ -5585,6 +5906,10 @@ function handleContentMessage(message, sender, sendResponse) {
     }
   } else if (message.action === 'guideFinalState') {
     renderGuideFinalStateCard(message);
+  } else if (message.action === 'guideRecap') {
+    // Full diagnostic recap for a failed run (e.g. hit the step cap). Content only sends this when
+    // Visual Recap is on, so render it directly.
+    if (message.recap) renderGuideRecap(message.recap);
   } else if (message.action === 'closePanel') {
     window.close();
   } else if (message.action === 'selectedText') {

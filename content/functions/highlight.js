@@ -587,4 +587,69 @@ function cleanupSom() {
   }
 }
 
+/**
+ * Draw a single Set-of-Marks-style overlay the way nanobrowser does: a real DOM box (one per
+ * client rect, so wrapped/multi-line elements get several boxes) plus a numeric label, drawn as
+ * fixed-position DOM so a screenshot captures the marker NATURALLY — no canvas post-processing and
+ * no geometry math that can drift. Used for recap evidence markers when Vision is on.
+ *
+ * @param {Element|{x:number,y:number,w:number,h:number}} target - a DOM element, or a normalized
+ *        viewport rect (fractions of innerWidth/innerHeight) when there is no element.
+ * @param {number|string|null} number - numeric label to show (e.g. the SoM index), or null.
+ * @param {string} color - accent color for the box/label.
+ * @returns {HTMLElement|null} the container to pass to gv2RemoveDomMarker() after capture.
+ */
+function gv2DrawDomMarker(target, number, color = '#7857ff') {
+  try {
+    const rects = [];
+    if (target && typeof target.getClientRects === 'function') {
+      for (const r of target.getClientRects()) {
+        if (r.width >= 2 && r.height >= 2) rects.push({ left: r.left, top: r.top, width: r.width, height: r.height });
+      }
+      if (!rects.length && typeof target.getBoundingClientRect === 'function') {
+        const b = target.getBoundingClientRect();
+        if (b.width >= 2 && b.height >= 2) rects.push({ left: b.left, top: b.top, width: b.width, height: b.height });
+      }
+    } else if (target && typeof target === 'object' && Number.isFinite(target.x)) {
+      rects.push({
+        left: target.x * window.innerWidth, top: target.y * window.innerHeight,
+        width: target.w * window.innerWidth, height: target.h * window.innerHeight
+      });
+    }
+    if (!rects.length) return null;
+
+    const container = document.createElement('div');
+    container.className = 'pageguide-evidence-marker';
+    container.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483646;';
+    for (const r of rects) {
+      const box = document.createElement('div');
+      box.style.cssText = `position:fixed;top:${r.top}px;left:${r.left}px;width:${r.width}px;height:${r.height}px;border:2px solid ${color};background:${color}26;box-sizing:border-box;pointer-events:none;z-index:2147483646;`;
+      container.appendChild(box);
+    }
+    if (number != null && number !== '') {
+      const first = rects[0];
+      const label = document.createElement('div');
+      label.textContent = String(number);
+      const top = Math.max(0, first.top - 18);
+      const left = Math.max(0, Math.min(first.left, window.innerWidth - 24));
+      label.style.cssText = `position:fixed;top:${top}px;left:${left}px;background:${color};color:#fff;font:700 12px/1.3 sans-serif;padding:1px 5px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:2147483647;`;
+      container.appendChild(label);
+    }
+    document.body.appendChild(container);
+    return container;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Remove a marker overlay created by gv2DrawDomMarker(). */
+function gv2RemoveDomMarker(container) {
+  try { if (container && typeof container.remove === 'function') container.remove(); } catch (e) { /* noop */ }
+}
+
+if (typeof window !== 'undefined') {
+  window.gv2DrawDomMarker = gv2DrawDomMarker;
+  window.gv2RemoveDomMarker = gv2RemoveDomMarker;
+}
+
 console.log('🎨 highlight.js loaded');

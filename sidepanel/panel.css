@@ -2694,21 +2694,22 @@ body {
 /* "View journey" recall button (chat) — a compact card-style button. */
 .pageguide-journey-recall {
   display: flex;
-  margin: 6px 0;
+  margin: 12px 0;
 }
 .pageguide-journey-recall-btn {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   width: 100%;
   text-align: left;
-  padding: 9px 11px;
-  border: 1px solid var(--pg-border, rgba(120,87,255,.18));
-  border-radius: 11px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--pg-border, #d9dce8) 88%, var(--pg-som, #7857ff));
+  border-radius: 16px;
   background: var(--pg-card, #fff);
   color: var(--pg-text, #202538);
   cursor: pointer;
-  box-shadow: 0 6px 18px rgba(44,45,70,.06);
+  box-shadow: 0 12px 28px rgba(44,45,70,.08);
   transition: border-color .15s, box-shadow .15s, transform .1s;
 }
 .pageguide-journey-recall-btn:hover {
@@ -2718,24 +2719,27 @@ body {
 .pageguide-journey-recall-btn:active { transform: scale(.99); }
 .pageguide-journey-recall-ico {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #7857ff, #9a6dff);
-  font-size: 15px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 12%, transparent);
+  color: var(--pg-som, #7857ff);
+  font-size: 24px;
+  font-weight: 700;
 }
 .pageguide-journey-recall-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.pageguide-journey-recall-title { font-size: 12.5px; font-weight: 760; line-height: 1.2; }
+.pageguide-journey-recall-title { font-size: 16px; font-weight: 800; line-height: 1.18; }
 .pageguide-journey-recall-sub {
-  font-size: 11px;
+  font-size: 14px;
+  line-height: 1.25;
   color: var(--pg-muted, #71788c);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.pageguide-journey-recall-arrow { flex-shrink: 0; color: var(--pg-accent, #7857ff); font-weight: 800; }
+.pageguide-journey-recall-arrow { flex-shrink: 0; color: var(--pg-text, #202538); font-size: 18px; font-weight: 800; }
 
 .pageguide-goal-progress {
   display: flex;
@@ -2801,6 +2805,11 @@ body {
   padding: 4px 8px;
 }
 
+.pageguide-goal-dots.is-compact {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
 .pageguide-goal-dots::before {
   content: "";
   position: absolute;
@@ -2810,6 +2819,21 @@ body {
   height: 2px;
   background: #d9dce8;
   transform: translateY(-50%);
+}
+
+.pageguide-goal-dots-toggle {
+  align-self: flex-start;
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  color: var(--pg-muted);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+}
+.pageguide-goal-dots-toggle:hover {
+  color: var(--pg-accent);
 }
 
 .pageguide-goal-dot {
@@ -5256,6 +5280,202 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   transform: translateY(-1px);
 }
 
+.pageguide-answer-card {
+  gap: 0;
+  border: 2px solid var(--pg-som) !important;
+  border-radius: 16px !important;
+  padding: 0;
+}
+
+.pageguide-answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 8px;
+}
+
+.pageguide-answer-status {
+  display: inline-flex;
+  align-items: center;
+  max-width: 46%;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.pageguide-answer-status.ok { color: #1ea672; }
+.pageguide-answer-status.fail,
+.pageguide-answer-status.wrong { color: #e0463e; }
+.pageguide-answer-status.unclear { color: #c98a1a; }
+
+.pageguide-answer-copy {
+  padding: 10px 18px 16px;
+  color: var(--pg-text);
+  font-size: 18px;
+  line-height: 1.38;
+  font-weight: 500;
+  border-bottom: 1px solid var(--pg-border);
+}
+
+.pageguide-answer-citation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0 2px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pg-som) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pg-som) 26%, transparent);
+  color: var(--pg-som);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+
+.pageguide-answer-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--pg-border);
+}
+
+.pageguide-answer-evidence-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pageguide-answer-evidence-shot .pageguide-recap-figure {
+  display: block;
+  width: 100%;
+}
+.pageguide-answer-evidence-shot .pageguide-recap-figure img {
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  object-position: center;
+  background:
+    repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--pg-som) 5%, var(--pg-bg)) 0 10px,
+      color-mix(in srgb, var(--pg-som) 11%, var(--pg-bg)) 10px 12px);
+}
+
+.pageguide-answer-evidence-caption {
+  color: var(--pg-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.pageguide-answer-evidence-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--pg-som);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pageguide-reasoning-trail {
+  border-bottom: 1px solid var(--pg-border);
+}
+.pageguide-reasoning-trail > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 18px;
+  color: var(--pg-muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+.pageguide-reasoning-trail > summary::-webkit-details-marker { display: none; }
+.pageguide-reasoning-trail[open] .pageguide-reasoning-trail-chevron { transform: rotate(180deg); }
+.pageguide-reasoning-trail-chevron {
+  transition: transform 0.14s ease;
+  font-size: 18px;
+  line-height: 1;
+}
+.pageguide-reasoning-trail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 18px 16px;
+}
+.pageguide-answer-trail-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 7px 0;
+  color: var(--pg-text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.pageguide-answer-trail-row::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 24px;
+  bottom: -8px;
+  width: 2px;
+  background: color-mix(in srgb, var(--pg-border) 70%, transparent);
+}
+.pageguide-answer-trail-row:last-child::before { display: none; }
+.pageguide-answer-trail-dot {
+  position: relative;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  margin-top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--pg-som);
+  color: #fff;
+  font: 800 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  box-shadow: 0 0 0 2px var(--pg-bg);
+}
+.pageguide-answer-trail-row.is-ok .pageguide-answer-trail-dot { background: #1ea672; }
+.pageguide-answer-trail-row.is-wrong .pageguide-answer-trail-dot { background: #a36a00; }
+.pageguide-answer-trail-row.is-unclear .pageguide-answer-trail-dot { background: #c98a1a; }
+.pageguide-answer-trail-text {
+  color: var(--pg-text);
+  text-decoration: none;
+}
+.pageguide-answer-trail-pill {
+  grid-column: 2;
+  justify-self: start;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #c98a1a 16%, transparent);
+  color: #9a6500;
+  font-size: 11px;
+  font-weight: 800;
+}
+.pageguide-answer-trail-pill.is-unclear {
+  background: color-mix(in srgb, #c98a1a 12%, transparent);
+  color: #9a6500;
+}
+.pageguide-answer-trail-pill.is-complete {
+  background: color-mix(in srgb, #1ea672 13%, transparent);
+  color: #16855b;
+}
+
 @media (max-width: 520px) {
   .pageguide-recap-hero {
     grid-template-columns: 1fr;
@@ -5277,6 +5497,12 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   .pageguide-recap-final-card > .pageguide-final-verdict {
     grid-column: 1 / -1;
     justify-self: start;
+  }
+  .pageguide-answer-copy {
+    font-size: 16px;
+  }
+  .pageguide-answer-status {
+    max-width: none;
   }
 }
 
@@ -5516,4 +5742,3 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   box-shadow: none !important;
   max-width: 95% !important;
 }
-

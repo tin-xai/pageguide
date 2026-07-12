@@ -445,42 +445,64 @@ async function _doCaptureScreenshot(tabId, windowId) {
 async function callOpenAIEmbeddings(texts = []) {
   let settings = {};
   try {
-    settings = await chrome.storage.sync.get(['openaiApiKey']);
+    settings = await chrome.storage.sync.get(['provider', 'openrouterApiKey', 'openaiApiKey']);
   } catch (e) {
-    return { error: 'Failed to load OpenAI settings' };
+    return { error: 'Failed to load embedding settings' };
   }
-  const config = CONFIG.providers.openai;
-  const apiKey = (settings.openaiApiKey || config.defaultApiKey || '').trim();
-  if (!apiKey) return { error: 'OpenAI API key not configured. Click ⚙️ Settings.' };
 
   const input = (Array.isArray(texts) ? texts : [texts])
     .map(t => String(t || '').trim())
     .filter(Boolean);
   if (!input.length) return { embeddings: [] };
 
+  // Route the embedding call by provider. text-embedding-ada-002 is served by the OpenAI-compatible
+  // /embeddings endpoint on BOTH OpenAI and OpenRouter — Gemini has no such endpoint here, so when
+  // the LLM provider is Gemini (or lacks a key) we still send embeddings to whichever of OpenAI /
+  // OpenRouter is configured. The model id differs per endpoint (OpenRouter needs the "openai/"
+  // prefix). Previously this only hit OpenAI, so OpenRouter-only users silently fell back to 0.0.
+  const provider = settings.provider || CONFIG.defaultProvider;
+  const openaiKey = (settings.openaiApiKey || CONFIG.providers.openai.defaultApiKey || '').trim();
+  const openrouterKey = (settings.openrouterApiKey || CONFIG.providers.openrouter.defaultApiKey || '').trim();
+
+  let endpoint, apiKey, model;
+  if (provider === 'openai' && openaiKey) {
+    endpoint = 'https://api.openai.com/v1/embeddings';
+    apiKey = openaiKey;
+    model = 'text-embedding-ada-002';
+  } else if (openrouterKey) {
+    endpoint = 'https://openrouter.ai/api/v1/embeddings';
+    apiKey = openrouterKey;
+    model = 'openai/text-embedding-ada-002';
+  } else if (openaiKey) {
+    endpoint = 'https://api.openai.com/v1/embeddings';
+    apiKey = openaiKey;
+    model = 'text-embedding-ada-002';
+  } else {
+    return { error: 'Embedding API key not configured (OpenAI or OpenRouter). Click ⚙️ Settings.' };
+  }
+
   startKeepAlive();
   try {
-    const response = await fetch('https://api.openai.com/v1/embeddings', {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'chrome-extension://pageguide',
+        'X-Title': 'PageGuide'
       },
-      body: JSON.stringify({
-        model: 'text-embedding-ada-002',
-        input
-      })
+      body: JSON.stringify({ model, input })
     });
     const data = await response.json();
     if (!response.ok) {
-      return { error: `OpenAI embedding API error: ${data.error?.message || response.status}` };
+      return { error: `Embedding API error: ${data.error?.message || response.status}` };
     }
     const embeddings = Array.isArray(data.data)
-      ? data.data.sort((a, b) => (a.index || 0) - (b.index || 0)).map(item => item.embedding)
+      ? data.data.slice().sort((a, b) => (a.index || 0) - (b.index || 0)).map(item => item.embedding || [])
       : [];
-    return { embeddings, model: 'text-embedding-ada-002' };
+    return { embeddings, model };
   } catch (error) {
-    return { error: `OpenAI embedding network error: ${error.message}` };
+    return { error: `Embedding network error: ${error.message}` };
   } finally {
     stopKeepAlive();
   }
