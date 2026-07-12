@@ -3812,8 +3812,12 @@ function addGuideStep(result) {
     }
   }
 
-  // Terminal step: post the Visual Recap (summary + hoverable evidence) once. The content
-  // script only attaches result.recap when the mode is on; re-check the panel toggle too.
+  // Terminal step: post the standalone Task Review recap card (summary + hoverable per-step
+  // evidence) once. The working agent always finishes via action="finish" now, so this branch is
+  // unreachable for normal completions (they get the unified answer card above, whose Reasoning
+  // Trail already surfaces the same per-step evidence). It only still fires for find/visual_highlight
+  // terminals, which coerce isLastStep=true without going through finish. The content script only
+  // attaches result.recap when the mode is on; re-check the panel toggle too.
   if (result.isLastStep && result.recap && result.recap.summary && !(result.isFinish && result.finalAnswer)) {
     const recapKey = `${result.recap.sessionId || ''}:${result.step}`;
     if (_lastRecapKey !== recapKey) {

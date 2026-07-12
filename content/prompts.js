@@ -439,7 +439,6 @@ Return JSON only:
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
   "url": "the target URL (only when action=navigate; null otherwise)",
   "answer": "final answer text, ALWAYS required when action=finish (never null); may use [ev:key] citations",
-  "answerType": "information" | "confirmation",
   "isLastStep": false,
   "risk": "low" | "high",
   "riskReason": "short reason for the risk level",
@@ -448,9 +447,8 @@ Return JSON only:
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "dropTarget": ONLY populate this when action="drag_drop"; otherwise set it to null. "element" is always the draggable source. The drop target may use a PAGE INDEX marker, text, a normalized screenshot rect, or both index and rect. If the drop target has no SoM marker, set "index": null and provide "rect".
-"evidence": ONLY populate this when action="save_evidence"; otherwise set it to null. Use save_evidence only when VISUAL EVIDENCE REQUESTED is yes. Save a compact, important fact that may be needed in the final answer. The key must be short and slug-safe. The note must be short. region_bbox is optional but should be provided for visual evidence when possible.
+"evidence": ONLY populate this when action="save_evidence"; otherwise set it to null. save_evidence is only available when Recap is on (see the EVIDENCE SCRATCHPAD section of the user prompt). Save a compact, important fact that may be needed in the final answer. The key must be short and slug-safe. The note must be short. region_bbox is optional but should be provided for visual evidence when possible.
 "answer": ONLY populate this when action="finish", and it is ALWAYS required then (never null). Every task ends with a finish that states the result. For information tasks, the answer is the info you found. For action/navigation tasks, the answer confirms the completed state (e.g. "The page language is now English."). May cite saved evidence with [ev:key].
-"answerType": ONLY populate this when action="finish". "information" when the answer is information read from the page (a question answered). "confirmation" when the answer confirms that an action or state change completed (navigation, a setting changed, an item added).
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
@@ -471,7 +469,7 @@ RULES:
 8. action="scroll_down" or action="scroll_up": scroll the page to reveal more content.
 9. action="navigate": navigate the browser to the specified URL. Provide the target URL in "url".
 10. action="save_evidence": save one important visual or page-state fact to the evidence scratchpad, then continue. This is not terminal.
-11. action="finish": terminal action. ALWAYS provide an "answer" (never null), set "answerType", and provide "visualEvidence" confirming the answer on the current page. For information tasks the answer is what you found; for action/navigation tasks the answer confirms the completed state.
+11. action="finish": terminal action. ALWAYS provide an "answer" (never null), and provide "visualEvidence" confirming the answer on the current page. For information tasks the answer is what you found; for action/navigation tasks the answer confirms the completed state.
 12. Final answers may cite saved evidence with [ev:key], e.g. "Team A is red [ev:team_a_color]."
 13. Highlight the element to interact with using its index from PAGE INDEX
 14. If the target is not visible, guide the user to open the relevant menu first
@@ -481,9 +479,9 @@ COMMON PATTERNS:
 - Forms:          Step 1 → type in field (action=type) → Step 2 → click submit
 - Replace text:   Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
 - Drag/drop:      Step 1 → drag the source card/file/item to the destination (action=drag_drop)
-- Visual answer:  Step 1 → save_evidence for each important observation → final Step → finish(answer with [ev:key], answerType="information")
+- Visual answer:  Step 1 → save_evidence for each important observation → final Step → finish(answer with [ev:key] citations)
 - Settings:       Step 1 → click profile/settings icon → Step 2 → click specific option
-- Navigation:     Final Step → finish(answer describing the reached state, answerType="confirmation", visualEvidence=[the region that confirms it]) once the requested page state is reached
+- Navigation:     Final Step → finish(answer describing the reached state, visualEvidence=[the region that confirms it]) once the requested page state is reached
 
 NATIVE BROWSER DIALOGS (print, save, open file, etc.):
 When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that

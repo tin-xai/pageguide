@@ -1703,13 +1703,6 @@ function gv2BuildAnswerEvidence(input) {
   return items;
 }
 
-// Normalize the working agent's finish `answerType`. 'confirmation' means the answer confirms an
-// action/state change completed (S3); anything else (including missing) is an 'information' answer
-// (S1/S2). Pure — unit-testable. Drives the answer-card wording only.
-function gv2NormalizeAnswerType(v) {
-  return String(v == null ? '' : v).trim().toLowerCase() === 'confirmation' ? 'confirmation' : 'information';
-}
-
 if (typeof window !== 'undefined') {
   window.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
   window.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
@@ -1717,7 +1710,6 @@ if (typeof window !== 'undefined') {
   window.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
   window.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
   window.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
-  window.gv2NormalizeAnswerType = gv2NormalizeAnswerType;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
@@ -1726,7 +1718,6 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
   module.exports.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
   module.exports.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
-  module.exports.gv2NormalizeAnswerType = gv2NormalizeAnswerType;
 }
 
 /**

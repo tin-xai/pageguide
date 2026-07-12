@@ -2745,7 +2745,7 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
 VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}
-ON FINISH: always return a non-null "answer", set "answerType" ("information" if you are reporting info you found, "confirmation" if you are confirming a completed action/state change), and return "visualEvidence" as up to 5 items pointing at the region(s) on THIS page that confirm the answer (each may include a SoM index and/or a rect, index:null when no marker fits, plus a one-sentence reason). On non-finish steps set "visualEvidence" to null.
+ON FINISH: always return a non-null "answer", and return "visualEvidence" as up to 5 items pointing at the region(s) on THIS page that confirm the answer (each may include a SoM index and/or a rect, index:null when no marker fits, plus a one-sentence reason). On non-finish steps set "visualEvidence" to null.
 
 === PAGE INDEX ===
 ${pageIndex.indexText}
@@ -3400,12 +3400,11 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       _gv2ClearState();
     }
 
-    // The working agent always finishes with an answer; fall back so it is never empty. answerType
-    // ('information' | 'confirmation') is the agent's own tag and only drives the card wording.
+    // The working agent always finishes with an answer; fall back so it is never empty. Whether the
+    // task is an information lookup (S1/S2) or a navigate-only confirmation (S3) is never
+    // self-reported by the model — it's derived after the fact from the trajectory: S3 is whatever
+    // finishes with an empty evidence scratchpad (see gv2BuildAnswerEvidence's action-fallback path).
     const finalAnswer = isFinish ? (step.answer || step.instruction || 'Task completed.') : '';
-    const answerType = isFinish
-      ? ((typeof gv2NormalizeAnswerType === 'function') ? gv2NormalizeAnswerType(step.answerType) : 'information')
-      : null;
     // Finish-time confirmation: the visualEvidence the agent attached to the finish step to justify
     // its answer. It becomes the top-priority evidence link on the answer card.
     const confirmationEvidence = (isFinish && Array.isArray(resolvedEvidenceItems) && resolvedEvidenceItems.length)
@@ -3805,8 +3804,9 @@ Return the recap JSON.`;
       }
     }
 
-    // Guaranteed visual link for whichever consumer renders this recap (S3 answer card, or a
-    // failed-run diagnostic card): action grounding to the clicked step / saved scratchpad evidence.
+    // Guaranteed visual link for whichever consumer renders this recap: the answer card (navigate-
+    // only S3 tasks land here whenever the scratchpad ends up empty — see gv2BuildAnswerEvidence)
+    // or a failed-run diagnostic card. Falls back to action grounding on the clicked step.
     let answerEvidence = [];
     try { answerEvidence = await _gv2ComputeAnswerEvidence(g, '', finalStep); } catch (e) { answerEvidence = []; }
 
