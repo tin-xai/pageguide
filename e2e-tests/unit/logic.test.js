@@ -1099,7 +1099,7 @@ describe('Evidence scratchpad helpers (content/utils.js)', () => {
 
   test('builds compact memory text and parses evidence refs', () => {
     const entries = [{ key: 'team_a_color', note: 'Team A shirt is red', ref_step_id: 7 }];
-    expect(window.gv2EvidenceMemoryText(entries)).toContain('team_a_color: Team A shirt is red, captured at step 7');
+    expect(window.gv2EvidenceMemoryText(entries)).toContain('evidenceKey="team_a_color": Team A shirt is red, captured at step 7');
     expect(window.gv2ParseEvidenceRefs('Team A [ev:team_a_color] and missing [ev:other].'))
       .toEqual(['team_a_color', 'other']);
     expect(window.gv2ParseEvidenceRefs('Language [ev:40].')).toEqual(['40']);
@@ -1678,10 +1678,10 @@ describe('gv2NormalizeRecap (content/utils.js)', () => {
 
   test('keeps summary segments pinned to real completed steps with valid phrases', () => {
     const raw = {
-      summary: 'Compared the latest iPhone models.',
+      summary: 'I opened the latest iPhone lineup and compared the Pro Max display specs.',
       summarySegments: [
         { text: 'Opened the latest iPhone lineup.', phrase: 'latest iPhone lineup', step: 2 },
-        { text: 'Compared the Pro Max display specs.', phrase: 'missing phrase', step: 4 },
+        { text: 'Compared the Pro Max display specs.', phrase: 'Pro Max display specs', step: 4 },
         { text: 'Invented an off-trajectory step.', phrase: 'off-trajectory', step: 9 }
       ],
       milestones: [
@@ -1692,7 +1692,35 @@ describe('gv2NormalizeRecap (content/utils.js)', () => {
     const r = window.gv2NormalizeRecap(raw, ctx);
     expect(r.summarySegments).toEqual([
       { text: 'Opened the latest iPhone lineup.', step: 2, phrase: 'latest iPhone lineup' },
-      { text: 'Compared the Pro Max display specs.', step: 4, phrase: '' }
+      { text: 'Compared the Pro Max display specs.', step: 4, phrase: 'Pro Max display specs' }
+    ]);
+  });
+
+  test('keeps evidence-backed summary segments using scratchpad keys', () => {
+    const raw = {
+      summary: 'I collected ESPN evidence that England and Argentina reached the semifinals.',
+      summarySegments: [
+        { text: 'Collected ESPN evidence that England and Argentina reached the semifinals at step 4.', phrase: 'ESPN evidence', evidenceKey: 'espn_semifinals', step: 4 },
+        { text: 'Ignored unknown evidence.', phrase: 'unknown evidence', evidenceKey: 'missing_key', step: 4 }
+      ],
+      milestones: [{ text: 'Found the latest World Cup news.', step: 4 }]
+    };
+    const r = window.gv2NormalizeRecap(raw, {
+      ...ctx,
+      validSteps: [2, 4],
+      scratchpad: [
+        { key: 'espn_semifinals', note: 'ESPN reports England and Argentina reached the semifinals', ref_step_id: 4, region_bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 } }
+      ]
+    });
+    expect(r.summarySegments).toEqual([
+      {
+        text: 'Collected ESPN evidence that England and Argentina reached the semifinals at step 4.',
+        step: 4,
+        phrase: 'ESPN evidence',
+        evidenceKey: 'espn_semifinals',
+        note: 'ESPN reports England and Argentina reached the semifinals',
+        region_bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 }
+      }
     ]);
   });
 
@@ -2086,8 +2114,12 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
         .map(call => call[0])
         .find(msg => msg?.metadata?.mode === 'guide' && msg?.metadata?.step === 'recap');
       expect(recapCall?.systemPrompt).toContain('summarySegments');
+      expect(recapCall?.systemPrompt).toContain('evidenceKey');
       expect(recapCall?.systemPrompt).toContain('inline visual references');
-      expect(recapCall?.messages?.[0]?.content).toContain('The UI will render summarySegments as inline clickable visual references');
+      expect(recapCall?.messages?.[0]?.content).toContain('The UI will render ONLY "summary" as the top prose');
+      expect(recapCall?.messages?.[0]?.content).not.toContain('progress=');
+      expect(recapCall?.messages?.[0]?.content).not.toContain('mechConfidence=');
+      expect(recapCall?.messages?.[0]?.content).not.toContain('grounded=');
     } finally {
       if (originalCaptureScreenshot) window.captureScreenshot = originalCaptureScreenshot;
       else delete window.captureScreenshot;
@@ -2241,7 +2273,7 @@ describe('RewindStore (rewind/rewind_store.js)', () => {
 
     const evidence = await window.rewindGetEvidence('s1');
     expect(evidence.map(e => e.key)).toEqual(['team_a_color', 'team_b_color', 'team_c_color']);
-    expect(window.gv2EvidenceMemoryText(evidence)).toContain('team_c_color: Team C shirt is green, captured at step 5');
+    expect(window.gv2EvidenceMemoryText(evidence)).toContain('evidenceKey="team_c_color": Team C shirt is green, captured at step 5');
     expect(window.gv2ParseEvidenceRefs('A [ev:team_a_color], B [ev:team_b_color], C [ev:team_c_color].'))
       .toEqual(['team_a_color', 'team_b_color', 'team_c_color']);
   });
@@ -2595,6 +2627,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
         visualEvidenceIndex: 40,
         som_id: '40'
       }));
+      expect(record.visualEvidenceItems[0]).toHaveProperty('visualEvidenceOriginalShot');
     } finally {
       evidenceEl.remove();
       delete window.gv2DrawDomMarker;

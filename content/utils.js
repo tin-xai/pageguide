@@ -1763,7 +1763,7 @@ function gv2EvidenceMemoryText(entries) {
   const clean = list
     .filter(e => e && e.key && e.note)
     .slice(-12)
-    .map(e => `- ${e.key}: ${e.note}, captured at step ${e.ref_step_id}`);
+    .map(e => `- evidenceKey="${e.key}": ${e.note}, captured at step ${e.ref_step_id}`);
   return clean.length ? clean.join('\n') : '(none)';
 }
 
@@ -2224,6 +2224,12 @@ function gv2NormalizeRecap(raw, ctx) {
   const stepStrings = Array.isArray(c.steps) ? c.steps : [];
   const clampText = (s) => String(s == null ? '' : s).trim().slice(0, 240);
   const stepRecords = Array.isArray(c.stepRecords) ? c.stepRecords : [];
+  const scratchpad = Array.isArray(c.scratchpad) ? c.scratchpad : [];
+  const evidenceByKey = {};
+  for (const e of scratchpad) {
+    const key = String(e?.key || '').trim();
+    if (key) evidenceByKey[key] = e;
+  }
   const rawVerdict = raw && (raw.verdict === 'completed' || raw.verdict === 'failed' || raw.verdict === 'unclear')
     ? raw.verdict : null;
   const finalVerdict = rawVerdict || (c.finalVerdict === 'completed' || c.finalVerdict === 'failed' || c.finalVerdict === 'unclear'
@@ -2260,19 +2266,36 @@ function gv2NormalizeRecap(raw, ctx) {
     return null;
   };
   const recForStep = (step) => stepRecords.find(r => Number(r?.step) === Number(step)) || null;
-  const normalizeSummarySegments = (items, fallbackMilestones = []) => {
+  const normalizeSummarySegments = (items, fallbackMilestones = [], summaryText = '') => {
     const source = Array.isArray(items) ? items : [];
+    const visibleSummary = clampText(summaryText);
     const out = [];
     const seenSeg = new Set();
     for (const item of source) {
       if (!item) continue;
-      const step = Number(item.step);
       const text = clampText(item.text);
-      if (!text || !Number.isFinite(step) || !validSet.has(step)) continue;
-      const key = `${step}:${text.toLowerCase()}`;
+      const phrase = validPhrase(item.phrase, visibleSummary || text);
+      if (!text && !phrase) continue;
+      if (visibleSummary && !phrase) continue;
+      const evidenceKey = String(item.evidenceKey || item.evidence_key || '').trim();
+      const evidence = evidenceKey ? evidenceByKey[evidenceKey] : null;
+      const rawStep = item.step != null ? item.step : evidence?.ref_step_id;
+      const step = Number(rawStep);
+      const hasValidStep = Number.isFinite(step) && validSet.has(step);
+      const evidenceStep = Number(evidence?.ref_step_id);
+      const hasValidEvidence = !!(evidence && Number.isFinite(evidenceStep) && validSet.has(evidenceStep));
+      if (evidenceKey && !hasValidEvidence) continue;
+      if (!hasValidStep && !hasValidEvidence) continue;
+      const key = `${evidenceKey || step}:${(phrase || text).toLowerCase()}`;
       if (seenSeg.has(key)) continue;
       seenSeg.add(key);
-      out.push({ text, step, phrase: validPhrase(item.phrase, text) });
+      const segment = { text: text || phrase, step: hasValidStep ? step : evidenceStep, phrase };
+      if (evidence) {
+        segment.evidenceKey = evidenceKey;
+        segment.note = clampText(evidence.note || '');
+        segment.region_bbox = evidence.region_bbox || null;
+      }
+      out.push(segment);
       if (out.length >= 5) break;
     }
     if (out.length) return out;
@@ -2368,7 +2391,7 @@ function gv2NormalizeRecap(raw, ctx) {
 
   const rawSummarySegments = raw && (Array.isArray(raw.summarySegments) ? raw.summarySegments
     : (Array.isArray(raw.summary_segments) ? raw.summary_segments : []));
-  const summarySegments = normalizeSummarySegments(rawSummarySegments, milestones);
+  const summarySegments = normalizeSummarySegments(rawSummarySegments, milestones, summary);
 
   return { summary, milestones, summarySegments };
 }

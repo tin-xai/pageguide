@@ -20,6 +20,7 @@ let currentGuideTitle = '';
 let currentGuideStep = 0;
 let currentGuideRecords = [];
 let currentGuideInitial = null; // Phase 1: the "Initial state" node (step 0), kept out of the dot count
+let currentGuideSessionId = null;
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
 let currentGuideWorkingStatus = '';
@@ -355,7 +356,15 @@ function _recapSavedEvidenceCapture(rec, key) {
     .find(item => item && String(item.key || '').trim().toLowerCase() === needle);
   const shot = _recapPickShot(cap?.shot || confirmationCap?.visualEvidenceShot);
   if (!shot) return null;
-  const originalShot = _recapPickShot(cap?.annotationScreenshot || rec?.screenshotBefore || rec?.screenshot);
+  const originalShot = _recapPickShot(
+    cap?.originalShot ||
+    cap?.annotationOriginalShot ||
+    confirmationCap?.visualEvidenceOriginalShot ||
+    // Older saved evidence did not store a same-crop clean image, so keep the previous fallback.
+    cap?.annotationScreenshot ||
+    rec?.screenshotBefore ||
+    rec?.screenshot
+  );
   // Saved evidence crops already have the visual proof baked in: DOM/SoM captures include the
   // highlighted marker, while bbox captures include the region marker and relationship annotations.
   return {
@@ -763,6 +772,15 @@ function renderWatchVideoAnswer(result) {
   container.scrollTop = container.scrollHeight;
 }
 
+function _compactAnswerMarkdown(text) {
+  let s = String(text || '').replace(/\r\n/g, '\n');
+  // Keep paragraph breaks generally, but collapse blank lines between adjacent bullets so the
+  // answer card reads like a compact summary instead of spaced-out sections.
+  s = s.replace(/\n{2,}(\s*[-*]\s+)/g, '\n$1');
+  s = s.replace(/(\n\s*[-*]\s+[^\n]+)\n{2,}(?=\s*[-*]\s+)/g, '$1\n');
+  return s.trim();
+}
+
 function _buildAnswerEvidenceModel(answer, scratchpad, answerEvidence) {
   const normEvKey = (value) => {
     if (typeof gv2NormalizeEvidenceKey === 'function') return gv2NormalizeEvidenceKey(value);
@@ -802,9 +820,10 @@ function _buildAnswerEvidenceModel(answer, scratchpad, answerEvidence) {
   const text = (typeof gv2ExpandBareEvidenceCitations === 'function')
     ? gv2ExpandBareEvidenceCitations(answer, scratchpad)
     : String(answer || '');
+  const compactText = _compactAnswerMarkdown(text);
   const re = /\[ev:([a-zA-Z0-9_-]+)\]/g;
   const chips = [];
-  const tokenized = text.replace(re, (full, rawKey) => {
+  const tokenized = compactText.replace(re, (full, rawKey) => {
     const key = normEvKey(rawKey);
     const fallbackConfirmation = confirmationQueue[confirmationQueueIndex] || null;
     const ev = byKey[key] || answerEvidenceByKey[key] || fallbackConfirmation;
@@ -906,18 +925,54 @@ function _answerStepScreenshotChip(sessionId, step, label = '') {
   return `<span class="pageguide-recap-link pageguide-answer-summary-chip pageguide-answer-trail-shot" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(n))}" title="Open ${escapeHtml(chipLabel)} screenshot">📷 ${escapeHtml(chipLabel)}</span>`;
 }
 
+function _answerSummarySegmentLink(segment, sessionId, label) {
+  const step = Number(segment?.step);
+  if (!Number.isFinite(step) || step <= 0) return escapeHtml(label);
+  const evidenceKey = String(segment?.evidenceKey || segment?.evidence_key || '').trim();
+  const bbox = segment?.region_bbox ? JSON.stringify(segment.region_bbox) : '';
+  const note = segment?.note || segment?.text || label;
+  const evidenceAttrs = evidenceKey
+    ? ` data-evidence="scratchpad" data-key="${escapeHtml(evidenceKey)}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(note)}"`
+    : '';
+  return `<span class="pageguide-recap-link pageguide-answer-summary-ref" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}"${evidenceAttrs}>${escapeHtml(label)}</span>`;
+}
+
 function _answerSummarySegmentHtml(segment, sessionId) {
   const text = String(segment?.text || '').trim();
-  const step = Number(segment?.step);
   if (!text) return '';
-  if (!Number.isFinite(step) || step <= 0) return escapeHtml(text);
-  const link = (label) => `<span class="pageguide-recap-link pageguide-answer-summary-ref" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}">${escapeHtml(label)}</span>`;
   const phrase = String(segment?.phrase || '').trim();
   if (phrase && text.toLowerCase().includes(phrase.toLowerCase())) {
     const idx = text.toLowerCase().indexOf(phrase.toLowerCase());
-    return `${escapeHtml(text.slice(0, idx))}${link(text.slice(idx, idx + phrase.length))}${escapeHtml(text.slice(idx + phrase.length))}`;
+    return `${escapeHtml(text.slice(0, idx))}${_answerSummarySegmentLink(segment, sessionId, text.slice(idx, idx + phrase.length))}${escapeHtml(text.slice(idx + phrase.length))}`;
   }
-  return link(text);
+  return _answerSummarySegmentLink(segment, sessionId, text);
+}
+
+function _answerLinkedSummaryHtml(summaryText, segments, sessionId) {
+  const text = String(summaryText || '').trim();
+  if (!text) return '';
+  const lower = text.toLowerCase();
+  const ranges = [];
+  (Array.isArray(segments) ? segments : []).forEach((segment) => {
+    const phrase = String(segment?.phrase || '').trim();
+    if (!phrase) return;
+    const start = lower.indexOf(phrase.toLowerCase());
+    if (start < 0) return;
+    const end = start + phrase.length;
+    if (ranges.some(r => start < r.end && end > r.start)) return;
+    ranges.push({ start, end, segment });
+  });
+  if (!ranges.length) return escapeHtml(text);
+  ranges.sort((a, b) => a.start - b.start);
+  let out = '';
+  let cursor = 0;
+  ranges.forEach((range) => {
+    out += escapeHtml(text.slice(cursor, range.start));
+    out += _answerSummarySegmentLink(range.segment, sessionId, text.slice(range.start, range.end));
+    cursor = range.end;
+  });
+  out += escapeHtml(text.slice(cursor));
+  return out;
 }
 
 function _answerConciseSummaryText(recap) {
@@ -943,9 +998,11 @@ function _answerTrailSummaryHtml(recap, sessionId, milestones = []) {
     .slice(0, 5);
   const summaryText = _answerConciseSummaryText(recap);
   if (!summaryText && !meaningful.length && !segments.length) return '';
-  const linkedSummaryLine = segments.length
-    ? `<div class="pageguide-answer-trail-summary-text">${segments.map(s => _answerSummarySegmentHtml(s, sessionId)).filter(Boolean).join(' ')}</div>`
-    : '';
+  const linkedSummaryLine = summaryText
+    ? `<div class="pageguide-answer-trail-summary-text">${_answerLinkedSummaryHtml(summaryText, segments, sessionId)}</div>`
+    : (segments.length
+      ? `<div class="pageguide-answer-trail-summary-text">${segments.map(s => _answerSummarySegmentHtml(s, sessionId)).filter(Boolean).join(' ')}</div>`
+      : '');
   const summaryLine = (!linkedSummaryLine && summaryText)
     ? `<div class="pageguide-answer-trail-summary-text">${escapeHtml(summaryText)}</div>`
     : '';
@@ -1536,6 +1593,9 @@ function renderGoalDots(current, total) {
     dot.className = 'pageguide-goal-dot';
     dot.dataset.step = String(i);
     dot.title = getGuideStepLabel(i);
+    if (compact && count > 1) {
+      dot.style.setProperty('--pg-dot-pos', String(Math.max(0, Math.min(1, (i - 1) / (count - 1)))));
+    }
     if (st.status === 'done') dot.classList.add('done');
     else if (st.status === 'current') dot.classList.add('current');
     // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
@@ -1821,6 +1881,26 @@ function pruneGuideAfter(step) {
 }
 if (typeof window !== 'undefined') window.pruneGuideAfter = pruneGuideAfter;
 
+function resetLiveGuideTimelineForSession(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || currentGuideSessionId === sid) return false;
+  currentGuideSessionId = sid;
+  currentGuidePlan = Array.isArray(options.plan) ? options.plan : [];
+  currentGuideTitle = options.title || '';
+  currentGuideStep = 0;
+  currentGuideRecords = [];
+  currentGuideInitial = null;
+  currentGuideVerifications = {};
+  currentGuideWarnings = {};
+  goalDotsExpanded = false;
+  guideTimelineCheckpointSteps = null;
+  visibleJourneySessionId = null;
+  visibleJourneyTitle = '';
+  visibleJourneyRecalled = false;
+  hideGoalStepPreview();
+  return true;
+}
+
 function clearGoalAndStepPanel() {
   guidePaused = false;
   currentGoal = null;
@@ -1829,6 +1909,7 @@ function clearGoalAndStepPanel() {
   currentGuideStep = 0;
   currentGuideRecords = [];
   currentGuideInitial = null;
+  currentGuideSessionId = null;
   currentGuideVerifications = {};
   currentGuideWarnings = {};
   goalDotsExpanded = false;
@@ -2966,6 +3047,7 @@ async function loadSessionSteps(sessionId) {
   currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
   currentGuideTitle = title || '';
   currentGuidePlan = Array.isArray(plan) ? plan : [];
+  currentGuideSessionId = sessionId || currentGuideSessionId;
 }
 
 /**
@@ -3010,6 +3092,7 @@ async function showStoredJourney(sessionId) {
   currentGuideStep = lastStep;
   guideActive = false; // recalled journey is a past, read-only view
   guidePaused = false;
+  currentGuideSessionId = null;
   visibleJourneySessionId = sessionId;
   visibleJourneyTitle = currentGuideTitle;
   visibleJourneyRecalled = true;
@@ -3034,7 +3117,7 @@ function removeGuideStepRecord(sessionId, step) {
 if (typeof window !== 'undefined') window.removeGuideStepRecord = removeGuideStepRecord;
 
 function getActiveSessionId() {
-  return visibleJourneySessionId || currentGuideInitial?.sessionId || (currentGuideRecords[0] ? currentGuideRecords[0].sessionId : null);
+  return currentGuideSessionId || visibleJourneySessionId || currentGuideInitial?.sessionId || (currentGuideRecords[0] ? currentGuideRecords[0].sessionId : null);
 }
 
 async function checkShowBranchButton() {
@@ -4108,6 +4191,10 @@ function addGuideStep(result) {
   const panel = document.getElementById('pageguide-step-panel');
   if (!panel) return;
 
+  if (result?.sessionId && getActiveSessionId() !== result.sessionId) {
+    resetLiveGuideTimelineForSession(result.sessionId, { title: currentGoal?.prompt || result.title || result.instruction || '' });
+  }
+  if (result?.sessionId) currentGuideSessionId = result.sessionId;
   guideActive = !result.isLastStep;
   guidePaused = false;
   hideTyping();
@@ -5697,6 +5784,7 @@ function _saveTabSession(tabId) {
     visibleJourneySessionId,
     visibleJourneyTitle,
     visibleJourneyRecalled,
+    currentGuideSessionId,
     activeGuideRecords: [...currentGuideRecords],
     activeGuideInitial: currentGuideInitial,
     activeGuidePlan: [...currentGuidePlan],
@@ -5741,11 +5829,13 @@ function _restoreTabSession(session) {
   visibleJourneySessionId = session.visibleJourneySessionId || null;
   visibleJourneyTitle = session.visibleJourneyTitle || '';
   visibleJourneyRecalled = !!session.visibleJourneyRecalled;
+  currentGuideSessionId = session.currentGuideSessionId || null;
   if (visibleJourneyRecalled && visibleJourneySessionId) {
     showStoredJourney(visibleJourneySessionId);
   } else {
     clearGoalAndStepPanel();
     if (session.activeSessionId && session.activeGuideRecords && typeof RewindTimeline !== 'undefined') {
+      currentGuideSessionId = session.currentGuideSessionId || session.activeSessionId || null;
       currentGuideRecords = [...session.activeGuideRecords];
       currentGuideInitial = session.activeGuideInitial;
       currentGuidePlan = session.activeGuidePlan ? [...session.activeGuidePlan] : [];
@@ -6248,6 +6338,9 @@ function handleContentMessage(message, sender, sendResponse) {
     addGuideStep(message.result);
   } else if (message.action === 'guidePlan') {
     _setJourneyRecalledMode(false);
+    if (message.sessionId) {
+      resetLiveGuideTimelineForSession(message.sessionId, { title: message.title || currentGoal?.prompt || '', plan: message.plan });
+    }
     currentGuidePlan = Array.isArray(message.plan) ? message.plan : [];
     currentGuideTitle = message.title || currentGuideTitle;
     if (message.sessionId) {
@@ -6265,6 +6358,10 @@ function handleContentMessage(message, sender, sendResponse) {
     if (message.meta && (message.meta.isInitial || Number(message.meta.step) === 0)) {
       // Initial-state node (step 0): tracked separately so it never inflates the step/dot count,
       // but still accumulated into the session journey so "View journey" can show it later.
+      if (message.meta.sessionId && getActiveSessionId() !== message.meta.sessionId) {
+        resetLiveGuideTimelineForSession(message.meta.sessionId, { title: currentGoal?.prompt || message.meta.title || '' });
+      }
+      if (message.meta.sessionId) currentGuideSessionId = message.meta.sessionId;
       _setJourneyRecalledMode(false);
       currentGuideInitial = message.meta;
       renderGoalCard({ route: 'guide', step: currentGuideStep });
@@ -6279,8 +6376,10 @@ function handleContentMessage(message, sender, sendResponse) {
       const handleRecord = async () => {
         const liveSessionId = message.meta.sessionId;
         if (liveSessionId && getActiveSessionId() !== liveSessionId) {
+          resetLiveGuideTimelineForSession(liveSessionId, { title: currentGoal?.prompt || message.meta.title || message.meta.instruction || '' });
           await loadSessionSteps(liveSessionId);
         }
+        if (liveSessionId) currentGuideSessionId = liveSessionId;
         _setJourneyRecalledMode(false); // a live step is arriving — leave recalled view
         const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
         if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);

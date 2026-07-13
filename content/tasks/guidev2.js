@@ -29,17 +29,21 @@ const GUIDE_EVIDENCE_ANNOTATOR_PROMPT = _GV2_PROMPTS.GUIDE_EVIDENCE_ANNOTATOR ||
 const GUIDE_RECAP_SUMMARIZER_SYSTEM_PROMPT = _GV2_PROMPTS.GUIDE_RECAP_SUMMARIZER_SYSTEM || `You are a SUMMARIZER for a step-by-step web guide. You do NOT decide whether the task succeeded — the OUTCOME is already decided and given below. Never contradict it or re-judge success/failure. You are given INITIAL and FINAL screenshots when vision is available. The UI will turn summarySegments and stepEvaluations into inline visual references, so pin each meaningful phrase to the real step screenshot/action it describes. Reply with ONLY JSON:
 {"reason":"one or two sentences describing the final state (for a failed run, what is missing)",
  "annotations":[{"x":0..1,"y":0..1,"w":0..1,"h":0..1,"label":"short final-state evidence label"}],
- "summary": "1-2 short sentences. Do NOT prefix it with any verdict phrase. Do NOT list screenshots here.",
- "summarySegments": [{"text": "short sentence fragment or sentence for the summary", "step": <completed step number>, "phrase": "<meaningful phrase copied verbatim from text to make clickable>"}],
+ "summary": "1-2 natural sentences. This is the ONLY top summary text the UI will display. Do NOT prefix it with any verdict phrase. Do NOT list screenshots here.",
+ "summarySegments": [{"text": "brief metadata label for this linked phrase, not displayed when summary exists", "step": <completed step number or null>, "evidenceKey": "saved evidence key or null", "phrase": "<meaningful phrase copied verbatim from summary to make clickable>"}],
  "stepEvaluations": [{"step": <completed step number>, "status": "correct"|"wrong", "goalRelated": true|false, "goalRelatedReason": "brief reason whether this step helped the user goal", "text": "short visual-recap sentence for this exact step", "phrase": "<key noun phrase copied verbatim from text>", "errorLabel": "misgrounded"|"loop"|"low-confidence"|"risky"|"incomplete"|"wrong-action"|"other", "reason": "why this step was wrong"}]}
 Rules:
-- OUTCOME is authoritative. When OUTCOME is "completed": write "summary" as the ANSWER to the user — describe what the guide accomplished and the resulting state. Mark every step status="correct".
+- OUTCOME is authoritative. When OUTCOME is "completed": write "summary" as the ANSWER to the user — describe what the guide accomplished and the resulting state in a natural, user-facing sentence. Mark every step status="correct".
 - When OUTCOME is "failed": the agent stopped before emitting a finish action. Do NOT claim success. Diagnose WHERE and WHY it broke down using the CONFIDENCE SIGNALS and trajectory: mark the failing step(s) status="wrong" with an errorLabel and a short reason, and make "summary" explain why it could not finish and at which step.
-- Use the confidence scores to choose labels: high loop/mechLoop → "loop"; low grounded/mechGrounding → "misgrounded"; low confidence with no clear cause → "low-confidence".
+- Use the confidence signals to choose labels: high loop → "loop"; low grounding → "misgrounded"; low confidence with no clear cause → "low-confidence".
 - Use 2 to 6 stepEvaluations, each a concrete step the guide actually took. "step" MUST be one of the completed step numbers listed below; do not invent steps. If there is only 1 completed step, return 1 stepEvaluation.
-- Use 1 to 5 summarySegments to make the top summary visually grounded. Each segment should describe a meaningful action/result and point to the step whose screenshot/action proves it.
-- For every summarySegments item, "step" MUST be one of the completed step numbers listed below; do not invent steps.
-- For every summarySegments item, "phrase" MUST be a short substring copied exactly from that segment's "text"; it is the clickable visual reference. If unsure, use the key noun phrase such as "Compare all models" or "iPhone 17 Pro Max specs".
+- Use 1 to 5 summarySegments to make the top summary visually grounded. summarySegments are NOT a second summary and are NOT displayed as separate text; they only wrap exact phrases inside "summary" with visual links.
+- Every summarySegments.phrase MUST be copied exactly from "summary". Choose natural phrases in "summary" that the user would want to inspect visually, such as "facility hours page", "Sportsplex schedule", "4:00pm to 9:00pm", or "closed on other days".
+- summarySegments.text may be a brief hidden label explaining what the phrase proves, but the visible UI will use "summary" plus the linked "phrase".
+- For every summarySegments item, "step" MUST be one of the completed step numbers listed below when it references an action. Do not invent steps.
+- For every summarySegments item that references saved evidence, set "evidenceKey" to the exact scratchpad key. You may also set "step" to that evidence's captured step. Example: {"text":"collected evidence that ESPN reported England and Argentina reached the semifinals","phrase":"ESPN reported England and Argentina reached the semifinals","evidenceKey":"espn_semifinals","step":4}.
+- For every summarySegments item, "phrase" MUST be a short substring copied exactly from "summary"; it is the clickable visual reference. If unsure, edit "summary" so the phrase appears naturally.
+- If the EVIDENCE SCRATCHPAD contains useful saved facts, include them in summarySegments when describing what the agent collected, e.g. "collected two article evidence items ...", with each evidence-backed phrase linked by evidenceKey and mentioning "captured at step N" when natural.
 - Treat stepEvaluations as the detailed visual trail: each "text" should summarize the action/result for that step and be useful when the row itself is hovered/clicked.
 - Prefer steps that have before/after screenshots, a target, saved evidence, or visual evidence. Include navigation/scroll steps only when they were meaningful for the goal.
 - "text" should be a short standalone sentence under 100 characters, e.g. "Opened BBC News.", "Scrolled to the World Cup section.", "Saved the Messi article evidence.", "Confirmed the language changed to Spanish."
@@ -63,9 +67,11 @@ VISUAL EVIDENCE BY STEP:
 {{VISUAL_EVIDENCE_BY_STEP}}
 
 IMPORTANT FOR VISUAL RECAP:
-- The UI will render summarySegments as inline clickable visual references inside the short summary.
+- The UI will render ONLY "summary" as the top prose, with summarySegments.phrase wrapped as inline clickable visual references inside that exact summary.
 - The UI will render stepEvaluations as the detailed reasoning-trail rows.
-- Choose summarySegments.step and stepEvaluation.step values that point to the screenshot/action the user should inspect for that phrase.
+- Choose summarySegments.step, summarySegments.evidenceKey, and stepEvaluation.step values that point to the screenshot/action/evidence the user should inspect for that phrase.
+- summarySegments.phrase must appear verbatim in "summary"; otherwise the UI cannot link it.
+- summarySegments may reference saved evidence by exact evidenceKey from the EVIDENCE SCRATCHPAD. Example: if summary says "I found the Messi article and the semi-final preview.", use {"text":"Messi article evidence","phrase":"Messi article","evidenceKey":"messi_england_article","step":2}.
 - Do not write a separate "Visual recap:" list in summary.
 
 EVIDENCE SCRATCHPAD:
@@ -2189,7 +2195,7 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
 // scroll a DOM/SoM target into view before capture; bbox-only evidence remains current-viewport only.
 // Best-effort — never throws.
 async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = null, options = {}) {
-  const out = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureMode: null, captureError: null };
+  const out = { visualEvidenceShot: null, visualEvidenceOriginalShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureMode: null, captureError: null };
   try {
     // Resolve a CSS-px viewport rect from either the live element or a normalized {x,y,w,h} box,
     // plus the marker target (the element when we have one, else the normalized rect).
@@ -2247,12 +2253,19 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
       await new Promise(r => setTimeout(r, 50));
     }
     let shot = options.screenshotBase64 || null;
+    let cleanShot = shot;
     try { if (!shot && typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
-    if (markerNode && typeof gv2RemoveDomMarker === 'function') gv2RemoveDomMarker(markerNode);
+    if (markerNode && typeof gv2RemoveDomMarker === 'function') {
+      gv2RemoveDomMarker(markerNode);
+      cleanShot = null;
+      await new Promise(r => setTimeout(r, 50));
+      try { if (typeof captureScreenshot === 'function') cleanShot = await captureScreenshot(); } catch (e) { /* best-effort */ }
+    }
     if (!shot) {
       out.captureError = 'screenshot-failed';
       return out;
     }
+    if (!cleanShot) cleanShot = shot;
     const hasAnnotations = Array.isArray(options.annotations) && options.annotations.length > 0;
     // DOM overlays are already captured in pixels. For screenshot-region evidence, annotations are
     // the visual overlay; region_bbox is just the crop/hint. Only draw the plain region box when
@@ -2279,6 +2292,26 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
         );
     out.visualEvidenceShot = marked?.base64 || null;
     out.visualEvidenceMarker = marked?.marker || null;
+    const original = options.fullViewport
+      ? await _gv2MarkFullScreenshot(
+          cleanShot,
+          rect,
+          markerNumber,
+          GV2_EVIDENCE_MARKER_COLOR,
+          GV2_EVIDENCE_MARKER_FILL,
+          false,
+          []
+        )
+      : await _gv2CropScreenshot(
+          cleanShot,
+          rect,
+          markerNumber,
+          GV2_EVIDENCE_MARKER_COLOR,
+          GV2_EVIDENCE_MARKER_FILL,
+          false,
+          []
+        );
+    out.visualEvidenceOriginalShot = original?.base64 || null;
     if (!out.visualEvidenceShot && !out.captureError) out.captureError = 'crop-failed';
   } catch (e) { out.captureError = e?.message || 'capture-failed'; }
   return out;
@@ -2534,6 +2567,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
         annotationCoordinateDebug: item?.annotationCoordinateDebug || null,
         annotationError: item?.annotationError || (item?.evidenceRect ? null : 'missing-target'),
         visualEvidenceShot: null,
+        visualEvidenceOriginalShot: null,
         visualEvidenceNormRect: item?.evidenceRect || null,
         visualEvidenceMarker: null,
         visualEvidenceText: item?.text || null,
@@ -2544,7 +2578,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       });
       continue;
     }
-    let cap = { visualEvidenceShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureMode: null, captureError: null };
+    let cap = { visualEvidenceShot: null, visualEvidenceOriginalShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureMode: null, captureError: null };
     try {
       cap = await gv2CaptureEvidenceRegion(item.evidenceEl, item.evidenceIndex, item.evidenceRect, {
         scrollIntoView: !!item.scrollIntoView,
@@ -2569,6 +2603,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       annotationCoordinateDebug: item.annotationCoordinateDebug || null,
       annotationError: item.annotationError || null,
       visualEvidenceShot: cap.visualEvidenceShot || null,
+      visualEvidenceOriginalShot: cap.visualEvidenceOriginalShot || null,
       visualEvidenceNormRect: cap.visualEvidenceNormRect || item.evidenceRect || null,
       visualEvidenceMarker: cap.visualEvidenceMarker || null,
       visualEvidenceText: item.text || null,
@@ -2811,6 +2846,7 @@ async function gv2CaptureStepRecord(data) {
       key: item.key || null,
       note: item.note || null,
       shot: item.visualEvidenceShot || null,
+      originalShot: item.visualEvidenceOriginalShot || null,
       marker: item.visualEvidenceMarker || null,
       region_bbox: item.region_bbox || item.visualEvidenceNormRect || null,
       annotations: Array.isArray(item.annotations) ? item.annotations : [],
@@ -2823,12 +2859,14 @@ async function gv2CaptureStepRecord(data) {
       annotationCoordinateDebug: item.annotationCoordinateDebug || null,
       annotationError: item.annotationError || null,
       annotationResultShot: item.visualEvidenceShot || null,
+      annotationOriginalShot: item.visualEvidenceOriginalShot || null,
       som_id: item.som_id || null,
       captureMode: item.captureMode || null,
       captureError: item.captureError || null
     }));
     const firstEvidence = evidenceItems[0] || {
       visualEvidenceShot: null,
+      visualEvidenceOriginalShot: null,
       visualEvidenceNormRect: null,
       visualEvidenceMarker: null,
       visualEvidenceText: data.visualEvidenceText || null,
@@ -2898,6 +2936,7 @@ async function gv2CaptureStepRecord(data) {
       // distinct SoM element, e.g. "Sort by: Price: Low to High"), plus its reason and resolved index.
       visualEvidenceItems: evidenceItems,
       visualEvidenceShot: firstEvidence.visualEvidenceShot || null,
+      visualEvidenceOriginalShot: firstEvidence.visualEvidenceOriginalShot || null,
       visualEvidenceNormRect: firstEvidence.visualEvidenceNormRect || null,
       visualEvidenceMarker: firstEvidence.visualEvidenceMarker || null,
       visualEvidenceText: firstEvidence.visualEvidenceText || null,
@@ -4455,14 +4494,20 @@ async function _gv2BuildRecap(g, outcome = 'completed') {
     let raw = null;
     let recapSystemPrompt = '', recapUserPrompt = '', recapResponse = '';
     let recapImages = [];
+    let recapScratchpad = [];
     try {
       const scratchpad = await _gv2LoadEvidenceScratchpad(g?.sessionId);
+      recapScratchpad = Array.isArray(scratchpad) ? scratchpad : [];
       const scratchpadText = (typeof gv2EvidenceMemoryText === 'function') ? gv2EvidenceMemoryText(scratchpad) : '(none)';
       const planText = plan.length ? plan.map(p => `- ${p.goal || p.text || ''}`).join('\n') : '(no plan)';
-      const scoreText = stepRecords.length ? stepRecords.map(r => {
-        const pct = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : 'null';
-        return `Step ${r.step}: confidence=${pct(r.confidence)}, grounded=${pct(r.grounded)}, loop=${pct(r.loop)}, progress=${pct(r.progress)}, mechConfidence=${pct(r.mechConfidence)}, mechGrounding=${pct(r.mechGrounding)}, mechLoop=${pct(r.mechLoop)}, action=${r.action || ''}, instruction=${r.instruction || ''}`;
-      }).join('\n') : '(no confidence records)';
+      const scoreRows = stepRecords
+        .filter(r => ['click', 'type', 'clear_text', 'drag_drop'].includes(String(r?.action || '').toLowerCase()))
+        .filter(r => [r.mechConfidence, r.mechGrounding, r.mechLoop].some(v => Number.isFinite(Number(v))))
+        .map(r => {
+          const pct = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : 'null';
+          return `Step ${r.step}: confidence=${pct(r.mechConfidence)}, grounding=${pct(r.mechGrounding)}, loop=${pct(r.mechLoop)}, action=${r.action || ''}, instruction=${r.instruction || ''}`;
+        });
+      const scoreText = scoreRows.length ? scoreRows.join('\n') : '(no targeted confidence records)';
       const stepEvidenceText = stepRecords.length ? stepRecords.map(r => {
         const hasBefore = !!(r.screenshotBefore || r.screenshot || r.markedShot || r.regionShot);
         const hasAfter = !!r.screenshotAfter;
@@ -4522,6 +4567,7 @@ async function _gv2BuildRecap(g, outcome = 'completed') {
     const final = { verdict: verdictKey, reason: rawNorm.reason, annotations: rawNorm.annotations };
     ctx.finalVerdict = final.verdict;
     ctx.finalReason = final.reason;
+    ctx.scratchpad = recapScratchpad;
 
     const normalized = (typeof gv2NormalizeRecap === 'function')
       ? gv2NormalizeRecap(raw, ctx)

@@ -2732,10 +2732,10 @@ body {
   font-weight: 700;
 }
 .pageguide-journey-recall-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.pageguide-journey-recall-title { font-size: 16px; font-weight: 800; line-height: 1.18; }
+.pageguide-journey-recall-title { font-size: 13px; font-weight: 800; line-height: 1.35; }
 .pageguide-journey-recall-sub {
-  font-size: 14px;
-  line-height: 1.25;
+  font-size: 13px;
+  line-height: 1.35;
   color: var(--pg-muted, #71788c);
   white-space: nowrap;
   overflow: hidden;
@@ -2808,8 +2808,8 @@ body {
 }
 
 .pageguide-goal-dots.is-compact {
-  justify-content: flex-start;
-  gap: 10px;
+  justify-content: initial;
+  min-height: 24px;
 }
 
 .pageguide-goal-dots::before {
@@ -2848,6 +2848,17 @@ body {
   padding: 0;
   background: #aeb5c5;
   cursor: pointer;
+}
+
+.pageguide-goal-dots.is-compact .pageguide-goal-dot {
+  position: absolute;
+  left: calc(14px + var(--pg-dot-pos, 0) * (100% - 28px));
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.pageguide-goal-dots.is-compact .pageguide-goal-dot.initial {
+  left: 14px;
 }
 
 .pageguide-goal-dot.done {
@@ -5416,28 +5427,29 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 .pageguide-answer-status.unclear { color: #c98a1a; }
 
 .pageguide-answer-copy {
-  padding: 8px 18px 14px;
+  padding: 8px 18px 12px;
   color: var(--pg-text);
-  font-size: 15px;
-  line-height: 1.38;
+  font-size: 13px;
+  line-height: 1.35;
   font-weight: 500;
   border-bottom: 1px solid var(--pg-border);
 }
 .pageguide-answer-copy p {
-  margin: 0 0 7px;
+  margin: 0 0 6px;
 }
 .pageguide-answer-copy p:last-child {
   margin-bottom: 0;
 }
 .pageguide-answer-copy ul,
 .pageguide-answer-copy ol {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   padding-left: 0;
   list-style-position: outside;
 }
 .pageguide-answer-copy li {
-  margin: 0 0 8px 18px;
-  padding-left: 4px;
+  margin: 0 0 4px 17px;
+  padding-left: 3px;
+  line-height: 1.35;
 }
 .pageguide-answer-copy li p {
   display: inline;
@@ -5446,7 +5458,7 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 .pageguide-answer-copy li + li {
   margin-top: 0;
 }
-.pageguide-answer-copy li br:first-child {
+.pageguide-answer-copy li br {
   display: none;
 }
 
@@ -5702,7 +5714,7 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
     justify-self: start;
   }
   .pageguide-answer-copy {
-    font-size: 15px;
+    font-size: 13px;
   }
   .pageguide-answer-status {
     max-width: none;
