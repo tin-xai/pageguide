@@ -66,12 +66,14 @@
 #${TIMELINE_ID} .rw-step.current .rw-right::after{content:"⌃";color:#7857ff}
 #${TIMELINE_ID} .rw-thumb{display:none!important}
 #${TIMELINE_ID} .rw-flag{display:inline-block;font:700 9px/1 sans-serif;color:#a16207;background:rgba(250,204,21,.18);border:1px solid rgba(234,179,8,.4);padding:2px 6px;border-radius:99px;margin-top:2px}
+#${TIMELINE_ID} .rw-evidence-flag{display:inline-block;font:800 9px/1 sans-serif;color:#5b3df6;background:rgba(120,87,255,.13);border:1px solid rgba(120,87,255,.32);padding:2px 6px;border-radius:99px;margin-top:3px}
 #${TIMELINE_ID} .rw-step.rw-verify-failed .rw-instr::after{content:" ⚠";color:#ff6b35}
 #${TIMELINE_ID} .rw-step.rw-verify-blocked .rw-instr::after{content:" ⛔";color:#ffa502}
 
 .rw-hovercard{position:fixed;z-index:2147483646;width:230px;background:var(--pg-bg,#1e1e28);color:var(--pg-text,#eee);border:1px solid var(--pg-border,rgba(255,255,255,.15));border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.4);padding:8px;font:400 11px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none}
 .rw-hovercard img{width:100%;border-radius:6px;display:block;margin-bottom:6px;background:#0003}
 .rw-hovercard .rw-hc-instr{font-weight:600;margin-bottom:3px}
+.rw-hovercard .rw-hc-evidence{margin-top:7px;padding:6px 7px;border-radius:7px;background:rgba(120,87,255,.14);border:1px solid rgba(120,87,255,.28);color:#c7bbff;font-weight:650}
 .rw-hovercard .rw-hc-meta{opacity:.65;font-size:10px}
 
 #${INSPECTOR_ID}{position:fixed;inset:0;z-index:2147483647;background:var(--pg-bg,#1e1e28);color:var(--pg-text,#eee);display:flex;flex-direction:column}
@@ -124,6 +126,40 @@
     if (typeof global.rewindResolveScreenshot === 'function') return global.rewindResolveScreenshot(rec);
     return rec ? (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter || null) : null;
   }
+  function _evidenceEntries(meta, rec) {
+    const out = [];
+    const push = (item) => {
+      if (!item) return;
+      const key = String(item.key || item.evidenceKey || '').trim();
+      const note = String(item.note || item.evidenceNote || '').replace(/\s+/g, ' ').trim();
+      if (!key && !note) return;
+      out.push({ key, note });
+    };
+    (Array.isArray(rec?.savedEvidenceEntries) ? rec.savedEvidenceEntries : []).forEach(push);
+    (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : []).forEach(push);
+    if (rec?.evidenceKey || rec?.evidenceNote) push({ key: rec.evidenceKey, note: rec.evidenceNote });
+    if (meta?.evidenceKey || meta?.evidenceNote) push({ key: meta.evidenceKey, note: meta.evidenceNote });
+    const seen = new Set();
+    return out.filter(item => {
+      const k = `${item.key}|${item.note}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+  function _evidenceSummary(meta, rec) {
+    const entries = _evidenceEntries(meta, rec);
+    if (!entries.length) return null;
+    const first = entries[0].note || entries[0].key || 'Saved evidence';
+    const clipped = first.length > 90 ? `${first.slice(0, 87).trim()}...` : first;
+    return {
+      count: entries.length,
+      text: `Saved ${entries.length} evidence${entries.length === 1 ? '' : ' items'}${clipped ? `: ${clipped.replace(/[.!?]+$/g, '')}` : ''}.`
+    };
+  }
+  function _evidenceFlagHtml(summary) {
+    return summary ? `<span class="rw-evidence-flag">${_escape(summary.count === 1 ? 'Saved evidence' : `Saved ${summary.count} evidence`)}</span>` : '';
+  }
   function _removeTimelineStep(meta) {
     if (!meta) return;
     const container = document.getElementById(TIMELINE_ID);
@@ -173,7 +209,11 @@
     if (meta.confidence != null && meta.confidence < _confidenceThreshold) bits.push('Low confidence');
     if (meta.durationMs != null) bits.push(_fmtDuration(meta.durationMs));
     const cost = _fmtCost(meta.cost); if (cost) bits.push(cost);
-    card.innerHTML = `${img}<div class="rw-hc-instr">Step ${meta.step}</div><div>${_escape(meta.instruction || '')}</div><div class="rw-hc-meta">${bits.join(' · ')}</div>`;
+    const evidenceSummary = _evidenceSummary(meta, rec);
+    const evidenceHtml = evidenceSummary
+      ? `<div class="rw-hc-evidence">${_escape(evidenceSummary.text)}</div>`
+      : '';
+    card.innerHTML = `${img}<div class="rw-hc-instr">Step ${meta.step}</div><div>${_escape(meta.instruction || '')}</div>${evidenceHtml}<div class="rw-hc-meta">${bits.join(' · ')}</div>`;
     document.body.appendChild(card);
     const r = anchorEl.getBoundingClientRect();
     const top = Math.max(8, Math.min(r.top, window.innerHeight - card.offsetHeight - 8));
@@ -195,6 +235,93 @@
 
   function _escape(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function _pctBox(b) {
+    if (!b || typeof b !== 'object') return null;
+    const x = Number(b.x), y = Number(b.y), w = Number(b.w), h = Number(b.h);
+    if (![x, y, w, h].every(Number.isFinite) || !(w > 0) || !(h > 0)) return null;
+    const clamp = (v) => Math.max(0, Math.min(100, v * 100));
+    const x1 = clamp(x), y1 = clamp(y), x2 = clamp(x + w), y2 = clamp(y + h);
+    return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+  }
+
+  function _pctPoint(p) {
+    if (!p || typeof p !== 'object') return null;
+    const x = Number(p.x), y = Number(p.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x: Math.max(0, Math.min(100, x * 100)), y: Math.max(0, Math.min(100, y * 100)) };
+  }
+
+  function _annotationOverlaySvg(ev) {
+    const debug = ev?.annotationCoordinateDebug || {};
+    const region = debug.coercedRegion || ev?.region_bbox || null;
+    const annotations = Array.isArray(debug.coercedAnnotations) ? debug.coercedAnnotations : (Array.isArray(ev?.annotations) ? ev.annotations : []);
+    const parts = [];
+    const r = _pctBox(region);
+    if (r) {
+      parts.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="rgba(255,184,0,0.12)" stroke="#ffb800" stroke-width="0.7" stroke-dasharray="1.5 1" vector-effect="non-scaling-stroke"/>`);
+      parts.push(`<text x="${Math.min(98, r.x + 0.8)}" y="${Math.max(3, r.y + 2.8)}" fill="#ffb800" font-size="3" font-weight="800">region</text>`);
+    }
+    annotations.slice(0, 5).forEach((ann) => {
+      const color = _escape(String(ann?.color || '#ff2d78'));
+      const label = _escape(String(ann?.label || '').slice(0, 60));
+      if (!ann || ann.type === 'box' || ann.type === 'rect' || ann.type === 'rectangle') {
+        const b = _pctBox(ann?.bbox);
+        if (!b) return;
+        parts.push(`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="rgba(255,45,120,0.12)" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"/>`);
+        if (label) parts.push(`<text x="${Math.min(98, b.x + 0.8)}" y="${Math.max(3, b.y + 2.8)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      } else if (ann.type === 'ellipse') {
+        const b = _pctBox(ann?.bbox);
+        if (!b) return;
+        parts.push(`<ellipse cx="${b.x + b.w / 2}" cy="${b.y + b.h / 2}" rx="${b.w / 2}" ry="${b.h / 2}" fill="rgba(255,45,120,0.12)" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"/>`);
+        if (label) parts.push(`<text x="${Math.min(98, b.x + 0.8)}" y="${Math.max(3, b.y + 2.8)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      } else if (ann.type === 'arrow' || ann.type === 'line') {
+        const from = _pctPoint(ann.from), to = _pctPoint(ann.to);
+        if (!from || !to) return;
+        const marker = ann.type === 'arrow' ? ' marker-end="url(#rw-ann-arrow)"' : '';
+        parts.push(`<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"${marker}/>`);
+        if (label) parts.push(`<text x="${Math.min(98, (from.x + to.x) / 2 + 0.8)}" y="${Math.max(3, (from.y + to.y) / 2 - 1)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      }
+    });
+    if (!parts.length) return '';
+    return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;">
+      <defs><marker id="rw-ann-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ff2d78"></path></marker></defs>
+      ${parts.join('')}
+    </svg>`;
+  }
+
+  function _annotatedInputFigure(src, ev) {
+    const overlay = _annotationOverlaySvg(ev);
+    if (!src || !overlay) return '';
+    return `<div style="font-weight:700;margin-top:6px;">Annotator input with region + annotations overlay</div><span style="position:relative;display:inline-block;max-width:100%;margin-top:6px;border:1px solid #444;border-radius:6px;overflow:hidden;"><img src="${src}" style="width:auto;max-width:100%;max-height:260px;object-fit:contain;display:block;"><span style="position:absolute;inset:0;">${overlay}</span></span>`;
+  }
+
+  function _annotationDebugItems(rec) {
+    const hasAnnotationDebug = ev => ev && (
+      ev.annotationSystemPrompt ||
+      ev.annotationUserPrompt ||
+      ev.annotationRawResponse ||
+      ev.annotationCoordinateDebug ||
+      ev.annotationScreenshot ||
+      ev.annotationResultShot ||
+      ev.annotationError
+    );
+    const mapItem = (ev, source, idx) => Object.assign({}, ev, {
+      annotationSource: source,
+      annotationOrdinal: idx + 1,
+      annotationResultShot: ev?.annotationResultShot || ev?.shot || ev?.visualEvidenceShot || null,
+      shot: ev?.shot || ev?.visualEvidenceShot || null,
+      region_bbox: ev?.region_bbox || ev?.visualEvidenceNormRect || null,
+      note: ev?.note || ev?.visualEvidenceReason || ev?.reason || ev?.text || ''
+    });
+    const saved = (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+      .filter(hasAnnotationDebug)
+      .map((ev, idx) => mapItem(ev, 'Saved evidence', idx));
+    const confirmation = (Array.isArray(rec?.visualEvidenceItems) ? rec.visualEvidenceItems : [])
+      .filter(hasAnnotationDebug)
+      .map((ev, idx) => mapItem(ev, 'Confirmation evidence', idx));
+    return saved.concat(confirmation);
   }
 
   // ---- in-panel inspector ----
@@ -231,7 +358,11 @@
     const planText = (rec.planCompleted != null && rec.planTotal)
       ? `${Math.min(Number(rec.planCompleted), Number(rec.planTotal))}/${rec.planTotal}`
       : '—';
-    const scoreHtml = (rec.mechGrounding != null || rec.mechLoop != null || rec.loopMatches != null)
+    const action = String(rec.action || '').toLowerCase();
+    const pageTargetActions = new Set(['click', 'type', 'clear_text', 'drag_drop']);
+    const hasActionScore = [rec.mechGrounding, rec.grounded, rec.mechLoop, rec.loop]
+      .some(v => typeof v === 'number' && isFinite(v));
+    const scoreHtml = (pageTargetActions.has(action) && hasActionScore)
       ? `<div class="rw-score-details" style="margin-top:8px;font:400 11px/1.5 -apple-system,sans-serif;opacity:.9">
           <div><strong>Grounding:</strong> ${fmtScore(rec.mechGrounding)}</div>
           <div><strong>Loop:</strong> ${fmtScore(rec.mechLoop)}${rec.loopMatches != null ? ` (${_escape(rec.loopMatches)}/10 matches)` : ''}</div>
@@ -276,6 +407,35 @@
           ${rec.verifyResultRawResponse ? `<div style="font-weight:700;margin-top:6px;">Raw verification LLM response</div><pre>${_escape(rec.verifyResultRawResponse)}</pre>` : ''}
         </details>`
       : '';
+    const annotationItems = _annotationDebugItems(rec);
+    const annotationHtml = annotationItems.length
+      ? `<details open><summary>Evidence annotation${annotationItems.length > 1 ? 's' : ''}</summary>
+          ${annotationItems.map((ev, idx) => {
+            const shot = ev.annotationScreenshot
+              ? (String(ev.annotationScreenshot).startsWith('data:') ? ev.annotationScreenshot : `data:image/jpeg;base64,${ev.annotationScreenshot}`)
+              : '';
+            const resultShot = ev.annotationResultShot || ev.shot
+              ? (String(ev.annotationResultShot || ev.shot).startsWith('data:') ? (ev.annotationResultShot || ev.shot) : `data:image/jpeg;base64,${ev.annotationResultShot || ev.shot}`)
+              : '';
+            return `<div style="border-top:1px solid rgba(255,255,255,.14);padding-top:8px;margin-top:8px;">
+              <div style="font-weight:800;">${_escape(ev.annotationSource || 'Evidence annotation')} · ${_escape(ev.key || `Evidence ${idx + 1}`)}</div>
+              ${ev.note ? `<div style="font:400 12px/1.45 system-ui;opacity:.85;margin:4px 0;">${_escape(ev.note)}</div>` : ''}
+              ${ev.annotationError ? `<div style="color:#ff9b9b;font:700 12px/1.45 system-ui;">Annotation error: ${_escape(ev.annotationError)}</div>` : ''}
+              ${ev.annotationSystemPrompt ? `<div style="font-weight:700;margin-top:6px;">Annotator system prompt</div><pre>${_escape(ev.annotationSystemPrompt)}</pre>` : ''}
+              ${ev.annotationUserPrompt ? `<div style="font-weight:700;margin-top:6px;">Annotator user prompt</div><pre>${_escape(ev.annotationUserPrompt)}</pre>` : ''}
+              ${shot ? `<div style="font-weight:700;margin-top:6px;">Screenshot sent to annotator</div><img src="${shot}" style="max-width:100%;max-height:260px;object-fit:contain;border:1px solid #444;border-radius:6px;margin-top:6px;">${_annotatedInputFigure(shot, ev)}` : ''}
+              ${ev.annotationRawResponse ? `<div style="font-weight:700;margin-top:6px;">Raw annotator response</div><pre>${_escape(ev.annotationRawResponse)}</pre>` : ''}
+              ${ev.annotationCoordinateDebug ? `<div style="font-weight:700;margin-top:6px;">Coordinate debug</div><pre>${_escape(JSON.stringify(ev.annotationCoordinateDebug, null, 2))}</pre>` : ''}
+              ${resultShot ? `<div style="font-weight:700;margin-top:6px;">Final annotated evidence crop</div><img src="${resultShot}" style="max-width:100%;max-height:260px;object-fit:contain;border:1px solid #444;border-radius:6px;margin-top:6px;">` : ''}
+            </div>`;
+          }).join('')}
+        </details>`
+      : (rec.confirmationEvidenceSkippedReason
+          ? `<details open><summary>Evidence annotation</summary>
+              <div style="font-weight:700;margin-top:6px;">Confirmation evidence skipped</div>
+              <div style="font:400 12px/1.45 system-ui;opacity:.85;margin:4px 0;">${_escape(rec.confirmationEvidenceSkippedReason)}</div>
+            </details>`
+          : '');
 
     wrap.innerHTML = `
       <div class="rw-ins-hdr">
@@ -303,6 +463,7 @@
         ${rec.systemPrompt ? `<details><summary>System prompt sent to AI</summary><pre>${_escape(rec.systemPrompt)}</pre></details>` : ''}
         ${rec.userPrompt ? `<details><summary>User/Page prompt sent to AI</summary><pre>${_escape(rec.userPrompt)}</pre></details>` : ''}
         ${rec.rawLlmJson ? `<details><summary>Raw agent response</summary><pre>${_escape(rec.rawLlmJson)}</pre></details>` : ''}
+        ${annotationHtml}
         ${verifyHtml}
       </div>`;
     document.body.appendChild(wrap);
@@ -539,6 +700,7 @@
 
     // Low confidence → yellow status.
     const lowConf = (meta.confidence != null && meta.confidence < _confidenceThreshold);
+    const initialEvidenceSummary = _evidenceSummary(meta, null);
     let row = track.querySelector(`[data-step="${meta.step}"]`);
     const created = !row;
     if (!row) {
@@ -554,6 +716,7 @@
       <span class="rw-body">
         <span class="rw-instr">${_escape(meta.instruction || ('Step ' + meta.step))}</span>
         ${lowConf ? '<span class="rw-flag">Low confidence</span>' : ''}
+        <span class="rw-evidence-slot">${_evidenceFlagHtml(initialEvidenceSummary)}</span>
       </span>
       <span class="rw-right">
         <span class="rw-when"></span>
@@ -586,6 +749,8 @@
     if (typeof rewindGetRecord === 'function') {
       _getVerifiedRecord(meta).then(rec => {
         const shot = _recordShot(rec);
+        const evSlot = row.querySelector('.rw-evidence-slot');
+        if (evSlot) evSlot.innerHTML = _evidenceFlagHtml(_evidenceSummary(meta, rec));
         if (shot) {
           const img = row.querySelector('.rw-thumb');
           if (img) { img.src = 'data:image/jpeg;base64,' + shot; img.style.display = ''; }

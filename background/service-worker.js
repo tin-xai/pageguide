@@ -251,6 +251,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
+  if (request.action === 'watchVideo') {
+    appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'watchVideo',
+      systemPrompt: '',
+      userPrompt: request.query || '',
+      messages: [],
+      videoUrl: request.videoUrl || '',
+      metadata: request.metadata || {}
+    }).catch(() => {});
+
+    watchVideoWithGemini(request.videoUrl, request.query, request.metadata || {})
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   if (request.action === 'callEmbed') {
     callOpenAIEmbeddings(request.texts || [])
       .then(sendResponse)
@@ -748,6 +764,90 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
     return { content: text };
   } catch (error) {
     return { error: `Network error: ${error.message}` };
+  }
+}
+
+// ===== Gemini Video URL Call =====
+// Uses Gemini's fileData support for video URLs (for example YouTube links) to answer a query
+// from both visual and audio content. This intentionally uses the Gemini key even when the user's
+// selected chat provider is OpenRouter/OpenAI, because provider support for direct video URLs varies.
+async function watchVideoWithGemini(videoUrl, query, metadata = {}) {
+  startKeepAlive();
+
+  let settings;
+  try {
+    settings = await chrome.storage.sync.get(['geminiApiKey', 'geminiModel']);
+  } catch (e) {
+    stopKeepAlive();
+    return { error: 'Failed to load Gemini settings' };
+  }
+
+  const config = CONFIG.providers.gemini;
+  const apiKey = (settings.geminiApiKey || config.defaultApiKey || '').trim();
+  if (!apiKey) {
+    stopKeepAlive();
+    return { error: 'Gemini API key not configured. Add a Gemini key in Settings to use watch_video.' };
+  }
+
+  const urlText = String(videoUrl || '').trim();
+  if (!/^https?:\/\//i.test(urlText)) {
+    stopKeepAlive();
+    return { error: 'watch_video needs a valid http(s) video URL.' };
+  }
+
+  const model = settings.geminiModel || config.defaultModel;
+  const endpoint = `${config.endpoint}/${model}:generateContent?key=${apiKey}`;
+  const prompt = `Watch the video and answer the user's query using only information supported by the video content (visuals, speech, captions, or on-screen text).
+
+User query:
+${String(query || 'Summarize the important information in this video.').trim()}
+
+Return a concise answer. If the video does not answer the query, say so directly.`;
+
+  try {
+    console.log('🎬 Gemini watch_video request:', { model, videoUrl: urlText, url: metadata?.url || '' });
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { fileData: { fileUri: urlText } },
+            { text: prompt }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 4096
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
+        ]
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return { error: `Video API error: ${data.error?.message || response.status}` };
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
+    if (!text) {
+      const finishReason = data.candidates?.[0]?.finishReason;
+      if (finishReason === 'SAFETY') return { error: 'Video response blocked by safety filters' };
+      if (data.promptFeedback?.blockReason) return { error: `Video prompt blocked: ${data.promptFeedback.blockReason}` };
+      return { error: `Empty video response from Gemini (reason: ${finishReason || 'unknown'})` };
+    }
+
+    return { content: text };
+  } catch (error) {
+    return { error: `Video network error: ${error.message}` };
+  } finally {
+    stopKeepAlive();
   }
 }
 

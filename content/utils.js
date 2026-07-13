@@ -1515,6 +1515,8 @@ function gv2NormalizeAction(action, isLastStep = false) {
   const raw = String(action || (isLastStep ? 'finish' : 'click')).trim();
   const norm = raw.toLowerCase().replace(/[\s-]+/g, '_');
   if (norm === 'done') return 'finish';
+  if (norm === 'navigate' || norm === 'go_to_url' || norm === 'goto_url' || norm === 'open_url') return 'goto_url';
+  if (norm === 'watch_video' || norm === 'watch_youtube') return 'watch_video';
   return norm;
 }
 
@@ -1545,18 +1547,142 @@ function gv2NormalizeEvidenceKey(key) {
     .replace(/[^a-z0-9_-]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 64);
-  return /^[a-z][a-z0-9_-]{0,63}$/.test(raw) ? raw : '';
+  return /^[a-z0-9][a-z0-9_-]{0,63}$/.test(raw) ? raw : '';
 }
 
 function gv2NormalizeEvidenceBbox(box) {
   if (!box || typeof box !== 'object') return null;
+  const round = (v) => Number(Number(v).toFixed(6));
+  const viewportSize = () => {
+    try {
+      if (typeof window !== 'undefined') {
+        const vw = Number(window.innerWidth);
+        const vh = Number(window.innerHeight);
+        if (Number.isFinite(vw) && vw > 0 && Number.isFinite(vh) && vh > 0) return { vw, vh };
+      }
+    } catch (e) {}
+    return { vw: 0, vh: 0 };
+  };
+  if (Array.isArray(box) && box.length >= 4) {
+    box = { x: box[0], y: box[1], w: box[2], h: box[3] };
+  }
+  const firstDefined = (...vals) => vals.find(v => v != null && v !== '');
+  const xRaw = firstDefined(box.x, box.left, box.l, box.x1);
+  const yRaw = firstDefined(box.y, box.top, box.t, box.y1);
+  let wRaw = firstDefined(box.w, box.width);
+  let hRaw = firstDefined(box.h, box.height);
+  const x2 = firstDefined(box.x2, box.right, box.r);
+  const y2 = firstDefined(box.y2, box.bottom, box.b);
+  if ((wRaw == null || wRaw === '') && x2 != null && xRaw != null) wRaw = Number(x2) - Number(xRaw);
+  if ((hRaw == null || hRaw === '') && y2 != null && yRaw != null) hRaw = Number(y2) - Number(yRaw);
+  if ((wRaw == null || hRaw == null || wRaw === '' || hRaw === '') && !Array.isArray(box)) {
+    const nums = Object.values(box).map(Number).filter(Number.isFinite);
+    if (nums.length >= 4) {
+      if (wRaw == null || wRaw === '') wRaw = nums[2];
+      if (hRaw == null || hRaw === '') hRaw = nums[3];
+    }
+  }
+  let normX = Number(xRaw), normY = Number(yRaw), normW = Number(wRaw), normH = Number(hRaw);
+  if (![normX, normY, normW, normH].every(Number.isFinite)) return null;
+  const looksPixelish = [normX, normY, normW, normH].some(v => Math.abs(v) > 1);
+  if (looksPixelish) {
+    const { vw, vh } = viewportSize();
+    if (vw > 0 && vh > 0) {
+      normX = normX / vw;
+      normW = normW / vw;
+      normY = normY / vh;
+      normH = normH / vh;
+    }
+  }
   const rect = gv2NormalizeRect({
-    x: box.x,
-    y: box.y,
-    w: box.w != null ? box.w : box.width,
-    h: box.h != null ? box.h : box.height
+    x: normX,
+    y: normY,
+    w: normW,
+    h: normH
   });
-  return rect ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h } : null;
+  if (!rect) return null;
+  const w = Math.min(rect.w, 1 - rect.x);
+  const h = Math.min(rect.h, 1 - rect.y);
+  if (!(w > 0) || !(h > 0)) return null;
+  return {
+    x: round(rect.x),
+    y: round(rect.y),
+    w: round(w),
+    h: round(h)
+  };
+}
+
+function gv2NormalizeEvidencePoint(point) {
+  if (!point || typeof point !== 'object') return null;
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    x: Math.max(0, Math.min(1, x)),
+    y: Math.max(0, Math.min(1, y))
+  };
+}
+
+function gv2NormalizeEvidenceColor(color) {
+  const raw = String(color == null ? '' : color).trim().slice(0, 32);
+  if (!raw) return null;
+  if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(raw)) return raw;
+  const named = raw.toLowerCase().replace(/\s+/g, '');
+  const allow = new Set(['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'cyan', 'white', 'black']);
+  return allow.has(named) ? named : null;
+}
+
+function gv2NormalizeEvidenceAnnotations(input, maxItems = 5) {
+  const raw = Array.isArray(input) ? input : [];
+  const cap = Math.max(1, Math.min(5, Number(maxItems) || 5));
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const type = String(item.type || '').toLowerCase();
+    const label = String(item.label == null ? '' : item.label).replace(/\s+/g, ' ').trim().slice(0, 60);
+    const color = gv2NormalizeEvidenceColor(item.color);
+    if (type === 'box' || type === 'rect' || type === 'rectangle') {
+      const bbox = gv2NormalizeEvidenceBbox(item.bbox || item.region_bbox || item.region || item);
+      if (!bbox) continue;
+      out.push(Object.assign({ type: 'box', bbox, label }, color ? { color } : {}));
+    } else if (type === 'circle' || type === 'ellipse') {
+      const bbox = gv2NormalizeEvidenceBbox(item.bbox || item.region_bbox || item.region || item);
+      if (!bbox) continue;
+      out.push(Object.assign({ type: 'ellipse', bbox, label }, color ? { color } : {}));
+    } else if (type === 'arrow') {
+      const from = gv2NormalizeEvidencePoint(item.from);
+      const to = gv2NormalizeEvidencePoint(item.to);
+      if (!from || !to) continue;
+      out.push(Object.assign({ type: 'arrow', from, to, label }, color ? { color } : {}));
+    } else if (type === 'line') {
+      const from = gv2NormalizeEvidencePoint(item.from);
+      const to = gv2NormalizeEvidencePoint(item.to);
+      if (!from || !to) continue;
+      out.push(Object.assign({ type: 'line', from, to, label }, color ? { color } : {}));
+    }
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+function gv2NormalizeEvidenceAnnotationResult(input) {
+  const obj = input && typeof input === 'object' ? input : {};
+  const crop = obj.crop && typeof obj.crop === 'object'
+    ? gv2NormalizeRect(obj.crop)
+    : null;
+  const region_bbox = crop
+    ? {
+        x: Number(crop.x.toFixed(6)),
+        y: Number(crop.y.toFixed(6)),
+        w: Number(Math.min(crop.w, 1 - crop.x).toFixed(6)),
+        h: Number(Math.min(crop.h, 1 - crop.y).toFixed(6))
+      }
+    : gv2NormalizeEvidenceBbox(obj.region_bbox || obj.region || obj.bbox);
+  return {
+    region_bbox,
+    annotations: gv2NormalizeEvidenceAnnotations(obj.annotations, 5),
+    note: String(obj.note == null ? '' : obj.note).replace(/\s+/g, ' ').trim().slice(0, 220)
+  };
 }
 
 function gv2NormalizeEvidenceEntry(input, ctx = {}) {
@@ -1568,6 +1694,9 @@ function gv2NormalizeEvidenceEntry(input, ctx = {}) {
   const region_bbox = gv2NormalizeEvidenceBbox(obj.region_bbox || obj.region || obj.bbox);
   const somRaw = obj.som_id != null ? String(obj.som_id).trim() : '';
   const som_id = somRaw ? somRaw.slice(0, 80) : null;
+  const annotations = (!som_id && region_bbox) ? gv2NormalizeEvidenceAnnotations(obj.annotations, 5) : [];
+  const need_annotation = !som_id && (obj.need_annotation === true || obj.needs_annotation === true || obj.needAnnotation === true);
+  const annotation_prompt = String(obj.annotation_prompt || obj.annotationPrompt || obj.annotation_request || obj.annotationRequest || '').replace(/\s+/g, ' ').trim().slice(0, 500);
   const errors = [];
   if (!key) errors.push('key');
   if (!note) errors.push('note');
@@ -1578,7 +1707,7 @@ function gv2NormalizeEvidenceEntry(input, ctx = {}) {
   return errors.length ? { ok: false, errors, entry: null } : {
     ok: true,
     errors: [],
-    entry: { key, note, ref_step_id, updated_at_step_id: ref_step_id, previous_ref_step_ids: [], region_bbox, som_id }
+    entry: { key, note, ref_step_id, updated_at_step_id: ref_step_id, previous_ref_step_ids: [], region_bbox, som_id, annotations, need_annotation, annotation_prompt }
   };
 }
 
@@ -1650,6 +1779,55 @@ function gv2ParseEvidenceRefs(text) {
   return out;
 }
 
+function gv2EvidenceClaimText(entry) {
+  const raw = String(entry?.note || entry?.key || '').replace(/\s+/g, ' ').trim();
+  return raw.replace(/[.!?;:,\s]+$/g, '').slice(0, 180);
+}
+
+function gv2CitationTail(text, idx) {
+  const prefix = String(text || '').slice(0, Math.max(0, idx));
+  const prevCitation = prefix.lastIndexOf('[ev:');
+  const cuts = ['.', '!', '?', ';', '\n'].map(ch => prefix.lastIndexOf(ch));
+  const lastCut = Math.max(prevCitation, ...cuts);
+  return prefix.slice(lastCut + 1);
+}
+
+function gv2CitationLooksBare(tail) {
+  const s = String(tail || '').replace(/\s+/g, ' ').trim();
+  if (!s) return true;
+  if (/[:([]\s*$/.test(s)) return true;
+  if (/\b(and|or|also|plus|with|see|source|evidence|article|item|result|one|another|first|second|third|titled|called|named)\s*:?$/i.test(s)) return true;
+  if (/\b(one|another|first|second|third)\s+(titled|called|named|about|is)\s*:?$/i.test(s)) return true;
+  const meaningful = s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(w => !/^(a|an|the|and|or|one|another|first|second|third|titled|called|named|about|is|are|was|were|with|of|to|in|on|for|this|that|these|those)$/.test(w));
+  return meaningful.length < 2;
+}
+
+function gv2ExpandBareEvidenceCitations(answer, scratchpad) {
+  const text = String(answer == null ? '' : answer);
+  const entries = Array.isArray(scratchpad) ? scratchpad : [];
+  const byKey = {};
+  entries.forEach(e => {
+    const k = gv2NormalizeEvidenceKey(e?.key);
+    if (k && !byKey[k]) byKey[k] = e;
+  });
+  return text.replace(/\[ev:([a-zA-Z0-9_-]+)\]/g, (full, rawKey, offset) => {
+    const key = gv2NormalizeEvidenceKey(rawKey);
+    const entry = byKey[key];
+    const claim = gv2EvidenceClaimText(entry);
+    if (!entry || !claim) return full;
+    const tail = gv2CitationTail(text, offset);
+    const tailLower = tail.toLowerCase();
+    const claimProbe = claim.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
+    if (claimProbe && tailLower.includes(claimProbe)) return full;
+    return gv2CitationLooksBare(tail) ? `${claim} ${full}` : full;
+  });
+}
+
 /**
  * Build the guaranteed "answer evidence" link list for a finished guide task. This is the
  * single source of truth that ensures every terminal deliverable (answer card or navigate-only
@@ -1659,12 +1837,12 @@ function gv2ParseEvidenceRefs(text) {
  * testable. It emits lightweight DESCRIPTORS only — the panel resolves the actual screenshot
  * bytes lazily by step number at render time.
  *
-	 * Aggregation order (deduped by step + region_bbox + evidence key):
- *   0. confirmation — finish-time visualEvidence the working agent attached to justify its answer
- *                     (the on-page region that confirms the result); highest priority.
+ * Aggregation order (deduped by step + region_bbox + evidence key):
  *   1. cited        — [ev:key] tokens in the answer that resolve to a scratchpad entry
  *   2. scratchpad   — any remaining saved evidence entry (the agent collected it but did not cite)
- *   3. action-fallback — the action-grounding step (e.g. the clicked button), used only when the
+ *   3. confirmation — finish-time confirmationEvidence, used only when there is no saved
+ *                     evidence trajectory (navigation/state-change-only tasks).
+ *   4. action-fallback — the action-grounding step (e.g. the clicked button), used only when the
  *                        above produced nothing (e.g. navigate-only S3, or an uncited answer)
  *
  * Guarantee: callers pass a `fallbackStep`, so the result is non-empty. It returns [] only when
@@ -1707,19 +1885,6 @@ function gv2BuildAnswerEvidence(input) {
     }, extra || {}));
   };
 
-  // 0. Finish-time confirmation evidence — the agent's own justification for the answer. Highest
-  // priority so a state-change task ("language is now English") links straight to the proof region.
-  confirmation.forEach(c => {
-    if (!c) return;
-    const step = Number(c.step);
-    if (!Number.isFinite(step)) return;
-    const bbox = c.region_bbox || null;
-	    const sbKey = stepBboxKey(step, bbox);
-    if (seenStepBbox.has(sbKey)) return;
-    seenStepBbox.add(sbKey);
-    items.push({ source: 'confirmation', step, region_bbox: bbox, note: c.note || 'Confirmation' });
-  });
-
   // 1. Cited [ev:key], in citation order → numbered.
   gv2ParseEvidenceRefs(finalAnswer).forEach(key => {
     const entry = byKey[key];
@@ -1737,7 +1902,26 @@ function gv2BuildAnswerEvidence(input) {
     push(e, 'scratchpad', { key });
   });
 
-  // 3. Action grounding — only when nothing above resolved.
+  // 3. Finish-time confirmation evidence — only when no saved evidence exists. This is the
+  // navigation/state-change path: "completed X" gets a hoverable confirmation region, while
+  // information tasks that saved evidence do not get a redundant final confirmation chip.
+  if (items.length === 0) {
+    const finalRefs = (typeof gv2ParseEvidenceRefs === 'function') ? gv2ParseEvidenceRefs(finalAnswer) : [];
+    confirmation.forEach((c, idx) => {
+      if (!c) return;
+      const step = Number(c.step);
+      if (!Number.isFinite(step)) return;
+      const bbox = c.region_bbox || null;
+      const refKey = finalRefs[idx] || '';
+      const key = refKey || c.key || '';
+      const sbKey = stepBboxKey(step, bbox, key);
+      if (seenStepBbox.has(sbKey)) return;
+      seenStepBbox.add(sbKey);
+      items.push({ source: 'confirmation', step, region_bbox: bbox, note: c.note || 'Confirmation', key });
+    });
+  }
+
+  // 4. Action grounding — only when nothing above resolved.
   if (items.length === 0 && fallbackStep && Number.isFinite(Number(fallbackStep.step))) {
     items.push({
       source: 'action-fallback',
@@ -1753,24 +1937,33 @@ function gv2BuildAnswerEvidence(input) {
 if (typeof window !== 'undefined') {
   window.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
   window.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
+  window.gv2NormalizeEvidencePoint = gv2NormalizeEvidencePoint;
+  window.gv2NormalizeEvidenceAnnotations = gv2NormalizeEvidenceAnnotations;
+  window.gv2NormalizeEvidenceAnnotationResult = gv2NormalizeEvidenceAnnotationResult;
   window.gv2NormalizeEvidenceEntry = gv2NormalizeEvidenceEntry;
   window.gv2NormalizeEvidenceList = gv2NormalizeEvidenceList;
   window.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
   window.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
+  window.gv2ExpandBareEvidenceCitations = gv2ExpandBareEvidenceCitations;
   window.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
   module.exports.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
+  module.exports.gv2NormalizeEvidencePoint = gv2NormalizeEvidencePoint;
+  module.exports.gv2NormalizeEvidenceAnnotations = gv2NormalizeEvidenceAnnotations;
+  module.exports.gv2NormalizeEvidenceAnnotationResult = gv2NormalizeEvidenceAnnotationResult;
   module.exports.gv2NormalizeEvidenceEntry = gv2NormalizeEvidenceEntry;
   module.exports.gv2NormalizeEvidenceList = gv2NormalizeEvidenceList;
   module.exports.gv2EvidenceMemoryText = gv2EvidenceMemoryText;
   module.exports.gv2ParseEvidenceRefs = gv2ParseEvidenceRefs;
+  module.exports.gv2ExpandBareEvidenceCitations = gv2ExpandBareEvidenceCitations;
   module.exports.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
 }
 
 /**
- * Normalize one LLM per-step confirmationEvidence item into { index, rect, text, reason }, or null.
+ * Normalize one LLM per-step confirmationEvidence item into { name, index, rect, text, reason,
+ * need_annotation, annotation_prompt }, or null.
  *
  * confirmationEvidence is the SEPARATE on-page proof that justifies a step (e.g. a "Sort by:
  * Price: Low to High" control), distinct from the action target. The model points to it with
@@ -1778,7 +1971,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * a bare string (treated as the reason).
  *
  * @param {object|string} v
- * @returns {{index:(number|null), rect:(object|null), text:(string|null), reason:(string|null)}|null}
+ * @returns {{name:(string|null), index:(number|null), rect:(object|null), text:(string|null), reason:(string|null), need_annotation:boolean, annotation_prompt:(string|null), annotations:Array}|null}
  */
 function gv2NormalizeVisualEvidence(v) {
   const MAX = 280;
@@ -1793,11 +1986,17 @@ function gv2NormalizeVisualEvidence(v) {
   if (!obj || typeof obj !== 'object') return null;
   const n = Number(obj.index);
   const index = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
-  const rect = gv2NormalizeRect(obj.rect);
+  const name = gv2NormalizeEvidenceKey(obj.name || obj.key);
+  const rect = gv2NormalizeRect(obj.rect || obj.region_bbox || obj.region || obj.bbox);
   const text = clean(obj.text);
   const reason = clean(obj.reason);
-  if (index == null && !rect && !text && !reason) return null;
-  return { index, rect, text, reason };
+  const need_annotation = obj.need_annotation === true || obj.needs_annotation === true || obj.needAnnotation === true;
+  const annotation_prompt = clean(obj.annotation_prompt || obj.annotationPrompt || obj.annotation_request || obj.annotationRequest);
+  const annotations = typeof gv2NormalizeEvidenceAnnotations === 'function'
+    ? gv2NormalizeEvidenceAnnotations(obj.annotations, 5)
+    : [];
+  if (!name && index == null && !rect && !text && !reason && !need_annotation && !annotation_prompt) return null;
+  return { name: name || null, index, rect, text, reason, need_annotation, annotation_prompt, annotations };
 }
 
 if (typeof window !== 'undefined') window.gv2NormalizeVisualEvidence = gv2NormalizeVisualEvidence;
@@ -1814,7 +2013,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports.gv2Normalize
  *
  * @param {object|string|Array} v
  * @param {number} maxItems
- * @returns {Array<{index:(number|null), rect:(object|null), text:(string|null), reason:(string|null)}>}
+ * @returns {Array<{name:(string|null), index:(number|null), rect:(object|null), text:(string|null), reason:(string|null), need_annotation:boolean, annotation_prompt:(string|null), annotations:Array}>}
  */
 function gv2NormalizeVisualEvidenceList(v, maxItems = 5) {
   const cap = Math.max(1, Math.min(5, Number(maxItems) || 5));
@@ -1825,10 +2024,12 @@ function gv2NormalizeVisualEvidenceList(v, maxItems = 5) {
   } else if (v && typeof v === 'object' && (Array.isArray(v.indexes) || Array.isArray(v.indices) || Array.isArray(v.rects))) {
     const indexes = Array.isArray(v.indexes) ? v.indexes : (Array.isArray(v.indices) ? v.indices : []);
     const rects = Array.isArray(v.rects) ? v.rects : [];
+    const names = Array.isArray(v.names) ? v.names : (Array.isArray(v.keys) ? v.keys : []);
     const texts = Array.isArray(v.texts) ? v.texts : [];
     const reasons = Array.isArray(v.reasons) ? v.reasons : [];
-    const count = Math.max(indexes.length, rects.length, texts.length, reasons.length);
+    const count = Math.max(names.length, indexes.length, rects.length, texts.length, reasons.length);
     raw = Array.from({ length: count }, (_, i) => ({
+      name: names[i],
       index: indexes[i],
       rect: rects[i],
       text: texts[i],
@@ -1843,7 +2044,9 @@ function gv2NormalizeVisualEvidenceList(v, maxItems = 5) {
     if (out.length >= cap) break;
     const norm = gv2NormalizeVisualEvidence(item);
     if (!norm) continue;
-    const key = norm.index != null
+    const key = norm.name
+      ? `n:${norm.name}`
+      : norm.index != null
       ? `i:${norm.index}`
       : (norm.rect ? `r:${norm.rect.x},${norm.rect.y},${norm.rect.w},${norm.rect.h}` : `t:${norm.text || ''}|${norm.reason || ''}`);
     if (seen.has(key)) continue;
@@ -1869,7 +2072,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports.gv2Normalize
 function gv2StepHasTarget(step) {
   if (!step) return false;
   const action = gv2NormalizeAction(step.action, step.isLastStep);
-  if (action === 'find' || action === 'visual_highlight' || action === 'finish' || action === 'save_evidence' || step.isLastStep) return false;
+  if (
+    action === 'find' ||
+    action === 'visual_highlight' ||
+    action === 'finish' ||
+    action === 'save_evidence' ||
+    action === 'scroll_down' ||
+    action === 'scroll_up' ||
+    action === 'goto_url' ||
+    action === 'watch_video' ||
+    step.isLastStep
+  ) return false;
   const hasIndex = step.element?.index != null && step.element?.index !== '';
   const hasText = !!(step.element?.text && String(step.element.text).trim());
   return hasIndex || hasText;
@@ -1909,8 +2122,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports.gv2ParseFind
  * @returns {'noop'|'type'|'clear_text'|'select'|'check'|'drag_drop'|'click'}
  */
 function gv2ReplayKind(action) {
-  const a = String(action || 'click').toLowerCase().replace(/[\s-]+/g, '_');
-  if (a === 'find' || a === 'visual_highlight' || a === 'save_evidence' || a === 'finish' || a === 'done') return 'noop';
+  const a = gv2NormalizeAction(action || 'click');
+  if (a === 'find' || a === 'visual_highlight' || a === 'save_evidence' || a === 'finish' || a === 'goto_url' || a === 'watch_video') return 'noop';
   if (a === 'type' || a === 'clear_text' || a === 'select') return a;
   if (a === 'drag_drop') return 'drag_drop';
   if (a === 'check' || a === 'toggle') return 'check';
@@ -1976,7 +2189,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports.gv2DotState 
 
 function gv2StepErrorLabelFromScores(rec) {
   const action = rec?.action || '';
-  if (action !== 'click' && action !== 'type') return '';
+  if (action && action !== 'click' && action !== 'type') return '';
   const num = (v) => Number.isFinite(Number(v)) ? Number(v) : null;
   const grounded = num(rec?.mechGrounding ?? rec?.grounding ?? rec?.grounded);
   const loop = num(rec?.mechLoop ?? rec?.loop);
@@ -2034,7 +2247,7 @@ function gv2NormalizeRecap(raw, ctx) {
   };
   const normalizeErrorLabel = (label, rec) => {
     const action = rec?.action || '';
-    if (action !== 'click' && action !== 'type') return '';
+    if (action && action !== 'click' && action !== 'type') return '';
     const s = String(label || '').toLowerCase().replace(/[^a-z-]/g, '');
     const known = ['misgrounded', 'loop', 'low-confidence', 'risky', 'incomplete', 'wrong-action', 'other'];
     if (known.includes(s)) return s;
@@ -2047,6 +2260,34 @@ function gv2NormalizeRecap(raw, ctx) {
     return null;
   };
   const recForStep = (step) => stepRecords.find(r => Number(r?.step) === Number(step)) || null;
+  const normalizeSummarySegments = (items, fallbackMilestones = []) => {
+    const source = Array.isArray(items) ? items : [];
+    const out = [];
+    const seenSeg = new Set();
+    for (const item of source) {
+      if (!item) continue;
+      const step = Number(item.step);
+      const text = clampText(item.text);
+      if (!text || !Number.isFinite(step) || !validSet.has(step)) continue;
+      const key = `${step}:${text.toLowerCase()}`;
+      if (seenSeg.has(key)) continue;
+      seenSeg.add(key);
+      out.push({ text, step, phrase: validPhrase(item.phrase, text) });
+      if (out.length >= 5) break;
+    }
+    if (out.length) return out;
+    for (const m of fallbackMilestones) {
+      const step = Number(m?.firstStep != null ? m.firstStep : m?.step);
+      const text = clampText(m?.text || '');
+      if (!text || !Number.isFinite(step) || !validSet.has(step)) continue;
+      const key = `${step}:${text.toLowerCase()}`;
+      if (seenSeg.has(key)) continue;
+      seenSeg.add(key);
+      out.push({ text, step, phrase: validPhrase(m?.phrase, text) });
+      if (out.length >= 4) break;
+    }
+    return out;
+  };
   for (const m of rawList) {
     if (!m) continue;
     const step = Number(m.step);
@@ -2125,7 +2366,11 @@ function gv2NormalizeRecap(raw, ctx) {
       : `${prefix}${reason}${title ? ` Task: ${title}.` : ''}`;
   }
 
-  return { summary, milestones };
+  const rawSummarySegments = raw && (Array.isArray(raw.summarySegments) ? raw.summarySegments
+    : (Array.isArray(raw.summary_segments) ? raw.summary_segments : []));
+  const summarySegments = normalizeSummarySegments(rawSummarySegments, milestones);
+
+  return { summary, milestones, summarySegments };
 }
 
 if (typeof window !== 'undefined') window.gv2NormalizeRecap = gv2NormalizeRecap;

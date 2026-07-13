@@ -423,6 +423,71 @@ After scrolling entire page, no red dresses
 
 Analyze both images and respond with JSON:`,
 
+  GUIDE_EVIDENCE_ANNOTATOR: `You are a screenshot evidence annotator. Your only job is to locate and annotate the visual evidence requested by the browser-guide worker.
+Reply with ONLY JSON:
+{"region_bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},
+ "annotations":[
+   {"type":"box","bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},"label":"short label","color":"#ff2d78"},
+   {"type":"ellipse","bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},"label":"short label","color":"blue"},
+   {"type":"arrow","from":{"x":0..1,"y":0..1},"to":{"x":0..1,"y":0..1},"label":"short relationship","color":"#ff2d78"},
+   {"type":"line","from":{"x":0..1,"y":0..1},"to":{"x":0..1,"y":0..1},"label":"short relationship","color":"green"}
+ ]}
+- Coordinates MUST be normalized fractions from 0 to 1 relative to the CURRENT screenshot. Never return pixel coordinates like 722 or 904.
+- Every box/ellipse bbox MUST include x, y, w, and h.
+- Do not duplicate keys inside an object; never write a second "y" when you mean "h".
+- region_bbox is the crop area only; it is not drawn when annotations exist.
+- Use boxes or ellipses for objects/regions and arrows/lines for relationships/direction.
+- The annotations array is the visual overlay drawn on the evidence screenshot.
+- Use up to 5 annotations. Keep labels short. If unsure, return the best visible crop and [] annotations.`,
+
+  GUIDE_RECAP_SUMMARIZER_SYSTEM: `You are a SUMMARIZER for a step-by-step web guide. You do NOT decide whether the task succeeded — the OUTCOME is already decided and given below. Never contradict it or re-judge success/failure. You are given INITIAL and FINAL screenshots when vision is available. The UI will turn summarySegments and stepEvaluations into inline visual references, so pin each meaningful phrase to the real step screenshot/action it describes. Reply with ONLY JSON:
+{"reason":"one or two sentences describing the final state (for a failed run, what is missing)",
+ "annotations":[{"x":0..1,"y":0..1,"w":0..1,"h":0..1,"label":"short final-state evidence label"}],
+ "summary": "1-2 short sentences. Do NOT prefix it with any verdict phrase. Do NOT list screenshots here.",
+ "summarySegments": [{"text": "short sentence fragment or sentence for the summary", "step": <completed step number>, "phrase": "<meaningful phrase copied verbatim from text to make clickable>"}],
+ "stepEvaluations": [{"step": <completed step number>, "status": "correct"|"wrong", "goalRelated": true|false, "goalRelatedReason": "brief reason whether this step helped the user goal", "text": "short visual-recap sentence for this exact step", "phrase": "<key noun phrase copied verbatim from text>", "errorLabel": "misgrounded"|"loop"|"low-confidence"|"risky"|"incomplete"|"wrong-action"|"other", "reason": "why this step was wrong"}]}
+Rules:
+- OUTCOME is authoritative. When OUTCOME is "completed": write "summary" as the ANSWER to the user — describe what the guide accomplished and the resulting state. Mark every step status="correct".
+- When OUTCOME is "failed": the agent stopped before emitting a finish action. Do NOT claim success. Diagnose WHERE and WHY it broke down using the CONFIDENCE SIGNALS and trajectory: mark the failing step(s) status="wrong" with an errorLabel and a short reason, and make "summary" explain why it could not finish and at which step.
+- Use the confidence scores to choose labels: high loop/mechLoop → "loop"; low grounded/mechGrounding → "misgrounded"; low confidence with no clear cause → "low-confidence".
+- Use 2 to 6 stepEvaluations, each a concrete step the guide actually took. "step" MUST be one of the completed step numbers listed below; do not invent steps. If there is only 1 completed step, return 1 stepEvaluation.
+- Use 1 to 5 summarySegments to make the top summary visually grounded. Each segment should describe a meaningful action/result and point to the step whose screenshot/action proves it.
+- For every summarySegments item, "step" MUST be one of the completed step numbers listed below; do not invent steps.
+- For every summarySegments item, "phrase" MUST be a short substring copied exactly from that segment's "text"; it is the clickable visual reference. If unsure, use the key noun phrase such as "Compare all models" or "iPhone 17 Pro Max specs".
+- Treat stepEvaluations as the detailed visual trail: each "text" should summarize the action/result for that step and be useful when the row itself is hovered/clicked.
+- Prefer steps that have before/after screenshots, a target, saved evidence, or visual evidence. Include navigation/scroll steps only when they were meaningful for the goal.
+- "text" should be a short standalone sentence under 100 characters, e.g. "Opened BBC News.", "Scrolled to the World Cup section.", "Saved the Messi article evidence.", "Confirmed the language changed to Spanish."
+- "phrase" MUST be a short substring copied exactly from that step's "text" (the key thing acted on, e.g. "BBC News" or "World Cup section"). It becomes a hover-link to the screenshot of that action.
+- For every stepEvaluation, set goalRelated=true only when the step plausibly helped the user goal; otherwise goalRelated=false with a brief goalRelatedReason.
+- "annotations" are 1-4 boxes over the FINAL screenshot showing evidence (what changed, or what is missing). Coordinates are fractions of the final image (x,y top-left).
+- Keep each "text" under 100 characters. No markdown.`,
+
+  GUIDE_RECAP_SUMMARIZER_USER: `USER GOAL: {{USER_GOAL}}
+OUTCOME (already decided — do not change): {{OUTCOME_LINE}}
+IMAGES PROVIDED:
+- Initial state before the guide: {{HAS_INITIAL_IMAGE}}
+- Final state after the guide: {{HAS_FINAL_IMAGE}}
+
+{{PLAN_SECTION}}COMPLETED STEPS (step number: what was done):
+{{COMPLETED_STEPS}}
+
+CONFIDENCE SIGNALS BY STEP:
+{{CONFIDENCE_SIGNALS}}
+
+VISUAL EVIDENCE BY STEP:
+{{VISUAL_EVIDENCE_BY_STEP}}
+
+IMPORTANT FOR VISUAL RECAP:
+- The UI will render summarySegments as inline clickable visual references inside the short summary.
+- The UI will render stepEvaluations as the detailed reasoning-trail rows.
+- Choose summarySegments.step and stepEvaluation.step values that point to the screenshot/action the user should inspect for that phrase.
+- Do not write a separate "Visual recap:" list in summary.
+
+EVIDENCE SCRATCHPAD:
+{{EVIDENCE_SCRATCHPAD}}
+
+Return the recap JSON.`,
+
   GUIDE_V2_PROMPT: `You are a helpful guide assistant providing step-by-step interactive guidance.
 
 Given the current page and the user's goal, provide ONE step at a time.
@@ -433,11 +498,13 @@ Return JSON only:
   "instruction": "Concise, action-oriented instruction shown to the user (max 1-2 sentences)",
   "element": {"index": N, "text": "element text to highlight"},
   "dropTarget": {"index": N|null, "text": "drop destination text", "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}},
-  "evidence": [{"key": "slug_safe_key", "note": "short evidence note", "region_bbox": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "som_id": "optional SoM marker id or null"}],
-  "confirmationEvidence": [{"index": M|null, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the confirmation region", "reason": "one sentence: how this region confirms the final answer"}],
-  "action": "click" | "type" | "clear_text" | "drag_drop" | "scroll_down" | "scroll_up" | "navigate" | "save_evidence" | "finish",
+  "evidence": [{"key": "slug_safe_key", "note": "short evidence note", "som_id": "SoM marker id or null", "region_bbox": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "need_annotation": false, "annotation_prompt": "short instruction for the annotator or null"}],
+  "confirmationEvidence": [{"index": M|null, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the confirmation region", "reason": "one sentence: how this region confirms the final answer", "need_annotation": false, "annotation_prompt": "short instruction for the annotator or null"}],
+  "action": "click" | "type" | "clear_text" | "drag_drop" | "scroll_down" | "scroll_up" | "goto_url" | "watch_video" | "finish",
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
-  "url": "the target URL (only when action=navigate; null otherwise)",
+  "url": "the target URL (only when action=goto_url; for watch_video this may be the video URL)",
+  "videoUrl": "the video URL to watch (only when action=watch_video; null otherwise)",
+  "videoQuery": "the question to answer from the video (only when action=watch_video; null otherwise)",
   "answer": "final answer text, ALWAYS required when action=finish (never null); may use [ev:key] citations",
   "isLastStep": false,
   "risk": "low" | "high",
@@ -447,12 +514,12 @@ Return JSON only:
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "dropTarget": ONLY populate this when action="drag_drop"; otherwise set it to null. "element" is always the draggable source. The drop target may use a PAGE INDEX marker, text, a normalized screenshot rect, or both index and rect. If the drop target has no SoM marker, set "index": null and provide "rect".
-"evidence": ONLY populate this when action="save_evidence"; otherwise set it to null. When action="save_evidence", evidence MUST be an array with 1-5 items, even when saving one item. save_evidence is only available when Recap is on (see the EVIDENCE SCRATCHPAD section of the user prompt). Save compact facts that may be needed in the final answer: labels, values, visible states, prices, colors, selected options, image/object details, warnings, confirmations, or text spans. Each item needs a short slug-safe key and a short note. Use som_id for DOM/SoM evidence: text spans, images, buttons, labels, cards, table cells, selected controls, or any indexed page element. Use region_bbox for screenshot-only evidence with no DOM/SoM marker, such as an unindexed image detail, chart region, icon, canvas content, visual state, or other visible region. region_bbox is always relative to the CURRENT screenshot/viewport and is not scrollable; if screenshot-only evidence is not currently visible, first use scroll_down/scroll_up, then save_evidence on the later visible viewport.
-"answer": ONLY populate this when action="finish", and it is ALWAYS required then (never null). Every task ends with a finish that states the result. For information tasks, the answer is the info you found. For action/navigation tasks, the answer confirms the completed state (e.g. "The page language is now English."). May cite saved evidence with [ev:key].
+"evidence": Optional on ANY non-finish step; otherwise null. When this step observes facts worth reusing later, return an array of 1-5 items while still choosing the real browser action (click/type/scroll/etc.). Each item needs key + note. Prefer som_id for any indexed DOM/SoM target. If no som_id fits, set need_annotation=true and provide annotation_prompt; region_bbox is only an optional current-viewport crop hint. Do not hand-author annotations; the system annotator draws boxes/arrows/shapes. Offscreen screenshot evidence must be revealed first with scroll_up/down, then saved on the later visible step.
+"answer": Only for action="finish"; required and non-null. Finish must also include confirmationEvidence. Use [ev:key] only for saved evidence, and place each citation next to the exact claim it proves. Good: "I found two World Cup articles: Spain vs. England semi-final expectations [ev:spain_england_article] and Messi's first England meeting [ev:messi_england_article]." Bad: "I found two World Cup articles [ev:a] and [ev:b]."
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
 "confirmation": "needed" if you need the user's explicit confirmation or review before proceeding with this step, or "no need" otherwise.
-"confirmationEvidence": ONLY populate this on the FINAL step (action="finish"); otherwise set it to null. It is the on-page CONFIRMATION of your answer — the region(s) on the CURRENT page that prove the answer is correct (the information you are reporting, or the resulting state that shows the action succeeded). Return an array with up to 5 items. Each item may include BOTH a SoM "index" and a normalized "rect" {x,y,w,h} as fractions of the screenshot (0..1, top-left origin). Use "index": null when no marker fits that region. Each item MUST include "reason", one short sentence explaining how that region confirms the answer. Example: for "change the language to English" finish with answer "The page language is now English." and confirmationEvidence pointing at the language selector now reading "English".
+"confirmationEvidence": ONLY populate this on the FINAL step (action="finish"); otherwise set it to null. It is the on-page CONFIRMATION of your answer — the region(s) on the CURRENT page that prove the answer is correct. Return up to 5 items. Prefer a SoM "index" for an indexed DOM/SoM target; otherwise use rect for a visible current-viewport region. If the confirmation needs boxes/arrows/shapes, set need_annotation=true and provide annotation_prompt. Each item needs "reason". Example: for "change the language to English", point at the selector now reading "English".
 
 RULES:
 1. ONE step at a time — never list multiple things to do
@@ -467,29 +534,32 @@ RULES:
    Sensitive fields (passwords, payment, private data) are high risk and should be handed to the user.
 7. action="drag_drop": drag the highlighted source element to dropTarget. Use this for reorder, move, kanban, upload drop zones, sliders that require dragging, or drag-based placement.
 8. action="scroll_down" or action="scroll_up": scroll the page to reveal more content.
-9. action="navigate": navigate the browser to the specified URL. Provide the target URL in "url".
-10. action="save_evidence": save 1-5 important visual or page-state facts to the evidence scratchpad, then continue. evidence must be an array. This is not terminal.
-11. action="finish": terminal action. ALWAYS provide an "answer" (never null), and provide "confirmationEvidence" confirming the answer on the current page. For information tasks the answer is what you found; for action/navigation tasks the answer confirms the completed state.
-12. Final answers may cite saved evidence with [ev:key], e.g. "Team A is red [ev:team_a_color]."
-13. Highlight the element to interact with using its index from PAGE INDEX
-14. If the target is not visible, guide the user to open the relevant menu first
+9. action="goto_url": navigate the browser to the specified URL. Provide the target URL in "url".
+10. action="watch_video": watch the video at "videoUrl" (or "url") and answer "videoQuery" from the video content. This is a terminal read-only action and does not need an element index.
+11. Evidence is NOT its own action. To save evidence, populate "evidence" on the same step that also does the browser action. Example: click a result and save the visible title as evidence in one JSON response.
+12. action="finish": terminal action. ALWAYS provide an "answer" (never null), and provide "confirmationEvidence" confirming the answer on the current page. Confirmation evidence may use index, rect, or need_annotation + annotation_prompt. For information tasks the answer is what you found; for action/navigation tasks the answer confirms the completed state.
+13. Final answers may cite saved evidence with [ev:key], but each citation must be attached to an explicit claim that tells the user what the evidence shows. Avoid bare image citations after vague text.
+14. Highlight the element to interact with using its index from PAGE INDEX
+15. If the target is not visible, guide the user to open the relevant menu first
 
 COMMON PATTERNS:
 - Hidden options:       Step 1 → click three-dot menu → Step 2 → click the option
 - Forms:                Step 1 → type in field (action=type) → Step 2 → click submit
 - Replace text:         Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
 - Drag/drop:            Step 1 → drag the source card/file/item to the destination (action=drag_drop)
-- Save page evidence:   Step 1 → save_evidence with evidence=[1-5 facts visible now] → later finish(answer with [ev:key] citations)
-- DOM/SoM evidence:     save_evidence item uses som_id when evidence is an indexed text span, image, button, label, card, row, cell, selected control, or other DOM target
-- Screenshot evidence:  save_evidence item uses region_bbox when evidence is visible in the current screenshot but has no DOM/SoM marker; do not use region_bbox for offscreen evidence
-- More visual evidence: Step 1 → scroll_down/scroll_up to reveal more → Step 2 → save_evidence with region_bbox for evidence now visible in the screenshot
+- Save page evidence:   Any step → choose the real browser action and include evidence=[1-5 facts visible now] → later finish(answer with specific claims plus [ev:key] citations)
+- DOM/SoM evidence:     evidence item uses som_id when evidence is an indexed text span, image, button, label, card, row, cell, selected control, or other DOM target
+- Screenshot evidence:  evidence item uses need_annotation=true when evidence is visible in the current screenshot but has no DOM/SoM marker; region_bbox may be included as a crop hint
+- Relationship evidence: evidence item uses need_annotation=true plus annotation_prompt for a whole spatial/comparison claim, such as "box the parking lot and Sanford Hall, then draw an arrow labeled next to"
+- More visual evidence: Step 1 → scroll_down/scroll_up to reveal more → Step 2 → real action plus evidence with need_annotation=true for evidence now visible in the screenshot
 - Settings:             Step 1 → click profile/settings icon → Step 2 → click specific option
 - Navigation:           Final Step → finish(answer describing the reached state, confirmationEvidence=[the region that confirms it]) once the requested page state is reached
 
-SAVE_EVIDENCE EXAMPLES:
+EVIDENCE ITEM EXAMPLES:
 - DOM/SoM text evidence: {"key":"team_a_score","note":"Team A score is 74.","som_id":"12","region_bbox":null}
 - DOM/SoM image/card evidence: {"key":"red_shirt","note":"The product image shows a red shirt.","som_id":"18","region_bbox":null}
-- Screenshot-only evidence: {"key":"chart_peak","note":"The line chart peaks near March.","som_id":null,"region_bbox":{"x":0.42,"y":0.28,"w":0.22,"h":0.18}}
+- Screenshot-only evidence: {"key":"chart_peak","note":"The line chart peaks near March.","som_id":null,"region_bbox":{"x":0.42,"y":0.28,"w":0.22,"h":0.18},"need_annotation":true,"annotation_prompt":"Box the line-chart peak near March."}
+- Screenshot relationship evidence: {"key":"parking_next_to_sanford_hall","note":"The parking lot is next to Sanford Hall.","som_id":null,"region_bbox":null,"need_annotation":true,"annotation_prompt":"Annotate the parking lot next to Sanford Hall: box both places and draw an arrow labeled next to."}
 
 NATIVE BROWSER DIALOGS (print, save, open file, etc.):
 When a step will open a native browser dialog (print dialog, save dialog, OS file picker), that

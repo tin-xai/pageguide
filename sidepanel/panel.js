@@ -22,10 +22,16 @@ let currentGuideRecords = [];
 let currentGuideInitial = null; // Phase 1: the "Initial state" node (step 0), kept out of the dot count
 let currentGuideVerifications = {};
 let currentGuideWarnings = {};
+let currentGuideWorkingStatus = '';
+let currentGuideStatusShownAt = 0;
+let currentGuideStatusTimer = null;
+let pendingGuideWorkingStatus = '';
+const GUIDE_WORKING_STATUS_MIN_MS = 1200;
 let goalDotsExpanded = false;
 let guideTimelineCheckpointSteps = null;
 let _lastFindMessageStep = null; // Step number whose find answer was already posted to chat
 let _lastVisualHighlightStep = null; // Step whose visual_highlight image was already posted to chat
+let _lastWatchVideoMessageStep = null; // Step number whose watch_video answer was already posted to chat
 let _lastRecapKey = null; // sessionId:step of the last recap posted, so it isn't posted twice
 let _lastAnswerCardKey = null; // sessionId:step of the last finish(answer) card posted
 let panelRunning = false;        // True while the agent is generating (send button shows Stop)
@@ -81,6 +87,41 @@ function _truncateText(text, max = 72) {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
+function _savedEvidencePreviewEntries(meta, rec) {
+  const out = [];
+  const push = (item) => {
+    if (!item) return;
+    const key = String(item.key || item.evidenceKey || '').trim();
+    const note = String(item.note || item.evidenceNote || '').replace(/\s+/g, ' ').trim();
+    if (!key && !note) return;
+    out.push({ key, note });
+  };
+  (Array.isArray(rec?.savedEvidenceEntries) ? rec.savedEvidenceEntries : []).forEach(push);
+  (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : []).forEach(push);
+  if (rec?.evidenceKey || rec?.evidenceNote) push({ key: rec.evidenceKey, note: rec.evidenceNote });
+  if (meta?.evidenceKey || meta?.evidenceNote) push({ key: meta.evidenceKey, note: meta.evidenceNote });
+  const seen = new Set();
+  return out.filter(item => {
+    const k = `${item.key}|${item.note}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function _savedEvidencePreviewHtml(meta, rec) {
+  const entries = _savedEvidencePreviewEntries(meta, rec);
+  if (!entries.length) return '';
+  const count = entries.length;
+  const first = entries[0].note || entries[0].key || 'Saved evidence';
+  const clippedRaw = first.length > 100 ? `${first.slice(0, 97).trim()}...` : first;
+  const clipped = clippedRaw.replace(/[.!?]+$/g, '');
+  return `<div class="pageguide-goal-step-evidence">
+    <b>${escapeHtml(count === 1 ? 'Saved evidence' : `Saved ${count} evidence`)}</b>
+    <span>${escapeHtml(clipped)}</span>
+  </div>`;
+}
+
 function _tabChipFallbackIcon() {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#7857ff"/><path d="M7 7h10v10H7z" fill="white" opacity=".9"/></svg>'
@@ -91,6 +132,52 @@ function hideWorkingTabChip() {
   if (currentTabId != null) _hiddenTabChips.add(currentTabId);
   const chip = document.getElementById('pageguide-tab-chip');
   if (chip) chip.style.display = 'none';
+}
+
+function _isGuideWorkingContext() {
+  return !!(guideActive || currentGuideWorkingStatus || currentGoal?.route === 'guide' || currentGuideStep || currentGuidePlan.length || currentGuideRecords.length);
+}
+
+function updateTypingIndicatorText(text = '') {
+  const typing = document.querySelector('.pageguide-typing');
+  if (!typing) return;
+  const label = typing.querySelector('.pageguide-typing-text');
+  if (label) label.textContent = text || 'Agent thinking…';
+}
+
+function setGuideWorkingStatus(status = '') {
+  const next = String(status || '').trim();
+  if (!next) {
+    if (currentGuideStatusTimer) {
+      clearTimeout(currentGuideStatusTimer);
+      currentGuideStatusTimer = null;
+    }
+    pendingGuideWorkingStatus = '';
+    currentGuideWorkingStatus = '';
+    currentGuideStatusShownAt = 0;
+    return;
+  }
+  const apply = (value) => {
+    currentGuideWorkingStatus = value;
+    currentGuideStatusShownAt = Date.now();
+    if (panelRunning) showTyping(value);
+    else updateTypingIndicatorText(value);
+  };
+  if (!currentGuideWorkingStatus) {
+    apply(next);
+    return;
+  }
+  if (next === currentGuideWorkingStatus) return;
+  pendingGuideWorkingStatus = next;
+  const elapsed = Date.now() - currentGuideStatusShownAt;
+  const wait = Math.max(0, GUIDE_WORKING_STATUS_MIN_MS - elapsed);
+  if (currentGuideStatusTimer) clearTimeout(currentGuideStatusTimer);
+  currentGuideStatusTimer = setTimeout(() => {
+    currentGuideStatusTimer = null;
+    const pending = pendingGuideWorkingStatus;
+    pendingGuideWorkingStatus = '';
+    if (pending) apply(pending);
+  }, wait);
 }
 
 function renderWorkingTabChip(tab) {
@@ -259,6 +346,27 @@ function _recapVisualEvidenceItems(rec) {
   }];
 }
 
+function _recapSavedEvidenceCapture(rec, key) {
+  const needle = String(key || '').trim().toLowerCase();
+  if (!rec || !needle) return null;
+  const cap = (Array.isArray(rec.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+    .find(item => item && String(item.key || '').trim().toLowerCase() === needle);
+  const confirmationCap = (Array.isArray(rec.visualEvidenceItems) ? rec.visualEvidenceItems : [])
+    .find(item => item && String(item.key || '').trim().toLowerCase() === needle);
+  const shot = _recapPickShot(cap?.shot || confirmationCap?.visualEvidenceShot);
+  if (!shot) return null;
+  const originalShot = _recapPickShot(cap?.annotationScreenshot || rec?.screenshotBefore || rec?.screenshot);
+  // Saved evidence crops already have the visual proof baked in: DOM/SoM captures include the
+  // highlighted marker, while bbox captures include the region marker and relationship annotations.
+  return {
+    src: `data:image/jpeg;base64,${shot}`,
+    originalSrc: originalShot ? `data:image/jpeg;base64,${originalShot}` : null,
+    marker: null,
+    number: null,
+    note: cap?.note || confirmationCap?.note || ''
+  };
+}
+
 // SOM marker overlay: an absolutely-positioned box + number badge, placed from a normalized
 // { x, y, w, h } rect (fractions of the image). Empty string when there's no geometry.
 function _recapMarkerHtml(normRect, number) {
@@ -299,8 +407,11 @@ async function _showRecapEvidencePopover(anchor, sessionId, step) {
   if (isScratchpad) {
     let bbox = null;
     try { bbox = JSON.parse(anchor?.dataset?.bbox || 'null'); } catch (e) { bbox = null; }
-    const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
-    if (shot && bbox) scratchEv = { src: `data:image/jpeg;base64,${shot}`, marker: bbox };
+    scratchEv = _recapSavedEvidenceCapture(rec, anchor?.dataset?.key);
+    if (!scratchEv && bbox) {
+      const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+      if (shot) scratchEv = { src: `data:image/jpeg;base64,${shot}`, marker: bbox };
+    }
   }
   const ev = isScratchpad ? (scratchEv || _recapMarkedEvidence(rec)) : (isVisual ? (selectedVisual?.ev || null) : _recapMarkedEvidence(rec));
   const number = isScratchpad ? null : (isVisual ? selectedVisual?.number : (rec?.target?.resolvedIndex ?? rec?.resolvedIndex));
@@ -341,7 +452,7 @@ function _recapActionHtml(rec) {
   const textHtml = targetText ? ` <span class="pageguide-recap-action-target">“${escapeHtml(targetText)}”</span>` : '';
   const typeHtml = (action === 'type' && typeText) ? `: <span class="pageguide-recap-action-target">“${escapeHtml(typeText)}”</span>` : '';
   const navigateUrl = rec?.navigateUrl || '';
-  const navigateHtml = (action === 'navigate' && navigateUrl) ? `: <span class="pageguide-recap-action-target">${escapeHtml(navigateUrl)}</span>` : '';
+  const navigateHtml = ((action === 'goto_url' || action === 'navigate') && navigateUrl) ? `: <span class="pageguide-recap-action-target">${escapeHtml(navigateUrl)}</span>` : '';
   return `<span class="pageguide-recap-action-verb">${escapeHtml(action)}</span>${numHtml}${textHtml}${typeHtml}${navigateHtml}`;
 }
 
@@ -438,10 +549,22 @@ async function openScratchpadEvidenceView(anchor, sessionId, step) {
   try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
   let bbox = null;
   try { bbox = JSON.parse(anchor?.dataset?.bbox || 'null'); } catch (e) { bbox = null; }
-  const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
   const note = anchor?.dataset?.note || 'Saved evidence';
-  const imgHtml = shot
-    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, bbox, null, 'saved evidence')
+  const saved = _recapSavedEvidenceCapture(rec, anchor?.dataset?.key);
+  const fallbackShot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+  const ev = saved || (fallbackShot ? { src: `data:image/jpeg;base64,${fallbackShot}`, marker: bbox } : null);
+  const canToggleOriginal = !!(ev?.originalSrc && ev.originalSrc !== ev.src);
+  const toggleHtml = canToggleOriginal
+    ? `<div class="pageguide-evidence-view-toggle" role="group" aria-label="Evidence screenshot view">
+        <button type="button" class="active" data-view="annotated">Annotated</button>
+        <button type="button" data-view="original">Original</button>
+      </div>`
+    : '';
+  const imgHtml = ev
+    ? `<div class="pageguide-evidence-shot-wrap" data-annotated-src="${escapeHtml(ev.src)}" data-original-src="${escapeHtml(ev.originalSrc || '')}">
+        ${toggleHtml}
+        ${_recapFigureHtml(ev.src, ev.marker, ev.number ?? null, 'saved evidence')}
+      </div>`
     : '<div class="pageguide-recap-pop-empty">No screenshot</div>';
   const overlay = document.createElement('div');
   overlay.id = 'pageguide-memory-shot-lightbox';
@@ -461,6 +584,23 @@ async function openScratchpadEvidenceView(anchor, sessionId, step) {
     </div>`;
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+    const btn = e.target.closest('.pageguide-evidence-view-toggle button');
+    if (btn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const wrap = btn.closest('.pageguide-evidence-shot-wrap');
+      const fig = wrap?.querySelector('.pageguide-recap-figure');
+      const img = fig?.querySelector('img');
+      if (!wrap || !fig || !img) return;
+      const view = btn.dataset.view === 'original' ? 'original' : 'annotated';
+      const src = view === 'original' ? wrap.dataset.originalSrc : wrap.dataset.annotatedSrc;
+      if (!src) return;
+      img.src = src;
+      fig.classList.toggle('hide-marker', view === 'original');
+      wrap.querySelectorAll('.pageguide-evidence-view-toggle button').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+    }
   });
   document.body.appendChild(overlay);
 }
@@ -596,39 +736,127 @@ function renderFindAnswer(result) {
   container.scrollTop = container.scrollHeight;
 }
 
-function _buildAnswerEvidenceModel(answer, scratchpad) {
+function renderWatchVideoAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result) return;
+  const raw = result.watchVideoAnswer || result.watchVideoError || '';
+  if (!raw) return;
+  const answerText = result.watchVideoError
+    ? escapeHtml(result.watchVideoError)
+    : parseCitations(parseMarkdown(raw));
+  const videoUrl = result.watchVideoUrl
+    ? `<div style="font-size: 12px; line-height: 1.4; color: var(--pg-muted); padding: 0 16px 14px; background: var(--pg-bg); overflow-wrap: anywhere;">${escapeHtml(result.watchVideoUrl)}</div>`
+    : '';
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-find-answer" style="border: 2px solid var(--pg-som);">
+      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
+        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Video Answer</div>
+      </div>
+      <div style="font-size: 14px; line-height: 1.5; color: var(--pg-text); padding: 16px; background: var(--pg-bg); font-weight: 500;">
+        ${answerText}
+      </div>
+      ${videoUrl}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+function _buildAnswerEvidenceModel(answer, scratchpad, answerEvidence) {
+  const normEvKey = (value) => {
+    if (typeof gv2NormalizeEvidenceKey === 'function') return gv2NormalizeEvidenceKey(value);
+    return String(value || '').toLowerCase();
+  };
   const byKey = {};
   (Array.isArray(scratchpad) ? scratchpad : []).forEach(e => {
-    if (e && e.key) byKey[String(e.key).toLowerCase()] = e;
+    const key = normEvKey(e?.key);
+    if (e && key) byKey[key] = e;
   });
+  const answerEvidenceList = Array.isArray(answerEvidence) ? answerEvidence : [];
+  const answerEvidenceByKey = {};
+  answerEvidenceList.forEach(it => {
+    if (!it || !it.key || !Number.isFinite(Number(it.step))) return;
+    const key = normEvKey(it.key);
+    if (!key || answerEvidenceByKey[key]) return;
+    answerEvidenceByKey[key] = {
+      ref_step_id: Number(it.step),
+      region_bbox: it.region_bbox || null,
+      note: it.note || it.key || 'Visual evidence',
+      key,
+      source: it.source || ''
+    };
+  });
+  const confirmationQueue = answerEvidenceList
+    .filter(it => it && it.source === 'confirmation' && Number.isFinite(Number(it.step)))
+    .map(it => ({
+      ref_step_id: Number(it.step),
+      region_bbox: it.region_bbox || null,
+      note: it.note || 'Confirmation',
+      key: normEvKey(it.key),
+      source: it.source || ''
+    }));
+  let confirmationQueueIndex = 0;
   const evidence = [];
   const byEvidenceKey = {};
-  const text = String(answer || '');
+  const text = (typeof gv2ExpandBareEvidenceCitations === 'function')
+    ? gv2ExpandBareEvidenceCitations(answer, scratchpad)
+    : String(answer || '');
   const re = /\[ev:([a-zA-Z0-9_-]+)\]/g;
-  let out = '';
-  let last = 0;
-  let m;
-  while ((m = re.exec(text))) {
-    out += escapeHtml(text.slice(last, m.index));
-    const rawKey = m[1];
-    const key = rawKey.toLowerCase();
-    const ev = byKey[key];
+  const chips = [];
+  const tokenized = text.replace(re, (full, rawKey) => {
+    const key = normEvKey(rawKey);
+    const fallbackConfirmation = confirmationQueue[confirmationQueueIndex] || null;
+    const ev = byKey[key] || answerEvidenceByKey[key] || fallbackConfirmation;
     if (ev && ev.ref_step_id != null) {
+      if (!byKey[key] && !answerEvidenceByKey[key] && fallbackConfirmation) confirmationQueueIndex += 1;
       if (!byEvidenceKey[key]) {
-        byEvidenceKey[key] = { number: evidence.length + 1, key, entry: ev };
+        const entry = Object.assign({}, ev, { key: ev.key || key });
+        byEvidenceKey[key] = { number: evidence.length + 1, key, entry };
         evidence.push(byEvidenceKey[key]);
       }
       const item = byEvidenceKey[key];
       const label = ev.note || key;
       const bbox = ev.region_bbox ? JSON.stringify(ev.region_bbox) : '';
-      out += `<span class="pageguide-recap-link pageguide-answer-citation-chip" data-evidence="scratchpad" data-step="${escapeHtml(String(ev.ref_step_id))}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(label)}" title="${escapeHtml(label)}">📷 ${escapeHtml(String(item.number))}</span>`;
-    } else {
-      out += `<span class="pageguide-evidence-missing">[missing evidence: ${escapeHtml(key)}]</span>`;
+      const chip = `<span class="pageguide-recap-link pageguide-answer-citation-chip" data-evidence="scratchpad" data-key="${escapeHtml(key)}" data-step="${escapeHtml(String(ev.ref_step_id))}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(label)}" title="${escapeHtml(label)}">📷 ${escapeHtml(String(item.number))}</span>`;
+      const idx = chips.push(chip) - 1;
+      return `\uE000${idx}\uE001`;
     }
-    last = re.lastIndex;
+    const idx = chips.push(`<span class="pageguide-evidence-missing" hidden></span>`) - 1;
+    return `\uE000${idx}\uE001`;
+  });
+  let answerHtml = parseMarkdown(tokenized)
+    .replace(/\uE000(\d+)\uE001/g, (_, idx) => chips[Number(idx)] || '');
+  const appended = [];
+  const hasSavedAnswerEvidence = answerEvidenceList.some(it => it && (it.source === 'cited' || it.source === 'scratchpad'));
+  answerEvidenceList.forEach((it) => {
+    if (!it || !Number.isFinite(Number(it.step))) return;
+    const source = String(it.source || '');
+    const key = normEvKey(it.key);
+    if ((source === 'cited' || source === 'scratchpad') && key && byEvidenceKey[key]) return;
+    if (source === 'confirmation' && (hasSavedAnswerEvidence || evidence.length)) return;
+    const step = Number(it.step);
+    const ev = key ? (byKey[key] || answerEvidenceByKey[key]) : null;
+    const note = it.note || ev?.note || key || (source === 'confirmation' ? 'Confirmation' : 'Visual evidence');
+    const bboxObj = it.region_bbox || ev?.region_bbox || null;
+    const bbox = bboxObj ? JSON.stringify(bboxObj) : '';
+    let label = '';
+    if (source === 'cited' || source === 'scratchpad') {
+      const num = evidence.length + 1;
+      if (key && !byEvidenceKey[key]) {
+        byEvidenceKey[key] = { number: num, key, entry: ev || { ref_step_id: step, region_bbox: bboxObj, note, key } };
+        evidence.push(byEvidenceKey[key]);
+      }
+      label = `📷 ${escapeHtml(String(num))}`;
+    } else {
+      label = appended.length ? '📷' : '📷';
+    }
+    appended.push(`<span class="pageguide-recap-link pageguide-answer-citation-chip" data-evidence="scratchpad" data-key="${escapeHtml(key)}" data-step="${escapeHtml(String(step))}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(note)}" title="${escapeHtml(note)}">${label}</span>`);
+  });
+  if (appended.length) {
+    answerHtml += ` <span class="pageguide-answer-evidence-tail"><span>Evidence:</span> ${appended.join(' ')}</span>`;
   }
-  out += escapeHtml(text.slice(last));
-  return { answerHtml: out.replace(/\n/g, '<br>'), evidence };
+  return { answerHtml, evidence };
 }
 
 function _stripEvidenceRefs(text) {
@@ -646,7 +874,8 @@ function _answerVerdictInfo(result) {
 
 function _answerReasoningTrailHtml(recap, sessionId) {
   const milestones = Array.isArray(recap?.milestones) ? recap.milestones.filter(m => m && m.goalRelated !== false) : [];
-  if (!milestones.length) return '';
+  const summaryHtml = _answerTrailSummaryHtml(recap, sessionId, milestones);
+  if (!milestones.length && !summaryHtml) return '';
   const rows = milestones.map((m, idx) => {
     const step = m.firstStep != null ? m.firstStep : m.step;
     const stepLabel = Number.isFinite(Number(step)) ? String(Number(step)) : String(idx + 1);
@@ -658,8 +887,112 @@ function _answerReasoningTrailHtml(recap, sessionId) {
       : (idx === milestones.length - 1 ? '<span class="pageguide-answer-trail-pill is-complete">Completed</span>' : ''));
     return `<div class="pageguide-answer-trail-row ${cls}">
       <span class="pageguide-answer-trail-dot">${escapeHtml(stepLabel)}</span>
-      <span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}">${escapeHtml(m.text || '')}</span>
+      <span class="pageguide-answer-trail-text-wrap">
+        <span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}">${escapeHtml(m.text || '')}</span>
+      </span>
       ${score || completed}
+    </div>`;
+  }).join('');
+  return `<details class="pageguide-reasoning-trail">
+    <summary><span>Reasoning Trail</span><span class="pageguide-reasoning-trail-chevron">⌄</span></summary>
+    <div class="pageguide-reasoning-trail-body">${summaryHtml}${rows}</div>
+  </details>`;
+}
+
+function _answerStepScreenshotChip(sessionId, step, label = '') {
+  const n = Number(step);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const chipLabel = label || `Step ${n}`;
+  return `<span class="pageguide-recap-link pageguide-answer-summary-chip pageguide-answer-trail-shot" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(n))}" title="Open ${escapeHtml(chipLabel)} screenshot">📷 ${escapeHtml(chipLabel)}</span>`;
+}
+
+function _answerSummarySegmentHtml(segment, sessionId) {
+  const text = String(segment?.text || '').trim();
+  const step = Number(segment?.step);
+  if (!text) return '';
+  if (!Number.isFinite(step) || step <= 0) return escapeHtml(text);
+  const link = (label) => `<span class="pageguide-recap-link pageguide-answer-summary-ref" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}">${escapeHtml(label)}</span>`;
+  const phrase = String(segment?.phrase || '').trim();
+  if (phrase && text.toLowerCase().includes(phrase.toLowerCase())) {
+    const idx = text.toLowerCase().indexOf(phrase.toLowerCase());
+    return `${escapeHtml(text.slice(0, idx))}${link(text.slice(idx, idx + phrase.length))}${escapeHtml(text.slice(idx + phrase.length))}`;
+  }
+  return link(text);
+}
+
+function _answerConciseSummaryText(recap) {
+  const summary = String(recap?.summary || '').trim();
+  const statusInfo = _recapStatusText(recap || {});
+  let text = String(statusInfo.title || summary || '').trim();
+  text = text.replace(/^I have completed (?:the|your) task\.?\s*/i, '').trim();
+  text = text.replace(/^I completed (?:the|your) task\.?\s*/i, '').trim();
+  text = text.replace(/^I could not complete (?:the|your) task\.?\s*/i, '').trim();
+  text = text || summary;
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+  text = sentences.slice(0, 2).join(' ').replace(/\s+/g, ' ').trim();
+  if (text.length > 220) text = text.slice(0, 217).replace(/\s+\S*$/, '') + '...';
+  return text;
+}
+
+function _answerTrailSummaryHtml(recap, sessionId, milestones = []) {
+  const meaningful = milestones
+    .filter(m => m && Number.isFinite(Number(m.firstStep != null ? m.firstStep : m.step)))
+    .slice(0, 4);
+  const segments = (Array.isArray(recap?.summarySegments) ? recap.summarySegments : [])
+    .filter(s => s && String(s.text || '').trim() && Number.isFinite(Number(s.step)))
+    .slice(0, 5);
+  const summaryText = _answerConciseSummaryText(recap);
+  if (!summaryText && !meaningful.length && !segments.length) return '';
+  const linkedSummaryLine = segments.length
+    ? `<div class="pageguide-answer-trail-summary-text">${segments.map(s => _answerSummarySegmentHtml(s, sessionId)).filter(Boolean).join(' ')}</div>`
+    : '';
+  const summaryLine = (!linkedSummaryLine && summaryText)
+    ? `<div class="pageguide-answer-trail-summary-text">${escapeHtml(summaryText)}</div>`
+    : '';
+  const visualLine = (!linkedSummaryLine && meaningful.length)
+    ? `<div class="pageguide-answer-trail-summary-steps">${meaningful.map((m) => {
+        const step = m.firstStep != null ? m.firstStep : m.step;
+        const text = String(m.phrase || m.text || `Step ${step}`).trim();
+        return `<span class="pageguide-answer-trail-summary-step"><span>${escapeHtml(text)}</span>${_answerStepScreenshotChip(sessionId, step, `Step ${step}`)}</span>`;
+      }).join('')}</div>`
+    : '';
+  return `<section class="pageguide-answer-trail-summary">${linkedSummaryLine || summaryLine}${visualLine}</section>`;
+}
+
+function _answerTrailTextFromStep(step) {
+  const action = String(step?.action || '').toLowerCase();
+  const instruction = _stripEvidenceRefs(step?.instruction || '').trim();
+  const saved = Array.isArray(step?.savedEvidenceEntries) && step.savedEvidenceEntries.length
+    ? step.savedEvidenceEntries
+    : (step?.evidenceKey ? [{ key: step.evidenceKey, note: step.evidenceNote }] : []);
+  if (saved.length) {
+    const notes = saved.map(e => e?.note || e?.key).filter(Boolean).slice(0, 2).join('; ');
+    return instruction ? `${instruction} Saved evidence: ${notes || 'visual evidence'}.` : `Saved evidence: ${notes || 'visual evidence'}.`;
+  }
+  if (action === 'save_evidence') return instruction || 'Saved visual evidence for the answer.';
+  if (action === 'finish') return instruction || 'Prepared the final answer.';
+  if (instruction) return instruction;
+  if (action) return `Completed ${action.replace(/_/g, ' ')}.`;
+  return 'Observed this checkpoint.';
+}
+
+function _answerReasoningTrailFromStepsHtml(steps, sessionId) {
+  const list = (Array.isArray(steps) ? steps : [])
+    .filter(s => s && !s.isInitial && Number(s.step) > 0)
+    .sort((a, b) => Number(a.step) - Number(b.step));
+  if (!list.length) return '';
+  const rows = list.map((s, idx) => {
+    const step = Number(s.step);
+    const isLast = idx === list.length - 1;
+    const status = String(s.status || '').toLowerCase();
+    const cls = status === 'wrong' ? 'is-wrong' : (status === 'unclear' ? 'is-unclear' : 'is-ok');
+    const pill = isLast ? '<span class="pageguide-answer-trail-pill is-complete">Completed</span>' : '';
+    return `<div class="pageguide-answer-trail-row ${cls}">
+      <span class="pageguide-answer-trail-dot">${escapeHtml(String(step))}</span>
+      <span class="pageguide-answer-trail-text-wrap">
+        <span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}">${escapeHtml(_answerTrailTextFromStep(s))}</span>
+      </span>
+      ${pill}
     </div>`;
   }).join('');
   return `<details class="pageguide-reasoning-trail">
@@ -675,21 +1008,24 @@ async function _answerEvidenceFigureHtml(item, sessionId) {
   try { if (sessionId && Number.isFinite(step) && typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
   const savedCapture = (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
     .find(cap => cap && entry.key && String(cap.key || '').toLowerCase() === String(entry.key || '').toLowerCase());
-  const dedicatedShot = _recapPickShot(savedCapture?.shot);
+  const confirmationCapture = (Array.isArray(rec?.visualEvidenceItems) ? rec.visualEvidenceItems : [])
+    .find(cap => cap && entry.key && String(cap.key || '').toLowerCase() === String(entry.key || '').toLowerCase());
+  const dedicatedShot = _recapPickShot(savedCapture?.shot || confirmationCapture?.visualEvidenceShot);
   const shot = dedicatedShot || _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
-  const bbox = entry.region_bbox || null;
+  const bbox = entry.region_bbox || confirmationCapture?.visualEvidenceNormRect || null;
   const note = entry.note || entry.key || 'Saved evidence';
   const bboxData = bbox ? JSON.stringify(bbox) : '';
-  const marker = dedicatedShot ? (savedCapture?.marker || null) : bbox;
+  const marker = dedicatedShot ? null : bbox;
+  const markerNumber = dedicatedShot ? null : (confirmationCapture?.visualEvidenceIndex ?? savedCapture?.som_id ?? null);
   const figure = shot
-    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, marker, null, note)
+    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, marker, markerNumber, note)
     : '<div class="pageguide-recap-pop-empty">No screenshot for this evidence</div>';
   return `<section class="pageguide-answer-evidence-item">
     <div class="pageguide-answer-evidence-shot">${figure}</div>
     <div class="pageguide-answer-evidence-caption">${escapeHtml(note)}</div>
     <div class="pageguide-answer-evidence-links">
       <span>Captured at checkpoint ${escapeHtml(String(step || ''))}</span>
-      <span class="pageguide-recap-link" data-evidence="scratchpad" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}" data-bbox="${escapeHtml(bboxData)}" data-note="${escapeHtml(note)}">Open full screenshot ↗</span>
+      <span class="pageguide-recap-link" data-evidence="scratchpad" data-key="${escapeHtml(String(entry.key || ''))}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}" data-bbox="${escapeHtml(bboxData)}" data-note="${escapeHtml(note)}">Open full screenshot ↗</span>
     </div>
   </section>`;
 }
@@ -766,14 +1102,7 @@ async function renderGuideFinalAnswer(result) {
   const container = document.getElementById('pageguide-messages');
   if (!container || !result || !result.finalAnswer) return;
   const sessionId = result.sessionId || result.recap?.sessionId || '';
-  const model = _buildAnswerEvidenceModel(result.finalAnswer, result.evidenceScratchpad || []);
-  // Guaranteed visual link: prefer the aggregated answerEvidence list (cited → saved → action
-  // grounding), falling back to the legacy inline model / final-step evidence if it is absent.
-  const evidenceHtml = (Array.isArray(result.answerEvidence) && result.answerEvidence.length)
-    ? await _answerEvidenceStripHtml(result.answerEvidence, sessionId)
-    : (model.evidence.length
-      ? (await Promise.all(model.evidence.map(item => _answerEvidenceFigureHtml(item, sessionId)))).join('')
-      : await _fallbackActionEvidenceHtml(result, sessionId));
+  const model = _buildAnswerEvidenceModel(result.finalAnswer, result.evidenceScratchpad || [], result.answerEvidence || []);
   const { verdict, verdictKey } = _answerVerdictInfo(result);
   const trailHtml = _answerReasoningTrailHtml(result.recap, sessionId);
   const checkpointSteps = Array.isArray(result.recap?.milestones)
@@ -793,7 +1122,6 @@ async function renderGuideFinalAnswer(result) {
         <span class="pageguide-answer-status ${escapeHtml(verdict.cls)}">${escapeHtml(verdict.label)}</span>
       </div>
       <div class="pageguide-answer-copy">${model.answerHtml}</div>
-      ${evidenceHtml ? `<div class="pageguide-answer-evidence">${evidenceHtml}</div>` : ''}
       ${trailHtml}
       <span class="pageguide-answer-verdict-key" hidden>${escapeHtml(verdictKey)}</span>
     </div>`;
@@ -926,10 +1254,6 @@ async function renderGuideRecap(recap) {
     `<button type="button" class="pageguide-recap-checkpoint" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Open step ${escapeHtml(String(m.step))} detail">${escapeHtml(String(m.step))}</button>`
   ).join('') + finalChipHtml;
   const recapSteps = recap.steps || milestones.map(m => m.step);
-  // Guaranteed action-grounding evidence link for navigate-only tasks (S3): the marked screenshot
-  // of the clicked step, or saved scratchpad evidence when present.
-  const answerEvidenceStripHtml = await _answerEvidenceStripHtml(recap.answerEvidence || [], sessionId);
-
   msg.innerHTML = `
     <div class="pageguide-recap" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(recapSteps))}">
       <div class="pageguide-recap-hero">
@@ -938,7 +1262,6 @@ async function renderGuideRecap(recap) {
         <span class="pageguide-final-verdict ${escapeHtml(statusInfo.verdict.cls)}">${escapeHtml(statusInfo.verdict.label)}</span>
       </div>
       ${bodyNote ? `<div class="pageguide-recap-body-note">${escapeHtml(bodyNote)}</div>` : ''}
-      ${answerEvidenceStripHtml ? `<div class="pageguide-answer-evidence pageguide-recap-answer-evidence">${answerEvidenceStripHtml}</div>` : ''}
       ${displayMilestones.length ? `<div class="pageguide-recap-list">${rowsHtml}</div>` : ''}
       ${(milestones.length || finalChipHtml) ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
     </div>`;
@@ -958,6 +1281,40 @@ function _dualConfidence(rec) {
   const noloop = gv2ComputeConfidence(signals, 'noloop').confidence;
   if (full == null && reduced == null && noloop == null) return null;
   return { full, reduced, noloop };
+}
+
+function _shouldShowGuideActionScores(source = {}, isInitialNode = false) {
+  if (isInitialNode) return false;
+  const action = String(source.action || '').toLowerCase();
+  const pageTargetActions = new Set(['click', 'type', 'clear_text', 'drag_drop']);
+  if (!pageTargetActions.has(action)) return false;
+  const hasScore = [source.mechGrounding, source.grounded, source.mechLoop, source.loop]
+    .some(v => typeof v === 'number' && Number.isFinite(v));
+  return hasScore;
+}
+
+function _timelineWordClip(text, maxWords = 50) {
+  const full = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!full) return { full: '', short: '', clipped: false };
+  const words = full.split(' ');
+  if (words.length <= maxWords) return { full, short: full, clipped: false };
+  return { full, short: `${words.slice(0, maxWords).join(' ')}...`, clipped: true };
+}
+
+function _timelineDetailTextHtml(label, text) {
+  const clipped = _timelineWordClip(text, 50);
+  if (!clipped.full) return '';
+  if (!clipped.clipped) {
+    return `<div>${escapeHtml(label)}: <b>${escapeHtml(clipped.short)}</b></div>`;
+  }
+  return `<div class="pageguide-goal-step-score-text">
+    ${escapeHtml(label)}:
+    <b>${escapeHtml(clipped.short)}</b>
+    <details class="pageguide-goal-step-expandable">
+      <summary>Show full text</summary>
+      <div>${escapeHtml(clipped.full)}</div>
+    </details>
+  </div>`;
 }
 
 async function showGoalStepPreview(step, anchor) {
@@ -990,18 +1347,19 @@ async function showGoalStepPreview(step, anchor) {
   const loopMatches = scoreSource.loopMatches != null ? Number(scoreSource.loopMatches) : null;
   const planDone = scoreSource.planCompleted != null ? Number(scoreSource.planCompleted) : null;
   const planTotal = scoreSource.planTotal != null ? Number(scoreSource.planTotal) : currentGuidePlan.length;
-  const scoreHtml = (!isInitialNode && (scoreSource.mechGrounding != null || scoreSource.mechLoop != null || scoreSource.confidence != null))
+  const scoreHtml = _shouldShowGuideActionScores(scoreSource, isInitialNode)
     ? `<div class="pageguide-goal-step-scores">
         <div>Grounding: <b>${fmtScore(scoreSource.mechGrounding ?? scoreSource.grounded)}</b></div>
         <div>Loop: <b>${fmtScore(scoreSource.mechLoop)}</b>${loopMatches != null ? ` (${loopMatches}/10 matches)` : ''}</div>
         <div>Plan: <b>${Number.isFinite(planDone) && planTotal ? `${Math.min(planDone, planTotal)}/${planTotal}` : '—'}</b></div>
-        ${scoreSource.llmElementText ? `<div>LLM text: <b>${escapeHtml(scoreSource.llmElementText)}</b></div>` : ''}
-        ${scoreSource.domElementText ? `<div>DOM text: <b>${escapeHtml(scoreSource.domElementText)}</b></div>` : ''}
+        ${_timelineDetailTextHtml('LLM text', scoreSource.llmElementText)}
+        ${_timelineDetailTextHtml('DOM text', scoreSource.domElementText)}
       </div>`
     : '';
   const url = meta?.url || rec?.url || '';
   // Show the URL as a compact "link" hyperlink rather than the full (often long) address.
   const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
+  const evidenceHtml = _savedEvidencePreviewHtml(meta, rec);
   const allowSteer = !!meta && !isInitialNode;
 
   // Card layout: the REGION-around-the-target crop is the picture on top; the full BEFORE-action
@@ -1032,6 +1390,7 @@ async function showGoalStepPreview(step, anchor) {
     ${topImg}
     <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
+    ${evidenceHtml}
     ${scoreHtml}
     ${dualHtml}
     ${urlHtml}
@@ -1052,6 +1411,7 @@ async function showGoalStepPreview(step, anchor) {
     }
     // Let the collapsible "Before action" toggle natively; don't open the inspector.
     if (target.closest('.pageguide-goal-step-before')) return;
+    if (target.closest('.pageguide-goal-step-expandable')) return;
     if (target.closest('.pageguide-goal-step-steer')) {
       const restoreBtn = target.closest('button');
       if (restoreBtn) restoreBtn.disabled = true;
@@ -1475,6 +1835,7 @@ function clearGoalAndStepPanel() {
   guideTimelineCheckpointSteps = null;
   _lastFindMessageStep = null;
   _lastVisualHighlightStep = null;
+  _lastWatchVideoMessageStep = null;
   _lastRecapKey = null;
   _lastAnswerCardKey = null;
   visibleJourneySessionId = null;
@@ -1586,6 +1947,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
   document.getElementById('pageguide-tab-chip-close')?.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (currentGuideWorkingStatus) return;
     hideWorkingTabChip();
   });
 
@@ -1642,6 +2004,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   initGuideModeToggle();
   initGuideVisualInputToggle();
+  initEndSummaryToggle();
   initVisualRecapToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
@@ -2022,10 +2385,19 @@ function parseMarkdown(text) {
   // Clean up any empty paragraphs and fix structure
   result = result.replace(/<p><\/p>/g, '');
   result = result.replace(/<br><br>/g, '</p><p>');
+  result = result.replace(/<br>\s*(<ul>)/g, '$1');
+  result = result.replace(/(<\/ul>)\s*<br>/g, '$1');
   
   // Wrap in paragraph if not already wrapped with a block element
   if (!result.startsWith('<h') && !result.startsWith('<ul') && !result.startsWith('<pre') && !result.startsWith('<p')) {
-    result = '<p>' + result + '</p>';
+    if (result.includes('<ul>')) {
+      result = result.replace(/^([\s\S]*?)(<ul>)/, (full, before, listStart) => {
+        const intro = before.replace(/<br>$/g, '').trim();
+        return intro ? `<p>${intro}</p>${listStart}` : listStart;
+      });
+    } else {
+      result = '<p>' + result + '</p>';
+    }
   }
   
   return result;
@@ -2967,6 +3339,7 @@ async function showBranchTree(keepZoom = false) {
 
       const url = node.meta.url || rec?.url || '';
       const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
+      const evidenceHtml = _savedEvidencePreviewHtml(node.meta, rec);
 
       const allowSteer = node.stepNum > 0;
 
@@ -2975,6 +3348,7 @@ async function showBranchTree(keepZoom = false) {
         ${imgHtml}
         <div class="pageguide-goal-step-preview-title">${node.stepNum === 0 ? 'Initial State' : 'Step ' + node.stepNum}</div>
         <div class="pageguide-goal-step-preview-text"><b>${actionText}</b>${escapeHtml(instruction)}</div>
+        ${evidenceHtml}
         ${urlHtml}
         ${beforeHtml}
         ${node.meta.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(node.meta.durationMs)}</div>` : ''}
@@ -3429,12 +3803,13 @@ function initPassHistoryToggle() {
 }
 
 // Visual Recap mode (debug-only): whether to post an end-of-task recap with screenshot
-// evidence. Stored in chrome.storage.local so the content script (guidev2.js) reads the
-// same value. Default ON.
+// evidence when the end summary agent is enabled. Stored in chrome.storage.local so the content
+// script (guidev2.js) reads the same value. Default ON.
 const GUIDE_VISUAL_RECAP_KEY = 'guideVisualRecap';
+const GUIDE_END_SUMMARY_KEY = 'guideEndSummaryAgent';
 
-// Visual input mode (debug-only): send the Guide LLM a screenshot with up to 100 SoM
-// markers alongside the normal page-index prompt. Default OFF.
+// Visual input mode (debug-only): both modes use the same 5000-element Guide index; Visual On
+// also sends a screenshot with matching numbered SoM markers. Default OFF.
 const GUIDE_VISUAL_INPUT_KEY = 'guideVisualInput';
 
 function _normalizeVisualInput(v) {
@@ -3445,8 +3820,8 @@ function _renderVisualInput(btn, val) {
   val = _normalizeVisualInput(val);
   btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Visual: ${val === 'on' ? 'On' : 'Off'} ▾`;
   btn.title = val === 'on'
-    ? 'Guide prompts include a screenshot with up to 100 numbered SoM markers.'
-    : 'Guide prompts are text-only.';
+    ? 'Guide prompts include a screenshot with up to 5000 numbered SoM markers.'
+    : 'Guide prompts are text-only with the same 5000-element PAGE INDEX.';
   document.querySelectorAll('#pageguide-visualinput-menu .pageguide-mode-option').forEach(opt => {
     opt.classList.toggle('active', opt.dataset.visualinput === val);
   });
@@ -3472,6 +3847,45 @@ function initGuideVisualInputToggle() {
     const val = _normalizeVisualInput(option.dataset.visualinput);
     try { await chrome.storage.local.set({ [GUIDE_VISUAL_INPUT_KEY]: val }); } catch (err) {}
     _renderVisualInput(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+function _normalizeEndSummary(v) {
+  return v === 'on' ? 'on' : 'off';
+}
+
+function _renderEndSummary(btn, val) {
+  val = _normalizeEndSummary(val);
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16"/><path d="M4 12h12"/><path d="M4 19h8"/><path d="m17 16 2 2 4-4"/></svg></span>Summary: ${val === 'on' ? 'On' : 'Off'} ▾`;
+  btn.title = val === 'on'
+    ? 'Run the extra end-of-task summarizer/diagnostic agent.'
+    : 'Finish without the extra end summarization call.';
+  document.querySelectorAll('#pageguide-summaryagent-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.summaryagent === val);
+  });
+}
+
+function initEndSummaryToggle() {
+  const btn = document.getElementById('pageguide-summaryagent-toggle');
+  const menu = document.getElementById('pageguide-summaryagent-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_END_SUMMARY_KEY)
+    .then(r => _renderEndSummary(btn, _normalizeEndSummary(r[GUIDE_END_SUMMARY_KEY])))
+    .catch(() => _renderEndSummary(btn, 'off'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeEndSummary(option.dataset.summaryagent);
+    try { await chrome.storage.local.set({ [GUIDE_END_SUMMARY_KEY]: val }); } catch (err) {}
+    _renderEndSummary(btn, val);
     menu.style.display = 'none';
   });
 }
@@ -3676,14 +4090,14 @@ async function stopPausedGuideWithRecap() {
     if (res.recap && res.recap.summary) {
       await renderGuideRecap(res.recap);
     } else {
-      addMessage('⏹ Guide stopped. No completed checkpoint was available to summarize.', 'system');
+      addMessage('⏹ Guide stopped.', 'system');
     }
   } catch (err) {
     hideTyping();
     guideStopped = false;
     if (resumeBtn) resumeBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = false;
-    addMessage(`Could not stop and summarize the guide: ${err.message}`, 'system');
+    addMessage(`Could not stop the guide: ${err.message}`, 'system');
   }
 }
 
@@ -3711,20 +4125,23 @@ function addGuideStep(result) {
   });
 
   // Auto mode hides intermediate step cards, but a find/visual_highlight answer IS the deliverable.
-  if (result.autoMode && !result.isLastStep && !result.isFind && !result.isVisualHighlight) {
+  if (result.autoMode && !result.isLastStep && !result.isFind && !result.isVisualHighlight && !result.isWatchVideo) {
     panel.style.display = 'none';
     panel.innerHTML = '';
     return;
   }
 
+  const isFinishNotice = !!(result.isFinish || (result.isLastStep && !result.isVisualHighlight && !result.isFind && !result.isWatchVideo));
   const stepBadge = result.isFind ? '🔎 Highlight'
-    : (result.isVisualHighlight ? '🖼 Answer' : (result.isLastStep ? '✅' : `Step ${result.step}`));
-  const targetRow = result.targetText
+    : (result.isVisualHighlight ? '🖼 Answer' : (result.isWatchVideo ? '▶ Video' : (isFinishNotice ? '' : `Step ${result.step}`)));
+  const targetRow = (!isFinishNotice && result.targetText)
     ? `<div class="pageguide-step-meta-row"><span>Target</span><b>${escapeHtml(result.targetText)}</b></div>`
     : '';
   const warning = renderStepWarning(result.step);
-  const urlRow = (result.action === 'navigate' && result.navigateUrl)
+  const urlRow = ((result.action === 'goto_url' || result.action === 'navigate') && result.navigateUrl)
     ? `<div class="pageguide-step-meta-row"><span>URL</span><b>${escapeHtml(result.navigateUrl)}</b></div>`
+    : (result.isWatchVideo && result.watchVideoUrl)
+    ? `<div class="pageguide-step-meta-row"><span>Video</span><b>${escapeHtml(result.watchVideoUrl)}</b></div>`
     : '';
 
   // A find answer carries [N:"text"] citations and markdown; render them as clickable chips
@@ -3735,30 +4152,33 @@ function addGuideStep(result) {
   const isTruncated = false;
 
   if (result.isFind) {
-    stepText = '✅ I have completed your request and you can see the highlight answer in the chat panel.';
+    stepText = 'I have completed your request. Please see the answer in the chatbox.';
+  } else if (result.isWatchVideo) {
+    stepText = 'I watched the video. Please see the answer in the chatbox.';
   } else if (result.isFinish && result.finalAnswer) {
     // The full answer lives in the chatbox ANSWER card (with its guaranteed evidence link); the
     // under-timeline box is just a terse pointer so it doesn't duplicate the whole answer.
-    stepText = '✅ I have completed your task. Please see the answer in the chatbox.';
+    stepText = 'I have completed your task. Please see the answer in the chatbox.';
   } else if (result.isLastStep && !result.isVisualHighlight) {
-    // Navigate-only / recap terminal: point to the summary of completed steps in the chatbox.
-    stepText = '✅ I have completed your task. Please see the summary of completed steps in the chatbox. You can now continue with these answers in mind.';
+    // Navigate-only / terminal completion: keep the under-timeline status to one quiet line.
+    stepText = 'I have completed your task. Please see the answer in the chatbox.';
   } else {
     const displayAnswer = result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || '');
     stepText = escapeHtml(_stripEvidenceRefs(displayAnswer));
   }
 
+  const metaHtml = (targetRow || urlRow)
+    ? `<div class="pageguide-step-meta">${targetRow}${urlRow}</div>`
+    : '';
+
   panel.innerHTML = `
-    <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
+    <div class="pageguide-step-card ${isFinishNotice ? 'pageguide-step-card-finish' : ''} ${result.hasHighlights && !isFinishNotice ? 'pageguide-clickable' : ''}">
       <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
       <div class="pageguide-guide-step">
-        <span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>
+        ${stepBadge ? `<span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>` : ''}
         <span class="pageguide-step-text">${stepText}</span>
       </div>
-      <div class="pageguide-step-meta">
-        ${targetRow}
-        ${urlRow}
-      </div>
+      ${metaHtml}
       ${warning}
       <div class="pageguide-step-btn-row"></div>
     </div>
@@ -3808,6 +4228,11 @@ function addGuideStep(result) {
     renderVisualHighlightAnswer(result);
   }
 
+  if (result.isWatchVideo && (result.watchVideoAnswer || result.watchVideoError) && _lastWatchVideoMessageStep !== result.step) {
+    _lastWatchVideoMessageStep = result.step;
+    renderWatchVideoAnswer(result);
+  }
+
   if (result.isFinish && result.finalAnswer) {
     const answerKey = `${result.sessionId || result.recap?.sessionId || ''}:${result.step}`;
     if (_lastAnswerCardKey !== answerKey) {
@@ -3826,7 +4251,7 @@ function addGuideStep(result) {
     const recapKey = `${result.recap.sessionId || ''}:${result.step}`;
     if (_lastRecapKey !== recapKey) {
       _lastRecapKey = recapKey;
-      _panelIsVisualRecapOn().then(on => { if (on) renderGuideRecap(result.recap); }).catch(() => {});
+      renderGuideRecap(result.recap);
     }
   }
 
@@ -3953,14 +4378,22 @@ function stopRun() {
   stopGuide('⏹ Stopped.');
 }
 
-function showTyping() {
+function showTyping(statusText = '') {
   setRunning(true);
   const container = document.getElementById('pageguide-messages');
-  if (!container || container.querySelector('.pageguide-typing')) return;
+  if (!container) return;
+  const existing = container.querySelector('.pageguide-typing');
+  const label = statusText || currentGuideWorkingStatus || (_isGuideWorkingContext() ? 'Agent thinking…' : 'Thinking…');
+  if (existing) {
+    updateTypingIndicatorText(label);
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
 
   const typing = document.createElement('div');
   typing.className = 'pageguide-typing';
-  typing.innerHTML = '<span></span><span></span><span></span>';
+  typing.innerHTML = '<span class="pageguide-typing-spinner" aria-hidden="true"></span><span class="pageguide-typing-text"></span>';
+  typing.querySelector('.pageguide-typing-text').textContent = label;
 
   container.appendChild(typing);
   container.scrollTop = container.scrollHeight;
@@ -3995,6 +4428,13 @@ async function stopGuide(message = '⏹ Guide stopped.') {
  */
 function hideTyping() {
   document.querySelector('.pageguide-typing')?.remove();
+  if (currentGuideStatusTimer) {
+    clearTimeout(currentGuideStatusTimer);
+    currentGuideStatusTimer = null;
+  }
+  pendingGuideWorkingStatus = '';
+  currentGuideWorkingStatus = '';
+  currentGuideStatusShownAt = 0;
   setRunning(false);
 }
 
@@ -4788,10 +5228,11 @@ Previous steps: None`;
           try {
             const cleanJson = content.replace(/```json|```/g, '').trim();
             const step = JSON.parse(cleanJson);
-            const normalizedAction = String(step.action || '').toLowerCase().replace(/[\s-]+/g, '_');
+            let normalizedAction = String(step.action || '').toLowerCase().replace(/[\s-]+/g, '_');
+            if (normalizedAction === 'navigate' || normalizedAction === 'go_to_url' || normalizedAction === 'open_url') normalizedAction = 'goto_url';
             const targetUrl = step.url;
 
-            if (normalizedAction === 'navigate' && targetUrl) {
+            if (normalizedAction === 'goto_url' && targetUrl) {
               const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
               const autoModeResult = await chrome.storage.local.get('guideAutoMode');
               const autoMode = autoModeResult.guideAutoMode === true;
@@ -4846,7 +5287,7 @@ Previous steps: None`;
                 url: currentTab.url,
                 title: currentTab.title || 'New Tab',
                 instruction: step.instruction || `Navigate to ${targetUrl}`,
-                action: 'navigate',
+                action: 'goto_url',
                 navigateUrl: targetUrl,
                 isLastStep: false,
                 target: null,
@@ -4890,7 +5331,7 @@ Previous steps: None`;
                     url: currentTab.url,
                     title: currentTab.title || 'New Tab',
                     timestamp: Date.now(),
-                    action: 'navigate',
+                    action: 'goto_url',
                     navigateUrl: targetUrl,
                     hasShot: !!screenshotBefore
                   }
@@ -4930,7 +5371,7 @@ Previous steps: None`;
                 isGuide: true,
                 autoMode: autoMode,
                 answer: step.instruction || `Navigating to ${targetUrl}`,
-                action: 'navigate',
+                action: 'goto_url',
                 navigateUrl: targetUrl,
                 step: 1,
                 isLastStep: false
@@ -5905,6 +6346,8 @@ function handleContentMessage(message, sender, sendResponse) {
     showTyping();
   } else if (message.action === 'hideTyping') {
     hideTyping();
+  } else if (message.action === 'guideWorkingStatus') {
+    setGuideWorkingStatus(message.status || '');
   } else if (message.action === 'addMessage') {
     if (isGuideParseError(message.content)) {
       addGuideRetryMessage(message.content);
@@ -6405,6 +6848,10 @@ function updateDebugButtonVisibility(enabled, alwaysShowPromptBtn = false) {
   const visualInputWrap = document.querySelector('.pageguide-visualinput-wrap');
   if (visualInputWrap) {
     visualInputWrap.style.display = enabled ? '' : 'none';
+  }
+  const summaryAgentWrap = document.querySelector('.pageguide-summaryagent-wrap');
+  if (summaryAgentWrap) {
+    summaryAgentWrap.style.display = enabled ? '' : 'none';
   }
   const recapWrap = document.querySelector('.pageguide-recap-wrap');
   if (recapWrap) {

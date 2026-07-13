@@ -21,8 +21,61 @@ const GV2_GOAL_RELEVANCE_ENABLED = false;
 
 // ===== PROMPT (inline to keep guidev2.js self-contained) =====
 
-const GUIDE_V2_PROMPT = PROMPTS.GUIDE_V2_PROMPT;
+const _GV2_PROMPTS = (typeof PROMPTS !== 'undefined')
+  ? PROMPTS
+  : ((typeof window !== 'undefined' && window.PROMPTS) ? window.PROMPTS : {});
+const GUIDE_V2_PROMPT = _GV2_PROMPTS.GUIDE_V2_PROMPT || '';
+const GUIDE_EVIDENCE_ANNOTATOR_PROMPT = _GV2_PROMPTS.GUIDE_EVIDENCE_ANNOTATOR || '';
+const GUIDE_RECAP_SUMMARIZER_SYSTEM_PROMPT = _GV2_PROMPTS.GUIDE_RECAP_SUMMARIZER_SYSTEM || `You are a SUMMARIZER for a step-by-step web guide. You do NOT decide whether the task succeeded — the OUTCOME is already decided and given below. Never contradict it or re-judge success/failure. You are given INITIAL and FINAL screenshots when vision is available. The UI will turn summarySegments and stepEvaluations into inline visual references, so pin each meaningful phrase to the real step screenshot/action it describes. Reply with ONLY JSON:
+{"reason":"one or two sentences describing the final state (for a failed run, what is missing)",
+ "annotations":[{"x":0..1,"y":0..1,"w":0..1,"h":0..1,"label":"short final-state evidence label"}],
+ "summary": "1-2 short sentences. Do NOT prefix it with any verdict phrase. Do NOT list screenshots here.",
+ "summarySegments": [{"text": "short sentence fragment or sentence for the summary", "step": <completed step number>, "phrase": "<meaningful phrase copied verbatim from text to make clickable>"}],
+ "stepEvaluations": [{"step": <completed step number>, "status": "correct"|"wrong", "goalRelated": true|false, "goalRelatedReason": "brief reason whether this step helped the user goal", "text": "short visual-recap sentence for this exact step", "phrase": "<key noun phrase copied verbatim from text>", "errorLabel": "misgrounded"|"loop"|"low-confidence"|"risky"|"incomplete"|"wrong-action"|"other", "reason": "why this step was wrong"}]}
+Rules:
+- OUTCOME is authoritative. When OUTCOME is "completed": write "summary" as the ANSWER to the user — describe what the guide accomplished and the resulting state. Mark every step status="correct".
+- When OUTCOME is "failed": the agent stopped before emitting a finish action. Do NOT claim success. Diagnose WHERE and WHY it broke down using the CONFIDENCE SIGNALS and trajectory: mark the failing step(s) status="wrong" with an errorLabel and a short reason, and make "summary" explain why it could not finish and at which step.
+- Use the confidence scores to choose labels: high loop/mechLoop → "loop"; low grounded/mechGrounding → "misgrounded"; low confidence with no clear cause → "low-confidence".
+- Use 2 to 6 stepEvaluations, each a concrete step the guide actually took. "step" MUST be one of the completed step numbers listed below; do not invent steps. If there is only 1 completed step, return 1 stepEvaluation.
+- Use 1 to 5 summarySegments to make the top summary visually grounded. Each segment should describe a meaningful action/result and point to the step whose screenshot/action proves it.
+- For every summarySegments item, "step" MUST be one of the completed step numbers listed below; do not invent steps.
+- For every summarySegments item, "phrase" MUST be a short substring copied exactly from that segment's "text"; it is the clickable visual reference. If unsure, use the key noun phrase such as "Compare all models" or "iPhone 17 Pro Max specs".
+- Treat stepEvaluations as the detailed visual trail: each "text" should summarize the action/result for that step and be useful when the row itself is hovered/clicked.
+- Prefer steps that have before/after screenshots, a target, saved evidence, or visual evidence. Include navigation/scroll steps only when they were meaningful for the goal.
+- "text" should be a short standalone sentence under 100 characters, e.g. "Opened BBC News.", "Scrolled to the World Cup section.", "Saved the Messi article evidence.", "Confirmed the language changed to Spanish."
+- "phrase" MUST be a short substring copied exactly from that step's "text" (the key thing acted on, e.g. "BBC News" or "World Cup section"). It becomes a hover-link to the screenshot of that action.
+- For every stepEvaluation, set goalRelated=true only when the step plausibly helped the user goal; otherwise goalRelated=false with a brief goalRelatedReason.
+- "annotations" are 1-4 boxes over the FINAL screenshot showing evidence (what changed, or what is missing). Coordinates are fractions of the final image (x,y top-left).
+- Keep each "text" under 100 characters. No markdown.`;
+const GUIDE_RECAP_SUMMARIZER_USER_TEMPLATE = _GV2_PROMPTS.GUIDE_RECAP_SUMMARIZER_USER || `USER GOAL: {{USER_GOAL}}
+OUTCOME (already decided — do not change): {{OUTCOME_LINE}}
+IMAGES PROVIDED:
+- Initial state before the guide: {{HAS_INITIAL_IMAGE}}
+- Final state after the guide: {{HAS_FINAL_IMAGE}}
+
+{{PLAN_SECTION}}COMPLETED STEPS (step number: what was done):
+{{COMPLETED_STEPS}}
+
+CONFIDENCE SIGNALS BY STEP:
+{{CONFIDENCE_SIGNALS}}
+
+VISUAL EVIDENCE BY STEP:
+{{VISUAL_EVIDENCE_BY_STEP}}
+
+IMPORTANT FOR VISUAL RECAP:
+- The UI will render summarySegments as inline clickable visual references inside the short summary.
+- The UI will render stepEvaluations as the detailed reasoning-trail rows.
+- Choose summarySegments.step and stepEvaluation.step values that point to the screenshot/action the user should inspect for that phrase.
+- Do not write a separate "Visual recap:" list in summary.
+
+EVIDENCE SCRATCHPAD:
+{{EVIDENCE_SCRATCHPAD}}
+
+Return the recap JSON.`;
 if (typeof window !== 'undefined') window.GUIDE_V2_PROMPT = GUIDE_V2_PROMPT;
+if (typeof window !== 'undefined') window.GUIDE_EVIDENCE_ANNOTATOR_PROMPT = GUIDE_EVIDENCE_ANNOTATOR_PROMPT;
+if (typeof window !== 'undefined') window.GUIDE_RECAP_SUMMARIZER_SYSTEM_PROMPT = GUIDE_RECAP_SUMMARIZER_SYSTEM_PROMPT;
+if (typeof window !== 'undefined') window.GUIDE_RECAP_SUMMARIZER_USER_TEMPLATE = GUIDE_RECAP_SUMMARIZER_USER_TEMPLATE;
 
 // ===== CONSTANTS =====
 
@@ -35,32 +88,35 @@ const _GV2_INDICATOR_ID = 'pageguide-gv2-indicator';
 let _gv2IndicatorInjected = false;
 
 function _gv2ShowIndicator(text = 'Agent thinking…') {
-  if (!_gv2IndicatorInjected) {
-    _gv2IndicatorInjected = true;
-    const style = document.createElement('style');
-    style.id = 'pageguide-gv2-indicator-css';
-    style.textContent = `
-#pageguide-gv2-indicator{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);z-index:2147483647;display:flex;align-items:center;gap:10px;padding:10px 18px;border-radius:999px;background:rgba(20,20,30,.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);box-shadow:0 4px 24px rgba(0,0,0,.45);color:#e8e8f0;font:600 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none;opacity:0;transition:opacity .22s ease,transform .22s ease}
-#pageguide-gv2-indicator.gv2-visible{opacity:1;transform:translateX(-50%) translateY(0)}
-#pageguide-gv2-indicator .gv2-spinner{width:14px;height:14px;border:2px solid rgba(160,120,255,.35);border-top-color:#a078ff;border-radius:50%;animation:gv2spin .75s linear infinite;flex-shrink:0}
-@keyframes gv2spin{to{transform:rotate(360deg)}}`;
-    document.head.appendChild(style);
-  }
-  let el = document.getElementById(_GV2_INDICATOR_ID);
-  if (!el) {
-    el = document.createElement('div');
-    el.id = _GV2_INDICATOR_ID;
-    el.innerHTML = '<div class="gv2-spinner"></div><span class="gv2-label"></span>';
-    document.body.appendChild(el);
-  }
-  el.querySelector('.gv2-label').textContent = text;
-  el.getBoundingClientRect(); // force reflow so transition plays
-  el.classList.add('gv2-visible');
+  try { chrome.runtime.sendMessage({ action: 'guideWorkingStatus', status: text }); } catch (e) {}
 }
 
 function _gv2HideIndicator() {
   const el = document.getElementById(_GV2_INDICATOR_ID);
-  if (el) el.classList.remove('gv2-visible');
+  if (el) el.remove();
+  try { chrome.runtime.sendMessage({ action: 'guideWorkingStatus', status: '' }); } catch (e) {}
+}
+
+function _gv2ActionStatus(action, step = null) {
+  const a = String(action || '').toLowerCase();
+  const target = String(step?.element?.text || step?.instruction || '').replace(/\s+/g, ' ').trim();
+  const shortTarget = target ? ` “${target.slice(0, 48)}${target.length > 48 ? '…' : ''}”` : '';
+  if (a === 'click') return `Agent clicking${shortTarget}…`;
+  if (a === 'drag_drop') return `Agent dragging${shortTarget}…`;
+  if (a === 'type') return 'Agent typing…';
+  if (a === 'clear_text') return 'Agent clearing text…';
+  if (a === 'scroll_down') return 'Agent scrolling down…';
+  if (a === 'scroll_up') return 'Agent scrolling up…';
+  if (a === 'goto_url' || a === 'navigate') return 'Agent going to URL…';
+  if (a === 'watch_video') return 'Agent watching video…';
+  if (a === 'find') return 'Reading page…';
+  if (a === 'finish') return 'Preparing final answer…';
+  if (a === 'highlight') return 'Preparing next step…';
+  return 'Agent working…';
+}
+
+function _gv2SetWorkingStatus(text) {
+  _gv2ShowIndicator(text || 'Agent working…');
 }
 
 // ===== AUTO-MODE OVERLAY + TAKE-CONTROL BUTTON (Slice 4) =====
@@ -373,24 +429,12 @@ function _gv2StopForMaxSteps(g = window._guidev2) {
   try {
     chrome.runtime.sendMessage({ action: 'addMessage', content: message, type: 'system' });
   } catch (e) {}
-  // Fire-and-forget the failed-run summary. Hitting the step cap is deterministically a FAILED run
-  // (no finish action), so the summarization agent diagnoses why/where it broke down — it never
-  // judges success. With Visual Recap on we build the full diagnostic recap (trajectory + action
-  // grounding); with it off we fall back to the lighter one-line Final-State card.
+  // Fire-and-forget the optional failed-run summary. Hitting the step cap is deterministically a
+  // FAILED run (no finish action), so when enabled the summarization agent diagnoses why/where it
+  // broke down — it never judges success.
   (async () => {
     try {
-      if (!(await _gv2IsVisualRecapOn())) {
-        if (!snap) return;
-        const final = await _gv2BuildFinalVerdictFromSnapshot(snap, 'stopped');
-        if (final) chrome.runtime.sendMessage({
-          action: 'guideFinalState',
-          sessionId: snap.sessionId,
-          step: final.step,
-          verdict: 'failed',
-          reason: final.reason
-        });
-        return;
-      }
+      if (!(await _gv2IsEndSummaryOn())) return;
       const recap = await _gv2BuildRecap(g, 'failed');
       if (recap) chrome.runtime.sendMessage({ action: 'guideRecap', recap });
     } catch (e) { /* non-fatal */ }
@@ -1395,9 +1439,9 @@ async function _gv2LowConfidenceActionThreshold() {
   try {
     const r = await chrome.storage.local.get(_GV2_ACTION_THRESHOLD_KEY);
     const n = Number(r[_GV2_ACTION_THRESHOLD_KEY]);
-    return Number.isFinite(n) ? Math.max(1, Math.round(n)) : 5;
+    return Number.isFinite(n) ? Math.max(1, Math.round(n)) : 3;
   } catch (e) {
-    return 5;
+    return 3;
   }
 }
 
@@ -1445,7 +1489,8 @@ async function _gv2IsPassHistory() {
 }
 
 const _GV2_VISUAL_INPUT_KEY = 'guideVisualInput';
-const GV2_VISUAL_INPUT_MAX_MARKS = 100;
+const GV2_GUIDE_INDEX_MAX_ITEMS = 5000;
+const GV2_VISUAL_INPUT_MAX_MARKS = GV2_GUIDE_INDEX_MAX_ITEMS;
 
 async function _gv2IsVisualInputOn() {
   try {
@@ -1457,6 +1502,7 @@ async function _gv2IsVisualInputOn() {
 }
 
 const _GV2_VISUAL_RECAP_KEY = 'guideVisualRecap';
+const _GV2_END_SUMMARY_KEY = 'guideEndSummaryAgent';
 
 async function _gv2IsVisualRecapOn() {
   try {
@@ -1464,6 +1510,15 @@ async function _gv2IsVisualRecapOn() {
     return r[_GV2_VISUAL_RECAP_KEY] !== 'off'; // default on
   } catch (e) {
     return true;
+  }
+}
+
+async function _gv2IsEndSummaryOn() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_END_SUMMARY_KEY);
+    return r[_GV2_END_SUMMARY_KEY] === 'on';
+  } catch (e) {
+    return false;
   }
 }
 
@@ -1937,9 +1992,8 @@ function _gv2DrawMarkerOnCanvas(ctx, canvas, marker, number, color = GV2_ACTION_
       const padX = Math.round(fs * 0.4);
       const bw = ctx.measureText(label).width + padX * 2;
       const bh = Math.round(fs * 1.35);
-      let bx = x - lw / 2, by = y - bh;
-      if (by < 0) by = y;           // no room above → sit inside the top edge
-      if (bx < 0) bx = 0;
+      let bx = x - bw - lw, by = y;
+      if (bx < 0) bx = Math.min(Math.max(0, x), Math.max(0, W - bw));
       if (bx + bw > W) bx = W - bw;
       const r = Math.min(6, bh / 2);
       ctx.fillStyle = color;
@@ -1959,11 +2013,139 @@ function _gv2DrawMarkerOnCanvas(ctx, canvas, marker, number, color = GV2_ACTION_
   } catch (e) { /* best-effort */ }
 }
 
+function _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr) {
+  if (!ctx || !canvas || !crop || !Array.isArray(annotations) || !annotations.length) return;
+  try {
+    const W = canvas.width, H = canvas.height;
+    const sourceW = Number(crop.imageWidth || crop.sourceWidth || 0) || Math.max(1, Number(crop.sx || 0) + Number(crop.sw || W));
+    const sourceH = Number(crop.imageHeight || crop.sourceHeight || 0) || Math.max(1, Number(crop.sy || 0) + Number(crop.sh || H));
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const pointInCrop = (p) => ({
+      x: clamp((p.x * sourceW) - crop.sx, 0, W),
+      y: clamp((p.y * sourceH) - crop.sy, 0, H)
+    });
+    const annColor = (ann) => {
+      const c = String(ann?.color || '').trim();
+      return c || GV2_EVIDENCE_MARKER_COLOR;
+    };
+    const annFill = (color) => {
+      if (/^#[0-9a-f]{6}$/i.test(color)) return `${color}26`;
+      if (/^#[0-9a-f]{3}$/i.test(color)) return `${color}26`;
+      return GV2_EVIDENCE_MARKER_FILL;
+    };
+    const rectInCrop = (b) => {
+      const x = (b.x * sourceW) - crop.sx;
+      const y = (b.y * sourceH) - crop.sy;
+      const w = b.w * sourceW;
+      const h = b.h * sourceH;
+      const x1 = clamp(x, 0, W), y1 = clamp(y, 0, H);
+      const x2 = clamp(x + w, 0, W), y2 = clamp(y + h, 0, H);
+      return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+    };
+    const drawLabel = (text, x, y, color = GV2_EVIDENCE_MARKER_COLOR) => {
+      if (!text) return;
+      const label = String(text).slice(0, 60);
+      const fs = Math.max(12, Math.round(W * 0.028));
+      ctx.font = `700 ${fs}px sans-serif`;
+      const pad = Math.round(fs * 0.35);
+      const tw = ctx.measureText(label).width;
+      const bw = Math.min(W - 4, tw + pad * 2);
+      const bh = Math.round(fs * 1.45);
+      const bx = clamp(x, 2, Math.max(2, W - bw - 2));
+      const by = clamp(y - bh - 4, 2, Math.max(2, H - bh - 2));
+      ctx.fillStyle = color;
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillText(label, bx + pad, by + bh / 2 + 1);
+    };
+    const lw = Math.max(3, Math.round(W * 0.006));
+    annotations.slice(0, 5).forEach((ann) => {
+      const color = annColor(ann);
+      if (!ann || ann.type === 'box') {
+        const r = rectInCrop(ann?.bbox || {});
+        if (!(r.w > 0) || !(r.h > 0)) return;
+        ctx.lineWidth = lw + 2;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.lineWidth = lw;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = annFill(color);
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        drawLabel(ann.label, r.x, r.y, color);
+      } else if (ann.type === 'ellipse') {
+        const r = rectInCrop(ann?.bbox || {});
+        if (!(r.w > 0) || !(r.h > 0)) return;
+        ctx.lineWidth = lw + 2;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.beginPath(); ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2); ctx.stroke();
+        ctx.lineWidth = lw;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = annFill(color);
+        ctx.beginPath(); ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        drawLabel(ann.label, r.x, r.y, color);
+      } else if (ann.type === 'arrow' || ann.type === 'line') {
+        const from = pointInCrop(ann.from || {});
+        const to = pointInCrop(ann.to || {});
+        const angle = Math.atan2(to.y - from.y, to.x - from.x);
+        const head = Math.max(10, Math.round(W * 0.025));
+        ctx.lineWidth = lw + 2;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+        ctx.lineWidth = lw;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+        if (ann.type === 'arrow') {
+          ctx.beginPath();
+          ctx.moveTo(to.x, to.y);
+          ctx.lineTo(to.x - head * Math.cos(angle - Math.PI / 6), to.y - head * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(to.x - head * Math.cos(angle + Math.PI / 6), to.y - head * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fill();
+        }
+        drawLabel(ann.label, (from.x + to.x) / 2, (from.y + to.y) / 2, color);
+      }
+    });
+  } catch (e) { /* best-effort */ }
+}
+
+function _gv2MarkFullScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = []) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v || { base64: null, marker: null }); } };
+    setTimeout(() => finish(null), 1500);
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const dpr = window.devicePixelRatio || 1;
+          const crop = { sx: 0, sy: 0, sw: img.naturalWidth, sh: img.naturalHeight, imageWidth: img.naturalWidth, imageHeight: img.naturalHeight };
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          const marker = (typeof gv2RegionMarkerRect === 'function') ? gv2RegionMarkerRect(rect, crop, dpr) : null;
+          if (bakeMarker) _gv2DrawMarkerOnCanvas(ctx, canvas, marker, markerNumber, color, fill);
+          _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr);
+          const out = canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/\w+;base64,/, '');
+          finish({ base64: out, marker });
+        } catch (e) { finish(null); }
+      };
+      img.onerror = () => finish(null);
+      img.src = 'data:image/jpeg;base64,' + base64;
+    } catch (e) { finish(null); }
+  });
+}
+
 /** Crop a base64 JPEG viewport screenshot to a CSS-px rect using a canvas, and BAKE a SoM marker
  * (box + optional number badge) over the target so the "region of action" is visible in the pixels
  * themselves (no dependency on render-time geometry). Resolves { base64, marker } — base64 is the
  * crop (or null), marker is the target's normalized rect within the crop (or null). */
-function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true) {
+function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = []) {
   return new Promise((resolve) => {
     // Hard time-box: never let a stuck Image decode hang the caller (which gates the record store).
     let done = false;
@@ -1980,6 +2162,8 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
             ? gv2CropRect(rect, dpr, img.naturalWidth, img.naturalHeight, pad)
             : null;
           if (!crop) return finish(null);
+          crop.imageWidth = img.naturalWidth;
+          crop.imageHeight = img.naturalHeight;
           const canvas = document.createElement('canvas');
           canvas.width = crop.sw; canvas.height = crop.sh;
           const ctx = canvas.getContext('2d');
@@ -1988,6 +2172,7 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
           // Skip canvas baking when the marker is already drawn as a DOM overlay (captured in the
           // pixels), so we don't stack two markers on the same region.
           if (bakeMarker) _gv2DrawMarkerOnCanvas(ctx, canvas, marker, markerNumber, color, fill);
+          _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr);
           const base = canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/\w+;base64,/, '');
           finish({ base64: base, marker });
         } catch (e) { finish(null); }
@@ -2042,7 +2227,7 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
         return out;
       }
       markerTarget = normRect;
-      out.captureMode = 'bbox_viewport';
+      out.captureMode = options.fullViewport ? 'bbox_full_viewport' : 'bbox_viewport';
     } else {
       out.captureError = 'missing-target';
       return out;
@@ -2061,19 +2246,249 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
       // Let the overlay paint before capturing.
       await new Promise(r => setTimeout(r, 50));
     }
-    let shot = null;
-    try { if (typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
+    let shot = options.screenshotBase64 || null;
+    try { if (!shot && typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
     if (markerNode && typeof gv2RemoveDomMarker === 'function') gv2RemoveDomMarker(markerNode);
     if (!shot) {
       out.captureError = 'screenshot-failed';
       return out;
     }
-    const bakeMarker = !markerNode; // DOM overlay already in pixels → don't also bake on canvas
-    const cropped = await _gv2CropScreenshot(shot, rect, markerNumber, GV2_EVIDENCE_MARKER_COLOR, GV2_EVIDENCE_MARKER_FILL, bakeMarker);
-    out.visualEvidenceShot = cropped?.base64 || null;
-    out.visualEvidenceMarker = cropped?.marker || null;
+    const hasAnnotations = Array.isArray(options.annotations) && options.annotations.length > 0;
+    // DOM overlays are already captured in pixels. For screenshot-region evidence, annotations are
+    // the visual overlay; region_bbox is just the crop/hint. Only draw the plain region box when
+    // there are no annotations to show.
+    const bakeMarker = !markerNode && !hasAnnotations;
+    const marked = options.fullViewport
+      ? await _gv2MarkFullScreenshot(
+          shot,
+          rect,
+          markerNumber,
+          GV2_EVIDENCE_MARKER_COLOR,
+          GV2_EVIDENCE_MARKER_FILL,
+          bakeMarker,
+          options.annotations || []
+        )
+      : await _gv2CropScreenshot(
+          shot,
+          rect,
+          markerNumber,
+          GV2_EVIDENCE_MARKER_COLOR,
+          GV2_EVIDENCE_MARKER_FILL,
+          bakeMarker,
+          options.annotations || []
+        );
+    out.visualEvidenceShot = marked?.base64 || null;
+    out.visualEvidenceMarker = marked?.marker || null;
     if (!out.visualEvidenceShot && !out.captureError) out.captureError = 'crop-failed';
   } catch (e) { out.captureError = e?.message || 'capture-failed'; }
+  return out;
+}
+
+async function _gv2AnnotateEvidenceItem(item, screenshotBase64) {
+  const out = {
+    region_bbox: item?.evidenceRect || item?.region_bbox || null,
+    annotations: Array.isArray(item?.annotations) ? item.annotations : [],
+    systemPrompt: '',
+    userPrompt: '',
+    screenshotBase64: screenshotBase64 || null,
+    rawResponse: '',
+    error: null
+  };
+  if (!item || item.evidenceEl || item.som_id || !screenshotBase64) return out;
+  const prompt = item.annotation_prompt || item.annotationPrompt || item.note || item.reason || item.key || '';
+  const systemPrompt = GUIDE_EVIDENCE_ANNOTATOR_PROMPT || '';
+  const userPrompt = `EVIDENCE KEY: ${item.key || ''}
+EVIDENCE NOTE: ${item.note || ''}
+ANNOTATION REQUEST: ${prompt}
+CURRENT WORKER REGION_BBOX HINT: ${item.evidenceRect ? JSON.stringify(item.evidenceRect) : '(none)'}
+
+Annotate the screenshot so the user can visually understand this evidence.`;
+  out.systemPrompt = systemPrompt;
+  out.userPrompt = userPrompt;
+  try {
+    const response = await safeSendMessage({
+      action: 'callLLMWithImages',
+      systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      images: [{ base64: screenshotBase64, label: 'Current viewport screenshot for evidence annotation' }],
+      metadata: { mode: 'guide_evidence_annotator', step: window._guidev2?._activeStepNumber || null, url: window.location.href }
+    });
+    out.rawResponse = response?.content ? String(response.content) : '';
+    if (response?.error) {
+      out.error = response.error;
+      return out;
+    }
+    const repairedRawResponse = _gv2RepairAnnotatorJsonText(out.rawResponse);
+    const raw = repairedRawResponse && typeof gv2ExtractJsonObject === 'function' ? gv2ExtractJsonObject(repairedRawResponse) : null;
+    const imageSize = await _gv2ImageSizeFromBase64(screenshotBase64);
+    const coercedRaw = _gv2CoerceAnnotatorResult(raw, imageSize);
+    out.annotationCoordinateDebug = coercedRaw?.__coordinateDebug || null;
+    if (out.annotationCoordinateDebug && repairedRawResponse !== out.rawResponse) {
+      out.annotationCoordinateDebug.repairedRawResponse = repairedRawResponse;
+    }
+    const norm = typeof gv2NormalizeEvidenceAnnotationResult === 'function'
+      ? gv2NormalizeEvidenceAnnotationResult(coercedRaw)
+      : { region_bbox: null, annotations: [] };
+    if (norm.region_bbox) out.region_bbox = norm.region_bbox;
+    out.annotations = Array.isArray(norm.annotations) ? norm.annotations : [];
+  } catch (e) {
+    out.error = e?.message || String(e);
+  }
+  return out;
+}
+
+function _gv2RepairAnnotatorJsonText(text) {
+  let s = String(text || '');
+  const num = '[-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?';
+  const coordKey = '(?:bbox|region_bbox|region|crop)';
+  const firstFinite = (vals) => vals.find(v => Number.isFinite(v));
+  const fmt = (n) => Number.isFinite(n) ? String(n) : null;
+  const repairObjectBody = (name, body) => {
+    const pairs = [];
+    const pairRe = new RegExp('"([^"]+)"\\s*:\\s*(' + num + ')', 'g');
+    let m;
+    while ((m = pairRe.exec(body))) {
+      pairs.push({ key: String(m[1] || '').toLowerCase(), value: Number(m[2]) });
+    }
+    if (pairs.length < 4) return null;
+    const valsFor = (...keys) => pairs.filter(p => keys.includes(p.key)).map(p => p.value).filter(Number.isFinite);
+    const nums = pairs.map(p => p.value).filter(Number.isFinite);
+    let x = firstFinite(valsFor('x', 'left', 'l', 'x1'));
+    let y = firstFinite(valsFor('y', 'top', 't', 'y1'));
+    let w = firstFinite(valsFor('w', 'width'));
+    let h = firstFinite(valsFor('h', 'height'));
+    const x2 = firstFinite(valsFor('x2', 'right', 'r'));
+    const y2 = firstFinite(valsFor('y2', 'bottom', 'b'));
+    if (!Number.isFinite(w) && Number.isFinite(x2) && Number.isFinite(x)) w = x2 - x;
+    if (!Number.isFinite(h) && Number.isFinite(y2) && Number.isFinite(y)) h = y2 - y;
+    const xVals = valsFor('x', 'left', 'l', 'x1');
+    const yVals = valsFor('y', 'top', 't', 'y1');
+    // Duplicate-key recovery: x/y/w/y means the second y was intended as h; x/y/x/h means the
+    // second x was intended as w. This keeps JSON.parse from silently discarding the first value.
+    if (!Number.isFinite(h) && Number.isFinite(w) && yVals.length >= 2) h = yVals[yVals.length - 1];
+    if (!Number.isFinite(w) && Number.isFinite(h) && xVals.length >= 2) w = xVals[xVals.length - 1];
+    if (![x, y, w, h].every(Number.isFinite) && nums.length >= 4) {
+      x = Number.isFinite(x) ? x : nums[0];
+      y = Number.isFinite(y) ? y : nums[1];
+      w = Number.isFinite(w) ? w : nums[2];
+      h = Number.isFinite(h) ? h : nums[3];
+    }
+    if (![x, y, w, h].every(Number.isFinite)) return null;
+    x = Number(x.toFixed(6)); y = Number(y.toFixed(6)); w = Number(w.toFixed(6)); h = Number(h.toFixed(6));
+    return `"${name}":{"x":${fmt(x)},"y":${fmt(y)},"w":${fmt(w)},"h":${fmt(h)}}`;
+  };
+  s = s.replace(new RegExp('"(' + coordKey + ')"\\s*:\\s*\\{([^{}]*)\\}', 'g'), (full, name, body) => {
+    return repairObjectBody(name, body) || full;
+  });
+  s = s.replace(new RegExp('"(' + coordKey + ')"\\s*:\\s*\\[\\s*(' + num + ')\\s*,\\s*(' + num + ')\\s*,\\s*(' + num + ')\\s*,\\s*(' + num + ')\\s*\\]', 'g'), (_full, name, x, y, w, h) => {
+    return `"${name}":{"x":${x},"y":${y},"w":${w},"h":${h}}`;
+  });
+  return s;
+}
+if (typeof window !== 'undefined') window._gv2RepairAnnotatorJsonText = _gv2RepairAnnotatorJsonText;
+
+function _gv2ImageSizeFromBase64(base64) {
+  return new Promise((resolve) => {
+    if (!base64) return resolve(null);
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v || null); } };
+    setTimeout(() => finish(null), 1000);
+    try {
+      const img = new Image();
+      img.onload = () => finish({ width: img.naturalWidth || img.width || 0, height: img.naturalHeight || img.height || 0 });
+      img.onerror = () => finish(null);
+      img.src = String(base64).startsWith('data:') ? String(base64) : `data:image/jpeg;base64,${base64}`;
+    } catch (e) {
+      finish(null);
+    }
+  });
+}
+
+function _gv2CoerceAnnotatorBox(box, imageSize, fallbackRegion = null) {
+  if (!box || typeof box !== 'object') return null;
+  const iw = Number(imageSize?.width) || 0;
+  const ih = Number(imageSize?.height) || 0;
+  if (Array.isArray(box) && box.length >= 4) {
+    box = { x: box[0], y: box[1], w: box[2], h: box[3] };
+  }
+  const firstDefined = (...vals) => vals.find(v => v != null && v !== '');
+  const toNormX = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return n > 1 && iw > 0 ? n / iw : n;
+  };
+  const toNormY = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return n > 1 && ih > 0 ? n / ih : n;
+  };
+  const xRaw = firstDefined(box.x, box.left, box.l, box.x1);
+  const yRaw = firstDefined(box.y, box.top, box.t, box.y1);
+  const x = toNormX(xRaw);
+  const y = toNormY(yRaw);
+  let w = Number(firstDefined(box.w, box.width));
+  let h = Number(firstDefined(box.h, box.height));
+  const x2 = toNormX(firstDefined(box.x2, box.right, box.r));
+  const y2 = toNormY(firstDefined(box.y2, box.bottom, box.b));
+  if ((!Number.isFinite(w) || !(w > 0)) && Number.isFinite(x2) && Number.isFinite(x)) w = x2 - x;
+  if ((!Number.isFinite(h) || !(h > 0)) && Number.isFinite(y2) && Number.isFinite(y)) h = y2 - y;
+  if ((!Number.isFinite(w) || !Number.isFinite(h)) && !Array.isArray(box)) {
+    const nums = Object.values(box).map(Number).filter(Number.isFinite);
+    if (nums.length >= 4) {
+      if (!Number.isFinite(w)) w = nums[2];
+      if (!Number.isFinite(h)) h = nums[3];
+    }
+  }
+  if (Number.isFinite(w) && w > 1 && iw > 0) w = w / iw;
+  if (Number.isFinite(h) && h > 1 && ih > 0) h = h / ih;
+  if (!Number.isFinite(w) || !(w > 0)) w = fallbackRegion?.w ? Math.min(fallbackRegion.w, 0.12) : 0.08;
+  if (!Number.isFinite(h) || !(h > 0)) h = fallbackRegion?.h ? Math.min(fallbackRegion.h, 0.06) : 0.04;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y, w, h };
+}
+
+function _gv2CoerceAnnotatorPoint(point, imageSize) {
+  if (!point || typeof point !== 'object') return null;
+  const iw = Number(imageSize?.width) || 0;
+  const ih = Number(imageSize?.height) || 0;
+  const x0 = Number(point.x);
+  const y0 = Number(point.y);
+  if (!Number.isFinite(x0) || !Number.isFinite(y0)) return null;
+  return {
+    x: x0 > 1 && iw > 0 ? x0 / iw : x0,
+    y: y0 > 1 && ih > 0 ? y0 / ih : y0
+  };
+}
+
+function _gv2CoerceAnnotatorResult(raw, imageSize) {
+  if (!raw || typeof raw !== 'object') return raw;
+  const out = Object.assign({}, raw);
+  const fallbackRegion = _gv2CoerceAnnotatorBox(raw.region_bbox || raw.region || raw.crop || raw.bbox, imageSize, null);
+  if (fallbackRegion) out.region_bbox = fallbackRegion;
+  if (Array.isArray(raw.annotations)) {
+    out.annotations = raw.annotations.map((ann) => {
+      if (!ann || typeof ann !== 'object') return ann;
+      const next = Object.assign({}, ann);
+      const type = String(next.type || '').toLowerCase();
+      if (type === 'box' || type === 'rect' || type === 'rectangle' || type === 'circle' || type === 'ellipse') {
+        const box = _gv2CoerceAnnotatorBox(next.bbox || next.region_bbox || next.region || next, imageSize, fallbackRegion);
+        if (box) next.bbox = box;
+      } else if (type === 'arrow' || type === 'line') {
+        const from = _gv2CoerceAnnotatorPoint(next.from, imageSize);
+        const to = _gv2CoerceAnnotatorPoint(next.to, imageSize);
+        if (from) next.from = from;
+        if (to) next.to = to;
+      }
+      return next;
+    });
+  }
+  out.__coordinateDebug = {
+    imageSize: imageSize || null,
+    rawRegion: raw.region_bbox || raw.region || raw.crop || raw.bbox || null,
+    coercedRegion: out.region_bbox || null,
+    rawAnnotations: Array.isArray(raw.annotations) ? raw.annotations : [],
+    coercedAnnotations: Array.isArray(out.annotations) ? out.annotations : []
+  };
   return out;
 }
 
@@ -2083,13 +2498,41 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
   const startX = window.scrollX || 0;
   const startY = window.scrollY || 0;
   const shouldRestore = options.restoreScroll === true;
+  let annotationShot = null;
   for (const item of input) {
+    if (item && !item.evidenceEl && !item.som_id && (item.need_annotation || item.needAnnotation || !Array.isArray(item.annotations) || !item.annotations.length)) {
+      try { if (!annotationShot && typeof captureScreenshot === 'function') annotationShot = await captureScreenshot(); } catch (e) {}
+      const annotated = await _gv2AnnotateEvidenceItem(item, annotationShot);
+      if (annotated.region_bbox) {
+        item.region_bbox = annotated.region_bbox;
+        item.evidenceRect = annotated.region_bbox;
+      }
+      item.annotations = Array.isArray(annotated.annotations) ? annotated.annotations : [];
+      item.annotationSystemPrompt = annotated.systemPrompt || '';
+      item.annotationUserPrompt = annotated.userPrompt || '';
+      item.annotationScreenshot = annotated.screenshotBase64 || annotationShot || null;
+      item.annotationRawResponse = annotated.rawResponse || '';
+      item.annotationError = annotated.error || null;
+      item.annotationCoordinateDebug = annotated.annotationCoordinateDebug || null;
+    }
+    if (item?.fullViewportCapture && !item.evidenceEl && !item.evidenceRect && Array.isArray(item.annotations) && item.annotations.length) {
+      item.evidenceRect = { x: 0, y: 0, w: 1, h: 1 };
+    }
     if (!item || (!item.evidenceEl && !item.evidenceRect)) {
       out.push({
         key: item?.key || null,
         note: item?.note || null,
         som_id: item?.som_id || null,
         region_bbox: item?.region_bbox || item?.evidenceRect || null,
+        annotations: Array.isArray(item?.annotations) ? item.annotations : [],
+        need_annotation: !!(item?.need_annotation || item?.needAnnotation),
+        annotation_prompt: item?.annotation_prompt || item?.annotationPrompt || null,
+        annotationSystemPrompt: item?.annotationSystemPrompt || '',
+        annotationUserPrompt: item?.annotationUserPrompt || '',
+        annotationScreenshot: item?.annotationScreenshot || null,
+        annotationRawResponse: item?.annotationRawResponse || '',
+        annotationCoordinateDebug: item?.annotationCoordinateDebug || null,
+        annotationError: item?.annotationError || (item?.evidenceRect ? null : 'missing-target'),
         visualEvidenceShot: null,
         visualEvidenceNormRect: item?.evidenceRect || null,
         visualEvidenceMarker: null,
@@ -2105,7 +2548,10 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
     try {
       cap = await gv2CaptureEvidenceRegion(item.evidenceEl, item.evidenceIndex, item.evidenceRect, {
         scrollIntoView: !!item.scrollIntoView,
-        forceDomMarker: !!item.forceDomMarker
+        forceDomMarker: !!item.forceDomMarker,
+        fullViewport: !!item.fullViewportCapture,
+        annotations: Array.isArray(item.annotations) ? item.annotations : [],
+        screenshotBase64: (!item.evidenceEl && annotationShot) ? annotationShot : null
       });
     } catch (e) { cap.captureError = e?.message || 'capture-failed'; }
     out.push({
@@ -2113,13 +2559,22 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       note: item.note || null,
       som_id: item.som_id || null,
       region_bbox: item.region_bbox || item.evidenceRect || null,
+      annotations: Array.isArray(item.annotations) ? item.annotations : [],
+      need_annotation: !!(item.need_annotation || item.needAnnotation),
+      annotation_prompt: item.annotation_prompt || item.annotationPrompt || null,
+      annotationSystemPrompt: item.annotationSystemPrompt || '',
+      annotationUserPrompt: item.annotationUserPrompt || '',
+      annotationScreenshot: item.annotationScreenshot || null,
+      annotationRawResponse: item.annotationRawResponse || '',
+      annotationCoordinateDebug: item.annotationCoordinateDebug || null,
+      annotationError: item.annotationError || null,
       visualEvidenceShot: cap.visualEvidenceShot || null,
       visualEvidenceNormRect: cap.visualEvidenceNormRect || item.evidenceRect || null,
       visualEvidenceMarker: cap.visualEvidenceMarker || null,
       visualEvidenceText: item.text || null,
       visualEvidenceReason: item.reason || null,
       visualEvidenceIndex: item.evidenceIndex != null ? item.evidenceIndex : null,
-      captureMode: cap.captureMode || (item.evidenceRect ? 'bbox_viewport' : null),
+      captureMode: cap.captureMode || (item.evidenceRect ? (item.fullViewportCapture ? 'bbox_full_viewport' : 'bbox_viewport') : null),
       captureError: cap.captureError || null
     });
   }
@@ -2346,7 +2801,7 @@ async function gv2CaptureStepRecord(data) {
             text: data.visualEvidenceText || null,
             reason: data.visualEvidenceReason || null
           }] : []);
-      evidenceItems = await gv2CaptureEvidenceItems(rawEvidenceItems);
+      evidenceItems = await gv2CaptureEvidenceItems(rawEvidenceItems, { restoreScroll: true });
     }
     const savedEvidenceItems = Array.isArray(data.savedEvidenceItems) ? data.savedEvidenceItems.slice(0, 5) : [];
     const savedEvidenceCapturesRaw = savedEvidenceItems.length
@@ -2358,6 +2813,16 @@ async function gv2CaptureStepRecord(data) {
       shot: item.visualEvidenceShot || null,
       marker: item.visualEvidenceMarker || null,
       region_bbox: item.region_bbox || item.visualEvidenceNormRect || null,
+      annotations: Array.isArray(item.annotations) ? item.annotations : [],
+      need_annotation: !!item.need_annotation,
+      annotation_prompt: item.annotation_prompt || null,
+      annotationSystemPrompt: item.annotationSystemPrompt || '',
+      annotationUserPrompt: item.annotationUserPrompt || '',
+      annotationScreenshot: item.annotationScreenshot || null,
+      annotationRawResponse: item.annotationRawResponse || '',
+      annotationCoordinateDebug: item.annotationCoordinateDebug || null,
+      annotationError: item.annotationError || null,
+      annotationResultShot: item.visualEvidenceShot || null,
       som_id: item.som_id || null,
       captureMode: item.captureMode || null,
       captureError: item.captureError || null
@@ -2438,6 +2903,7 @@ async function gv2CaptureStepRecord(data) {
       visualEvidenceText: firstEvidence.visualEvidenceText || null,
       visualEvidenceReason: firstEvidence.visualEvidenceReason || null,
       visualEvidenceIndex: firstEvidence.visualEvidenceIndex != null ? firstEvidence.visualEvidenceIndex : null,
+      confirmationEvidenceSkippedReason: data.confirmationEvidenceSkippedReason || '',
       savedEvidenceCaptures,
       // visual_highlight terminal answer: the cropped screenshot region shown to the user.
       visualHighlightImage: data.visualHighlightImage || null,
@@ -2640,6 +3106,131 @@ async function _handleStepByStepGuideV2(question) {
   return gv2GenerateNextStep();
 }
 
+function _gv2ParseStepContract(content) {
+  try {
+    return (typeof gv2ExtractJsonObject === 'function')
+      ? gv2ExtractJsonObject(content)
+      : JSON.parse(content);
+  } catch (e) {
+    return null;
+  }
+}
+
+function _gv2EmptyContractValue(value) {
+  if (value == null || value === false) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'string') {
+    return /^(|no|none|null|n\/a|na|false)$/i.test(value.trim());
+  }
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  return false;
+}
+
+function _gv2ConfirmationItemHasTarget(item) {
+  if (!item || typeof item !== 'object') return false;
+  return item.index != null
+    || !!item.rect
+    || !!(item.text && String(item.text).trim())
+    || item.need_annotation === true
+    || !!(item.annotation_prompt && String(item.annotation_prompt).trim());
+}
+
+function _gv2EvidenceAttempted(value) {
+  if (_gv2EmptyContractValue(value)) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return true;
+}
+
+function _gv2StepContractIssue(content, g = null) {
+  const step = _gv2ParseStepContract(content);
+  if (!step) return null;
+  const action = (typeof gv2NormalizeAction === 'function')
+    ? gv2NormalizeAction(step.action, step.isLastStep)
+    : String(step.action || (step.isLastStep ? 'finish' : '')).toLowerCase().replace(/[\s-]+/g, '_');
+
+  if (action === 'save_evidence') {
+    return {
+      kind: 'legacy_save_evidence_action',
+      message: 'Evidence is not a standalone action; choose the real browser action and attach evidence to it.'
+    };
+  }
+
+  if (action === 'finish') {
+    const hasPriorSavedEvidence = Array.isArray(g?.evidenceScratchpad) && g.evidenceScratchpad.length > 0;
+    const finishEvidenceAttempted = _gv2EvidenceAttempted(step.evidence);
+    const finishEvidenceValid = finishEvidenceAttempted && typeof gv2NormalizeEvidenceList === 'function'
+      ? gv2NormalizeEvidenceList(step.evidence, {
+          ref_step_id: Number(step.step) || 0,
+          maxItems: 5,
+          existingKeys: (Array.isArray(g?.evidenceScratchpad) ? g.evidenceScratchpad : []).map(e => e?.key)
+        }).ok
+      : false;
+    if (hasPriorSavedEvidence || finishEvidenceValid) return null;
+    const rawConfirmation = step.confirmationEvidence != null ? step.confirmationEvidence : step.visualEvidence;
+    const normalized = (typeof gv2NormalizeVisualEvidenceList === 'function')
+      ? gv2NormalizeVisualEvidenceList(rawConfirmation, 5)
+      : [];
+    const hasUsableTarget = normalized.some(_gv2ConfirmationItemHasTarget);
+    if (_gv2EmptyContractValue(rawConfirmation) || !hasUsableTarget) {
+      return {
+        kind: 'missing_confirmation_evidence',
+        message: 'action="finish" must include non-empty confirmationEvidence with a page target.'
+      };
+    }
+  }
+
+  if (_gv2EvidenceAttempted(step.evidence)) {
+    const normalized = (typeof gv2NormalizeEvidenceList === 'function')
+      ? gv2NormalizeEvidenceList(step.evidence, { ref_step_id: 0, maxItems: 5 })
+      : {
+          ok: (Array.isArray(step.evidence) ? step.evidence : [step.evidence])
+            .slice(0, 5)
+            .some(e => e && typeof e === 'object' && String(e.key || '').trim() && String(e.note || '').trim())
+        };
+    if (!normalized.ok) {
+      return {
+        kind: 'invalid_evidence_sidecar',
+        message: 'If evidence is provided, it must be an array with 1-5 valid items.'
+      };
+    }
+  }
+
+  return null;
+}
+
+function _gv2ContractRetryPrompt(issue) {
+  if (issue?.kind === 'missing_confirmation_evidence') {
+    return `Your previous JSON cannot be accepted: action="finish" requires confirmationEvidence.
+Return corrected JSON for the same step only. Keep action="finish", keep answer non-null, and add confirmationEvidence as an array with 1-5 items. Each item may include a citation-safe name, and must include a short reason plus either index, rect, text, or need_annotation=true with annotation_prompt. Cite it in answer as [ev:name] or [ev:index]. Do not explain outside JSON.`;
+  }
+  if (issue?.kind === 'legacy_save_evidence_action') {
+    return `Your previous JSON cannot be accepted: "save_evidence" is not a valid standalone action anymore.
+Return corrected JSON for the same step only. Choose the real browser action to perform now (click, type, clear_text, drag_drop, scroll_down, scroll_up, goto_url, watch_video, or finish). Keep the evidence array on that same step if the observed fact should be saved. Do not explain outside JSON.`;
+  }
+  if (issue?.kind === 'invalid_evidence_sidecar') {
+    return `Your previous JSON cannot be accepted: when "evidence" is present it must be an array with 1-5 valid items.
+Return corrected JSON for the same step only. Keep the real browser action, and either set evidence to null or provide evidence items with key and note; use som_id for DOM/SoM evidence, or need_annotation=true with annotation_prompt for screenshot-only evidence. Do not explain outside JSON.`;
+  }
+  return `Your previous JSON cannot be accepted: ${issue?.message || 'missing required fields'}.
+Return corrected JSON for the same step only. Do not explain outside JSON.`;
+}
+if (typeof window !== 'undefined') {
+  window._gv2StepContractIssue = _gv2StepContractIssue;
+  window._gv2ContractRetryPrompt = _gv2ContractRetryPrompt;
+}
+
+function _gv2SavedEvidenceStepSummary(entries) {
+  const list = Array.isArray(entries) ? entries.filter(e => e && (e.note || e.key)) : [];
+  if (!list.length) return '';
+  const count = list.length;
+  const first = String(list[0].note || list[0].key || '').replace(/\s+/g, ' ').trim();
+  const clippedRaw = first.length > 90 ? `${first.slice(0, 87).trim()}...` : first;
+  const clipped = clippedRaw.replace(/[.!?]+$/g, '');
+  return ` Saved ${count} evidence${count === 1 ? '' : ' items'}${clipped ? `: ${clipped}` : ''}.`;
+}
+if (typeof window !== 'undefined') window._gv2SavedEvidenceStepSummary = _gv2SavedEvidenceStepSummary;
+
 /**
  * Generate the next step: build page index, call LLM, process response.
  */
@@ -2672,7 +3263,7 @@ async function gv2GenerateNextStep() {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (_gv2IsStopped()) return null;
     if (_gv2IsPaused()) return { success: false, progressed: false, error: 'Guide paused' };
-    pageIndex = createPageIndex(visualInputOn ? GV2_VISUAL_INPUT_MAX_MARKS : 5000, true);
+    pageIndex = createPageIndex(GV2_GUIDE_INDEX_MAX_ITEMS, true);
     if (pageIndex.count > 5) break;
     console.log('[guidev2] Sparse DOM (', pageIndex.count, 'el), retrying...');
     await new Promise(r => setTimeout(r, 700));
@@ -2805,12 +3396,12 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
   }
   const systemPrompt = GUIDE_V2_PROMPT;
   const evidenceSection = recapOn
-    ? `\n=== SAVED EVIDENCE SCRATCHPAD ===\n${typeof gv2EvidenceMemoryText === 'function' ? gv2EvidenceMemoryText(g.evidenceScratchpad || []) : '(none)'}\nUse [ev:key] citations in finish(answer) when referencing saved evidence.\n`
-    : '\n=== EVIDENCE SCRATCHPAD ===\nRecap is off. Do not use action="save_evidence"; use normal browser actions and finish when done.\n';
+    ? `\n=== SAVED EVIDENCE SCRATCHPAD ===\n${typeof gv2EvidenceMemoryText === 'function' ? gv2EvidenceMemoryText(g.evidenceScratchpad || []) : '(none)'}\nUse [ev:key] citations in finish(answer) when referencing saved evidence. Each citation must sit next to the specific fact it proves, not after a vague sentence.\n`
+    : '\n=== EVIDENCE SCRATCHPAD ===\nRecap is off. Set evidence to null; use normal browser actions and finish when done.\n';
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
 VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}
-ON FINISH: always return a non-null "answer", and return "confirmationEvidence" as up to 5 items pointing at the region(s) on THIS page that confirm the answer (each may include a SoM index and/or a rect, index:null when no marker fits, plus a one-sentence reason). On non-finish steps set "confirmationEvidence" to null.
+ON FINISH: always return a non-null "answer", and return "confirmationEvidence" as up to 5 items confirming the answer on THIS page. Each item may include "name" (lowercase citation key like "spanish_language"), and needs reason plus either a SoM index, current-viewport rect/text, or need_annotation=true with annotation_prompt. Cite confirmation evidence in answer as [ev:name], or [ev:index] when using a SoM index without a name. On non-finish steps set "confirmationEvidence" to null.
 
 === PAGE INDEX ===
 ${pageIndex.indexText}
@@ -2857,6 +3448,40 @@ Return JSON for Step ${stepNumber}`;
       return { success: false, error: response.error };
     }
     if (response?.content) {
+      let contractIssue = _gv2StepContractIssue(response.content, g);
+      if (contractIssue) {
+        console.warn('[guidev2] Retrying LLM response for contract issue:', contractIssue);
+        const retryMessages = [
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: String(response.content || '') },
+          { role: 'user', content: _gv2ContractRetryPrompt(contractIssue) }
+        ];
+        const retryMsg = Object.assign({}, llmMsg, {
+          messages: retryMessages,
+          metadata: Object.assign({}, llmMsg.metadata || {}, {
+            retry: 'contract',
+            contractIssue: contractIssue.kind || 'unknown'
+          })
+        });
+        let retryResponse = await safeSendMessage(retryMsg);
+        if (visualInputShot && retryResponse && retryResponse.error) {
+          retryResponse = await safeSendMessage({ ...retryMsg, action: 'callLLM', images: undefined });
+        }
+        if (_gv2IsStopped()) return null;
+        if (_gv2IsPaused()) return { success: false, progressed: false, error: 'Guide paused' };
+        if (retryResponse?.error) {
+          console.warn('[guidev2] Contract retry LLM error:', retryResponse.error);
+          _gv2HideIndicator();
+          return { success: false, error: retryResponse.error };
+        }
+        if (retryResponse?.content) response = retryResponse;
+        contractIssue = _gv2StepContractIssue(response.content, g);
+        if (contractIssue) {
+          console.warn('[guidev2] LLM response still violates contract after retry:', contractIssue);
+          _gv2HideIndicator();
+          return { success: false, error: contractIssue.message || 'LLM response is missing required fields after retry' };
+        }
+      }
       const result = await gv2ProcessResponse(response.content, systemPrompt, userPrompt);
       if (_guidev2Stopped) return null;
       // On step 1 only, attach tutorial match info so the panel can show it in Details
@@ -2992,11 +3617,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       ? gv2NormalizeAction(step.action, step.isLastStep)
       : String(step.action || (step.isLastStep ? 'finish' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
     if (!step.instruction) {
-      if (action === 'save_evidence') {
-        const firstEvidence = Array.isArray(step.evidence) ? step.evidence[0] : step.evidence;
-        step.instruction = `Save evidence: ${firstEvidence?.note || firstEvidence?.key || 'important finding'}`;
-      }
-      else if (action === 'finish') step.instruction = step.answer ? 'Finish with the final answer.' : 'Finish the task.';
+      if (action === 'finish') step.instruction = step.answer ? 'Finish with the final answer.' : 'Finish the task.';
       else throw new Error('LLM response JSON is missing instruction field');
     }
     console.log('[guidev2] Parsed step:', step);
@@ -3025,28 +3646,28 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
 
     const recapOnForEvidence = await _gv2IsVisualRecapOn();
     let isFind = action === 'highlight' || action === 'find';
-    const isSaveEvidence = action === 'save_evidence';
-    if (isSaveEvidence && !recapOnForEvidence) {
-      throw new Error('save_evidence is only available when Recap is on');
-    }
-    const normalizedSaveEvidence = isSaveEvidence && typeof gv2NormalizeEvidenceList === 'function'
+    const evidenceAttempted = _gv2EvidenceAttempted(step.evidence);
+    const normalizedSaveEvidence = evidenceAttempted && recapOnForEvidence && typeof gv2NormalizeEvidenceList === 'function'
       ? gv2NormalizeEvidenceList(step.evidence, {
           ref_step_id: step.step,
           maxItems: 5,
           existingKeys: (Array.isArray(g.evidenceScratchpad) ? g.evidenceScratchpad : []).map(e => e?.key)
         })
       : { ok: false, entries: [], errors: [] };
+    const hasSavedEvidence = !!(recapOnForEvidence && normalizedSaveEvidence.ok && normalizedSaveEvidence.entries.length);
     const isFinish = action === 'finish';
+    if (isFinish) _gv2SetWorkingStatus('Preparing final answer…');
     let isVisualHighlight = false; // resolved dynamically if highlight falls back
+    const isWatchVideo = action === 'watch_video';
     // find and visual_highlight are ALWAYS the final answer to the user — never mid-journey. Coerce
     // isLastStep so the terminal branch (recap + state clear) runs and the trajectory can't continue.
-    if (isFind || isVisualHighlight || isFinish) step.isLastStep = true;
+    if (isFind || isVisualHighlight || isWatchVideo || isFinish) step.isLastStep = true;
     const hasText = !!(step.element?.text && String(step.element.text).trim());
     const hasIndex = step.element?.index != null && step.element?.index !== '';
     // find highlights whatever the reader pass cites, not a single planner-chosen element.
     const hasTarget = (typeof gv2StepHasTarget === 'function')
       ? gv2StepHasTarget({ action, isLastStep: step.isLastStep, element: step.element })
-      : (!isFind && !step.isLastStep && action !== 'finish' && action !== 'save_evidence' && (hasIndex || hasText));
+      : (!isFind && !step.isLastStep && action !== 'finish' && (hasIndex || hasText));
     const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
     const idxToUse = hasTarget
       ? (gv2PickTargetIndex(step.element?.text, step.element?.index) ?? step.element?.index ?? null)
@@ -3057,13 +3678,23 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Confirmation evidence: SECOND, distinct SoM elements or rects the model points to as justification
     // for the action. Resolve each item independently: prefer index/text, then use that item's rect
     // only when no distinct SoM element resolves. Cap at five.
+    const hasAnySavedEvidenceForAnswer = !!(hasSavedEvidence || (Array.isArray(g.evidenceScratchpad) && g.evidenceScratchpad.length));
+    const confirmationEvidenceSkippedReason = (isFinish && hasAnySavedEvidenceForAnswer)
+      ? (hasSavedEvidence ? 'saved_evidence_on_finish_step' : 'saved_evidence_in_trajectory')
+      : '';
     const rawConfirmationEvidence = step.confirmationEvidence != null ? step.confirmationEvidence : step.visualEvidence;
-    const visualEvidenceItems = (typeof gv2NormalizeVisualEvidenceList === 'function')
+    const visualEvidenceItems = (isFinish && hasAnySavedEvidenceForAnswer)
+      ? []
+      : (typeof gv2NormalizeVisualEvidenceList === 'function')
       ? gv2NormalizeVisualEvidenceList(rawConfirmationEvidence, 5)
       : ((typeof gv2NormalizeVisualEvidence === 'function' && gv2NormalizeVisualEvidence(rawConfirmationEvidence))
           ? [gv2NormalizeVisualEvidence(rawConfirmationEvidence)] : []);
+    const finishAnswerEvidenceRefs = (isFinish && typeof gv2ParseEvidenceRefs === 'function')
+      ? gv2ParseEvidenceRefs(step.answer || step.instruction || '')
+      : [];
     const resolvedEvidenceItemsRaw = [];
-    for (const item of visualEvidenceItems) {
+    for (let i = 0; i < visualEvidenceItems.length; i++) {
+      const item = visualEvidenceItems[i];
       let itemEl = null;
       let itemIndex = null;
       if (item?.index != null) {
@@ -3075,10 +3706,22 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
         if (cand) { itemEl = cand; }
         else { itemIndex = null; }
       }
+      const confirmationKey = item?.name || finishAnswerEvidenceRefs[i] || (itemIndex != null ? String(itemIndex) : `confirmation_${i + 1}`);
+      const confirmationNote = item?.reason || item?.text || item?.annotation_prompt || 'Confirmation of the answer';
       resolvedEvidenceItemsRaw.push({
+        key: confirmationKey,
+        note: confirmationNote,
+        som_id: itemEl && itemIndex != null ? String(itemIndex) : null,
         evidenceEl: itemEl,
         evidenceIndex: itemIndex,
         evidenceRect: (!itemEl && item?.rect) ? item.rect : null,
+        region_bbox: (!itemEl && item?.rect) ? item.rect : null,
+        need_annotation: !itemEl && !!(item?.need_annotation || item?.annotation_prompt),
+        annotation_prompt: item?.annotation_prompt || confirmationNote,
+        annotations: !itemEl && Array.isArray(item?.annotations) ? item.annotations : [],
+        scrollIntoView: isFinish && !!itemEl,
+        forceDomMarker: isFinish && !!itemEl,
+        fullViewportCapture: isFinish && !itemEl,
         text: item?.text || null,
         reason: item?.reason || null
       });
@@ -3091,7 +3734,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     let visualEvidence = visualEvidenceItems[0] || null;
 
     const resolvedSavedEvidenceItems = [];
-    if (isSaveEvidence && normalizedSaveEvidence.ok) {
+    if (hasSavedEvidence) {
       for (const entry of normalizedSaveEvidence.entries) {
         const somIndex = _gv2SomIdToIndex(entry.som_id);
         const somEl = somIndex != null ? (window._pageguideIndex?.[somIndex] || null) : null;
@@ -3100,13 +3743,17 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
           note: entry.note,
           som_id: entry.som_id || null,
           region_bbox: entry.region_bbox || null,
+          annotations: somEl ? [] : (Array.isArray(entry.annotations) ? entry.annotations : []),
+          need_annotation: !somEl && (entry.need_annotation || !entry.region_bbox || !entry.annotations?.length),
+          annotation_prompt: entry.annotation_prompt || entry.note,
           evidenceEl: somEl || null,
           evidenceIndex: somEl && somIndex != null ? somIndex : null,
           evidenceRect: somEl ? null : (entry.region_bbox || null),
           text: entry.note,
           reason: entry.note,
           scrollIntoView: !!somEl,
-          forceDomMarker: true
+          forceDomMarker: !!somEl,
+          fullViewportCapture: !somEl
         });
       }
       resolvedSavedEvidenceItems.sort((a, b) => {
@@ -3202,6 +3849,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     let visualFallbackUserPrompt = '';
     let visualFallbackRawResponse = '';
     let visualFallbackShot = null;
+    let watchVideoResult = null;
 
     if (isFind) {
       _gv2ShowIndicator('Reading page…');
@@ -3237,6 +3885,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       }
     }
 
+    if (isWatchVideo) {
+      _gv2ShowIndicator('Agent watching video…');
+      watchVideoResult = await gv2RunWatchVideo(step);
+      if (_gv2IsStopped()) return null;
+    }
+
     // visual_highlight: crop the model's evidence region (SoM index or rect) from a clean capture
     // (SoM markers already cleaned up above) and return it as the answer image. No second LLM pass.
     let visualHighlightResult = null;
@@ -3252,10 +3906,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
 
     const isLast = !!step.isLastStep || isFinish;
     // Mark find steps so a later step doesn't loop and re-issue find on the same page.
-    const stepSuffix = isLast ? ' ✓' : (isFind ? ' [found]' : '');
-    g.previousSteps.push(`Step ${step.step}: ${step.instruction}${stepSuffix}`);
+    const stepSuffix = isLast ? ' ✓' : (isFind ? ' [found]' : (isWatchVideo ? ' [watched]' : ''));
+    const savedEvidenceSummary = _gv2SavedEvidenceStepSummary(hasSavedEvidence ? normalizedSaveEvidence.entries : []);
+    g.previousSteps.push(`Step ${step.step}: ${step.instruction}${savedEvidenceSummary}${stepSuffix}`);
 
-    // Simple dispatch: interaction actions | save_evidence | find | finish.
+    // Simple dispatch: interaction actions | find | finish. Evidence is an optional sidecar on
+    // any non-finish step and is saved/captured with the step before the action runs.
     // Pass the normalized action through so gv2AssessRisk sees 'find'/'clear_text'; it also
     // mutates step.riskReason, which the pause messages below read, so hand it the real step.
     step.action = action;
@@ -3283,8 +3939,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // Pause/stop-action conditions: 3 low-confidence actions, loop score over threshold,
     // high risk (JSON), or confirmation needed (JSON). When triggered, the proposed step is
     // captured for review but not executed.
-    const isHighRiskJson = !isFind && !isVisualHighlight && step.risk === 'high';
-    const needsConfirmation = !isFind && !isVisualHighlight && step.confirmation === 'needed';
+    const isHighRiskJson = !isFind && !isVisualHighlight && !isWatchVideo && step.risk === 'high';
+    const needsConfirmation = !isFind && !isVisualHighlight && !isWatchVideo && step.confirmation === 'needed';
     const activeLoopScore = _gv2MaxFiniteScore(mech.loop);
     const loopStop = activeLoopScore !== null && activeLoopScore >= GV2_LOOP_STOP_THRESHOLD;
     const confidenceThreshold = await _gv2ConfidenceThreshold();
@@ -3294,7 +3950,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // A find step never pauses for low-confidence/risk gates, but loop detection still stops it
     // from driving another autonomous step.
     const actionThreshold = await _gv2LowConfidenceActionThreshold();
-    const willPause = loopStop || (!isFind && !isVisualHighlight && ((g.lowConfidenceCount >= actionThreshold) || isHighRiskJson || needsConfirmation));
+    const willPause = loopStop || (!isFind && !isVisualHighlight && !isWatchVideo && ((g.lowConfidenceCount >= actionThreshold) || isHighRiskJson || needsConfirmation));
     const loopPauseMessage = loopStop
       ? `Page Guide paused: loop score ${activeLoopScore.toFixed(2)} is above the ${GV2_LOOP_STOP_THRESHOLD.toFixed(1)} threshold. Review and resume when ready.`
       : '';
@@ -3306,16 +3962,14 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const autoPerform = g.autoMode && !isHighRisk && !forcedManual && !willPause;
     let pauseAfterCaptureMessage = '';
 
-    if (isFind) {
+    if (isFind || isWatchVideo) {
       // Read-only: the reader pass already ran. No pendingResume (nothing navigates) and
       // deliberately no click listener (there is nothing for the user to click).
       if (!isLast) await _gv2SetState(false);
       if (loopStop && !isLast) pauseAfterCaptureMessage = loopPauseMessage;
     } else if (isLast || action === 'finish') {
       // Clear state after capture runs at end of function
-    } else if (isSaveEvidence) {
-      await _gv2SetState(false);
-    } else if (action === 'scroll_down' || action === 'scroll_up' || action === 'navigate') {
+    } else if (action === 'scroll_down' || action === 'scroll_up' || action === 'goto_url') {
       await _gv2SetState(false);
     } else if (action === 'type' || action === 'clear_text') {
       await _gv2SetState(false);
@@ -3361,7 +4015,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       }
     }
 
-    _gv2HideIndicator();
+    _gv2SetWorkingStatus(hasSavedEvidence ? 'Saving evidence…' : 'Capturing step…');
 
     // Rewind: capture screenshot + target region + DOM snapshot BEFORE auto-performing the action.
     await gv2CaptureStepRecord({
@@ -3388,6 +4042,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       evidenceIndex,
       evidenceRect,
 	      visualEvidenceItems: resolvedEvidenceItems,
+	      confirmationEvidenceSkippedReason,
 	      savedEvidenceItems: resolvedSavedEvidenceItems,
 	      visualEvidenceText: visualEvidence?.text || null,
 	      visualEvidenceReason: visualEvidence?.reason || null,
@@ -3400,8 +4055,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       stepNumberCorrected: step.stepNumberCorrected,
       instruction: step.instruction,
       action,
-	      evidenceKey: isSaveEvidence ? (normalizedSaveEvidence.entries?.[0]?.key || null) : null,
-	      evidenceNote: isSaveEvidence ? (normalizedSaveEvidence.entries?.[0]?.note || null) : null,
+	      evidenceKey: hasSavedEvidence ? (normalizedSaveEvidence.entries?.[0]?.key || null) : null,
+	      evidenceNote: hasSavedEvidence ? (normalizedSaveEvidence.entries?.[0]?.note || null) : null,
       finishAnswer: isFinish ? (step.answer || null) : null,
       typeText: (step.typeText != null ? step.typeText : step.value) || null,
       navigateUrl: step.url || null,
@@ -3416,6 +4071,11 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       findAnswer: isFind ? (findResult?.answer || null) : null,
       findNotOnPage: isFind ? !!findResult?.notOnPage : false,
       findHighlightCount: isFind ? (findResult?.highlightCount || 0) : 0,
+      isWatchVideo,
+      watchVideoAnswer: isWatchVideo ? (watchVideoResult?.answer || null) : null,
+      watchVideoUrl: isWatchVideo ? (watchVideoResult?.videoUrl || step.videoUrl || step.url || null) : null,
+      watchVideoQuery: isWatchVideo ? (watchVideoResult?.videoQuery || step.videoQuery || null) : null,
+      watchVideoError: isWatchVideo ? (watchVideoResult?.error || null) : null,
       visualHighlightImage: isVisualHighlight ? (visualHighlightResult?.image || null) : null,
       visualHighlightCaption: isVisualHighlight ? (visualHighlightResult?.caption || null) : null,
       findSystemPrompt,
@@ -3432,7 +4092,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       verifyResultScrollY: verifyResult?.verifyResultScrollY != null ? verifyResult.verifyResultScrollY : null,
       verifyResultAction: verifyResult?.verifyResultAction || null,
       verifyResultError: verifyResult?.verifyResultError || null,
-      target: (isFind || isVisualHighlight)
+      target: (isFind || isVisualHighlight || isWatchVideo)
         ? { text: null, domText: null, llmIndex: null, resolvedIndex: null }
         : { text: step.element?.text || null, domText: domElementText || null, llmIndex: step.element?.index ?? null, resolvedIndex: idxToUse },
       rawLlmJson: content,
@@ -3447,7 +4107,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     });
 
 	    // Auto-perform only after pre-action capture completes (regionShot + before-shot are stored).
-	    if (isSaveEvidence && g.sessionId) {
+	    if (hasSavedEvidence && g.sessionId) {
 	      try {
 	        if (normalizedSaveEvidence.ok && typeof rewindPutEvidence === 'function') {
 	          const savedEntries = [];
@@ -3467,14 +4127,15 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
 	            }
 	          } catch (e) {}
 	        } else {
-	          console.warn('[guidev2] save_evidence rejected:', normalizedSaveEvidence.errors || []);
+	          console.warn('[guidev2] evidence sidecar rejected:', normalizedSaveEvidence.errors || []);
 	        }
 	      } catch (e) {
-	        console.warn('[guidev2] save_evidence failed:', e);
+	        console.warn('[guidev2] evidence sidecar save failed:', e);
       }
     }
+    const finalEvidenceScratchpad = Array.isArray(g.evidenceScratchpad) ? g.evidenceScratchpad.slice() : [];
 
-    if (autoPerform && !isLast && action !== 'finish' && !isFind && !isSaveEvidence) {
+    if (autoPerform && !isLast && action !== 'finish' && !isFind && !isWatchVideo) {
       if (action !== 'type') {
         await _gv2SetState(true);
         if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
@@ -3487,22 +4148,26 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       _gv2ScheduleAutoPerformAfterCapture(g, step, 'highlight');
     }
 
-    if (isSaveEvidence && !isLast) {
-      _gv2ScheduleAutoPerformAfterCapture(g, step, 'highlight');
-    }
-
     if (pauseAfterCaptureMessage && !isLast && action !== 'finish') {
       await gv2PauseGuide(pauseAfterCaptureMessage);
     }
 
-    // On the terminal step, synthesize the visual recap BEFORE clearing state (which wipes
-    // g.previousSteps / g.guidePlan). Guarded so a recap failure never breaks task completion.
+    // On the terminal step, optionally synthesize the visual recap BEFORE clearing state (which
+    // wipes g.previousSteps / g.guidePlan). Guarded so a recap failure never breaks completion.
     let recap = null;
+    let finalStepRecords = [];
     if (isLast || action === 'finish') {
       // Deterministic outcome: only a literal finish action counts as completed; any other terminal
       // (find/visual deliverables still render their own cards) is not treated as a failure here —
       // real failures come through the stop / step-cap paths with outcome 'failed'.
-      try { recap = await _gv2BuildRecap(g, 'completed'); } catch (e) { recap = null; }
+      _gv2SetWorkingStatus('Preparing final answer…');
+      try { if (await _gv2IsEndSummaryOn()) recap = await _gv2BuildRecap(g, 'completed'); } catch (e) { recap = null; }
+      try {
+        if (g?.sessionId && typeof rewindGetIndex === 'function') {
+          const idx = await rewindGetIndex(g.sessionId);
+          finalStepRecords = Array.isArray(idx?.steps) ? idx.steps.filter(s => Number(s?.step) > 0) : [];
+        }
+      } catch (e) { finalStepRecords = []; }
       _gv2ClearState();
     }
 
@@ -3510,28 +4175,41 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // task is an information lookup (S1/S2) or a navigate-only confirmation (S3) is never
     // self-reported by the model — it's derived after the fact from the trajectory: S3 is whatever
     // finishes with an empty evidence scratchpad (see gv2BuildAnswerEvidence's action-fallback path).
-    const finalAnswer = isFinish ? (step.answer || step.instruction || 'Task completed.') : '';
+    let finalAnswer = isFinish ? (step.answer || step.instruction || 'Task completed.') : '';
+    if (isFinish && typeof gv2ExpandBareEvidenceCitations === 'function') {
+      finalAnswer = gv2ExpandBareEvidenceCitations(finalAnswer, finalEvidenceScratchpad);
+    }
     // Finish-time confirmation: the confirmationEvidence the agent attached to the finish step to justify
     // its answer. It becomes the top-priority evidence link on the answer card.
     const confirmationEvidence = (isFinish && Array.isArray(resolvedEvidenceItems) && resolvedEvidenceItems.length)
-      ? [{ step: step.step, note: (resolvedEvidenceItems.find(it => it && it.reason)?.reason) || 'Confirmation of the answer' }]
+      ? resolvedEvidenceItems.slice(0, 5).map((it) => {
+          let region = it?.evidenceRect || null;
+          try {
+            if (!region && it?.evidenceEl?.getBoundingClientRect && typeof gv2TargetNormRect === 'function') {
+              const r = it.evidenceEl.getBoundingClientRect();
+              region = gv2TargetNormRect({ left: r.left, top: r.top, width: r.width, height: r.height }, window.innerWidth, window.innerHeight);
+            }
+          } catch (e) { region = it?.evidenceRect || null; }
+          return { key: it?.key || '', step: step.step, region_bbox: region || null, note: it?.note || it?.reason || it?.text || 'Confirmation of the answer' };
+        })
       : [];
     // Guarantee a visual-evidence link on the terminal card (confirmation → cited scratchpad → saved
     // scratchpad → action grounding). Computed here so it holds even when Visual Recap is off; also
     // attached to the recap so the navigate-only summary card can render it.
     const answerEvidence = (isLast || action === 'finish')
-      ? await _gv2ComputeAnswerEvidence(g, finalAnswer, step.step, confirmationEvidence)
+      ? await _gv2ComputeAnswerEvidence(Object.assign({}, g, { evidenceScratchpad: finalEvidenceScratchpad }), finalAnswer, step.step, confirmationEvidence)
       : [];
     if (recap) recap.answerEvidence = answerEvidence;
     return {
       success: true,
-      answer: isFind ? (findResult?.answer || step.instruction)
+      answer: isWatchVideo ? (watchVideoResult?.answer || watchVideoResult?.error || step.instruction)
+        : isFind ? (findResult?.answer || step.instruction)
         : (isVisualHighlight ? (visualHighlightResult?.caption || step.instruction) : (isFinish ? (finalAnswer || step.instruction) : step.instruction)),
       step: step.step,
       sessionId: g.sessionId || null,
       isLastStep: isLast,
       recap,
-      targetText: (isFind || isVisualHighlight) ? null : (step.element?.text || null),
+      targetText: (isFind || isVisualHighlight || isWatchVideo) ? null : (step.element?.text || null),
       action,
       confidence,
       planStep,
@@ -3539,14 +4217,20 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       hasHighlights: isFind ? !!findResult?.hasHighlights : (highlightCount > 0),
       autoMode: !!g.autoMode,
       isGuide: true,
-      isSaveEvidence,
+      hasSavedEvidence,
       isFinish,
       finalAnswer,
       answerEvidence,
-      evidenceScratchpad: Array.isArray(g.evidenceScratchpad) ? g.evidenceScratchpad.slice() : [],
+      stepRecords: finalStepRecords,
+      evidenceScratchpad: finalEvidenceScratchpad,
       isFind,
       findAnswer: isFind ? (findResult?.answer || '') : null,
       findNotOnPage: isFind ? !!findResult?.notOnPage : false,
+      isWatchVideo,
+      watchVideoAnswer: isWatchVideo ? (watchVideoResult?.answer || '') : null,
+      watchVideoUrl: isWatchVideo ? (watchVideoResult?.videoUrl || step.videoUrl || step.url || null) : null,
+      watchVideoQuery: isWatchVideo ? (watchVideoResult?.videoQuery || step.videoQuery || null) : null,
+      watchVideoError: isWatchVideo ? (watchVideoResult?.error || null) : null,
       isVisualHighlight,
       visualHighlightImage: isVisualHighlight ? (visualHighlightResult?.image || null) : null,
       visualHighlightCaption: isVisualHighlight ? (visualHighlightResult?.caption || null) : null
@@ -3689,11 +4373,17 @@ async function _gv2BuildFinalVerdict(g, outcome) {
 // to a real completed step number so the panel can attach that step's screenshot as visual
 // evidence. Never throws — any failure yields a deterministic recap from the plan/step list.
 // Returns null when Visual Recap mode is off or there are no completed steps to recap.
+function _gv2RenderTemplate(template, values) {
+  return String(template || '').replace(/\{\{([A-Z0-9_]+)\}\}/g, (full, key) => (
+    Object.prototype.hasOwnProperty.call(values || {}, key) ? String(values[key] ?? '') : full
+  ));
+}
+
 // Build the guaranteed answer-evidence link list for a finished task (runs independent of the
 // Visual Recap toggle so every terminal card can show a visual link). Picks the action-grounding
 // fallback step — the latest step that grounded on a real clicked/targeted element with a
 // screenshot — for navigate-only tasks or answers the model did not cite with [ev:key].
-async function _gv2ComputeAnswerEvidence(g, finalAnswer, terminalStep) {
+async function _gv2ComputeAnswerEvidence(g, finalAnswer, terminalStep, confirmation = []) {
   const scratchpad = Array.isArray(g?.evidenceScratchpad) ? g.evidenceScratchpad : [];
   let fallbackStep = Number.isFinite(Number(terminalStep))
     ? { step: Number(terminalStep), note: 'Final step evidence' }
@@ -3707,7 +4397,7 @@ async function _gv2ComputeAnswerEvidence(g, finalAnswer, terminalStep) {
       // Prefer the latest step that acted on a concrete element, so the fallback shows "the
       // button I clicked" rather than a bare page screenshot.
       const grounded = steps.filter(s => s.resolvedIndex != null
-        || ['click', 'type', 'clear_text', 'drag_drop', 'navigate'].includes(String(s.action || '')));
+        || ['click', 'type', 'clear_text', 'drag_drop', 'goto_url', 'navigate'].includes(String(s.action || '')));
       const pick = (grounded.length ? grounded : steps)
         .reduce((a, b) => (a == null || Number(b.step) > Number(a.step) ? b : a), null);
       if (pick && Number.isFinite(Number(pick.step))) {
@@ -3716,13 +4406,13 @@ async function _gv2ComputeAnswerEvidence(g, finalAnswer, terminalStep) {
     }
   } catch (e) { /* keep terminalStep fallback */ }
   return (typeof gv2BuildAnswerEvidence === 'function')
-    ? gv2BuildAnswerEvidence({ finalAnswer, scratchpad, fallbackStep })
+    ? gv2BuildAnswerEvidence({ finalAnswer, scratchpad, confirmation, fallbackStep })
     : [];
 }
 
 async function _gv2BuildRecap(g, outcome = 'completed') {
   try {
-    if (!(await _gv2IsVisualRecapOn())) return null;
+    if (!(await _gv2IsEndSummaryOn())) return null;
     // Verdict is deterministic and binary (finish → completed, everything else → failed). The
     // summarization LLM below never decides this; it only summarizes (completed) or diagnoses (failed).
     const verdictKey = (typeof gv2DeterministicVerdict === 'function')
@@ -3788,39 +4478,18 @@ async function _gv2BuildRecap(g, outcome = 'completed') {
         const evidence = evidenceReasons ? `, evidence="${evidenceReasons}"` : '';
         return `Step ${r.step}: before=${hasBefore ? 'yes' : 'no'}, after=${hasAfter ? 'yes' : 'no'}, target="${target}", action=${r.action || ''}${evidence}, instruction=${r.instruction || ''}`;
       }).join('\n') : '(no step visual evidence records)';
-      recapSystemPrompt = `You are a SUMMARIZER for a step-by-step web guide. You do NOT decide whether the task succeeded — the OUTCOME is already decided and given below. Never contradict it or re-judge success/failure. You are given INITIAL and FINAL screenshots when vision is available. Reply with ONLY JSON:
-{"reason":"one or two sentences describing the final state (for a failed run, what is missing)",
- "annotations":[{"x":0..1,"y":0..1,"w":0..1,"h":0..1,"label":"short final-state evidence label"}],
- "summary": "1-3 sentences. Do NOT prefix it with any verdict phrase.",
- "stepEvaluations": [{"step": <completed step number>, "status": "correct"|"wrong", "goalRelated": true|false, "goalRelatedReason": "brief reason whether this step helped the user goal", "text": "short summary of what this step did", "phrase": "<key noun phrase copied verbatim from text>", "errorLabel": "misgrounded"|"loop"|"low-confidence"|"risky"|"incomplete"|"wrong-action"|"other", "reason": "why this step was wrong"}]}
-Rules:
-- OUTCOME is authoritative. When OUTCOME is "completed": write "summary" as the ANSWER to the user — describe what the guide accomplished and the resulting state. Mark every step status="correct".
-- When OUTCOME is "failed": the agent stopped before emitting a finish action. Do NOT claim success. Diagnose WHERE and WHY it broke down using the CONFIDENCE SIGNALS and trajectory: mark the failing step(s) status="wrong" with an errorLabel and a short reason, and make "summary" explain why it could not finish and at which step.
-- Use the confidence scores to choose labels: high loop/mechLoop → "loop"; low grounded/mechGrounding → "misgrounded"; low confidence with no clear cause → "low-confidence".
-- Use 2 to 6 stepEvaluations, each a concrete step the guide actually took. "step" MUST be one of the completed step numbers listed below; do not invent steps.
-- "phrase" MUST be a short substring copied exactly from that step's "text" (the key thing acted on, e.g. "language settings"). It becomes a hover-link to the screenshot of that action — the button that was clicked.
-- For every stepEvaluation, set goalRelated=true only when the step plausibly helped the user goal; otherwise goalRelated=false with a brief goalRelatedReason.
-- "annotations" are 1-4 boxes over the FINAL screenshot showing evidence (what changed, or what is missing). Coordinates are fractions of the final image (x,y top-left).
-- Keep each "text" under 100 characters. No markdown.`;
-      recapUserPrompt = `USER GOAL: ${g?.question || ''}
-OUTCOME (already decided — do not change): ${verdictKey}${verdictKey === 'failed' ? ' — the agent stopped before emitting a finish action; explain where and why it broke down.' : ' — the agent emitted a finish action; summarize what it accomplished.'}
-IMAGES PROVIDED:
-- Initial state before the guide: ${initialShot ? 'yes' : 'no'}
-- Final state after the guide: ${finalShot ? 'yes' : 'no'}
-
-${plan.length ? `PLAN MILESTONES:\n${planText}\n\n` : ''}COMPLETED STEPS (step number: what was done):
-${steps.join('\n')}
-
-CONFIDENCE SIGNALS BY STEP:
-${scoreText}
-
-VISUAL EVIDENCE BY STEP:
-${stepEvidenceText}
-
-EVIDENCE SCRATCHPAD:
-${scratchpadText}
-
-Return the recap JSON.`;
+      recapSystemPrompt = GUIDE_RECAP_SUMMARIZER_SYSTEM_PROMPT;
+      recapUserPrompt = _gv2RenderTemplate(GUIDE_RECAP_SUMMARIZER_USER_TEMPLATE, {
+        USER_GOAL: g?.question || '',
+        OUTCOME_LINE: `${verdictKey}${verdictKey === 'failed' ? ' — the agent stopped before emitting a finish action; explain where and why it broke down.' : ' — the agent emitted a finish action; summarize what it accomplished.'}`,
+        HAS_INITIAL_IMAGE: initialShot ? 'yes' : 'no',
+        HAS_FINAL_IMAGE: finalShot ? 'yes' : 'no',
+        PLAN_SECTION: plan.length ? `PLAN MILESTONES:\n${planText}\n\n` : '',
+        COMPLETED_STEPS: steps.join('\n'),
+        CONFIDENCE_SIGNALS: scoreText,
+        VISUAL_EVIDENCE_BY_STEP: stepEvidenceText,
+        EVIDENCE_SCRATCHPAD: scratchpadText
+      });
       const useVision = await _gv2IsVisionEnabled();
       recapImages = [];
       if (useVision && initialShot) recapImages.push({ base64: initialShot, label: 'Initial state before guide' });
@@ -3859,6 +4528,7 @@ Return the recap JSON.`;
       : { summary: final?.verdict === 'completed' ? 'I have completed the task.' : 'I could not complete the task.', milestones: [] };
     if (!normalized || !normalized.summary) return null;
     const milestones = Array.isArray(normalized.milestones) ? normalized.milestones : [];
+    const summarySegments = Array.isArray(normalized.summarySegments) ? normalized.summarySegments : [];
 
     // Persist the recap prompt/response onto the final step's record so the step inspector can
     // show a "Summarization" section (what we sent to the LLM and what it replied).
@@ -3918,6 +4588,7 @@ Return the recap JSON.`;
 
     return {
       summary: normalized.summary,
+      summarySegments,
       milestones,
       sessionId: g?.sessionId,
       finalStep: Number.isFinite(finalStep) ? finalStep : null,
@@ -4129,6 +4800,7 @@ function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
     // highlight already ran (read-only, nothing to perform) — just advance the loop.
     g._autoClickTimer = setTimeout(() => {
       g._autoClickTimer = null;
+      if (!_gv2IsStopped()) _gv2SetWorkingStatus(_gv2ActionStatus(action, step));
       if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
     }, 900);
     return;
@@ -4137,6 +4809,7 @@ function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
     g._autoTypeTimer = setTimeout(() => {
       g._autoTypeTimer = null;
       if (_gv2IsStopped()) return;
+      _gv2SetWorkingStatus(_gv2ActionStatus(action, step));
       if (action === 'clear_text') _gv2AutoClearText(step);
       else _gv2AutoType(step);
     }, 200);
@@ -4146,17 +4819,22 @@ function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
     g._autoClickTimer = setTimeout(() => {
       g._autoClickTimer = null;
       if (_gv2IsStopped()) return;
+      _gv2SetWorkingStatus(_gv2ActionStatus(action, step));
       const scroller = document.scrollingElement || document.documentElement || document.body;
       const amount = Math.max(240, Math.min(800, Math.round((window.innerHeight || 800) * 0.8)));
       try { scroller.scrollTop = (scroller.scrollTop || 0) + (action === 'scroll_up' ? -amount : amount); } catch (e) {}
-      if (typeof gv2NextStep === 'function') setTimeout(gv2NextStep, 500);
+      if (typeof gv2NextStep === 'function') setTimeout(() => {
+        _gv2SetWorkingStatus('Checking result…');
+        setTimeout(gv2NextStep, 250);
+      }, 900);
     }, 200);
     return;
   }
-  if (action === 'navigate') {
+  if (action === 'goto_url') {
     g._autoClickTimer = setTimeout(() => {
       g._autoClickTimer = null;
       if (_gv2IsStopped()) return;
+      _gv2SetWorkingStatus(_gv2ActionStatus(action, step));
       const targetUrl = step.url;
       if (targetUrl) {
         window.location.href = targetUrl;
@@ -4167,6 +4845,7 @@ function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
   console.log('[guidev2] Auto mode: auto-performing low-risk action', action, 'step', step.step);
   g._autoClickTimer = setTimeout(() => {
     g._autoClickTimer = null;
+    if (!_gv2IsStopped()) _gv2SetWorkingStatus(_gv2ActionStatus(action, step));
     if (!_gv2IsStopped() && typeof gv2NextStep === 'function') gv2NextStep();
   }, 900);
 }
@@ -4242,6 +4921,40 @@ async function gv2RunFind(findQuery) {
   };
 }
 if (typeof window !== 'undefined') window.gv2RunFind = gv2RunFind;
+
+async function gv2RunWatchVideo(step) {
+  const currentUrl = String(window.location.href || '').trim();
+  const videoUrl = String(step?.videoUrl || step?.video_url || step?.url || currentUrl || '').trim();
+  const videoQuery = String(
+    step?.videoQuery ||
+    step?.video_query ||
+    step?.findQuery ||
+    step?.query ||
+    window._guidev2?.question ||
+    step?.instruction ||
+    'Summarize the important information in this video.'
+  ).trim();
+
+  const response = await safeSendMessage({
+    action: 'watchVideo',
+    videoUrl,
+    query: videoQuery,
+    metadata: { mode: 'guide_watch_video', url: window.location.href, step: step?.step || null }
+  });
+
+  if (response?.error) {
+    console.warn('[guidev2] watch_video: error', response.error);
+    return { answer: '', error: response.error, videoUrl, videoQuery };
+  }
+
+  return {
+    answer: response?.content?.trim() || '',
+    error: null,
+    videoUrl,
+    videoQuery
+  };
+}
+if (typeof window !== 'undefined') window.gv2RunWatchVideo = gv2RunWatchVideo;
 
 async function gv2RunVisualFallbackHighlight(findQuery) {
   const question = String(findQuery || window._guidev2?.question || '').trim();
@@ -4377,6 +5090,7 @@ function _gv2SetEditableValue(input, text) {
 }
 
 async function _gv2ContinueAfterFormEdit(label) {
+  _gv2SetWorkingStatus('Checking result…');
   try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) { /* non-fatal */ }
 
   console.log(`[guidev2] ${label} done, generating next step...`);
@@ -4403,6 +5117,7 @@ async function _gv2ContinueAfterFormEdit(label) {
  */
 async function _gv2AutoType(step) {
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+  _gv2SetWorkingStatus(_gv2ActionStatus('type', step));
 
   // Slice 5: canonical ACT/type carries text in `value`; legacy type used `typeText`.
   const typeText = (step.typeText != null) ? step.typeText : step.value;
@@ -4426,6 +5141,7 @@ async function _gv2AutoType(step) {
 
 async function _gv2AutoClearText(step) {
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+  _gv2SetWorkingStatus(_gv2ActionStatus('clear_text', step));
   const input = _gv2EditableTarget();
   if (!input) {
     console.warn('[guidev2] autoClearText: no editable element found in highlighted area');
@@ -4632,6 +5348,7 @@ window.gv2NextStep = async function (options = {}) {
   // click. Handled before the click-resolution path below because find's highlights carry
   // data-pageguide-styled, which that path would otherwise click as a fallback target.
   if (g?.active && cur && cur.action === 'find') {
+    _gv2SetWorkingStatus('Preparing next step…');
     _gv2RemoveClickListeners();
     _guidev2WaitingForClick = false;
     return continueGuide();
@@ -4653,6 +5370,7 @@ window.gv2NextStep = async function (options = {}) {
     // Manual "Next →" = "I performed this step, continue." The page now reflects the result,
     // so refresh the just-completed step's snapshot (post-action) before generating the next —
     // the user-click path does this via _gv2WaitForNavOrSettle, but the panel button doesn't.
+    _gv2SetWorkingStatus('Checking result…');
     try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) {}
     return continueGuide();
   }
@@ -4676,6 +5394,7 @@ window.gv2NextStep = async function (options = {}) {
     return continueGuide();
   }
 
+  _gv2SetWorkingStatus(_gv2ActionStatus(cur?.action || 'click', cur));
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
 
   // Resolve the element to click.
@@ -4736,8 +5455,10 @@ window.gv2NextStep = async function (options = {}) {
     try {
       if (cur?.action === 'drag_drop') {
         const drop = cur.dropTarget || window._guidev2?.currentDropTarget || null;
+        _gv2SetWorkingStatus(_gv2ActionStatus('drag_drop', cur));
         if (!_gv2DispatchDragDrop(toClick, drop)) console.warn('[guidev2] Auto-drag failed: missing source or drop target');
       } else {
+        _gv2SetWorkingStatus(_gv2ActionStatus('click', cur));
         _gv2DispatchClick(toClick);
       }
     } catch (e) { console.warn(cur?.action === 'drag_drop' ? '[guidev2] Auto-drag failed:' : '[guidev2] Auto-click failed:', e); }
@@ -4747,6 +5468,7 @@ window.gv2NextStep = async function (options = {}) {
 
   // Use the same post-click flow as a real user click: detects full-page nav,
   // SPA nav, or same-page DOM settle, then generates the next step.
+  _gv2SetWorkingStatus('Checking result…');
   const startUrl = window.location.href;
   const outcome = await _gv2WaitForNavOrSettle(startUrl);
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
@@ -4856,9 +5578,9 @@ async function gv2StopGuideWithRecap() {
     return { success: true, stopped: true, recap: null };
   }
   let recap = null;
-  // The user stopped the guide before it finished → deterministically a failed run; the recap
-  // diagnoses where/why it broke down rather than judging success.
-  try { recap = await _gv2BuildRecap(g, 'failed'); } catch (e) { recap = null; }
+  // The user stopped the guide before it finished → deterministically a failed run. When the
+  // optional summary agent is enabled, the recap diagnoses where/why it broke down.
+  try { if (await _gv2IsEndSummaryOn()) recap = await _gv2BuildRecap(g, 'failed'); } catch (e) { recap = null; }
   _gv2StopInternal();
   _gv2HidePanelTyping();
   return { success: true, stopped: true, recap };

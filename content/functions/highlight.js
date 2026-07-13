@@ -630,9 +630,10 @@ function gv2DrawDomMarker(target, number, color = '#7857ff') {
       const first = rects[0];
       const label = document.createElement('div');
       label.textContent = String(number);
-      const top = Math.max(0, first.top - 18);
+      const top = Math.max(0, first.top);
       const left = Math.max(0, Math.min(first.left, window.innerWidth - 24));
-      label.style.cssText = `position:fixed;top:${top}px;left:${left}px;background:${color};color:#fff;font:700 12px/1.3 sans-serif;padding:1px 5px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:2147483647;`;
+      const transform = first.left >= 24 ? 'translateX(-100%)' : 'none';
+      label.style.cssText = `position:fixed;top:${top}px;left:${left}px;transform:${transform};background:${color};color:#fff;font:700 12px/1.3 sans-serif;padding:1px 5px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:2147483647;`;
       container.appendChild(label);
     }
     document.body.appendChild(container);

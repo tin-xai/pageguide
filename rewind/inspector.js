@@ -380,6 +380,126 @@
     }).join('');
   }
 
+  function dataImage(base64) {
+    if (!base64) return '';
+    return String(base64).startsWith('data:') ? String(base64) : `data:image/jpeg;base64,${base64}`;
+  }
+
+  function pctBox(b) {
+    if (!b || typeof b !== 'object') return null;
+    const x = Number(b.x), y = Number(b.y), w = Number(b.w), h = Number(b.h);
+    if (![x, y, w, h].every(Number.isFinite) || !(w > 0) || !(h > 0)) return null;
+    const clamp = (v) => Math.max(0, Math.min(100, v * 100));
+    const x1 = clamp(x), y1 = clamp(y), x2 = clamp(x + w), y2 = clamp(y + h);
+    return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+  }
+
+  function pctPoint(p) {
+    if (!p || typeof p !== 'object') return null;
+    const x = Number(p.x), y = Number(p.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x: Math.max(0, Math.min(100, x * 100)), y: Math.max(0, Math.min(100, y * 100)) };
+  }
+
+  function annotationOverlaySvg(ev) {
+    const debug = ev?.annotationCoordinateDebug || {};
+    const region = debug.coercedRegion || ev?.region_bbox || null;
+    const annotations = Array.isArray(debug.coercedAnnotations) ? debug.coercedAnnotations : (Array.isArray(ev?.annotations) ? ev.annotations : []);
+    const parts = [];
+    const r = pctBox(region);
+    if (r) {
+      parts.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="rgba(255,184,0,0.12)" stroke="#ffb800" stroke-width="0.7" stroke-dasharray="1.5 1" vector-effect="non-scaling-stroke"/>`);
+      parts.push(`<text x="${Math.min(98, r.x + 0.8)}" y="${Math.max(3, r.y + 2.8)}" fill="#ffb800" font-size="3" font-weight="800">region</text>`);
+    }
+    annotations.slice(0, 5).forEach((ann) => {
+      const color = esc(String(ann?.color || '#ff2d78'));
+      const label = esc(String(ann?.label || '').slice(0, 60));
+      if (!ann || ann.type === 'box' || ann.type === 'rect' || ann.type === 'rectangle') {
+        const b = pctBox(ann?.bbox);
+        if (!b) return;
+        parts.push(`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="rgba(255,45,120,0.12)" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"/>`);
+        if (label) parts.push(`<text x="${Math.min(98, b.x + 0.8)}" y="${Math.max(3, b.y + 2.8)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      } else if (ann.type === 'ellipse') {
+        const b = pctBox(ann?.bbox);
+        if (!b) return;
+        parts.push(`<ellipse cx="${b.x + b.w / 2}" cy="${b.y + b.h / 2}" rx="${b.w / 2}" ry="${b.h / 2}" fill="rgba(255,45,120,0.12)" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"/>`);
+        if (label) parts.push(`<text x="${Math.min(98, b.x + 0.8)}" y="${Math.max(3, b.y + 2.8)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      } else if (ann.type === 'arrow' || ann.type === 'line') {
+        const from = pctPoint(ann.from), to = pctPoint(ann.to);
+        if (!from || !to) return;
+        const marker = ann.type === 'arrow' ? ' marker-end="url(#ann-arrow)"' : '';
+        parts.push(`<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"${marker}/>`);
+        if (label) parts.push(`<text x="${Math.min(98, (from.x + to.x) / 2 + 0.8)}" y="${Math.max(3, (from.y + to.y) / 2 - 1)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      }
+    });
+    if (!parts.length) return '';
+    return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;">
+      <defs><marker id="ann-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ff2d78"></path></marker></defs>
+      ${parts.join('')}
+    </svg>`;
+  }
+
+  function annotatedInputFigure(src, ev) {
+    const overlay = annotationOverlaySvg(ev);
+    if (!src || !overlay) return '';
+    return `<figure class="recap-image"><figcaption>Annotator input with region + annotations overlay</figcaption><span style="position:relative;display:inline-block;max-width:100%;border:1px solid var(--pg-border);border-radius:8px;overflow:hidden;background:rgba(0,0,0,.04);"><img src="${src}" alt="Annotator input with overlay" style="width:auto;max-width:100%;max-height:260px;object-fit:contain;display:block;border:0;border-radius:0;background:transparent;">${overlay}</span></figure>`;
+  }
+
+  function annotationDebugItems(rec) {
+    const hasAnnotationDebug = ev => ev && (
+      ev.annotationSystemPrompt ||
+      ev.annotationUserPrompt ||
+      ev.annotationRawResponse ||
+      ev.annotationCoordinateDebug ||
+      ev.annotationScreenshot ||
+      ev.annotationResultShot ||
+      ev.annotationError
+    );
+    const mapItem = (ev, source, idx) => Object.assign({}, ev, {
+      annotationSource: source,
+      annotationOrdinal: idx + 1,
+      annotationResultShot: ev?.annotationResultShot || ev?.shot || ev?.visualEvidenceShot || null,
+      shot: ev?.shot || ev?.visualEvidenceShot || null,
+      region_bbox: ev?.region_bbox || ev?.visualEvidenceNormRect || null,
+      note: ev?.note || ev?.visualEvidenceReason || ev?.reason || ev?.text || ''
+    });
+    const saved = (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+      .filter(hasAnnotationDebug)
+      .map((ev, idx) => mapItem(ev, 'Saved evidence', idx));
+    const confirmation = (Array.isArray(rec?.visualEvidenceItems) ? rec.visualEvidenceItems : [])
+      .filter(hasAnnotationDebug)
+      .map((ev, idx) => mapItem(ev, 'Confirmation evidence', idx));
+    return saved.concat(confirmation);
+  }
+
+  function renderAnnotationDetails(rec) {
+    const items = annotationDebugItems(rec);
+    if (!items.length) {
+      return rec?.confirmationEvidenceSkippedReason
+        ? `<div class="recap-sub" style="border-top:1px solid var(--pg-border);padding-top:10px;margin-top:10px;">
+            <div class="recap-sub-label">Confirmation evidence skipped</div>
+            <div style="font:500 13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--pg-muted);">${esc(rec.confirmationEvidenceSkippedReason)}</div>
+          </div>`
+        : '';
+    }
+    return items.map((ev, idx) => {
+      const shot = dataImage(ev.annotationScreenshot);
+      const resultShot = dataImage(ev.annotationResultShot || ev.shot);
+      return `
+        <div class="recap-sub" style="border-top:1px solid var(--pg-border);padding-top:10px;margin-top:10px;">
+          <div class="recap-sub-label">${esc(ev.annotationSource || 'Evidence annotation')} · ${esc(ev.key || `Evidence ${idx + 1}`)}</div>
+          ${ev.note ? `<div style="font:500 13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--pg-muted);margin-bottom:8px;">${esc(ev.note)}</div>` : ''}
+          ${ev.annotationError ? `<div style="font:800 12px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#c43;margin-bottom:8px;">Annotation error: ${esc(ev.annotationError)}</div>` : ''}
+          ${ev.annotationSystemPrompt ? `<div class="recap-sub-label">Annotator system prompt</div><pre>${esc(ev.annotationSystemPrompt)}</pre>` : ''}
+          ${ev.annotationUserPrompt ? `<div class="recap-sub-label">Annotator user prompt</div><pre>${esc(ev.annotationUserPrompt)}</pre>` : ''}
+          ${shot ? `<div class="recap-sub-label">Screenshot sent to annotator</div><div class="recap-images"><figure class="recap-image"><figcaption>Annotator input screenshot</figcaption><img src="${shot}" alt="Annotator input screenshot"></figure>${annotatedInputFigure(shot, ev)}</div>` : ''}
+          ${ev.annotationRawResponse ? `<div class="recap-sub-label">Raw annotator response</div><pre>${esc(ev.annotationRawResponse)}</pre>` : ''}
+          ${ev.annotationCoordinateDebug ? `<div class="recap-sub-label">Coordinate debug</div><pre>${esc(JSON.stringify(ev.annotationCoordinateDebug, null, 2))}</pre>` : ''}
+          ${resultShot ? `<div class="recap-sub-label">Final annotated evidence crop</div><div class="recap-images"><figure class="recap-image"><figcaption>Annotated evidence result</figcaption><img src="${resultShot}" alt="Annotated evidence result"></figure></div>` : ''}
+        </div>`;
+    }).join('');
+  }
+
   async function renderRawAndRecord(rec) {
     if (rec.systemPrompt) {
       $('prompt-system-wrap').style.display = '';
@@ -408,10 +528,24 @@
       const somShot = rec.somInputShot || null;
       if (somShot) {
         somWrap.style.display = '';
-        const src = String(somShot).startsWith('data:') ? somShot : `data:image/jpeg;base64,${somShot}`;
+        const src = dataImage(somShot);
         if ($('som-image')) $('som-image').innerHTML = `<figure class="recap-image"><figcaption>Viewport with SoM markers sent to LLM</figcaption><img src="${src}" alt="SoM screenshot sent to LLM"></figure>`;
       } else {
         somWrap.style.display = 'none';
+      }
+    }
+
+    const annotationWrap = $('annotation-wrap');
+    if (annotationWrap) {
+      const annotationHtml = renderAnnotationDetails(rec);
+      if (annotationHtml) {
+        annotationWrap.style.display = '';
+        annotationWrap.open = true;
+        if ($('annotation-content')) $('annotation-content').innerHTML = annotationHtml;
+      } else {
+        annotationWrap.style.display = 'none';
+        annotationWrap.open = false;
+        if ($('annotation-content')) $('annotation-content').innerHTML = '';
       }
     }
 
@@ -468,6 +602,15 @@
           label: img?.label || '',
           base64: img?.base64 ? '[base64 ' + img.base64.length + ' chars — see Summarization]' : null
         }));
+      }
+      if (Array.isArray(copy.savedEvidenceCaptures)) {
+        copy.savedEvidenceCaptures = copy.savedEvidenceCaptures.map(ev => {
+          const item = Object.assign({}, ev);
+          for (const k of ['shot', 'annotationScreenshot', 'annotationResultShot']) {
+            if (item[k]) item[k] = '[base64 ' + item[k].length + ' chars — see Evidence annotation]';
+          }
+          return item;
+        });
       }
       for (const k of ['recapSystemPrompt', 'recapUserPrompt', 'recapResponse']) {
         if (copy[k]) copy[k] = '[text ' + copy[k].length + ' chars — see Summarization]';

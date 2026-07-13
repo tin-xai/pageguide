@@ -914,12 +914,20 @@ describe('gv2NormalizeAction (content/utils.js)', () => {
     expect(window.gv2NormalizeAction('clear-text')).toBe('clear_text');
     expect(window.gv2NormalizeAction('drag drop')).toBe('drag_drop');
     expect(window.gv2NormalizeAction('scroll up')).toBe('scroll_up');
+    expect(window.gv2NormalizeAction('watch video')).toBe('watch_video');
   });
 
   test('defaults to click, or finish on the last step', () => {
     expect(window.gv2NormalizeAction(null, false)).toBe('click');
     expect(window.gv2NormalizeAction(null, true)).toBe('finish');
     expect(window.gv2NormalizeAction('done')).toBe('finish');
+  });
+
+  test('uses goto_url as the canonical navigation action', () => {
+    expect(window.gv2NormalizeAction('navigate')).toBe('goto_url');
+    expect(window.gv2NormalizeAction('goto url')).toBe('goto_url');
+    expect(window.gv2NormalizeAction('go_to_url')).toBe('goto_url');
+    expect(window.gv2NormalizeAction('open-url')).toBe('goto_url');
   });
 });
 
@@ -928,6 +936,7 @@ describe('Evidence scratchpad helpers (content/utils.js)', () => {
 
   test('normalizes evidence keys and bboxes', () => {
     expect(window.gv2NormalizeEvidenceKey('Team A Color!')).toBe('team_a_color');
+    expect(window.gv2NormalizeEvidenceKey('40')).toBe('40');
     expect(window.gv2NormalizeEvidenceBbox({ x: 0.1, y: 0.2, width: 0.3, height: 0.4 }))
       .toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
   });
@@ -942,6 +951,98 @@ describe('Evidence scratchpad helpers (content/utils.js)', () => {
     expect(out.ok).toBe(true);
     expect(out.entry.ref_step_id).toBe(7);
     expect(out.entry.updated_at_step_id).toBe(7);
+  });
+
+  test('normalizes region-only relationship evidence annotations', () => {
+    const out = window.gv2NormalizeEvidenceEntry({
+      key: 'parking_next_to_gym',
+      note: 'The parking lot is next to the gym.',
+      som_id: null,
+      region_bbox: { x: 0.12, y: 0.22, w: 0.64, h: 0.32 },
+      annotations: [
+        { type: 'box', bbox: { x: 0.14, y: 0.3, w: 0.22, h: 0.16 }, label: 'Parking lot' },
+        { type: 'box', bbox: { x: 0.44, y: 0.29, w: 0.2, h: 0.18 }, label: 'Gym' },
+        { type: 'arrow', from: { x: 0.36, y: 0.38 }, to: { x: 0.44, y: 0.38 }, label: 'next to' }
+      ]
+    }, { ref_step_id: 8 });
+
+    expect(out.ok).toBe(true);
+    expect(out.entry.annotations).toEqual([
+      { type: 'box', bbox: { x: 0.14, y: 0.3, w: 0.22, h: 0.16 }, label: 'Parking lot' },
+      { type: 'box', bbox: { x: 0.44, y: 0.29, w: 0.2, h: 0.18 }, label: 'Gym' },
+      { type: 'arrow', from: { x: 0.36, y: 0.38 }, to: { x: 0.44, y: 0.38 }, label: 'next to' }
+    ]);
+  });
+
+  test('drops malformed evidence annotations and caps valid annotations at five', () => {
+    const annotations = window.gv2NormalizeEvidenceAnnotations([
+      { type: 'box', bbox: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 }, label: 'one' },
+      { type: 'box', bbox: { x: 0.2, y: 0.2, w: 0, h: 0.1 }, label: 'bad' },
+      { type: 'arrow', from: { x: 0.2, y: 0.2 }, to: { x: 0.3, y: 0.3 }, label: 'two' },
+      { type: 'arrow', from: { x: 'nope', y: 0.2 }, to: { x: 0.3, y: 0.3 }, label: 'bad' },
+      { type: 'box', bbox: { x: 0.3, y: 0.3, w: 0.1, h: 0.1 }, label: 'three' },
+      { type: 'box', bbox: { x: 0.4, y: 0.4, w: 0.1, h: 0.1 }, label: 'four' },
+      { type: 'box', bbox: { x: 0.5, y: 0.5, w: 0.1, h: 0.1 }, label: 'five' },
+      { type: 'box', bbox: { x: 0.6, y: 0.6, w: 0.1, h: 0.1 }, label: 'six' }
+    ]);
+
+    expect(annotations).toHaveLength(5);
+    expect(annotations.map(a => a.label)).toEqual(['one', 'two', 'three', 'four', 'five']);
+  });
+
+  test('normalizes annotator shapes, colors, and crop result', () => {
+    const out = window.gv2NormalizeEvidenceAnnotationResult({
+      crop: { x: -0.1, y: 0.2, w: 0.5, h: 2 },
+      annotations: [
+        { type: 'ellipse', bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.2 }, label: 'Hall', color: '#00ff88' },
+        { type: 'line', from: { x: 0.2, y: 0.3 }, to: { x: 0.4, y: 0.5 }, label: 'near', color: 'blue' },
+        { type: 'arrow', from: { x: 0.4, y: 0.5 }, to: { x: 0.5, y: 0.5 }, label: 'next to', color: 'url(bad)' }
+      ]
+    });
+
+    expect(out.region_bbox).toEqual({ x: 0, y: 0.2, w: 0.5, h: 0.8 });
+    expect(out.annotations).toEqual([
+      { type: 'ellipse', bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.2 }, label: 'Hall', color: '#00ff88' },
+      { type: 'line', from: { x: 0.2, y: 0.3 }, to: { x: 0.4, y: 0.5 }, label: 'near', color: 'blue' },
+      { type: 'arrow', from: { x: 0.4, y: 0.5 }, to: { x: 0.5, y: 0.5 }, label: 'next to' }
+    ]);
+  });
+
+  test('normalizes bbox aliases and coordinate arrays', () => {
+    expect(window.gv2NormalizeEvidenceBbox([0.1, 0.2, 0.3, 0.4]))
+      .toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+    expect(window.gv2NormalizeEvidenceBbox({ left: 0.2, top: 0.3, right: 0.5, bottom: 0.7 }))
+      .toEqual({ x: 0.2, y: 0.3, w: 0.3, h: 0.4 });
+    expect(window.gv2NormalizeEvidenceBbox({ x1: 0.2, y1: 0.3, x2: 0.5, y2: 0.7 }))
+      .toEqual({ x: 0.2, y: 0.3, w: 0.3, h: 0.4 });
+  });
+
+  test('keeps screenshot evidence annotation request metadata', () => {
+    const out = window.gv2NormalizeEvidenceEntry({
+      key: 'parking_next_to_hall',
+      note: 'The parking lot is next to Sanford Hall.',
+      som_id: null,
+      need_annotation: true,
+      annotation_prompt: 'Box both places and draw an arrow labeled next to.'
+    }, { ref_step_id: 10 });
+
+    expect(out.ok).toBe(true);
+    expect(out.entry.need_annotation).toBe(true);
+    expect(out.entry.annotation_prompt).toBe('Box both places and draw an arrow labeled next to.');
+    expect(out.entry.region_bbox).toBe(null);
+  });
+
+  test('ignores annotations for DOM evidence entries', () => {
+    const out = window.gv2NormalizeEvidenceEntry({
+      key: 'gym_label',
+      note: 'The gym label is visible.',
+      som_id: '12',
+      region_bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+      annotations: [{ type: 'box', bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, label: 'ignored' }]
+    }, { ref_step_id: 9 });
+
+    expect(out.ok).toBe(true);
+    expect(out.entry.annotations).toEqual([]);
   });
 
   test('normalizes evidence arrays with cap and unique duplicate-key suffixes', () => {
@@ -1001,6 +1102,25 @@ describe('Evidence scratchpad helpers (content/utils.js)', () => {
     expect(window.gv2EvidenceMemoryText(entries)).toContain('team_a_color: Team A shirt is red, captured at step 7');
     expect(window.gv2ParseEvidenceRefs('Team A [ev:team_a_color] and missing [ev:other].'))
       .toEqual(['team_a_color', 'other']);
+    expect(window.gv2ParseEvidenceRefs('Language [ev:40].')).toEqual(['40']);
+  });
+
+  test('expands bare evidence citations using scratchpad notes', () => {
+    const scratchpad = [
+      { key: 'a', note: 'Spain and England semi-final expectations article', ref_step_id: 1 },
+      { key: 'b', note: 'Messi first England meeting article', ref_step_id: 1 }
+    ];
+
+    expect(window.gv2ExpandBareEvidenceCitations(
+      'I found two World Cup articles, one titled: [ev:a] and one titled: [ev:b].',
+      scratchpad
+    )).toBe('I found two World Cup articles, one titled: Spain and England semi-final expectations article [ev:a] and one titled: Messi first England meeting article [ev:b].');
+  });
+
+  test('leaves evidence citations attached to concrete claims alone', () => {
+    const scratchpad = [{ key: 'a', note: 'Team A shirt is red', ref_step_id: 1 }];
+    expect(window.gv2ExpandBareEvidenceCitations('Team A is red [ev:a].', scratchpad))
+      .toBe('Team A is red [ev:a].');
   });
 });
 
@@ -1059,6 +1179,46 @@ describe('gv2BuildAnswerEvidence (content/utils.js)', () => {
     expect(out[0].note).toBe('Clicked World Cup');
   });
 
+  test('navigation-only prefers cited finish confirmation before action fallback', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'The page language is now English [ev:40].',
+      scratchpad: [],
+      confirmation: [{ step: 6, region_bbox: { x: 0.2, y: 0.3, w: 0.2, h: 0.1 }, note: 'Language selector shows English.' }],
+      fallbackStep: { step: 4, note: 'Clicked language menu' }
+    });
+    expect(out).toEqual([{
+      source: 'confirmation',
+      step: 6,
+      region_bbox: { x: 0.2, y: 0.3, w: 0.2, h: 0.1 },
+      note: 'Language selector shows English.',
+      key: '40'
+    }]);
+  });
+
+  test('saved evidence suppresses finish confirmation evidence', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'Article A exists [ev:a].',
+      scratchpad: [scratch('a', 2)],
+      confirmation: [{ step: 6, region_bbox: { x: 0.2, y: 0.3, w: 0.2, h: 0.1 }, note: 'Final page still shows article.' }],
+      fallbackStep: { step: 6 }
+    });
+    expect(out.map(i => i.source)).toEqual(['cited']);
+    expect(out[0].key).toBe('a');
+  });
+
+  test('uncited saved evidence still suppresses finish confirmation evidence', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'I found the answer.',
+      scratchpad: [scratch('a', 2), scratch('b', 3)],
+      confirmation: [{ step: 6, region_bbox: { x: 0.2, y: 0.3, w: 0.2, h: 0.1 }, note: 'Final page confirms the answer.' }],
+      fallbackStep: { step: 6 }
+    });
+    expect(out.map(i => [i.source, i.key, i.step])).toEqual([
+      ['scratchpad', 'a', 2],
+      ['scratchpad', 'b', 3]
+    ]);
+  });
+
   test('guarantee contract: non-empty with fallbackStep, empty without', () => {
     expect(window.gv2BuildAnswerEvidence({ finalAnswer: '', scratchpad: [], fallbackStep: { step: 1 } }))
       .toHaveLength(1);
@@ -1087,6 +1247,18 @@ describe('gv2BuildAnswerEvidence (content/utils.js)', () => {
     expect(out).toHaveLength(1);
     expect(out[0].source).toBe('action-fallback');
   });
+
+  test('hallucinated citations do not suppress confirmation fallback', () => {
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'Done [ev:fake_link].',
+      scratchpad: [],
+      confirmation: [{ step: 8, region_bbox: { x: 0.1, y: 0.1, w: 0.3, h: 0.2 }, note: 'The destination page is open.' }],
+      fallbackStep: { step: 7 }
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('confirmation');
+    expect(out[0].step).toBe(8);
+  });
 });
 
 describe('gv2DeterministicVerdict (content/utils.js)', () => {
@@ -1109,12 +1281,17 @@ describe('gv2NormalizeVisualEvidence (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
 
   test('normalizes the object form into {index,rect,text,reason}', () => {
-    const r = window.gv2NormalizeVisualEvidence({ index: 7, text: '  Sort by:  Price ', reason: 'sorted low to high\nso first is cheapest' });
-    expect(r).toEqual({ index: 7, rect: null, text: 'Sort by: Price', reason: 'sorted low to high so first is cheapest' });
+    const r = window.gv2NormalizeVisualEvidence({ name: null, index: 7, text: '  Sort by:  Price ', reason: 'sorted low to high\nso first is cheapest' });
+    expect(r).toEqual({ name: null, index: 7, rect: null, text: 'Sort by: Price', reason: 'sorted low to high so first is cheapest', need_annotation: false, annotation_prompt: null, annotations: [] });
+  });
+
+  test('keeps a citation-safe confirmation evidence name', () => {
+    const r = window.gv2NormalizeVisualEvidence({ name: 'Spanish Language!', index: 40, reason: 'sidebar shows Spanish' });
+    expect(r).toEqual({ name: 'spanish_language', index: 40, rect: null, text: null, reason: 'sidebar shows Spanish', need_annotation: false, annotation_prompt: null, annotations: [] });
   });
 
   test('treats a bare string as the reason', () => {
-    expect(window.gv2NormalizeVisualEvidence('proves it')).toEqual({ index: null, rect: null, text: null, reason: 'proves it' });
+    expect(window.gv2NormalizeVisualEvidence('proves it')).toEqual({ name: null, index: null, rect: null, text: null, reason: 'proves it', need_annotation: false, annotation_prompt: null, annotations: [] });
   });
 
   test('accepts a normalized bounding box rect', () => {
@@ -1123,8 +1300,8 @@ describe('gv2NormalizeVisualEvidence (content/utils.js)', () => {
   });
 
   test('keeps both index and rect when both are provided', () => {
-    const r = window.gv2NormalizeVisualEvidence({ index: 9, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, reason: 'marker plus precise region' });
-    expect(r).toEqual({ index: 9, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, text: null, reason: 'marker plus precise region' });
+    const r = window.gv2NormalizeVisualEvidence({ name: null, index: 9, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, reason: 'marker plus precise region' });
+    expect(r).toEqual({ name: null, index: 9, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, text: null, reason: 'marker plus precise region', need_annotation: false, annotation_prompt: null, annotations: [] });
   });
 
   test('clamps rect components to 0..1 and rejects a zero-area rect', () => {
@@ -1136,15 +1313,33 @@ describe('gv2NormalizeVisualEvidence (content/utils.js)', () => {
 
   test('an object with only a rect is kept', () => {
     const r = window.gv2NormalizeVisualEvidence({ rect: { x: 0, y: 0, w: 1, h: 1 } });
-    expect(r).toEqual({ index: null, rect: { x: 0, y: 0, w: 1, h: 1 }, text: null, reason: null });
+    expect(r).toEqual({ name: null, index: null, rect: { x: 0, y: 0, w: 1, h: 1 }, text: null, reason: null, need_annotation: false, annotation_prompt: null, annotations: [] });
+  });
+
+  test('keeps confirmation annotation requests', () => {
+    const r = window.gv2NormalizeVisualEvidence({
+      need_annotation: true,
+      annotation_prompt: 'Box the selected language control.',
+      reason: 'The language selector confirms English.'
+    });
+    expect(r).toEqual({
+      name: null,
+      index: null,
+      rect: null,
+      text: null,
+      reason: 'The language selector confirms English.',
+      need_annotation: true,
+      annotation_prompt: 'Box the selected language control.',
+      annotations: []
+    });
   });
 
   test('coerces index to a positive integer, else null', () => {
-    expect(window.gv2NormalizeVisualEvidence({ index: '4', reason: 'x' }).index).toBe(4);
-    expect(window.gv2NormalizeVisualEvidence({ index: 3.9, reason: 'x' }).index).toBe(3);
-    expect(window.gv2NormalizeVisualEvidence({ index: 0, reason: 'x' }).index).toBeNull();
-    expect(window.gv2NormalizeVisualEvidence({ index: -2, reason: 'x' }).index).toBeNull();
-    expect(window.gv2NormalizeVisualEvidence({ index: 'abc', reason: 'x' }).index).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence({ name: null, index: '4', reason: 'x' }).index).toBe(4);
+    expect(window.gv2NormalizeVisualEvidence({ name: null, index: 3.9, reason: 'x' }).index).toBe(3);
+    expect(window.gv2NormalizeVisualEvidence({ name: null, index: 0, reason: 'x' }).index).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence({ name: null, index: -2, reason: 'x' }).index).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence({ name: null, index: 'abc', reason: 'x' }).index).toBeNull();
   });
 
   test('caps overlong text and reason at 280 chars', () => {
@@ -1158,34 +1353,35 @@ describe('gv2NormalizeVisualEvidence (content/utils.js)', () => {
     expect(window.gv2NormalizeVisualEvidence(null)).toBeNull();
     expect(window.gv2NormalizeVisualEvidence(undefined)).toBeNull();
     expect(window.gv2NormalizeVisualEvidence('   ')).toBeNull();
-    expect(window.gv2NormalizeVisualEvidence({ index: null, text: '  ', reason: '' })).toBeNull();
+    expect(window.gv2NormalizeVisualEvidence({ name: null, index: null, text: '  ', reason: '' })).toBeNull();
     expect(window.gv2NormalizeVisualEvidence(42)).toBeNull();
   });
 
   test('normalizes a capped list of visual evidence items', () => {
     const items = window.gv2NormalizeVisualEvidenceList([
-      { index: 3, reason: 'first marker' },
+      { name: null, index: 3, reason: 'first marker' },
       { rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, reason: 'fallback rect' },
-      { index: 3, reason: 'duplicate marker' },
-      { index: 4, reason: 'extra marker' }
+      { name: null, index: 3, reason: 'duplicate marker' },
+      { name: null, index: 4, reason: 'extra marker' }
     ], 3);
     expect(items).toEqual([
-      { index: 3, rect: null, text: null, reason: 'first marker' },
-      { index: null, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, text: null, reason: 'fallback rect' },
-      { index: 4, rect: null, text: null, reason: 'extra marker' }
+      { name: null, index: 3, rect: null, text: null, reason: 'first marker', need_annotation: false, annotation_prompt: null, annotations: [] },
+      { name: null, index: null, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, text: null, reason: 'fallback rect', need_annotation: false, annotation_prompt: null, annotations: [] },
+      { name: null, index: 4, rect: null, text: null, reason: 'extra marker', need_annotation: false, annotation_prompt: null, annotations: [] }
     ]);
   });
 
   test('normalizes grouped visual evidence fields', () => {
     const items = window.gv2NormalizeVisualEvidenceList({
+      names: ['price_sort', null],
       indexes: [8, null],
       rects: [null, { x: 0, y: 0, w: 0.5, h: 0.5 }],
       texts: ['price sort', 'first result'],
       reasons: ['sort order proves cheapest', 'item shown after sorting']
     });
     expect(items).toEqual([
-      { index: 8, rect: null, text: 'price sort', reason: 'sort order proves cheapest' },
-      { index: null, rect: { x: 0, y: 0, w: 0.5, h: 0.5 }, text: 'first result', reason: 'item shown after sorting' }
+      { name: 'price_sort', index: 8, rect: null, text: 'price sort', reason: 'sort order proves cheapest', need_annotation: false, annotation_prompt: null, annotations: [] },
+      { name: null, index: null, rect: { x: 0, y: 0, w: 0.5, h: 0.5 }, text: 'first result', reason: 'item shown after sorting', need_annotation: false, annotation_prompt: null, annotations: [] }
     ]);
   });
 });
@@ -1200,7 +1396,7 @@ describe('visual_highlight action (content/utils.js)', () => {
   });
 
   test('is read-only: no planner target, low risk, noop replay', () => {
-    expect(window.gv2StepHasTarget({ action: 'visual_highlight', element: { index: 4, text: 'x' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'visual_highlight', element: { name: null, index: 4, text: 'x' } })).toBe(false);
     expect(window.gv2AssessRisk({ action: 'visual_highlight', risk: 'high' })).toBe('low');
     expect(window.gv2ReplayKind('visual_highlight')).toBe('noop');
   });
@@ -1210,22 +1406,33 @@ describe('gv2StepHasTarget (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
 
   test('a click step with an element has a target', () => {
-    expect(window.gv2StepHasTarget({ action: 'click', element: { index: 4, text: 'Help' } })).toBe(true);
+    expect(window.gv2StepHasTarget({ action: 'click', element: { name: null, index: 4, text: 'Help' } })).toBe(true);
     expect(window.gv2StepHasTarget({ action: 'click', element: { text: 'Help' } })).toBe(true);
   });
 
   test('a drag_drop step uses element as the draggable source target', () => {
-    expect(window.gv2StepHasTarget({ action: 'drag_drop', element: { index: 4, text: 'Task A' }, dropTarget: { text: 'Done' } })).toBe(true);
+    expect(window.gv2StepHasTarget({ action: 'drag_drop', element: { name: null, index: 4, text: 'Task A' }, dropTarget: { text: 'Done' } })).toBe(true);
   });
 
   test('find never has a target, even when the model populates element', () => {
     // find highlights whatever the reader pass cites — not one planner-chosen element.
-    expect(window.gv2StepHasTarget({ action: 'find', element: { index: 4, text: 'Lost property' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'find', element: { name: null, index: 4, text: 'Lost property' } })).toBe(false);
+  });
+
+  test('scroll steps ignore model-populated element targets', () => {
+    expect(window.gv2StepHasTarget({ action: 'scroll_down', element: { name: null, index: 4, text: 'Article card' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'scroll_up', element: { name: null, index: 2, text: 'Header' } })).toBe(false);
+  });
+
+  test('goto_url and watch_video ignore model-populated element targets', () => {
+    expect(window.gv2StepHasTarget({ action: 'goto_url', element: { name: null, index: 4, text: 'BBC' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'navigate', element: { name: null, index: 4, text: 'BBC' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'watch_video', element: { name: null, index: 8, text: 'Play' } })).toBe(false);
   });
 
   test('done and last steps have no target', () => {
-    expect(window.gv2StepHasTarget({ action: 'done', element: { index: 1, text: 'x' } })).toBe(false);
-    expect(window.gv2StepHasTarget({ action: 'click', isLastStep: true, element: { index: 1, text: 'x' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'done', element: { name: null, index: 1, text: 'x' } })).toBe(false);
+    expect(window.gv2StepHasTarget({ action: 'click', isLastStep: true, element: { name: null, index: 1, text: 'x' } })).toBe(false);
   });
 
   test('a click step without an element has no target', () => {
@@ -1279,6 +1486,12 @@ describe('gv2ReplayKind (content/utils.js)', () => {
   test('find replays as a no-op', () => {
     expect(window.gv2ReplayKind('find')).toBe('noop');
     expect(window.gv2ReplayKind('FIND')).toBe('noop');
+  });
+
+  test('goto_url and watch_video replay as no-ops', () => {
+    expect(window.gv2ReplayKind('goto_url')).toBe('noop');
+    expect(window.gv2ReplayKind('navigate')).toBe('noop');
+    expect(window.gv2ReplayKind('watch_video')).toBe('noop');
   });
 
   test('mutating actions keep their own replay kind', () => {
@@ -1463,6 +1676,41 @@ describe('gv2NormalizeRecap (content/utils.js)', () => {
     ]);
   });
 
+  test('keeps summary segments pinned to real completed steps with valid phrases', () => {
+    const raw = {
+      summary: 'Compared the latest iPhone models.',
+      summarySegments: [
+        { text: 'Opened the latest iPhone lineup.', phrase: 'latest iPhone lineup', step: 2 },
+        { text: 'Compared the Pro Max display specs.', phrase: 'missing phrase', step: 4 },
+        { text: 'Invented an off-trajectory step.', phrase: 'off-trajectory', step: 9 }
+      ],
+      milestones: [
+        { text: 'Opened the latest iPhone lineup.', phrase: 'latest iPhone lineup', step: 2 },
+        { text: 'Compared the Pro Max display specs.', phrase: 'Pro Max display specs', step: 4 }
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, ctx);
+    expect(r.summarySegments).toEqual([
+      { text: 'Opened the latest iPhone lineup.', step: 2, phrase: 'latest iPhone lineup' },
+      { text: 'Compared the Pro Max display specs.', step: 4, phrase: '' }
+    ]);
+  });
+
+  test('falls back to milestone phrases when summary segments are missing', () => {
+    const raw = {
+      summary: 'Compared the latest iPhone models.',
+      milestones: [
+        { text: 'Opened the latest iPhone lineup.', phrase: 'latest iPhone lineup', step: 2 },
+        { text: 'Compared the Pro Max display specs.', phrase: 'Pro Max display specs', step: 4 }
+      ]
+    };
+    const r = window.gv2NormalizeRecap(raw, ctx);
+    expect(r.summarySegments).toEqual([
+      { text: 'Opened the latest iPhone lineup.', step: 2, phrase: 'latest iPhone lineup' },
+      { text: 'Compared the Pro Max display specs.', step: 4, phrase: 'Pro Max display specs' }
+    ]);
+  });
+
   test('dedupes repeated steps and clamps to at most 6 milestones', () => {
     const validSteps = [1, 2, 3, 4, 5, 6, 7, 8];
     const raw = {
@@ -1607,9 +1855,11 @@ describe('gv2TargetNormRect / gv2RegionMarkerRect (content/utils.js — recap ma
 describe('Guide default-flag predicates (planning off / recap on)', () => {
   // The runtime gates use the same storage idioms; assert the pure default semantics so a
   // regression that flips a default is caught. Planning is now OFF unless explicitly true;
-  // Visual Recap is ON unless explicitly 'off'.
+  // Visual Recap is ON unless explicitly 'off'. The extra end summary agent is OFF unless
+  // explicitly 'on'.
   const planningEnabled = (v) => v === true;               // guidev2 _gv2IsPlanningEnabled
   const recapOn = (v) => v !== 'off';                      // guidev2 _gv2IsVisualRecapOn / panel _normalizeRecap
+  const endSummaryOn = (v) => v === 'on';                  // guidev2 _gv2IsEndSummaryOn / panel _normalizeEndSummary
 
   test('planning defaults OFF when unset', () => {
     expect(planningEnabled(undefined)).toBe(false);
@@ -1621,6 +1871,12 @@ describe('Guide default-flag predicates (planning off / recap on)', () => {
     expect(recapOn(undefined)).toBe(true);
     expect(recapOn('on')).toBe(true);
     expect(recapOn('off')).toBe(false);
+  });
+
+  test('end summary agent defaults OFF when unset, on only when explicitly enabled', () => {
+    expect(endSummaryOn(undefined)).toBe(false);
+    expect(endSummaryOn('off')).toBe(false);
+    expect(endSummaryOn('on')).toBe(true);
   });
 });
 
@@ -1643,6 +1899,7 @@ describe('gv2NormalizeStepNumber (content/utils.js)', () => {
 
 describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
   beforeAll(() => {
+    if (!window.gv2NormalizeRecap) loadScript('content/utils.js');
     window.chrome = {
       runtime: {
         connect: jest.fn(() => ({
@@ -1663,11 +1920,13 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
         }
       }
     };
+    window.safeSendMessage = (msg) => window.chrome.runtime.sendMessage(msg);
     loadScript('content/tasks/guidev2.js');
   });
 
   beforeEach(() => {
     window.chrome.runtime.sendMessage.mockClear();
+    window.chrome.storage.local.get.mockImplementation(async () => ({}));
     window._guidev2 = {
       active: true,
       question: 'answer a form question',
@@ -1747,6 +2006,10 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
   });
 
   test('paused stop builds a recap before clearing guide state', async () => {
+    window.chrome.storage.local.get.mockImplementation(async () => ({
+      guideEndSummaryAgent: 'on',
+      guideVisualRecap: 'on'
+    }));
     window._guidev2 = {
       active: true,
       question: 'change language',
@@ -1762,6 +2025,73 @@ describe('gv2NextStep manual continuation (content/tasks/guidev2.js)', () => {
     expect(result.stopped).toBe(true);
     expect(result.recap?.summary).toContain('The guide recorded 1 step');
     expect(window._guidev2.active).toBe(false);
+  });
+
+  test('summary off stops without calling the trajectory summarizer', async () => {
+    window.chrome.storage.local.get.mockImplementation(async () => ({
+      guideEndSummaryAgent: 'off',
+      guideVisualRecap: 'on'
+    }));
+    window._guidev2 = {
+      active: true,
+      question: 'change language',
+      previousSteps: ['Step 1: Open language settings'],
+      currentPlanStep: 1,
+      autoMode: false,
+      paused: true
+    };
+
+    const result = await window.gv2StopGuideWithRecap();
+
+    expect(result.success).toBe(true);
+    expect(result.stopped).toBe(true);
+    expect(result.recap).toBeNull();
+    expect(window.chrome.runtime.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      action: 'callLLM'
+    }));
+    expect(window.chrome.runtime.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      action: 'callLLMWithImages'
+    }));
+  });
+
+  test('summary agent builds screenshot-capable trajectory recap when visual recap is off', async () => {
+    window.chrome.storage.local.get.mockImplementation(async () => ({
+      guideEndSummaryAgent: 'on',
+      guideVisualRecap: 'off'
+    }));
+    const originalCaptureScreenshot = window.captureScreenshot;
+    window.captureScreenshot = jest.fn(async () => 'FINAL_SHOT');
+    window._guidev2 = {
+      active: true,
+      question: 'change language',
+      previousSteps: ['Step 1: Open language settings'],
+      currentPlanStep: 1,
+      autoMode: false,
+      paused: true
+    };
+
+    try {
+      const result = await window.gv2StopGuideWithRecap();
+
+      expect(result.success).toBe(true);
+      expect(result.stopped).toBe(true);
+      expect(result.recap?.summary).toContain('The guide recorded 1 step');
+      expect(result.recap?.milestones).toEqual(expect.arrayContaining([
+        expect.objectContaining({ step: 1, text: 'Open language settings' })
+      ]));
+      expect(window.chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'callLLMWithImages'
+      }));
+      const recapCall = window.chrome.runtime.sendMessage.mock.calls
+        .map(call => call[0])
+        .find(msg => msg?.metadata?.mode === 'guide' && msg?.metadata?.step === 'recap');
+      expect(recapCall?.systemPrompt).toContain('summarySegments');
+      expect(recapCall?.systemPrompt).toContain('inline visual references');
+      expect(recapCall?.messages?.[0]?.content).toContain('The UI will render summarySegments as inline clickable visual references');
+    } finally {
+      if (originalCaptureScreenshot) window.captureScreenshot = originalCaptureScreenshot;
+      else delete window.captureScreenshot;
+    }
   });
 
   test('blocks step 16 before generating another guide step', async () => {
@@ -2093,6 +2423,32 @@ describe('_gv2BuildSteerQuestion (content/tasks/guidev2.js)', () => {
   });
 });
 
+describe('guide evidence annotator JSON repair (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  test('repairs duplicate bbox y emitted where h was intended', () => {
+    const raw = '{"region_bbox":{"x":715,"y":838,"w":0.14,"h":0.14},"annotations":[{"type":"box","bbox":{"x":722,"y":904,"w":0.125,"y":0.018},"label":"Sportsplex Closed"}]}';
+    const repaired = window._gv2RepairAnnotatorJsonText(raw);
+    const parsed = window.gv2ExtractJsonObject(repaired);
+    expect(parsed.annotations[0].bbox).toEqual({
+      x: 722,
+      y: 904,
+      w: 0.125,
+      h: 0.018
+    });
+  });
+
+  test('repairs coordinate arrays and edge/corner aliases before parsing', () => {
+    const raw = '{"annotations":[{"type":"box","bbox":[0.1,0.2,0.3,0.4]},{"type":"box","bbox":{"left":0.2,"top":0.3,"right":0.5,"bottom":0.7}}]}';
+    const parsed = window.gv2ExtractJsonObject(window._gv2RepairAnnotatorJsonText(raw));
+    expect(parsed.annotations[0].bbox).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+    expect(parsed.annotations[1].bbox).toEqual({ x: 0.2, y: 0.3, w: 0.3, h: 0.4 });
+  });
+});
+
 // Rewind action-replay: resolve a stored target.text against a fresh page index.
 describe('gv2MatchIndexText (content/utils.js)', () => {
   beforeAll(() => { loadScript('content/utils.js'); });
@@ -2184,6 +2540,113 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     };
   });
 
+  test('flags finish responses that omit confirmation evidence targets', () => {
+    const issue = window._gv2StepContractIssue(JSON.stringify({
+      step: 1,
+      thought: 'Done',
+      instruction: 'Finish the task.',
+      action: 'finish',
+      answer: 'The task is complete.',
+      confirmationEvidence: 'no'
+    }));
+    expect(issue).toEqual(expect.objectContaining({ kind: 'missing_confirmation_evidence' }));
+  });
+
+  test('finish confirmation evidence with an index requests a DOM marker capture', async () => {
+    const evidenceEl = document.createElement('button');
+    evidenceEl.textContent = 'Español (idioma)';
+    evidenceEl.getClientRects = () => [];
+    evidenceEl.getBoundingClientRect = () => ({
+      left: 40,
+      top: 50,
+      width: 160,
+      height: 32,
+      right: 200,
+      bottom: 82
+    });
+    document.body.appendChild(evidenceEl);
+    window._pageguideIndex = { 40: evidenceEl };
+    window._guidev2.captureEnabled = true;
+    window._guidev2.sessionId = 'confirmation-index-marker-test';
+    window.scrollTo = jest.fn();
+    const markerNode = document.createElement('div');
+    const drawMarker = jest.fn(() => markerNode);
+    const removeMarker = jest.fn();
+    window.gv2DrawDomMarker = drawMarker;
+    window.gv2RemoveDomMarker = removeMarker;
+    window.rewindPutRecord = jest.fn(async () => {});
+
+    try {
+      const result = await window.gv2ProcessResponse(JSON.stringify({
+        step: 1,
+        thought: 'The language is now Spanish.',
+        instruction: 'Finish.',
+        action: 'finish',
+        answer: 'The language has been changed to Spanish [ev:40].',
+        confirmationEvidence: [{ index: 40, reason: 'The sidebar shows Español (idioma).' }]
+      }));
+
+      expect(result.success).toBe(true);
+      expect(drawMarker).toHaveBeenCalledWith(evidenceEl, 40, expect.any(String));
+      expect(removeMarker).toHaveBeenCalledWith(markerNode);
+      const record = window.rewindPutRecord.mock.calls.at(-1)?.[0];
+      expect(record.visualEvidenceItems[0]).toEqual(expect.objectContaining({
+        key: '40',
+        visualEvidenceIndex: 40,
+        som_id: '40'
+      }));
+    } finally {
+      evidenceEl.remove();
+      delete window.gv2DrawDomMarker;
+      delete window.gv2RemoveDomMarker;
+    }
+  });
+
+  test('flags legacy save_evidence as an invalid standalone action', () => {
+    const issue = window._gv2StepContractIssue(JSON.stringify({
+      step: 1,
+      thought: 'Need to save this.',
+      instruction: 'Save evidence.',
+      action: 'save_evidence',
+      evidence: [{ key: 'headline', note: 'Headline is visible.', som_id: '12' }]
+    }));
+    expect(issue).toEqual(expect.objectContaining({ kind: 'legacy_save_evidence_action' }));
+  });
+
+  test('allows evidence on normal browser actions', () => {
+    const issue = window._gv2StepContractIssue(JSON.stringify({
+      step: 1,
+      thought: 'Click while saving what is visible.',
+      instruction: 'Click the World Cup article.',
+      action: 'click',
+      element: { name: null, index: 12, text: 'World Cup article' },
+      evidence: [{ key: 'world_cup_article', note: 'The World Cup article is visible.', som_id: '12' }]
+    }));
+    expect(issue).toBeNull();
+  });
+
+  test('flags malformed evidence sidecars', () => {
+    const issue = window._gv2StepContractIssue(JSON.stringify({
+      step: 1,
+      thought: 'Click while saving malformed evidence.',
+      instruction: 'Click the World Cup article.',
+      action: 'click',
+      element: { name: null, index: 12, text: 'World Cup article' },
+      evidence: [{ key: 'world_cup_article', som_id: '12' }]
+    }));
+    expect(issue).toEqual(expect.objectContaining({ kind: 'invalid_evidence_sidecar' }));
+  });
+
+  test('summarizes saved evidence for completed-step trajectory memory', () => {
+    expect(window._gv2SavedEvidenceStepSummary([
+      { key: 'world_cup_article', note: 'The World Cup article is visible.' }
+    ])).toBe(' Saved 1 evidence: The World Cup article is visible.');
+    expect(window._gv2SavedEvidenceStepSummary([
+      { key: 'a', note: 'First fact' },
+      { key: 'b', note: 'Second fact' }
+    ])).toBe(' Saved 2 evidence items: First fact.');
+  });
+
   test('consecutive low confidence steps pause after 3 occurrences', async () => {
     const originalCompute = window.gv2ComputeConfidence;
     window.gv2ComputeConfidence = () => ({ confidence: 0.5, grounded: 0.5, loop: 0.0, progress: 0.0, formula: 'full' });
@@ -2193,7 +2656,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
         step: 1,
         thought: 'First low confidence step',
         instruction: 'Do step 1',
-        element: { index: 1, text: 'Button' },
+        element: { name: null, index: 1, text: 'Button' },
         action: 'click'
       });
       await window.gv2ProcessResponse(stepJson1);
@@ -2205,7 +2668,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
         step: 2,
         thought: 'Second low confidence step',
         instruction: 'Do step 2',
-        element: { index: 2, text: 'Button 2' },
+        element: { name: null, index: 2, text: 'Button 2' },
         action: 'click'
       });
       await window.gv2ProcessResponse(stepJson2);
@@ -2217,7 +2680,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
         step: 3,
         thought: 'Third low confidence step',
         instruction: 'Do step 3',
-        element: { index: 3, text: 'Button 3' },
+        element: { name: null, index: 3, text: 'Button 3' },
         action: 'click'
       });
       await window.gv2ProcessResponse(stepJson3);
@@ -2234,7 +2697,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
       step: 1,
       thought: 'High risk task',
       instruction: 'Enter bank password',
-      element: { index: 1, text: 'Password input' },
+      element: { name: null, index: 1, text: 'Password input' },
       action: 'type',
       typeText: 'secret',
       risk: 'high'
@@ -2250,7 +2713,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
       step: 1,
       thought: 'Needs confirmation',
       instruction: 'Submit application',
-      element: { index: 2, text: 'Submit' },
+      element: { name: null, index: 2, text: 'Submit' },
       action: 'click',
       confirmation: 'needed'
     });
@@ -2268,7 +2731,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
         step: 1,
         thought: 'Potential loop',
         instruction: 'Click the same menu again',
-        element: { index: 2, text: 'Languages' },
+        element: { name: null, index: 2, text: 'Languages' },
         action: 'click'
       });
 
@@ -2301,7 +2764,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
         step: 1,
         thought: 'Open the language menu',
         instruction: 'Click Languages to change the language',
-        element: { index: 1, text: 'Languages' },
+        element: { name: null, index: 1, text: 'Languages' },
         action: 'click'
       });
 
@@ -2331,7 +2794,7 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
       step: 3,
       thought: 'The model skipped a hidden step number.',
       instruction: 'Select the pickup date',
-      element: { index: 3, text: 'April 5' },
+      element: { name: null, index: 3, text: 'April 5' },
       action: 'click'
     });
 
