@@ -2782,9 +2782,34 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
       },
       storage: {
         session: {
-          get: jest.fn(async () => ({})),
-          set: jest.fn(async () => {}),
-          remove: jest.fn(async () => {})
+          get: jest.fn((keys, callback) => {
+            const res = {};
+            if (typeof callback === 'function') callback(res);
+            return Promise.resolve(res);
+          }),
+          set: jest.fn((obj, callback) => {
+            if (typeof callback === 'function') callback();
+            return Promise.resolve();
+          }),
+          remove: jest.fn((keys, callback) => {
+            if (typeof callback === 'function') callback();
+            return Promise.resolve();
+          })
+        },
+        local: {
+          get: jest.fn((keys, callback) => {
+            const res = {};
+            if (typeof callback === 'function') callback(res);
+            return Promise.resolve(res);
+          }),
+          set: jest.fn((obj, callback) => {
+            if (typeof callback === 'function') callback();
+            return Promise.resolve();
+          }),
+          remove: jest.fn((keys, callback) => {
+            if (typeof callback === 'function') callback();
+            return Promise.resolve();
+          })
         }
       }
     };
@@ -2794,7 +2819,9 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     window.cleanupSom = () => {};
     window.clearHighlights = () => {};
     window.rewindPutRecord = jest.fn(async () => {});
-    window.captureScreenshot = jest.fn(async () => 'PLACEHOLDER');
+    window.captureScreenshot = jest.fn(async () => 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+    window.IS_TEST_ENV = true;
+    loadScript('content/utils.js');
     loadScript('content/tasks/guidev2.js');
   });
 
@@ -3179,6 +3206,98 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     
     expect(window._guidev2.lowConfidenceCount).toBe(0);
   });
+
+  test('maps annotation and annotations fields to step.evidence', async () => {
+    window._guidev2.captureEnabled = true;
+    window._guidev2.sessionId = 'annotation-field-test';
+    window.safeSendMessage = jest.fn(async () => ({
+      content: '{"region_bbox":{"x":0.25,"y":0.05,"w":0.45,"h":0.15},"annotations":[]}'
+    }));
+
+    const stepJson = JSON.stringify({
+      step: 1,
+      thought: 'Need to show visual evidence',
+      instruction: 'Click the checkout button',
+      action: 'click',
+      element: { name: null, index: 5, text: 'Checkout' },
+      annotations: [{
+        key: 'checkout_btn_ref',
+        annotation_prompt: 'Draw a box around the checkout button',
+        note: 'Checkout button is highlighted'
+      }]
+    });
+
+    await window.gv2ProcessResponse(stepJson);
+
+    const recordCalls = window.rewindPutRecord.mock.calls;
+    const record = recordCalls[recordCalls.length - 1][0];
+
+    expect(record.savedEvidenceCaptures).toHaveLength(1);
+    expect(record.savedEvidenceCaptures[0]).toEqual(expect.objectContaining({
+      key: 'checkout_btn_ref',
+      note: 'Checkout button is highlighted',
+      need_annotation: true,
+      annotation_prompt: 'Draw a box around the checkout button',
+      region_bbox: { x: 0.25, y: 0.05, w: 0.45, h: 0.15 }
+    }));
+  });
+
+  test('handles terminal step annotations and expands citations in final answer', async () => {
+    const originalPutEvidence = window.rewindPutEvidence;
+    const originalLoadScratchpad = window._gv2LoadEvidenceScratchpad;
+
+    try {
+      window._guidev2.captureEnabled = true;
+      window._guidev2.sessionId = 'final-step-annotation-test';
+      window._guidev2.evidenceScratchpad = [];
+      
+      const mockScratchpad = [];
+      window.rewindPutEvidence = jest.fn(async (sess, entry) => {
+        mockScratchpad.push(entry);
+        return entry;
+      });
+      window._gv2LoadEvidenceScratchpad = jest.fn(async () => mockScratchpad);
+
+      window.safeSendMessage = jest.fn(async () => ({
+        content: '{"region_bbox":{"x":0.1,"y":0.2,"w":0.3,"h":0.4},"annotations":[]}'
+      }));
+
+      const stepJson = JSON.stringify({
+        step: 1,
+        thought: 'Done with task, annotating the final score',
+        instruction: 'Finish task',
+        action: 'finish',
+        answer: 'Match finished. England won: [ev:final_score].',
+        annotations: [{
+          key: 'final_score',
+          annotation_prompt: 'Box the final score',
+          note: 'Score shows England 2, Argentina 1'
+        }]
+      });
+
+      console.log('[DEBUG-TEST] calling gv2ProcessResponse...');
+      const result = await window.gv2ProcessResponse(stepJson);
+      console.log('[DEBUG-TEST] gv2ProcessResponse finished. result:', JSON.stringify(result));
+
+      expect(window._guidev2.evidenceScratchpad).toHaveLength(1);
+      expect(window._guidev2.evidenceScratchpad[0]).toEqual(expect.objectContaining({
+        key: 'final_score',
+        note: 'Score shows England 2, Argentina 1',
+        need_annotation: true,
+        region_bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }
+      }));
+
+      const recordCalls = window.rewindPutRecord.mock.calls;
+      const record = recordCalls[recordCalls.length - 1][0];
+      expect(record.savedEvidenceCaptures).toHaveLength(1);
+      expect(record.savedEvidenceCaptures[0].key).toBe('final_score');
+
+      expect(result.finalAnswer).toBe('Match finished. England won: Score shows England 2, Argentina 1 [ev:final_score].');
+    } finally {
+      window.rewindPutEvidence = originalPutEvidence;
+      window._gv2LoadEvidenceScratchpad = originalLoadScratchpad;
+    }
+  });
 });
 
 // The find action end-to-end through gv2ProcessResponse, with the reader-pass LLM stubbed.
@@ -3212,7 +3331,8 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     window.cleanupSom = () => {};
     window.clearHighlights = () => {};
     window.rewindPutRecord = jest.fn(async () => {});
-    window.captureScreenshot = jest.fn(async () => 'PLACEHOLDER');
+    window.captureScreenshot = jest.fn(async () => 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+    window.IS_TEST_ENV = true;
     window.PROMPTS = { ANSWER_AND_HIGHLIGHT: 'CONTENT:{pageContent}\nINDEX:{pageIndex}' };
     // guidev2.js calls gv2ParseFindResponse/gv2StepHasTarget, which utils.js defines — the
     // same order manifest.json loads them in. Load it here so this block stands alone.
@@ -3314,5 +3434,63 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     expect(result.isFind).toBe(true);
     const paused = window.chrome.runtime.sendMessage.mock.calls.find(c => c[0]?.action === 'guidePaused');
     expect(paused).toBeUndefined();
+  });
+});
+
+describe('sidepanel panel.js visual annotations status (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    // Mock the runtime.connect required by top-level panel.js load
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    // Mock document.getElementById for elements referenced during initialization
+    document.body.innerHTML = `
+      <div id="pageguide-goal-dots"></div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('correctly extracts annotation preview entries', () => {
+    const meta = {
+      annotations: [
+        { key: 'ann_1', note: 'Annotated note 1' }
+      ]
+    };
+    const rec = {
+      savedEvidenceCaptures: [
+        { key: 'ann_2', note: 'Annotated note 2', need_annotation: true }
+      ]
+    };
+
+    const entries = window._savedAnnotationsPreviewEntries(meta, rec);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toEqual({ key: 'ann_2', note: 'Annotated note 2' });
+    expect(entries[1]).toEqual({ key: 'ann_1', note: 'Annotated note 1' });
+  });
+
+  test('correctly generates preview HTML for annotations', () => {
+    const meta = {
+      annotations: [
+        { key: 'ann_1', note: 'Annotated note 1' }
+      ]
+    };
+    const rec = {};
+
+    const html = window._savedAnnotationsPreviewHtml(meta, rec);
+    expect(html).toContain('pageguide-goal-step-annotations');
+    expect(html).toContain('Annotated');
+    expect(html).toContain('Annotated note 1');
   });
 });

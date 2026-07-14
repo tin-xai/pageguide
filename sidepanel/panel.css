@@ -3457,6 +3457,28 @@ body {
   color: #4d566c;
 }
 
+.pageguide-goal-step-annotations {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: rgba(255, 45, 120, 0.12);
+  border: 1px solid rgba(255, 45, 120, 0.26);
+  color: #ff2d78;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pageguide-goal-step-annotations b {
+  font-size: 11px;
+  color: inherit;
+}
+
+.pageguide-goal-step-annotations span {
+  color: #4d566c;
+}
+
 .pageguide-goal-step-preview-reason {
   display: grid;
   gap: 3px;
@@ -4185,6 +4207,16 @@ body:not(.light-mode) .pageguide-goal-step-evidence {
 }
 
 body:not(.light-mode) .pageguide-goal-step-evidence span {
+  color: var(--pg-text);
+}
+
+body:not(.light-mode) .pageguide-goal-step-annotations {
+  background: rgba(255, 45, 120, 0.18);
+  border-color: rgba(255, 75, 140, 0.34);
+  color: #ff75a7;
+}
+
+body:not(.light-mode) .pageguide-goal-step-annotations span {
   color: var(--pg-text);
 }
 

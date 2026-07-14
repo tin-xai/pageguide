@@ -126,6 +126,49 @@ function _savedEvidencePreviewHtml(meta, rec) {
   </div>`;
 }
 
+function _savedAnnotationsPreviewEntries(meta, rec) {
+  const out = [];
+  const push = (item, force = false) => {
+    if (!item) return;
+    const isAnn = force || item.need_annotation || item.needAnnotation || (Array.isArray(item.annotations) && item.annotations.length > 0) || item.annotation_prompt || item.annotationPrompt;
+    if (!isAnn) return;
+    const key = String(item.key || item.evidenceKey || '').trim();
+    const note = String(item.note || item.evidenceNote || '').replace(/\s+/g, ' ').trim();
+    if (!key && !note) return;
+    out.push({ key, note });
+  };
+  (Array.isArray(rec?.savedEvidenceEntries) ? rec.savedEvidenceEntries : []).forEach(item => push(item));
+  (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : []).forEach(item => push(item));
+  (Array.isArray(rec?.visualEvidenceItems) ? rec.visualEvidenceItems : []).forEach(item => push(item));
+  (Array.isArray(rec?.annotations) ? rec.annotations : []).forEach(item => push(item, true));
+  (Array.isArray(meta?.annotations) ? meta.annotations : []).forEach(item => push(item, true));
+  if (meta?.evidenceKey || meta?.evidenceNote) {
+    if (meta.need_annotation || meta.needAnnotation) {
+      push({ key: meta.evidenceKey, note: meta.evidenceNote });
+    }
+  }
+  const seen = new Set();
+  return out.filter(item => {
+    const k = `${item.key}|${item.note}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function _savedAnnotationsPreviewHtml(meta, rec) {
+  const entries = _savedAnnotationsPreviewEntries(meta, rec);
+  if (!entries.length) return '';
+  const count = entries.length;
+  const first = entries[0].note || entries[0].key || 'Visual annotation';
+  const clippedRaw = first.length > 100 ? `${first.slice(0, 97).trim()}...` : first;
+  const clipped = clippedRaw.replace(/[.!?]+$/g, '');
+  return `<div class="pageguide-goal-step-annotations">
+    <b>${escapeHtml(count === 1 ? 'Annotated' : `Annotated ${count} items`)}</b>
+    <span>${escapeHtml(clipped)}</span>
+  </div>`;
+}
+
 function _tabChipFallbackIcon() {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#7857ff"/><path d="M7 7h10v10H7z" fill="white" opacity=".9"/></svg>'
@@ -1405,6 +1448,7 @@ async function showGoalStepPreview(step, anchor) {
   // Show the URL as a compact "link" hyperlink rather than the full (often long) address.
   const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
   const evidenceHtml = _savedEvidencePreviewHtml(meta, rec);
+  const annotationsHtml = _savedAnnotationsPreviewHtml(meta, rec);
   const allowSteer = !!meta && !isInitialNode;
 
   // Card layout: the REGION-around-the-target crop is the picture on top; the full BEFORE-action
@@ -1436,6 +1480,7 @@ async function showGoalStepPreview(step, anchor) {
     <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
     ${evidenceHtml}
+    ${annotationsHtml}
     ${reviewHtml}
     ${scoreHtml}
     ${dualHtml}
@@ -1567,7 +1612,8 @@ function renderGoalDots(current, total) {
   currentGuideRecords.forEach(r => {
     const n = Number(r.step);
     if (!Number.isFinite(n) || n < 1 || n > count) return;
-    if (r.evidenceKey || r.hasVisualEvidence || r.isLastStep || r.finalVerdict || r.verification) important.add(n);
+    const hasAnn = (Array.isArray(r.savedEvidenceCaptures) && r.savedEvidenceCaptures.some(c => c.need_annotation || (Array.isArray(c.annotations) && c.annotations.length > 0))) || (Array.isArray(r.annotations) && r.annotations.length > 0);
+    if (r.evidenceKey || r.hasVisualEvidence || r.isLastStep || r.finalVerdict || r.verification || hasAnn) important.add(n);
   });
   const visibleSteps = compact
     ? Array.from(important).filter(n => Number.isFinite(n)).sort((a, b) => a - b).slice(0, 10)

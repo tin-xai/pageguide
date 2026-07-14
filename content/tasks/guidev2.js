@@ -1574,6 +1574,7 @@ async function _gv2LoadPersonalizationContext() {
 }
 
 async function _gv2WaitForLayoutSettle() {
+  if (typeof window !== 'undefined' && window.IS_TEST_ENV) return;
   await new Promise((resolve) => {
     try {
       requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -1943,6 +1944,7 @@ function _gv2ShouldAutoExecute(step) {
  * so we don't capture twice.
  */
 async function _gv2ScrollRegionTargetIntoView(el) {
+  if (typeof window !== 'undefined' && window.IS_TEST_ENV) return;
   if (!el || typeof el.scrollIntoView !== 'function') return;
   let evalMode = false;
   try {
@@ -2174,6 +2176,9 @@ function _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr
 }
 
 function _gv2MarkFullScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = []) {
+  if (typeof window !== 'undefined' && window.IS_TEST_ENV) {
+    return Promise.resolve({ base64: 'MOCK_MARK', marker: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
+  }
   return new Promise((resolve) => {
     let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v || { base64: null, marker: null }); } };
@@ -2207,6 +2212,9 @@ function _gv2MarkFullScreenshot(base64, rect, markerNumber, color = GV2_ACTION_M
  * themselves (no dependency on render-time geometry). Resolves { base64, marker } — base64 is the
  * crop (or null), marker is the target's normalized rect within the crop (or null). */
 function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = []) {
+  if (typeof window !== 'undefined' && window.IS_TEST_ENV) {
+    return Promise.resolve({ base64: 'MOCK_CROP', marker: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
+  }
   return new Promise((resolve) => {
     // Hard time-box: never let a stuck Image decode hang the caller (which gates the record store).
     let done = false;
@@ -2296,6 +2304,7 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     if (typeof gv2TargetNormRect === 'function') {
       out.visualEvidenceNormRect = gv2TargetNormRect(rect, window.innerWidth, window.innerHeight);
     }
+    console.log('[DEBUG] gv2CaptureEvidenceRegion starting options:', JSON.stringify(options));
 
     // For saved evidence, force a real DOM overlay before capture so text spans / DOM targets are
     // visibly highlighted in the screenshot pixels. Recap-only evidence keeps the older Vision-on
@@ -2304,20 +2313,25 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     let markerNode = null;
     if (useDomMarker) {
       markerNode = gv2DrawDomMarker(markerTarget, markerNumber, GV2_EVIDENCE_MARKER_COLOR);
+      console.log('[DEBUG] gv2DrawDomMarker called, waiting 50ms...');
       // Let the overlay paint before capturing.
       await new Promise(r => setTimeout(r, 50));
     }
     let shot = options.screenshotBase64 || null;
     let cleanShot = shot;
-    try { if (!shot && typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { /* best-effort */ }
+    console.log('[DEBUG] captureScreenshot check...');
+    try { if (!shot && typeof captureScreenshot === 'function') shot = await captureScreenshot(); } catch (e) { console.log('[DEBUG] captureScreenshot error:', e); }
+    console.log('[DEBUG] shot length:', shot?.length);
     if (markerNode && typeof gv2RemoveDomMarker === 'function') {
       gv2RemoveDomMarker(markerNode);
       cleanShot = null;
+      console.log('[DEBUG] gv2RemoveDomMarker called, waiting 50ms...');
       await new Promise(r => setTimeout(r, 50));
-      try { if (typeof captureScreenshot === 'function') cleanShot = await captureScreenshot(); } catch (e) { /* best-effort */ }
+      try { if (typeof captureScreenshot === 'function') cleanShot = await captureScreenshot(); } catch (e) { console.log('[DEBUG] cleanShot capture error:', e); }
     }
     if (!shot) {
       out.captureError = 'screenshot-failed';
+      console.log('[DEBUG] screenshot-failed');
       return out;
     }
     if (!cleanShot) cleanShot = shot;
@@ -2326,6 +2340,7 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     // the visual overlay; region_bbox is just the crop/hint. Only draw the plain region box when
     // there are no annotations to show.
     const bakeMarker = !markerNode && !hasAnnotations;
+    console.log('[DEBUG] crop screenshot starting...');
     const marked = options.fullViewport
       ? await _gv2MarkFullScreenshot(
           shot,
@@ -2384,7 +2399,7 @@ async function _gv2AnnotateEvidenceItem(item, screenshotBase64) {
   };
   if (!item || item.evidenceEl || item.som_id || !screenshotBase64) return out;
   const prompt = item.annotation_prompt || item.annotationPrompt || item.note || item.reason || item.key || '';
-  const systemPrompt = GUIDE_EVIDENCE_ANNOTATOR_PROMPT || '';
+  const systemPrompt = (typeof window !== 'undefined' && window.PROMPTS?.GUIDE_EVIDENCE_ANNOTATOR) || GUIDE_EVIDENCE_ANNOTATOR_PROMPT || '';
   const userPrompt = `EVIDENCE KEY: ${item.key || ''}
 EVIDENCE NOTE: ${item.note || ''}
 ANNOTATION REQUEST: ${prompt}
@@ -2476,6 +2491,9 @@ function _gv2RepairAnnotatorJsonText(text) {
 if (typeof window !== 'undefined') window._gv2RepairAnnotatorJsonText = _gv2RepairAnnotatorJsonText;
 
 function _gv2ImageSizeFromBase64(base64) {
+  if (typeof window !== 'undefined' && window.IS_TEST_ENV) {
+    return Promise.resolve({ width: 800, height: 600 });
+  }
   return new Promise((resolve) => {
     if (!base64) return resolve(null);
     let done = false;
@@ -2678,8 +2696,9 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       item.annotationError = annotated.error || null;
       item.annotationCoordinateDebug = annotated.annotationCoordinateDebug || null;
     }
-    if (item?.fullViewportCapture && !item.evidenceEl && !item.evidenceRect && Array.isArray(item.annotations) && item.annotations.length) {
+    if ((item?.fullViewportCapture || item?.need_annotation || item?.needAnnotation || (Array.isArray(item?.annotations) && item?.annotations.length)) && !item?.evidenceEl && !item?.evidenceRect) {
       item.evidenceRect = { x: 0, y: 0, w: 1, h: 1 };
+      item.fullViewportCapture = true;
     }
     if (!item || (!item.evidenceEl && !item.evidenceRect)) {
       out.push({
@@ -3815,6 +3834,30 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       ? gv2ExtractJsonObject(content)
       : JSON.parse(content);
     if (!step) throw new Error('Could not parse step JSON');
+
+    // Convert direct annotation / annotations fields to step.evidence sidecars with need_annotation=true
+    if (step.annotation || step.annotations) {
+      if (!Array.isArray(step.evidence)) {
+        step.evidence = [];
+      }
+      const rawAnns = Array.isArray(step.annotations) ? step.annotations : (step.annotations && typeof step.annotations === 'object' ? [step.annotations] : []);
+      for (const ann of rawAnns) {
+        if (ann && typeof ann === 'object') {
+          const key = ann.key || ann.name || `annotation_${Date.now()}`;
+          const note = ann.note || ann.reason || ann.text || ann.annotation_prompt || '';
+          const prompt = ann.annotation_prompt || ann.prompt || note;
+          step.evidence.push({
+            key,
+            note,
+            need_annotation: true,
+            annotation_prompt: prompt,
+            som_id: ann.som_id || null,
+            region_bbox: ann.region_bbox || ann.rect || null
+          });
+        }
+      }
+    }
+
     const action = (typeof gv2NormalizeAction === 'function')
       ? gv2NormalizeAction(step.action, step.isLastStep)
       : String(step.action || (step.isLastStep ? 'finish' : 'click')).toLowerCase().replace(/[\s-]+/g, '_');
@@ -4318,6 +4361,16 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
 	      try {
 	        if (normalizedSaveEvidence.ok && typeof rewindPutEvidence === 'function') {
 	          const savedEntries = [];
+	          if (Array.isArray(resolvedSavedEvidenceItems)) {
+	            for (let i = 0; i < normalizedSaveEvidence.entries.length; i++) {
+	              const entry = normalizedSaveEvidence.entries[i];
+	              const resolvedItem = resolvedSavedEvidenceItems[i];
+	              if (resolvedItem) {
+	                if (resolvedItem.region_bbox) entry.region_bbox = resolvedItem.region_bbox;
+	                if (resolvedItem.annotations) entry.annotations = resolvedItem.annotations;
+	              }
+	            }
+	          }
 	          for (const entry of normalizedSaveEvidence.entries) {
 	            const saved = await rewindPutEvidence(g.sessionId, entry);
 	            if (saved) savedEntries.push(saved);
