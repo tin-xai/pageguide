@@ -286,15 +286,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
-  if (request.action === 'getVisionSetting') {
-    chrome.storage.sync.get(['visionEnabled'])
-      .then(settings => {
-        // Default to true if not set
-        sendResponse({ visionEnabled: settings.visionEnabled !== false });
-      })
-      .catch(err => sendResponse({ visionEnabled: true, error: err.message }));
-    return true;
-  }
   if (request.action === 'openOptions') {
     chrome.runtime.openOptionsPage();
     sendResponse({ success: true });

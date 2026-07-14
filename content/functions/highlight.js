@@ -340,28 +340,6 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
 }
 
 /**
- * Highlight elements by CSS selector with LLM-chosen style
- */
-function applyElementHighlight(selector, style = {}) {
-  const color = style.color || '#ff6b6b';
-  const animation = style.animation || 'glow';
-  let count = 0;
-  
-  try {
-    document.querySelectorAll(selector).forEach(el => {
-      if (!isPageGuideElement(el)) {
-        applyAnimatedHighlight(el, color, animation);
-        window._pageguideHighlights.push(el);
-        count++;
-      }
-    });
-  } catch (e) {
-    console.error('Invalid selector:', selector);
-  }
-  return count;
-}
-
-/**
  * Check if element or its parent/child is already highlighted
  */
 function isAlreadyHighlighted(element, highlightedElements) {

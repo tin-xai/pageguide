@@ -64,30 +64,4 @@ function scrollToIndex(index) {
   return true;
 }
 
-/**
- * Scroll the viewport in a direction
- * @param {string} direction - 'up' or 'down'
- * @returns {Promise<boolean>} Whether scroll was successful
- */
-function scrollViewport(direction) {
-  const scrollAmount = window.innerHeight * 0.8; // 80% of viewport height
-  const beforeScroll = window.scrollY;
-  
-  if (direction === 'down') {
-    window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
-  } else if (direction === 'up') {
-    window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
-  }
-  
-  // Check if scroll position actually changed (with small delay for smooth scroll)
-  return new Promise(resolve => {
-    setTimeout(() => {
-      const afterScroll = window.scrollY;
-      const didScroll = Math.abs(afterScroll - beforeScroll) > 10;
-      console.log('📜 Scrolled', direction, '- Position changed:', didScroll);
-      resolve(didScroll);
-    }, 500);
-  });
-}
-
 console.log('📜 scroll.js loaded');

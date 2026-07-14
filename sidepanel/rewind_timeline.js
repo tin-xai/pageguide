@@ -649,19 +649,6 @@
     return false;
   }
 
-  async function _runSteer(wrap, rec, meta, runBtn) {
-    const ta = wrap.querySelector('.rw-steer-input');
-    const newGoal = ta ? ta.value.trim() : '';
-    if (!newGoal) { if (ta) ta.focus(); return; }
-    if (runBtn) runBtn.disabled = true;
-    const ok = await steerFromStep({ sessionId: rec.sessionId || meta.sessionId, step: rec.step, url: rec.url || meta.url }, newGoal);
-    if (ok) wrap.remove();
-    else {
-      _clearPanelLoading();
-      if (runBtn) runBtn.disabled = false;
-    }
-  }
-
   // ---- plan strip ----
   let _plan = [];
   let _planProgress = 0; // highest plan step reached

@@ -183,20 +183,6 @@ function isPageGuideElement(el) {
          el.hasAttribute('data-pageguide-styled');
 }
 
-/**
- * Check if element is visible in viewport
- */
-function isInViewport(el) {
-  const rect = el.getBoundingClientRect();
-  return (
-    rect.bottom > 0 &&
-    rect.top < window.innerHeight &&
-    rect.right > 0 &&
-    rect.left < window.innerWidth &&
-    rect.width > 0 &&
-    rect.height > 0
-  );
-}
 
 /**
  * Get ALL page content as text using accessibility approach
@@ -289,26 +275,6 @@ const _INTERACTIVE_ROLES = new Set([
   'menuitemradio', 'option', 'treeitem', 'listbox', 'menu', 'dialog',
   'alertdialog', 'gridcell',
 ]);
-
-/**
- * Return a short landmark label for the element's nearest landmark ancestor.
- * Used to annotate the page index text so the LLM can distinguish navigation
- * links from main-content links (e.g. "[nav] History" vs "[main] Video title").
- */
-function _getLandmarkLabel(el) {
-  let node = el.parentElement;
-  while (node && node !== document.body) {
-    const tag = node.tagName?.toLowerCase();
-    const role = node.getAttribute?.('role');
-    if (role === 'navigation' || tag === 'nav') return '[nav]';
-    if (role === 'banner'     || tag === 'header') return '[header]';
-    if (role === 'complementary' || tag === 'aside') return '[sidebar]';
-    if (role === 'dialog' || role === 'alertdialog') return '[dialog]';
-    if (role === 'main' || tag === 'main') return '[main]';
-    node = node.parentElement;
-  }
-  return '';
-}
 
 function createPageIndex(maxItems = 200, interactiveOnly = false) {
   const indexMap = {};

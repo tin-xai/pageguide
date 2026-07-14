@@ -238,77 +238,6 @@ function getPdfJsApp() {
 }
 
 /**
- * Get current PDF page number from PDF.js viewer or Chrome native viewer
- * @returns {number} Current page number (1-indexed)
- */
-function getCurrentPdfPage() {
-  const pdfApp = getPdfJsApp();
-  if (pdfApp?.page) {
-    return pdfApp.page;
-  }
-  
-  // Check for Chrome native PDF viewer page indicator
-  // Chrome shows "1 / 15" format in a toolbar input
-  const chromePageInput = document.querySelector('input[type="text"][aria-label*="Page"]') ||
-                          document.querySelector('input#page-selector') ||
-                          document.querySelector('cr-input');
-  
-  if (chromePageInput?.value) {
-    const match = chromePageInput.value.match(/(\d+)/);
-    if (match) return parseInt(match[1], 10);
-  }
-  
-  // Fallback: look for page indicator in DOM
-  const pageInput = document.getElementById('pageNumber') ||
-                    document.querySelector('input[title*="Page"]') ||
-                    document.querySelector('[class*="pageNumber"]');
-  
-  if (pageInput?.value) {
-    return parseInt(pageInput.value, 10) || 1;
-  }
-  
-  // Try to find page text like "1 / 15"
-  const pageText = document.body.innerText?.match(/(\d+)\s*\/\s*\d+/);
-  if (pageText) {
-    return parseInt(pageText[1], 10) || 1;
-  }
-  
-  return 1;
-}
-
-/**
- * Get total number of pages in PDF
- * @returns {number} Total page count
- */
-function getTotalPdfPages() {
-  const pdfApp = getPdfJsApp();
-  if (pdfApp?.pagesCount) {
-    return pdfApp.pagesCount;
-  }
-  
-  // Check for Chrome native PDF viewer - look for "X / Y" format
-  const pageText = document.body.innerText?.match(/\d+\s*\/\s*(\d+)/);
-  if (pageText) {
-    return parseInt(pageText[1], 10) || 1;
-  }
-  
-  // Fallback: look for page count in DOM
-  const pageCount = document.getElementById('numPages') ||
-                    document.querySelector('[class*="numPages"]');
-  
-  if (pageCount?.textContent) {
-    const match = pageCount.textContent.match(/(\d+)/);
-    if (match) return parseInt(match[1], 10);
-  }
-  
-  // Count page elements
-  const pages = document.querySelectorAll('.page, [data-page-number]');
-  if (pages.length > 0) return pages.length;
-  
-  return 1;
-}
-
-/**
  * Navigate to a specific page in PDF viewer and optionally copy text for search
  * Supports PDF.js and Chrome's native PDF viewer
  * @param {number} pageNumber - Page to navigate to (1-indexed)
@@ -630,44 +559,6 @@ async function applyPdfHighlights(highlights) {
   
   console.log('📄 Applied', count, 'PDF highlights');
   return count;
-}
-
-/**
- * Get visible text from PDF page (for sending to backend)
- * Uses text layer from PDF.js if available
- * @param {number} pageNumber - Page number (1-indexed), or null for all visible pages
- * @returns {string} Extracted text
- */
-function getPdfPageText(pageNumber = null) {
-  let textLayers;
-  
-  if (pageNumber) {
-    const pageEl = document.querySelector(`[data-page-number="${pageNumber}"]`) ||
-                   document.querySelectorAll('.page')[pageNumber - 1];
-    textLayers = pageEl ? [pageEl.querySelector('.textLayer')] : [];
-  } else {
-    textLayers = document.querySelectorAll('.textLayer');
-  }
-  
-  const texts = [];
-  
-  textLayers.forEach((layer, idx) => {
-    if (!layer) return;
-    
-    const pageNum = pageNumber || idx + 1;
-    const spans = layer.querySelectorAll('span');
-    const pageText = Array.from(spans)
-      .map(span => span.textContent)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    
-    if (pageText) {
-      texts.push(`[Page ${pageNum}]\n${pageText}`);
-    }
-  });
-  
-  return texts.join('\n\n');
 }
 
 /**
