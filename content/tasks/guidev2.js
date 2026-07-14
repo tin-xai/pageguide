@@ -12,7 +12,7 @@
 //   • action="type"   → agent fills the field automatically, then continues
 //   • action="done"   → last step, no further interaction
 //
-// window.handleStepByStepGuide is overridden so the router calls v2 instead of guide.js.
+// window.handleStepByStepGuide is the router's entry point into the guide flow.
 
 // Feature flag: disabled for now in favour of the deterministic Subgoal Progress score
 // computed offline in the eval tool. When false, we skip the once-per-session
@@ -5856,11 +5856,10 @@ function _gv2BuildSteerQuestion(originalGoal, payload, redoStep, includeContext)
 if (typeof window !== 'undefined') window._gv2BuildSteerQuestion = _gv2BuildSteerQuestion;
 
 // ===== ROUTER INTEGRATION =====
-// guidev2.js is injected after guide.js, so this assignment overrides guide.js.
 
 window.handleStepByStepGuide = function (question, continueFromStep = false) {
-  // continueFromStep=true comes from guide.js's continueGuidance() which won't fire
-  // when v2 is active (_pageguideGuidance.active = false). Handle defensively anyway.
+  // continueFromStep=true re-enters the step-cap guard directly (see the "blocks step 16"
+  // unit test), without re-running the initial tutorial-match/setup path.
   if (continueFromStep) {
     if (((window._guidev2?.previousSteps || []).length + 1) > 15) {
       const configuredMax = GV2_MAX_STEPS;

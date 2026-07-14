@@ -57,7 +57,6 @@ const CONTENT_SCRIPTS = [
   'content/functions/scroll.js',
   'content/functions/main_router.js',
   'content/tasks/protection.js',
-  'content/tasks/guide.js',
   'content/tasks/guidev2.js',
   'content/tasks/ask.js',
   'content/tasks/ask_pdf.js',

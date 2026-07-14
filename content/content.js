@@ -38,15 +38,6 @@ async function handleMessage(request) {
       if (typeof clearMarkings === 'function') clearMarkings();
       if (typeof clearHighlights === 'function') clearHighlights();
       if (typeof clearPdfHighlights === 'function') clearPdfHighlights();
-      if (typeof clearGuidanceState === 'function') clearGuidanceState();
-      // Also reset in-memory guidance state
-      if (window._pageguideGuidance) {
-        window._pageguideGuidance.active = false;
-        window._pageguideGuidance.question = '';
-        window._pageguideGuidance.currentStep = 0;
-        window._pageguideGuidance.previousSteps = [];
-        window._pageguideGuidance.waitingForAction = null;
-      }
       // Reset guidev2 state
       if (typeof gv2StopGuide === 'function') gv2StopGuide();
       else if (window._guidev2) window._guidev2.active = false;
@@ -161,12 +152,6 @@ async function handleMessage(request) {
       }
       return { success: false, error: 'Steer restore comparison not available' };
 
-    case 'continueGuidance':
-      if (typeof continueGuidance === 'function') {
-        return await continueGuidance();
-      }
-      return { success: false, error: 'Guidance not available' };
-    
     case 'setUploadedImage':
       if (typeof setUploadedImage === 'function') {
         setUploadedImage(request.imageBase64);
