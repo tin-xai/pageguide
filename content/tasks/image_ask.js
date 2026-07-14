@@ -39,6 +39,137 @@ function getUploadedImage() {
   return window._pageguideUploadedImage;
 }
 
+// ===== Attachment ingestion (shared by guide/auto mode) =====
+// A guide session "ingests" any attached image/file ONCE at start into a compact
+// text context (cheap to carry on every step) plus, for images, the raw base64
+// which is attached to the model only on the first step.
+
+// Text files at or below this size go to the agent verbatim; larger ones are summarized.
+if (typeof ATTACHMENT_RAW_CHAR_LIMIT === 'undefined') {
+  var ATTACHMENT_RAW_CHAR_LIMIT = 6000;
+}
+
+// Store for an attached text file (image lives in window._pageguideUploadedImage).
+window._pageguideFileAttachment = window._pageguideFileAttachment || { fileText: null, fileName: null };
+
+/** Store an attached text file (called from the panel via content.js). */
+function setUploadedFile(fileText, fileName) {
+  window._pageguideFileAttachment = {
+    fileText: fileText || null,
+    fileName: fileName || null
+  };
+  console.log('📎 File stored for attachment ingestion:', fileName);
+}
+
+/** Clear the attached text file. */
+function clearUploadedFileAttachment() {
+  window._pageguideFileAttachment = { fileText: null, fileName: null };
+}
+
+/** Get the attached text file record. */
+function getUploadedFileAttachment() {
+  return window._pageguideFileAttachment || { fileText: null, fileName: null };
+}
+
+/**
+ * Whether an attached text file is large enough to warrant a one-shot summary
+ * instead of being embedded verbatim. Pure — unit-tested.
+ * @param {number} len - character length of the file text
+ */
+function attachmentNeedsSummary(len) {
+  return typeof len === 'number' && len > ATTACHMENT_RAW_CHAR_LIMIT;
+}
+
+/**
+ * Build the compact text block injected into the guide plan + each step's USER GOAL.
+ * Pure — unit-tested. Returns '' when nothing is attached.
+ * @param {object} opts
+ * @param {string} [opts.imageDescription] - LLM description of an attached image
+ * @param {string} [opts.fileName]
+ * @param {string} [opts.fileText]    - raw text (small files)
+ * @param {string} [opts.fileSummary] - summary text (large files)
+ */
+function buildAttachmentContext({ imageDescription, fileName, fileText, fileSummary } = {}) {
+  const parts = [];
+  if (imageDescription && imageDescription.trim()) {
+    parts.push(`Attached image (described): ${imageDescription.trim()}`);
+  }
+  if (fileSummary && fileSummary.trim()) {
+    parts.push(`Attached file "${fileName || 'file'}" (summary): ${fileSummary.trim()}`);
+  } else if (fileText && fileText.trim()) {
+    parts.push(`Attached file "${fileName || 'file'}":\n${fileText.trim()}`);
+  }
+  return parts.join('\n\n');
+}
+
+/**
+ * One-shot attachment ingestion for a guide session. Produces g.attachmentContext
+ * (compact text carried on every step) and g.attachmentImage (raw base64 attached
+ * only on the first step). Called ONCE at guide start; safe to call with nothing attached.
+ */
+async function gv2IngestAttachment(g) {
+  if (!g) return;
+  g.attachmentContext = '';
+  g.attachmentImage = null;
+
+  const image = (typeof getUploadedImage === 'function') ? getUploadedImage() : null;
+  const fileStore = getUploadedFileAttachment();
+  const fileText = fileStore?.fileText || null;
+  const fileName = fileStore?.fileName || null;
+
+  if (!image && !fileText) return; // nothing attached — no work, no cost
+
+  let imageDescription = '';
+  let fileSummary = '';
+  let rawFileText = null;
+
+  // Image → concise vision description (one call). Keep the raw base64 for step 1.
+  if (image) {
+    g.attachmentImage = image;
+    try {
+      const resp = await safeSendMessage({
+        action: 'callLLMWithImages',
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'Describe this user-attached image in 2-4 sentences for a browser assistant that will use it to complete a task. Note key objects, any visible text/labels, brand or product, and distinctive colors. Do not add commentary or preamble.' }],
+        images: [{ base64: image, label: 'User-attached image' }],
+        metadata: { mode: 'attachment_ingest_image', url: window.location.href }
+      });
+      if (resp && !resp.error && resp.content) imageDescription = String(resp.content).trim();
+    } catch (e) {
+      console.warn('[guidev2] image attachment ingest failed:', e);
+    }
+  }
+
+  // File → raw (small) or one-shot summary (large).
+  if (fileText) {
+    if (attachmentNeedsSummary(fileText.length)) {
+      try {
+        const clipped = fileText.slice(0, 40000);
+        const resp = await safeSendMessage({
+          action: 'callLLM',
+          systemPrompt: '',
+          messages: [{ role: 'user', content: `Summarize the following attached file for a browser assistant that will use it to complete the user's task. Preserve any facts, values, names, IDs, and instructions that could matter; be concise (under 400 words).\n\n[File: ${fileName || 'file'}]\n---\n${clipped}\n---` }],
+          metadata: { mode: 'attachment_ingest_file', url: window.location.href }
+        });
+        if (resp && !resp.error && resp.content) fileSummary = String(resp.content).trim();
+      } catch (e) {
+        console.warn('[guidev2] file attachment ingest failed:', e);
+      }
+      // If summarization failed, fall back to a truncated raw copy so context isn't lost.
+      if (!fileSummary) rawFileText = fileText.slice(0, ATTACHMENT_RAW_CHAR_LIMIT) + '\n… [truncated]';
+    } else {
+      rawFileText = fileText;
+    }
+  }
+
+  g.attachmentContext = buildAttachmentContext({
+    imageDescription,
+    fileName,
+    fileText: rawFileText,
+    fileSummary
+  });
+}
+
 /**
  * Parse image ask response
  */

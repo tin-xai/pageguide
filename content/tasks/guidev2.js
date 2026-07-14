@@ -691,6 +691,10 @@ async function _gv2ResumeFromState(state) {
     _mechElementTexts: Array.isArray(state.mechElementTexts) ? state.mechElementTexts : [],
     guidePlan: Array.isArray(state.guidePlan) ? state.guidePlan : [],
     guideTitle: state.guideTitle || '',
+    // Attachment text carries across navigations; the raw image is not re-attached
+    // after the first step (attachmentImage stays null on resume).
+    attachmentContext: state.attachmentContext || '',
+    attachmentImage: null,
     _lastActionStepNumber: state.lastActionStepNumber || state.activeStepNumber || (state.previousSteps || []).length || null,
     _activeStepNumber: state.activeStepNumber || null
   };
@@ -1373,7 +1377,9 @@ async function _gv2SetState(pendingResume) {
     mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
     mechElementTexts: Array.isArray(s._mechElementTexts) ? s._mechElementTexts : [],
     guidePlan: Array.isArray(s.guidePlan) ? s.guidePlan : [],
-    guideTitle: s.guideTitle || ''
+    guideTitle: s.guideTitle || '',
+    // Compact attachment text survives navigation (raw image intentionally does not).
+    attachmentContext: s.attachmentContext || ''
   };
 
   // Primary: tell service worker (survives page navigation if SW stays alive)
@@ -1803,13 +1809,16 @@ async function _gv2GenerateInitialPlan(g, pageIndex) {
   if (g.tutorialRef) {
     tutorialSection = `\nTutorial reference for a matching task:\n${g.tutorialRef.content.steps.join('\n')}\n`;
   }
+  const attachmentSection = g.attachmentContext
+    ? `\nUser-attached reference (ingested):\n${g.attachmentContext}\n`
+    : '';
   const prompt = `Create a concise execution plan for a browser guide before any action is taken.
 Return JSON only: {"title":"short title","steps":[{"n":1,"goal":"observable user-facing milestone"}]}.
 Use 3-10 high-level milestones. Do not include hidden reasoning.
 
 Current URL: ${window.location.href}
 User goal: ${g.question}
-${tutorialSection}
+${tutorialSection}${attachmentSection}
 Visible interactive page index:
 ${pageIndex?.indexText || ''}`;
   try {
@@ -3173,8 +3182,19 @@ async function _handleStepByStepGuideV2(question) {
     guidePlan: [],
     guideTitle: '',
     _planAttempted: false,
-    currentPlanStep: 1
+    currentPlanStep: 1,
+    attachmentContext: '',  // compact text from an ingested image/file (carried every step)
+    attachmentImage: null   // raw base64 for the first-step image attach (not persisted)
   };
+
+  // Ingest any attached image/file ONCE: image → vision description, large file →
+  // summary, small file → raw. Cheap text rides on every step; the raw image is
+  // attached only on the first step (see gv2GenerateNextStep). Never blocks the guide.
+  try {
+    if (typeof gv2IngestAttachment === 'function') await gv2IngestAttachment(window._guidev2);
+  } catch (e) {
+    console.warn('[guidev2] attachment ingest failed:', e);
+  }
 
   if (captureEnabled && typeof rewindStartSession === 'function') {
     try { await rewindStartSession(sessionId, question); } catch (e) { /* non-fatal */ }
@@ -3490,6 +3510,12 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
   const evidenceSection = recapOn
     ? `\n=== SAVED EVIDENCE SCRATCHPAD ===\n${typeof gv2EvidenceMemoryText === 'function' ? gv2EvidenceMemoryText(g.evidenceScratchpad || []) : '(none)'}\nUse [ev:key] citations in finish(answer) when referencing saved evidence. Each citation must sit next to the specific fact it proves, not after a vague sentence.\n`
     : '\n=== EVIDENCE SCRATCHPAD ===\nRecap is off. Set evidence to null; use normal browser actions and finish when done.\n';
+  // The user attached an image/file: its ingested text rides on every step; the raw
+  // image (if any) is attached to the model on step 1 only (see below).
+  const attachAsImage = !!g.attachmentImage && (stepNumber === 1 || g._needAttachmentImage);
+  const attachmentSection = g.attachmentContext
+    ? `\n=== ATTACHED BY USER ===\n${g.attachmentContext}${attachAsImage ? '\n(The attached image is also included below as an image.)' : ''}\n`
+    : '';
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
 VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}
@@ -3500,7 +3526,7 @@ ${pageIndex.indexText}
 
 === USER GOAL ===
 ${activeQuestion}
-${tutorialSection}
+${attachmentSection}${tutorialSection}
 ${g.personalizationContext || ''}
 ${planSection}
 ${evidenceSection}
@@ -3511,8 +3537,18 @@ Return JSON for Step ${stepNumber}`;
 
   try {
 
+    // Assemble the image list: the SoM viewport screenshot (if Visual is on) plus,
+    // on step 1 only, the user's raw attached image so the agent can actually see it.
+    const stepImages = [];
+    if (visualInputShot) {
+      stepImages.push({ base64: visualInputShot, label: `Guide viewport with up to ${GV2_VISUAL_INPUT_MAX_MARKS} SoM markers` });
+    }
+    if (attachAsImage) {
+      stepImages.push({ base64: g.attachmentImage, label: 'User-attached reference image' });
+      g._needAttachmentImage = false; // consumed
+    }
     const llmMsg = {
-      action: visualInputShot ? 'callLLMWithImages' : 'callLLM',
+      action: stepImages.length ? 'callLLMWithImages' : 'callLLM',
       systemPrompt: systemPrompt,
       messages: [{
         role: 'user',
@@ -3524,11 +3560,12 @@ Return JSON for Step ${stepNumber}`;
         url: window.location.href
       }
     };
-    if (visualInputShot) {
-      llmMsg.images = [{ base64: visualInputShot, label: `Guide viewport with up to ${GV2_VISUAL_INPUT_MAX_MARKS} SoM markers` }];
+    if (stepImages.length) {
+      llmMsg.images = stepImages;
     }
     let response = await safeSendMessage(llmMsg);
-    if (visualInputShot && response && response.error) {
+    // If the image made the call fail, retry text-only (matches the prior fallback).
+    if (stepImages.length && response && response.error) {
       response = await safeSendMessage({ ...llmMsg, action: 'callLLM', images: undefined });
     }
 

@@ -296,6 +296,122 @@ describe('Routing Logic (content/functions/main_router.js)', () => {
   });
 });
 
+// Attachment ingestion helpers: decide raw-vs-summary for attached text files and
+// build the compact context block injected into the guide plan + each step.
+describe('Attachment ingestion helpers (content/tasks/image_ask.js)', () => {
+  beforeAll(() => {
+    loadScript('content/tasks/image_ask.js');
+  });
+
+  describe('attachmentNeedsSummary', () => {
+    test('small files are embedded raw (no summary)', () => {
+      expect(window.attachmentNeedsSummary(0)).toBe(false);
+      expect(window.attachmentNeedsSummary(100)).toBe(false);
+      // Exactly at the limit is still "raw"
+      expect(window.attachmentNeedsSummary(window.ATTACHMENT_RAW_CHAR_LIMIT)).toBe(false);
+    });
+
+    test('large files are summarized', () => {
+      expect(window.attachmentNeedsSummary(window.ATTACHMENT_RAW_CHAR_LIMIT + 1)).toBe(true);
+      expect(window.attachmentNeedsSummary(500000)).toBe(true);
+    });
+
+    test('non-numeric input is treated as no-summary', () => {
+      expect(window.attachmentNeedsSummary(null)).toBe(false);
+      expect(window.attachmentNeedsSummary(undefined)).toBe(false);
+    });
+  });
+
+  describe('buildAttachmentContext', () => {
+    test('returns empty string when nothing is attached', () => {
+      expect(window.buildAttachmentContext({})).toBe('');
+      expect(window.buildAttachmentContext()).toBe('');
+    });
+
+    test('small file → raw text block', () => {
+      const ctx = window.buildAttachmentContext({ fileName: 'notes.txt', fileText: 'hello world' });
+      expect(ctx).toContain('notes.txt');
+      expect(ctx).toContain('hello world');
+      expect(ctx).not.toContain('(summary)');
+    });
+
+    test('large file → summary block (summary wins over raw)', () => {
+      const ctx = window.buildAttachmentContext({
+        fileName: 'big.txt',
+        fileText: 'RAW SHOULD NOT APPEAR',
+        fileSummary: 'condensed version'
+      });
+      expect(ctx).toContain('big.txt');
+      expect(ctx).toContain('(summary)');
+      expect(ctx).toContain('condensed version');
+      expect(ctx).not.toContain('RAW SHOULD NOT APPEAR');
+    });
+
+    test('image → description block', () => {
+      const ctx = window.buildAttachmentContext({ imageDescription: 'a blue polo shirt' });
+      expect(ctx).toContain('Attached image');
+      expect(ctx).toContain('a blue polo shirt');
+    });
+
+    test('image + file combine into one block', () => {
+      const ctx = window.buildAttachmentContext({
+        imageDescription: 'a blue polo shirt',
+        fileName: 'notes.txt',
+        fileText: 'buy 5 of them'
+      });
+      expect(ctx).toContain('a blue polo shirt');
+      expect(ctx).toContain('buy 5 of them');
+    });
+  });
+});
+
+// Router: an attached image must NOT hijack a guide-routed request into image_ask.
+// Guide/Auto mode consumes the attachment; ask-type intents still use image_ask.
+describe('Router attachment routing (content/functions/main_router.js)', () => {
+  let imageAskSpy;
+  let guideSpy;
+
+  beforeEach(() => {
+    window.chrome = { runtime: { sendMessage: jest.fn() } };
+    window.PROMPTS = { ROUTER: 'Router Prompt' };
+    loadScript('content/functions/main_router.js');
+
+    imageAskSpy = jest.fn().mockResolvedValue({ success: true, isImageAsk: true });
+    guideSpy = jest.fn().mockResolvedValue({ success: true, isGuide: true });
+    window.handleImageAsk = imageAskSpy;
+    window.handleStepByStepGuide = guideSpy;
+    window.getUploadedImage = () => 'BASE64';
+  });
+
+  test('forced guide route with an image does NOT call image_ask', async () => {
+    const result = await window.handleSmartQuery(
+      'help me buy this', [], /*hasImage*/ true, false, /*forcedRoute*/ 'guide', /*cleanQuery*/ 'help me buy this'
+    );
+    expect(imageAskSpy).not.toHaveBeenCalled();
+    expect(guideSpy).toHaveBeenCalledWith('help me buy this');
+    expect(result.routedTo).toBe('guide');
+  });
+
+  test('router-chosen guide route with an image does NOT call image_ask', async () => {
+    chrome.runtime.sendMessage.mockResolvedValue({ content: '{"handler":"guide","confidence":0.9}' });
+    const result = await window.handleSmartQuery(
+      'walk me through checkout', [], /*hasImage*/ true, false, /*forcedRoute*/ null, 'walk me through checkout'
+    );
+    expect(imageAskSpy).not.toHaveBeenCalled();
+    expect(guideSpy).toHaveBeenCalled();
+    expect(result.routedTo).toBe('guide');
+  });
+
+  test('attached image with an ask intent still routes to image_ask', async () => {
+    chrome.runtime.sendMessage.mockResolvedValue({ content: '{"handler":"ask","confidence":0.8}' });
+    const result = await window.handleSmartQuery(
+      'find this on the page', [], /*hasImage*/ true, false, /*forcedRoute*/ null, 'find this on the page'
+    );
+    expect(imageAskSpy).toHaveBeenCalled();
+    expect(result.routedTo).toBe('image_ask');
+  });
+});
+
 // Rewind feature (Slice 1): static DOM snapshot serializer.
 // Verifies that runtime form state (which outerHTML omits) is captured into the
 // snapshot, that scripts are stripped, and that a <base> is injected.

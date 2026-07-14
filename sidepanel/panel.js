@@ -4,10 +4,13 @@
 let chatMessages = [];
 let conversationHistory = []; // Stores {role: 'user'|'assistant', content: string, hasImage?: boolean}
 let currentTabId = null;
-let uploadedImageBase64 = null; // Stores the uploaded image
+let uploadedImageBase64 = null; // Stores the uploaded image (pure base64, no data-URL prefix)
+let uploadedImageDataUrl = null; // Full data URL for the chip thumbnail
+let uploadedImageMeta = null;   // { name, type, size } for the image chip label
 let hasImageInConversation = false; // Track if image was used in conversation
 let uploadedFileContent = null; // Text content of an attached file
 let uploadedFileName = null;    // Display name of the attached file
+let uploadedFileSize = null;    // Byte size of the attached file (for the chip label)
 let currentSelectedText = null; // Stores text selected on the webpage
 let guideActive = false; // True while guide is generating steps (shows stop button)
 let guidePaused = false; // True when an active guide is paused and can be resumed
@@ -1014,48 +1017,6 @@ function _answerTrailSummaryHtml(recap, sessionId, milestones = []) {
       }).join('')}</div>`
     : '';
   return `<section class="pageguide-answer-trail-summary">${linkedSummaryLine || summaryLine}${visualLine}</section>`;
-}
-
-function _answerTrailTextFromStep(step) {
-  const action = String(step?.action || '').toLowerCase();
-  const instruction = _stripEvidenceRefs(step?.instruction || '').trim();
-  const saved = Array.isArray(step?.savedEvidenceEntries) && step.savedEvidenceEntries.length
-    ? step.savedEvidenceEntries
-    : (step?.evidenceKey ? [{ key: step.evidenceKey, note: step.evidenceNote }] : []);
-  if (saved.length) {
-    const notes = saved.map(e => e?.note || e?.key).filter(Boolean).slice(0, 2).join('; ');
-    return instruction ? `${instruction} Saved evidence: ${notes || 'visual evidence'}.` : `Saved evidence: ${notes || 'visual evidence'}.`;
-  }
-  if (action === 'save_evidence') return instruction || 'Saved visual evidence for the answer.';
-  if (action === 'finish') return instruction || 'Prepared the final answer.';
-  if (instruction) return instruction;
-  if (action) return `Completed ${action.replace(/_/g, ' ')}.`;
-  return 'Observed this checkpoint.';
-}
-
-function _answerReasoningTrailFromStepsHtml(steps, sessionId) {
-  const list = (Array.isArray(steps) ? steps : [])
-    .filter(s => s && !s.isInitial && Number(s.step) > 0)
-    .sort((a, b) => Number(a.step) - Number(b.step));
-  if (!list.length) return '';
-  const rows = list.map((s, idx) => {
-    const step = Number(s.step);
-    const isLast = idx === list.length - 1;
-    const status = String(s.status || '').toLowerCase();
-    const cls = status === 'wrong' ? 'is-wrong' : (status === 'unclear' ? 'is-unclear' : 'is-ok');
-    const pill = isLast ? '<span class="pageguide-answer-trail-pill is-complete">Completed</span>' : '';
-    return `<div class="pageguide-answer-trail-row ${cls}">
-      <span class="pageguide-answer-trail-dot">${escapeHtml(String(step))}</span>
-      <span class="pageguide-answer-trail-text-wrap">
-        <span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}">${escapeHtml(_answerTrailTextFromStep(s))}</span>
-      </span>
-      ${pill}
-    </div>`;
-  }).join('');
-  return `<details class="pageguide-reasoning-trail">
-    <summary><span>Reasoning Trail</span><span class="pageguide-reasoning-trail-chevron">⌄</span></summary>
-    <div class="pageguide-reasoning-trail-body">${rows}</div>
-  </details>`;
 }
 
 async function _answerEvidenceFigureHtml(item, sessionId) {
@@ -2184,14 +2145,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Combined upload handling (images + text files share one button)
   const imageUpload = document.getElementById('pageguide-image-upload');
   const removeImageBtn = document.getElementById('pageguide-remove-image');
-  const removeFileBtn = document.getElementById('pageguide-remove-file');
-  const removeSelectedTextBtn = document.getElementById('pageguide-remove-selected-text');
 
   if (imageUpload) imageUpload.addEventListener('change', handleUpload);
   if (removeImageBtn) removeImageBtn.addEventListener('click', clearUploadedImage);
-  if (removeFileBtn) removeFileBtn.addEventListener('click', clearUploadedFile);
-  if (removeSelectedTextBtn) {
-    removeSelectedTextBtn.addEventListener('click', clearSelectedText);
+
+  // File / selected-text chips are (re)built dynamically, so their remove buttons
+  // are wired via one delegated listener on the chip row.
+  const chipRow = document.getElementById('pageguide-attachment-chips');
+  if (chipRow) {
+    chipRow.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-chip-remove]');
+      if (!btn) return;
+      const kind = btn.getAttribute('data-chip-remove');
+      if (kind === 'file') clearUploadedFile();
+      else if (kind === 'text') clearSelectedText();
+    });
   }
 
   // Paste image support (Ctrl+V / Cmd+V)
@@ -4597,6 +4565,88 @@ async function sendToContentScript(message) {
   });
 }
 
+/** Human-readable byte size for chip labels. */
+function _fmtBytes(bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Rebuild the unified attachment chip row from the current attachment state
+ * (image / text file / selected text). The image chip is static so its wrapper
+ * survives region-overlay injection; the file and text chips are rebuilt each
+ * call. The whole row hides when nothing is attached.
+ */
+function renderAttachmentChips() {
+  const row = document.getElementById('pageguide-attachment-chips');
+  if (!row) return;
+
+  // --- Image chip (static element; toggled, not rebuilt) ---
+  const imageChip = document.getElementById('pageguide-image-chip');
+  const previewImg = document.getElementById('pageguide-preview-img');
+  const nameEl = document.getElementById('pageguide-image-name');
+  const metaEl = document.getElementById('pageguide-image-label');
+  const wrapper = document.getElementById('pageguide-image-wrapper');
+  if (imageChip) {
+    if (uploadedImageBase64) {
+      if (previewImg && uploadedImageDataUrl) previewImg.src = uploadedImageDataUrl;
+      if (nameEl) nameEl.textContent = uploadedImageMeta?.name || 'Pasted image';
+      // renderImageRegions() owns the label once regions are found — don't clobber it.
+      if (metaEl && !wrapper?.classList.contains('has-regions')) {
+        const parts = [];
+        if (uploadedImageMeta?.type) parts.push(uploadedImageMeta.type.replace('image/', '').toUpperCase());
+        if (uploadedImageMeta?.size) parts.push(_fmtBytes(uploadedImageMeta.size));
+        metaEl.textContent = parts.length ? parts.join(' · ') : '📷 Ready — ask about it';
+      }
+      imageChip.style.display = 'flex';
+    } else {
+      imageChip.style.display = 'none';
+    }
+  }
+
+  // --- Dynamic chips: clear then rebuild file + selected-text ---
+  row.querySelectorAll('[data-chip-dynamic]').forEach(el => el.remove());
+
+  if (uploadedFileContent != null) {
+    const chip = document.createElement('div');
+    chip.className = 'pageguide-attachment-chip pageguide-chip-file';
+    chip.setAttribute('data-chip-dynamic', 'file');
+    const metaParts = [];
+    if (uploadedFileSize) metaParts.push(_fmtBytes(uploadedFileSize));
+    chip.innerHTML = `
+      <span class="pageguide-chip-icon">📎</span>
+      <div class="pageguide-chip-info">
+        <span class="pageguide-chip-name">${escapeHtml(uploadedFileName || 'File')}</span>
+        <span class="pageguide-chip-meta">${escapeHtml(metaParts.join(' · ') || 'Text file')}</span>
+      </div>
+      <button class="pageguide-remove-image" data-chip-remove="file" title="Remove file">✕</button>`;
+    row.appendChild(chip);
+  }
+
+  if (currentSelectedText) {
+    const chip = document.createElement('div');
+    chip.className = 'pageguide-attachment-chip pageguide-chip-text';
+    chip.setAttribute('data-chip-dynamic', 'text');
+    const wordCount = currentSelectedText.split(/\s+/).filter(w => w.length > 0).length;
+    const snippet = currentSelectedText.length > 60
+      ? currentSelectedText.slice(0, 60) + '…'
+      : currentSelectedText;
+    chip.innerHTML = `
+      <span class="pageguide-chip-icon">${UI_ICONS.quote || '✎'}</span>
+      <div class="pageguide-chip-info">
+        <span class="pageguide-chip-name">Selected text</span>
+        <span class="pageguide-chip-meta" title="${escapeHtml(currentSelectedText)}">“${escapeHtml(snippet)}” · ${wordCount}w</span>
+      </div>
+      <button class="pageguide-remove-image" data-chip-remove="text" title="Clear selection context">✕</button>`;
+    row.appendChild(chip);
+  }
+
+  const anyVisible = !!uploadedImageBase64 || uploadedFileContent != null || !!currentSelectedText;
+  row.style.display = anyVisible ? 'flex' : 'none';
+}
+
 /**
  * Handle paste image (Ctrl+V / Cmd+V)
  */
@@ -4625,21 +4675,18 @@ async function handlePasteImage(event) {
           const base64 = e.target.result;
           // Remove data URL prefix to get pure base64
           uploadedImageBase64 = base64.split(',')[1];
-          
-          // Show preview
-          const preview = document.getElementById('pageguide-image-preview');
-          const previewImg = document.getElementById('pageguide-preview-img');
+          uploadedImageDataUrl = base64;
+          uploadedImageMeta = { name: 'Pasted image', type: file.type, size: file.size };
+
           const uploadLabel = document.getElementById('pageguide-upload-label');
-          
-          if (preview && previewImg) {
-            previewImg.src = base64;
-            preview.style.display = 'flex';
-          }
-          
+
+          // Render the chip row (image chip becomes visible)
+          renderAttachmentChips();
+
           // Highlight upload button and show image icon
           if (uploadLabel) uploadLabel.classList.add('has-image');
           _setUploadIcon('📷');
-          
+
           // Send image to content script
           try {
             await sendToContentScript({
@@ -4658,7 +4705,7 @@ async function handlePasteImage(event) {
             input.focus();
           }
 
-          addMessage('📋 Image pasted! Ask me to find it on the page.', 'system');
+          addMessage('📋 Image pasted! Ask me about it or to find it on the page.', 'system');
         };
         
         reader.readAsDataURL(file);
@@ -4717,17 +4764,14 @@ async function handleImageUpload(event) {
       const base64 = e.target.result;
       // Remove data URL prefix to get pure base64
       uploadedImageBase64 = base64.split(',')[1];
-      
-      // Show preview
-      const preview = document.getElementById('pageguide-image-preview');
-      const previewImg = document.getElementById('pageguide-preview-img');
+      uploadedImageDataUrl = base64;
+      uploadedImageMeta = { name: file.name, type: file.type, size: file.size };
+
       const uploadLabel = document.getElementById('pageguide-upload-label');
-      
-      if (preview && previewImg) {
-        previewImg.src = base64;
-        preview.style.display = 'flex';
-      }
-      
+
+      // Render the chip row (image chip becomes visible)
+      renderAttachmentChips();
+
       // Highlight upload button and show image icon
       if (uploadLabel) uploadLabel.classList.add('has-image');
       _setUploadIcon('📷');
@@ -4749,7 +4793,7 @@ async function handleImageUpload(event) {
         input.placeholder = 'Ask about the uploaded image...';
       }
 
-      addMessage('📷 Image uploaded! Ask me to find it on the page.', 'system');
+      addMessage('📷 Image uploaded! Ask me about it or to find it on the page.', 'system');
     };
     
     reader.readAsDataURL(file);
@@ -4763,25 +4807,26 @@ async function handleImageUpload(event) {
  */
 async function clearUploadedImage() {
   uploadedImageBase64 = null;
+  uploadedImageDataUrl = null;
+  uploadedImageMeta = null;
 
-  // Hide preview and clear region overlays
-  const preview = document.getElementById('pageguide-image-preview');
+  // Clear region overlays before the chip re-renders
   const wrapper = document.getElementById('pageguide-image-wrapper');
   const uploadLabel = document.getElementById('pageguide-upload-label');
   const input = document.getElementById('pageguide-input');
   const fileInput = document.getElementById('pageguide-image-upload');
   const label = document.getElementById('pageguide-image-label');
 
-  if (preview) preview.style.display = 'none';
   if (wrapper) {
     wrapper.classList.remove('has-regions');
     wrapper.querySelectorAll('.pageguide-image-region').forEach(el => el.remove());
   }
-  if (label) label.textContent = '📷 Image ready — ask about it!';
+  if (label) label.textContent = '📷 Ready — ask about it';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   _setUploadIcon('📎');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
+  renderAttachmentChips();
 
   // Clear from content script
   try {
@@ -4811,18 +4856,26 @@ async function handleFileUpload(event) {
     const text = await file.text();
     uploadedFileContent = text;
     uploadedFileName = file.name;
+    uploadedFileSize = file.size;
 
-    // Show preview badge
-    const preview = document.getElementById('pageguide-file-preview');
-    const label = document.getElementById('pageguide-file-label');
     const uploadLabel = document.getElementById('pageguide-upload-label');
     const input = document.getElementById('pageguide-input');
 
-    if (preview) preview.style.display = 'flex';
-    if (label) label.textContent = `📎 ${file.name}`;
+    renderAttachmentChips();
     if (uploadLabel) uploadLabel.classList.add('has-image');
     _setUploadIcon('📎');
     if (input) input.placeholder = `Ask about ${file.name}…`;
+
+    // Forward the file text to the content script so a guide session can ingest it.
+    try {
+      await sendToContentScript({
+        action: 'setUploadedFile',
+        fileText: uploadedFileContent,
+        fileName: uploadedFileName
+      });
+    } catch (err) {
+      console.warn('📎 Could not send file to content script:', err);
+    }
 
     addMessage(`📎 File attached: ${file.name}`, 'system');
   } catch (err) {
@@ -4836,19 +4889,24 @@ async function handleFileUpload(event) {
 function clearUploadedFile() {
   uploadedFileContent = null;
   uploadedFileName = null;
+  uploadedFileSize = null;
 
-  const preview = document.getElementById('pageguide-file-preview');
-  const label = document.getElementById('pageguide-file-label');
   const uploadLabel = document.getElementById('pageguide-upload-label');
   const input = document.getElementById('pageguide-input');
   const fileInput = document.getElementById('pageguide-image-upload');
 
-  if (preview) preview.style.display = 'none';
-  if (label) label.textContent = '📎 File attached';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   _setUploadIcon('📎');
   if (input) input.placeholder = 'Ask anything…';
   if (fileInput) fileInput.value = '';
+  renderAttachmentChips();
+
+  // Clear from content script
+  try {
+    sendToContentScript({ action: 'clearUploadedFile' });
+  } catch (err) {
+    console.warn('📎 Could not clear file in content script:', err);
+  }
 
   addMessage('🗑️ File removed', 'system');
 }
@@ -4858,8 +4916,7 @@ function clearUploadedFile() {
  */
 function clearSelectedText() {
   currentSelectedText = null;
-  const preview = document.getElementById('pageguide-selected-text-preview');
-  if (preview) preview.style.display = 'none';
+  renderAttachmentChips();
   const input = document.getElementById('pageguide-input');
   if (input) input.focus();
 }
@@ -5175,38 +5232,49 @@ async function sendMessage() {
     hasImageInConversation = true;
   }
 
-  // If a text file is attached or text is selected, build an augmented query
+  // If a text file is attached or text is selected, build an augmented query.
   // The original user-visible message stays clean; the enriched version goes to the LLM.
+  //   • effectiveQuery — full context (file + selection); used by ask/pdf/restricted paths.
+  //   • guideQuery     — omits the file, because a guide session ingests the file ONCE
+  //                      (summarized) instead of re-embedding it in every step's question.
   let effectiveQuery = activeQuery;
-  
+  let guideQuery = activeQuery;
+
   if (uploadedFileContent || currentSelectedText) {
     const parts = [];
-    
+    const guideParts = [];
+
     if (uploadedFileContent) {
       const MAX_FILE_CHARS = 40000;
       const snippet = uploadedFileContent.length > MAX_FILE_CHARS
         ? uploadedFileContent.slice(0, MAX_FILE_CHARS) + '\n… [truncated]'
         : uploadedFileContent;
       parts.push(`[Attached file: ${uploadedFileName}]\n---\n${snippet}\n---`);
+      // guideParts intentionally omits the file — delivered via ingestion.
     }
-    
+
     if (currentSelectedText) {
       const MAX_SELECTION_CHARS = 20000;
       const selectionSnippet = currentSelectedText.length > MAX_SELECTION_CHARS
         ? currentSelectedText.slice(0, MAX_SELECTION_CHARS) + '\n… [truncated]'
         : currentSelectedText;
-      parts.push(`[Selected text from page]\n---\n${selectionSnippet}\n---`);
+      const block = `[Selected text from page]\n---\n${selectionSnippet}\n---`;
+      parts.push(block);
+      guideParts.push(block); // selection is small — keep it inline for the guide
     }
-    
-    if (activeQuery) {
-      effectiveQuery = `${parts.join('\n\n')}\n\nUser question: ${activeQuery}`;
-    } else {
-      // If user hit send with just context and no question, provide a default prompt
-      effectiveQuery = `${parts.join('\n\n')}\n\nPlease analyze or explain the provided content.`;
-    }
+
+    const compose = (ps) => {
+      if (!ps.length) return activeQuery;
+      return activeQuery
+        ? `${ps.join('\n\n')}\n\nUser question: ${activeQuery}`
+        : `${ps.join('\n\n')}\n\nPlease analyze or explain the provided content.`;
+    };
+    effectiveQuery = compose(parts);
+    guideQuery = compose(guideParts);
   } else if (forcedRoute) {
     // If no context was attached, just use the stripped query
     effectiveQuery = activeQuery;
+    guideQuery = activeQuery;
   }
 
   // Add to conversation history (mark if this message has an image)
@@ -5576,6 +5644,7 @@ Previous steps: None`;
       result = await sendToContentScript({
         action: 'handleQuery',
         query: effectiveQuery,
+        cleanQuery: guideQuery, // guide route uses this (file kept out; delivered via ingestion)
         history: conversationHistory.slice(0, -1),
         hasImage: currentMessageHasImage,
         hasImageInHistory: hasImageInConversation,
@@ -5863,20 +5932,18 @@ function _restoreTabSession(session) {
     container.scrollTop = container.scrollHeight;
   }
 
-  // Clear image upload UI (blobs aren't saved in the session)
+  // Clear attachment UI (blobs aren't saved in the session)
   uploadedImageBase64 = null;
-  const preview = document.getElementById('pageguide-image-preview');
-  const uploadLabel = document.getElementById('pageguide-upload-label');
-  const fileInput = document.getElementById('pageguide-image-upload');
-  if (preview) preview.style.display = 'none';
-  if (uploadLabel) uploadLabel.classList.remove('has-image');
-  if (fileInput) fileInput.value = '';
-
-  // Clear text-file upload UI
+  uploadedImageDataUrl = null;
+  uploadedImageMeta = null;
   uploadedFileContent = null;
   uploadedFileName = null;
-  const filePreview = document.getElementById('pageguide-file-preview');
-  if (filePreview) filePreview.style.display = 'none';
+  uploadedFileSize = null;
+  const uploadLabel = document.getElementById('pageguide-upload-label');
+  const fileInput = document.getElementById('pageguide-image-upload');
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  if (fileInput) fileInput.value = '';
+  renderAttachmentChips();
 
   visibleJourneySessionId = session.visibleJourneySessionId || null;
   visibleJourneyTitle = session.visibleJourneyTitle || '';
@@ -5964,31 +6031,31 @@ async function resetChat(showMessage = true) {
   const container = document.getElementById('pageguide-messages');
   if (container) container.innerHTML = '';
 
-  // Clear uploaded image state
+  // Clear all attachment state (image, file, selected text)
   uploadedImageBase64 = null;
-  const preview = document.getElementById('pageguide-image-preview');
+  uploadedImageDataUrl = null;
+  uploadedImageMeta = null;
+  uploadedFileContent = null;
+  uploadedFileName = null;
+  uploadedFileSize = null;
+  currentSelectedText = null;
   const uploadLabel = document.getElementById('pageguide-upload-label');
   const input = document.getElementById('pageguide-input');
   const fileInput = document.getElementById('pageguide-image-upload');
+  const wrapper = document.getElementById('pageguide-image-wrapper');
 
-  if (preview) preview.style.display = 'none';
+  if (wrapper) {
+    wrapper.classList.remove('has-regions');
+    wrapper.querySelectorAll('.pageguide-image-region').forEach(el => el.remove());
+  }
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
-
-  // Clear text-file upload state
-  uploadedFileContent = null;
-  uploadedFileName = null;
-  const filePreview = document.getElementById('pageguide-file-preview');
-  if (filePreview) filePreview.style.display = 'none';
-
-  // Clear selected text state
-  currentSelectedText = null;
-  const selectedTextPreview = document.getElementById('pageguide-selected-text-preview');
-  if (selectedTextPreview) selectedTextPreview.style.display = 'none';
+  renderAttachmentChips();
 
   try {
     await sendToContentScript({ action: 'clearUploadedImage' });
+    await sendToContentScript({ action: 'clearUploadedFile' });
   } catch (e) {
     // Ignore
   }
@@ -6514,31 +6581,16 @@ function handleContentMessage(message, sender, sendResponse) {
     window.close();
   } else if (message.action === 'selectedText') {
     // Handle text selection passed from the content script
-    const preview = document.getElementById('pageguide-selected-text-preview');
-    const label = document.getElementById('pageguide-selected-text-label');
-    
     if (message.text && message.text.length > 0) {
       currentSelectedText = message.text;
-      if (preview && label) {
-        // Display snippet (max 80 chars)
-        const snippet = message.text.length > 80 
-          ? message.text.substring(0, 80) + '...' 
-          : message.text;
-        
-        // Count words for better context hint
-        const wordCount = message.text.split(/\s+/).filter(w => w.length > 0).length;
-        
-        label.innerHTML = `${UI_ICONS.quote}<span>"${escapeHtml(snippet)}" (${wordCount} words)</span>`;
-        label.title = message.text; // Full text on hover
-        preview.style.display = 'flex';
-      }
+      renderAttachmentChips();
     } else if (currentSelectedText) {
       // Clear selection only if they selected empty space on purpose
       // (content script might just send empty text when clicking around)
       // To not frustrate users, we only hide it when explicitly empty string.
       if (message.text === '') {
         currentSelectedText = null;
-        if (preview) preview.style.display = 'none';
+        renderAttachmentChips();
       }
     }
   }

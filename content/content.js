@@ -23,11 +23,12 @@ async function handleMessage(request) {
     case 'handleQuery':
       if (typeof handleSmartQuery === 'function') {
         return await handleSmartQuery(
-          request.query, 
+          request.query,
           request.history || [],
           request.hasImage || false,
           request.hasImageInHistory || false,
-          request.forcedRoute || null
+          request.forcedRoute || null,
+          request.cleanQuery || null
         );
       }
       return { success: false, error: 'Query handler not loaded' };
@@ -176,6 +177,20 @@ async function handleMessage(request) {
     case 'clearUploadedImage':
       if (typeof clearUploadedImage === 'function') {
         clearUploadedImage();
+        return { success: true };
+      }
+      return { success: true }; // Silently succeed even if function not loaded
+
+    case 'setUploadedFile':
+      if (typeof setUploadedFile === 'function') {
+        setUploadedFile(request.fileText, request.fileName);
+        return { success: true };
+      }
+      return { success: false, error: 'File upload not available' };
+
+    case 'clearUploadedFile':
+      if (typeof clearUploadedFileAttachment === 'function') {
+        clearUploadedFileAttachment();
         return { success: true };
       }
       return { success: true }; // Silently succeed even if function not loaded
