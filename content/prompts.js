@@ -423,7 +423,7 @@ After scrolling entire page, no red dresses
 
 Analyze both images and respond with JSON:`,
 
-  GUIDE_EVIDENCE_ANNOTATOR: `You are a screenshot evidence annotator. Your only job is to locate and annotate the visual evidence requested by the browser-guide worker.
+  GUIDE_EVIDENCE_ANNOTATOR: `You are a screenshot evidence annotator. Locate and annotate the requested visual evidence on the screenshot.
 Reply with ONLY JSON:
 {"region_bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},
  "annotations":[
@@ -432,13 +432,30 @@ Reply with ONLY JSON:
    {"type":"arrow","from":{"x":0..1,"y":0..1},"to":{"x":0..1,"y":0..1},"label":"short relationship","color":"#ff2d78"},
    {"type":"line","from":{"x":0..1,"y":0..1},"to":{"x":0..1,"y":0..1},"label":"short relationship","color":"green"}
  ]}
-- Coordinates MUST be normalized fractions from 0 to 1 relative to the CURRENT screenshot. Never return pixel coordinates like 722 or 904.
-- Every box/ellipse bbox MUST include x, y, w, and h.
-- Do not duplicate keys inside an object; never write a second "y" when you mean "h".
-- region_bbox is the crop area only; it is not drawn when annotations exist.
-- Use boxes or ellipses for objects/regions and arrows/lines for relationships/direction.
-- The annotations array is the visual overlay drawn on the evidence screenshot.
-- Use up to 5 annotations. Keep labels short. If unsure, return the best visible crop and [] annotations.`,
+
+COORDINATE SYSTEM (0-1000 Grid Mental Model):
+- Imagine a grid from 0 to 1000 on the screenshot: origin (0,0) is top-left, and (1000,1000) is bottom-right.
+- Locate elements using integer values on this 0-1000 grid (e.g., center-point at x=450, y=700).
+- Convert these integers to normalized fractions from 0.0 to 1.0 by dividing by 1000 (e.g., 450 becomes 0.45, 700 becomes 0.70) in your JSON output. Never output raw pixel/grid coordinates like 450 or 700.
+
+RULES:
+- Every box/ellipse bbox MUST include x, y, w, and h (fractional values between 0.0 and 1.0). Do not duplicate keys inside an object.
+- region_bbox defines a bounding box around the entire relevant crop region (only drawn if annotations array is empty).
+- Use boxes/ellipses for objects, and lines/arrows for directions/relationships.
+- Colors: Choose high-contrast colors (e.g., bright pink '#ff2d78' or yellow '#ffd93d' on dark pages; dark blue '#1e90ff' or red '#ff4757' on light pages).
+- Keep labels short and descriptive. Return at most 5 annotations.
+
+EXAMPLE:
+If asked to "draw a box around the Search button at the center-right and point an arrow from the input field to it":
+Grid coordinates: Input field is at x=300 to 500, y=100. Search button is at x=550 to 650, y=100.
+Resulting JSON:
+{
+  "region_bbox": {"x": 0.25, "y": 0.05, "w": 0.45, "h": 0.15},
+  "annotations": [
+    {"type": "box", "bbox": {"x": 0.55, "y": 0.08, "w": 0.10, "h": 0.04}, "label": "Search Button", "color": "#ff2d78"},
+    {"type": "arrow", "from": {"x": 0.45, "y": 0.10}, "to": {"x": 0.54, "y": 0.10}, "label": "click path", "color": "blue"}
+  ]
+}`,
 
   GUIDE_RECAP_SUMMARIZER_SYSTEM: `You are a SUMMARIZER for a step-by-step web guide. You do NOT decide whether the task succeeded — the OUTCOME is already decided and given below. Never contradict it or re-judge success/failure. You are given INITIAL and FINAL screenshots when vision is available. The UI will turn summarySegments and stepEvaluations into inline visual references, so pin each meaningful phrase to the real step screenshot/action it describes. Reply with ONLY JSON:
 {"reason":"one or two sentences describing the final state (for a failed run, what is missing)",

@@ -2682,6 +2682,41 @@ describe('guide evidence annotator JSON repair (content/tasks/guidev2.js)', () =
     expect(parsed.annotations[0].bbox).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
     expect(parsed.annotations[1].bbox).toEqual({ x: 0.2, y: 0.3, w: 0.3, h: 0.4 });
   });
+
+  test('detects and normalizes raw 0-1000 grid coordinates', () => {
+    const raw = {
+      region_bbox: { x: 250, y: 50, w: 450, h: 150 },
+      annotations: [
+        { type: 'box', bbox: { x: 550, y: 80, w: 100, h: 40 }, label: 'Search Button' },
+        { type: 'arrow', from: { x: 450, y: 100 }, to: { x: 540, y: 100 }, label: 'click path' }
+      ]
+    };
+    const coerced = window._gv2CoerceAnnotatorResult(raw, { width: 1280, height: 800 });
+    expect(coerced.region_bbox).toEqual({ x: 0.25, y: 0.05, w: 0.45, h: 0.15 });
+    expect(coerced.annotations[0].bbox).toEqual({ x: 0.55, y: 0.08, w: 0.10, h: 0.04 });
+    expect(coerced.annotations[1].from).toEqual({ x: 0.45, y: 0.10 });
+    expect(coerced.annotations[1].to).toEqual({ x: 0.54, y: 0.10 });
+  });
+
+  test('does not normalize already-fractional coordinates', () => {
+    const raw = {
+      region_bbox: { x: 0.25, y: 0.05, w: 0.45, h: 0.15 },
+      annotations: [
+        { type: 'box', bbox: { x: 0.55, y: 0.08, w: 0.10, h: 0.04 }, label: 'Search Button' }
+      ]
+    };
+    const coerced = window._gv2CoerceAnnotatorResult(raw, { width: 1280, height: 800 });
+    expect(coerced.region_bbox).toEqual({ x: 0.25, y: 0.05, w: 0.45, h: 0.15 });
+    expect(coerced.annotations[0].bbox).toEqual({ x: 0.55, y: 0.08, w: 0.10, h: 0.04 });
+  });
+
+  test('does not divide by 1000 if coordinates are absolute pixel values > 1000', () => {
+    const raw = {
+      region_bbox: { x: 1200, y: 50, w: 450, h: 150 }
+    };
+    const coerced = window._gv2CoerceAnnotatorResult(raw, { width: 2000, height: 1000 });
+    expect(coerced.region_bbox).toEqual({ x: 0.6, y: 0.05, w: 0.225, h: 0.15 });
+  });
 });
 
 // Rewind action-replay: resolve a stored target.text against a fresh page index.

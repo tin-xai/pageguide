@@ -2548,13 +2548,85 @@ function _gv2CoerceAnnotatorPoint(point, imageSize) {
   };
 }
 
+function _gv2PreprocessGridCoordinates(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+
+  const coords = [];
+  const collectBox = (b) => {
+    if (!b || typeof b !== 'object') return;
+    const keys = ['x', 'y', 'w', 'h', 'left', 'top', 'right', 'bottom', 'l', 't', 'r', 'b', 'x1', 'y1', 'x2', 'y2'];
+    for (const k of keys) {
+      if (b[k] != null && b[k] !== '') {
+        const val = Number(b[k]);
+        if (Number.isFinite(val)) coords.push({ obj: b, key: k, val });
+      }
+    }
+    if (Array.isArray(b)) {
+      for (let i = 0; i < Math.min(b.length, 4); i++) {
+        const val = Number(b[i]);
+        if (Number.isFinite(val)) coords.push({ obj: b, key: i, val });
+      }
+    }
+  };
+
+  const collectPoint = (p) => {
+    if (!p || typeof p !== 'object') return;
+    for (const k of ['x', 'y']) {
+      if (p[k] != null && p[k] !== '') {
+        const val = Number(p[k]);
+        if (Number.isFinite(val)) coords.push({ obj: p, key: k, val });
+      }
+    }
+  };
+
+  const mainBox = raw.region_bbox || raw.region || raw.crop || raw.bbox;
+  if (mainBox) collectBox(mainBox);
+
+  if (Array.isArray(raw.annotations)) {
+    for (const ann of raw.annotations) {
+      if (!ann || typeof ann !== 'object') continue;
+      const type = String(ann.type || '').toLowerCase();
+      if (type === 'box' || type === 'rect' || type === 'rectangle' || type === 'circle' || type === 'ellipse') {
+        const box = ann.bbox || ann.region_bbox || ann.region || ann;
+        collectBox(box);
+      } else if (type === 'arrow' || type === 'line') {
+        collectPoint(ann.from);
+        collectPoint(ann.to);
+      }
+    }
+  }
+
+  const hasValueGreaterThanOne = coords.some(c => c.val > 1);
+  if (!hasValueGreaterThanOne) return raw;
+
+  const maxVal = Math.max(...coords.map(c => c.val));
+
+  if (maxVal <= 1000) {
+    for (const c of coords) {
+      c.obj[c.key] = Number((c.val / 1000).toFixed(6));
+    }
+  }
+
+  return raw;
+}
+
 function _gv2CoerceAnnotatorResult(raw, imageSize) {
   if (!raw || typeof raw !== 'object') return raw;
-  const out = Object.assign({}, raw);
-  const fallbackRegion = _gv2CoerceAnnotatorBox(raw.region_bbox || raw.region || raw.crop || raw.bbox, imageSize, null);
+
+  let clonedRaw;
+  try {
+    clonedRaw = JSON.parse(JSON.stringify(raw));
+  } catch (e) {
+    clonedRaw = raw;
+  }
+
+  _gv2PreprocessGridCoordinates(clonedRaw);
+
+  const out = Object.assign({}, clonedRaw);
+  const fallbackRegion = _gv2CoerceAnnotatorBox(clonedRaw.region_bbox || clonedRaw.region || clonedRaw.crop || clonedRaw.bbox, imageSize, null);
   if (fallbackRegion) out.region_bbox = fallbackRegion;
-  if (Array.isArray(raw.annotations)) {
-    out.annotations = raw.annotations.map((ann) => {
+  if (Array.isArray(clonedRaw.annotations)) {
+    out.annotations = clonedRaw.annotations.map((ann) => {
       if (!ann || typeof ann !== 'object') return ann;
       const next = Object.assign({}, ann);
       const type = String(next.type || '').toLowerCase();
@@ -2572,9 +2644,9 @@ function _gv2CoerceAnnotatorResult(raw, imageSize) {
   }
   out.__coordinateDebug = {
     imageSize: imageSize || null,
-    rawRegion: raw.region_bbox || raw.region || raw.crop || raw.bbox || null,
+    rawRegion: clonedRaw.region_bbox || clonedRaw.region || clonedRaw.crop || clonedRaw.bbox || null,
     coercedRegion: out.region_bbox || null,
-    rawAnnotations: Array.isArray(raw.annotations) ? raw.annotations : [],
+    rawAnnotations: Array.isArray(clonedRaw.annotations) ? clonedRaw.annotations : [],
     coercedAnnotations: Array.isArray(out.annotations) ? out.annotations : []
   };
   return out;
@@ -5853,7 +5925,11 @@ function _gv2BuildSteerQuestion(originalGoal, payload, redoStep, includeContext)
   if (newGoal) lines.push(`User redirection: ${newGoal}`);
   return lines.join('\n');
 }
-if (typeof window !== 'undefined') window._gv2BuildSteerQuestion = _gv2BuildSteerQuestion;
+if (typeof window !== 'undefined') {
+  window._gv2BuildSteerQuestion = _gv2BuildSteerQuestion;
+  window._gv2CoerceAnnotatorResult = _gv2CoerceAnnotatorResult;
+  window._gv2PreprocessGridCoordinates = _gv2PreprocessGridCoordinates;
+}
 
 // ===== ROUTER INTEGRATION =====
 
