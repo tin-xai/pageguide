@@ -1064,6 +1064,22 @@ describe('Evidence scratchpad helpers (content/utils.js)', () => {
     expect(out.entries[1].region_bbox).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
   });
 
+  test('does not cap saved evidence arrays by default', () => {
+    const out = window.gv2NormalizeEvidenceList([
+      { key: 'team_a', note: 'red' },
+      { key: 'team_b', note: 'blue' },
+      { key: 'team_c', note: 'green' },
+      { key: 'team_d', note: 'yellow' },
+      { key: 'team_e', note: 'black' },
+      { key: 'team_f', note: 'white' }
+    ], { ref_step_id: 3 });
+
+    expect(out.ok).toBe(true);
+    expect(out.truncated).toBe(false);
+    expect(out.entries).toHaveLength(6);
+    expect(out.entries.map(e => e.key)).toEqual(['team_a', 'team_b', 'team_c', 'team_d', 'team_e', 'team_f']);
+  });
+
   test('avoids existing scratchpad keys when normalizing evidence arrays', () => {
     const out = window.gv2NormalizeEvidenceList([
       { key: 'team_a', note: 'new red' },
@@ -1552,14 +1568,19 @@ describe('gv2DotState (content/utils.js)', () => {
     expect(dots[6].status).toBe('pending');   // step 7 not started
   });
 
-  test('marks low-grounding steps for review but not low-confidence yellow status', () => {
+  test('marks low-grounding and high-loop steps for yellow review status', () => {
     const records = [
       { step: 1, confidence: 0.3 },
-      { step: 2, confidence: 0.9, mechGrounding: 0.2 }
+      { step: 2, confidence: 0.9, mechGrounding: 0.2 },
+      { step: 3, confidence: 0.9, mechGrounding: 0.9, mechLoop: 0.3 }
     ];
-    const dots = window.gv2DotState({ plan: [], records, verifications: {}, current: 2, guideActive: true });
+    const dots = window.gv2DotState({ plan: [], records, verifications: {}, current: 3, guideActive: true });
     expect(dots[0].review).toBe(false);
+    expect(dots[0].reviewLabels).toEqual([]);
     expect(dots[1].review).toBe(true);
+    expect(dots[1].reviewLabels).toEqual(['misgrounded']);
+    expect(dots[2].review).toBe(true);
+    expect(dots[2].reviewLabels).toEqual(['loop']);
   });
 
   test('surfaces verification status per concrete step (success + error)', () => {
@@ -1767,6 +1788,72 @@ describe('gv2NormalizeRecap (content/utils.js)', () => {
     const r = window.gv2NormalizeRecap({ milestones: [{ text: 'x', step: 3 }] }, { validSteps: [], plan: [], steps: [] });
     expect(r.milestones).toEqual([]);
     expect(typeof r.summary).toBe('string');
+  });
+});
+
+describe('gv2BuildPersonalizationSection (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('returns empty string when both facts and learned summary are empty', () => {
+    expect(window.gv2BuildPersonalizationSection({ facts: '', learned: '' })).toBe('');
+    expect(window.gv2BuildPersonalizationSection({})).toBe('');
+    expect(window.gv2BuildPersonalizationSection()).toBe('');
+  });
+
+  test('includes only manual facts when learned summary is empty', () => {
+    const out = window.gv2BuildPersonalizationSection({ facts: 'Vegetarian, prefers concise answers', learned: '' });
+    expect(out).toContain('=== ABOUT THIS USER ===');
+    expect(out).toContain('Facts the user shared: Vegetarian, prefers concise answers');
+    expect(out).not.toContain('What you have learned');
+  });
+
+  test('includes only the learned profile when manual facts are empty', () => {
+    const out = window.gv2BuildPersonalizationSection({ facts: '', learned: 'Works in finance, often automates spreadsheets.' });
+    expect(out).toContain('=== ABOUT THIS USER ===');
+    expect(out).toContain('What you have learned from prior sessions: Works in finance, often automates spreadsheets.');
+    expect(out).not.toContain('Facts the user shared');
+  });
+
+  test('combines both manual facts and the learned profile when present', () => {
+    const out = window.gv2BuildPersonalizationSection({ facts: 'Vegetarian', learned: 'Frequently books travel.' });
+    expect(out).toContain('Facts the user shared: Vegetarian');
+    expect(out).toContain('What you have learned from prior sessions: Frequently books travel.');
+  });
+
+  test('trims whitespace-only input to empty', () => {
+    expect(window.gv2BuildPersonalizationSection({ facts: '   ', learned: '  \n ' })).toBe('');
+  });
+});
+
+describe('gv2NormalizeProfileUpdate (content/utils.js)', () => {
+  beforeAll(() => { loadScript('content/utils.js'); });
+
+  test('normalizes a valid summary, stamping timestamp and incrementing version', () => {
+    const before = Date.now();
+    const r = window.gv2NormalizeProfileUpdate({ summary: 'Likes concise answers.' }, { summary: 'old', version: 3 });
+    expect(r.summary).toBe('Likes concise answers.');
+    expect(r.version).toBe(4);
+    expect(r.updatedAt).toBeGreaterThanOrEqual(before);
+  });
+
+  test('defaults version to 1 when there is no prior profile', () => {
+    const r = window.gv2NormalizeProfileUpdate({ summary: 'New user fact.' }, null);
+    expect(r.version).toBe(1);
+  });
+
+  test('returns null when summary is missing, non-string, or empty after trim', () => {
+    expect(window.gv2NormalizeProfileUpdate({}, null)).toBeNull();
+    expect(window.gv2NormalizeProfileUpdate({ summary: 123 }, null)).toBeNull();
+    expect(window.gv2NormalizeProfileUpdate({ summary: '   ' }, null)).toBeNull();
+    expect(window.gv2NormalizeProfileUpdate(null, null)).toBeNull();
+  });
+
+  test('truncates an oversized summary to the 1500-char cap on a word boundary instead of rejecting it', () => {
+    const longSummary = 'word '.repeat(400); // 2000 chars
+    const r = window.gv2NormalizeProfileUpdate({ summary: longSummary }, null);
+    expect(r).not.toBeNull();
+    expect(r.summary.length).toBeLessThanOrEqual(1500);
+    expect(r.summary.endsWith('word')).toBe(true); // cut on a word boundary, no trailing partial word
   });
 });
 
@@ -2754,6 +2841,78 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     await window.gv2ProcessResponse(stepJson);
     expect(window._guidev2.paused).toBe(true);
     expect(getPauseMessage()).toBe('Confirmation needed. Please verify and press Resume.');
+  });
+
+  test('auto no-ask skips routine confirmation pauses', async () => {
+    window._guidev2.autoMode = true;
+    window._guidev2.autonomyLevel = 'auto_no_ask';
+    const stepJson = JSON.stringify({
+      step: 1,
+      thought: 'Routine confirmation',
+      instruction: 'Open the details panel',
+      element: { name: null, index: 2, text: 'Details' },
+      action: 'click',
+      confirmation: 'needed'
+    });
+
+    const result = await window.gv2ProcessResponse(stepJson);
+
+    expect(window._guidev2.paused).toBe(false);
+    expect(result.paused).toBe(false);
+    expect(getPauseMessage()).toBe('');
+    if (window._guidev2._autoClickTimer) {
+      clearTimeout(window._guidev2._autoClickTimer);
+      window._guidev2._autoClickTimer = null;
+    }
+  });
+
+  test('auto no-ask skips high-risk json pauses', async () => {
+    window._guidev2.autoMode = true;
+    window._guidev2.autonomyLevel = 'auto_no_ask';
+    const stepJson = JSON.stringify({
+      step: 1,
+      thought: 'Sensitive task',
+      instruction: 'Enter bank password',
+      element: { name: null, index: 1, text: 'Password input' },
+      action: 'type',
+      typeText: 'secret',
+      risk: 'high'
+    });
+
+    const result = await window.gv2ProcessResponse(stepJson);
+
+    expect(window._guidev2.paused).toBe(false);
+    expect(result.paused).toBe(false);
+    expect(getPauseMessage()).toBe('');
+    if (window._guidev2._autoTypeTimer) {
+      clearTimeout(window._guidev2._autoTypeTimer);
+      window._guidev2._autoTypeTimer = null;
+    }
+  });
+
+  test('auto no-ask still pauses for low-confidence guard', async () => {
+    const originalCompute = window.gv2ComputeConfidence;
+    window.gv2ComputeConfidence = () => ({ confidence: 0.5, grounded: 0.5, loop: 0.0, progress: 0.0, formula: 'full' });
+    window._guidev2.autoMode = true;
+    window._guidev2.autonomyLevel = 'auto_no_ask';
+    window._guidev2.lowConfidenceCount = 2;
+    try {
+      const stepJson = JSON.stringify({
+        step: 1,
+        thought: 'Low confidence',
+        instruction: 'Click maybe',
+        element: { name: null, index: 3, text: 'Maybe' },
+        action: 'click'
+      });
+
+      const result = await window.gv2ProcessResponse(stepJson);
+
+      expect(window._guidev2.paused).toBe(true);
+      expect(result.paused).toBe(true);
+      expect(getPauseMessage()).toBe('Page Guide paused: 3 low-confidence actions detected. Review and resume when ready.');
+    } finally {
+      window.gv2ComputeConfidence = originalCompute;
+    }
   });
 
   test('loop score at or above 0.3 pauses before action', async () => {

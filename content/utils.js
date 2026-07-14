@@ -1712,8 +1712,11 @@ function gv2NormalizeEvidenceEntry(input, ctx = {}) {
 }
 
 function gv2NormalizeEvidenceList(input, ctx = {}) {
-  const cap = Math.max(1, Math.min(5, Number(ctx.maxItems) || 5));
   const raw = Array.isArray(input) ? input : (input && typeof input === 'object' ? [input] : []);
+  const requestedMax = Number(ctx.maxItems);
+  const cap = Number.isFinite(requestedMax) && requestedMax > 0
+    ? Math.floor(requestedMax)
+    : raw.length;
   const entries = [];
   const errors = [];
   const usedKeys = new Set((Array.isArray(ctx.existingKeys) ? ctx.existingKeys : [])
@@ -1762,7 +1765,6 @@ function gv2EvidenceMemoryText(entries) {
   const list = Array.isArray(entries) ? entries : [];
   const clean = list
     .filter(e => e && e.key && e.note)
-    .slice(-12)
     .map(e => `- evidenceKey="${e.key}": ${e.note}, captured at step ${e.ref_step_id}`);
   return clean.length ? clean.join('\n') : '(none)';
 }
@@ -2144,7 +2146,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports.gv2ReplayKin
  * @param {object} args.verifications - map: concrete-step|plan-step -> {status}
  * @param {number} args.current       - current plan step (1-based)
  * @param {boolean} args.guideActive  - false once the guide has finished
- * @returns {Array<{step:number, status:'done'|'current'|'pending', review:boolean, verify:('success'|'failed'|'blocked'|null)}>}
+ * @returns {Array<{step:number, status:'done'|'current'|'pending', review:boolean, reviewLabels:string[], verify:('success'|'failed'|'blocked'|null)}>}
  */
 function gv2DotState(args) {
   const a = args || {};
@@ -2166,6 +2168,7 @@ function gv2DotState(args) {
 
   const recOf = (i) => records.find(r => Number(r.step) === i) || null;
   const isLowGrounding = (x) => x != null && x < 0.5;
+  const isHighLoop = (x) => x != null && x >= 0.3;
 
   const out = [];
   for (let i = 1; i <= total; i++) {
@@ -2176,10 +2179,13 @@ function gv2DotState(args) {
     else status = 'pending';
     if (!active && i <= current) status = 'done'; // finished guide: everything up to current done
 
-    const review = !!(r && (isLowGrounding(r.grounding) || isLowGrounding(r.mechGrounding)));
+    const reviewLabels = [];
+    if (r && (isLowGrounding(r.grounding) || isLowGrounding(r.mechGrounding))) reviewLabels.push('misgrounded');
+    if (r && (isHighLoop(r.loop) || isHighLoop(r.mechLoop))) reviewLabels.push('loop');
+    const review = reviewLabels.length > 0;
     const verify = (verifications[i] && verifications[i].status) ||
                    (r && r.verification && r.verification.status) || null;
-    out.push({ step: i, status, review, verify });
+    out.push({ step: i, status, review, reviewLabels, verify });
   }
   return out;
 }
@@ -2398,6 +2404,45 @@ function gv2NormalizeRecap(raw, ctx) {
 
 if (typeof window !== 'undefined') window.gv2NormalizeRecap = gv2NormalizeRecap;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeRecap = gv2NormalizeRecap;
+
+// Builds the "=== ABOUT THIS USER ===" prompt block spliced into Guide step prompts, combining
+// the user's manually-entered facts (settings) with the auto-learned rolling profile. Pure string
+// logic — no storage access — so the guide loop can cache the result once per session instead of
+// re-reading chrome.storage on every step.
+function gv2BuildPersonalizationSection({ facts, learned } = {}) {
+  const factsText = String(facts == null ? '' : facts).trim();
+  const learnedText = String(learned == null ? '' : learned).trim();
+  if (!factsText && !learnedText) return '';
+  const lines = ['\n=== ABOUT THIS USER ===', 'Use this to tailor tone and answers, but never let it override the actual task or page content.'];
+  if (factsText) lines.push(`Facts the user shared: ${factsText}`);
+  if (learnedText) lines.push(`What you have learned from prior sessions: ${learnedText}`);
+  return lines.join('\n') + '\n';
+}
+if (typeof window !== 'undefined') window.gv2BuildPersonalizationSection = gv2BuildPersonalizationSection;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2BuildPersonalizationSection = gv2BuildPersonalizationSection;
+
+// Normalizes the LLM response from the post-trajectory personalization-profile-update call into a
+// storable { summary, updatedAt, version } record. Returns null for anything unusable so a bad or
+// malformed LLM response never overwrites a previously good learned profile.
+const GV2_PERSONALIZATION_SUMMARY_MAX_CHARS = 1500;
+function gv2NormalizeProfileUpdate(raw, priorProfile) {
+  if (!raw || typeof raw.summary !== 'string') return null;
+  let summary = raw.summary.trim();
+  if (!summary) return null;
+  if (summary.length > GV2_PERSONALIZATION_SUMMARY_MAX_CHARS) {
+    const truncated = summary.slice(0, GV2_PERSONALIZATION_SUMMARY_MAX_CHARS);
+    const lastSpace = truncated.lastIndexOf(' ');
+    summary = (lastSpace > GV2_PERSONALIZATION_SUMMARY_MAX_CHARS * 0.6 ? truncated.slice(0, lastSpace) : truncated).trim();
+  }
+  const priorVersion = Number(priorProfile?.version);
+  return {
+    summary,
+    updatedAt: Date.now(),
+    version: (Number.isFinite(priorVersion) ? priorVersion : 0) + 1
+  };
+}
+if (typeof window !== 'undefined') window.gv2NormalizeProfileUpdate = gv2NormalizeProfileUpdate;
+if (typeof module !== 'undefined' && module.exports) module.exports.gv2NormalizeProfileUpdate = gv2NormalizeProfileUpdate;
 
 // Deterministic binary verdict: the WORKING agent's own terminal action decides success, not the
 // summarization LLM. 'completed' only when the agent emitted a literal finish action (outcome

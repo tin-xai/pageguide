@@ -1350,6 +1350,26 @@ function _shouldShowGuideActionScores(source = {}, isInitialNode = false) {
   return hasScore;
 }
 
+function _guideStepReviewInfo(source = {}) {
+  const grounding = source?.mechGrounding ?? source?.grounding ?? source?.grounded;
+  const loop = source?.mechLoop ?? source?.loop;
+  const labels = [];
+  const provided = Array.isArray(source?.reviewLabels) ? source.reviewLabels : [];
+  if (provided.includes('misgrounded')) labels.push({ key: 'misgrounded', label: 'Misgrounded', detail: 'Grounding is below the review threshold.' });
+  if (provided.includes('loop')) labels.push({ key: 'loop', label: 'Loop', detail: 'Loop score is above the review threshold.' });
+  if (typeof grounding === 'number' && Number.isFinite(grounding) && grounding < 0.5) {
+    const existing = labels.find(item => item.key === 'misgrounded');
+    if (existing) existing.detail = `Grounding ${grounding.toFixed(2)} is below 0.50.`;
+    else labels.push({ key: 'misgrounded', label: 'Misgrounded', detail: `Grounding ${grounding.toFixed(2)} is below 0.50.` });
+  }
+  if (typeof loop === 'number' && Number.isFinite(loop) && loop >= 0.3) {
+    const existing = labels.find(item => item.key === 'loop');
+    if (existing) existing.detail = `Loop ${loop.toFixed(2)} is at or above 0.30.`;
+    else labels.push({ key: 'loop', label: 'Loop', detail: `Loop ${loop.toFixed(2)} is at or above 0.30.` });
+  }
+  return labels;
+}
+
 function _timelineWordClip(text, maxWords = 50) {
   const full = String(text || '').replace(/\s+/g, ' ').trim();
   if (!full) return { full: '', short: '', clipped: false };
@@ -1400,6 +1420,13 @@ async function showGoalStepPreview(step, anchor) {
     ? `<div class="pageguide-goal-step-dual">🐞 Full: <b>${pctOf(dual.full)}</b> · No-progress: <b>${pctOf(dual.reduced)}</b> · No-loop: <b>${pctOf(dual.noloop)}</b></div>`
     : '';
   const scoreSource = rec || meta || {};
+  const reviewInfo = _guideStepReviewInfo(scoreSource);
+  const reviewHtml = reviewInfo.length
+    ? `<div class="pageguide-goal-step-review-status">
+        <div>Status: ${reviewInfo.map(item => `<b>${escapeHtml(item.label)}</b>`).join(' · ')}</div>
+        ${reviewInfo.map(item => `<div>${escapeHtml(item.detail)}</div>`).join('')}
+      </div>`
+    : '';
   const fmtScore = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '—';
   const loopMatches = scoreSource.loopMatches != null ? Number(scoreSource.loopMatches) : null;
   const planDone = scoreSource.planCompleted != null ? Number(scoreSource.planCompleted) : null;
@@ -1448,6 +1475,7 @@ async function showGoalStepPreview(step, anchor) {
     <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
     <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
     ${evidenceHtml}
+    ${reviewHtml}
     ${scoreHtml}
     ${dualHtml}
     ${urlHtml}
@@ -1602,9 +1630,12 @@ function renderGoalDots(current, total) {
     const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
     if (tier === 'high') dot.classList.add('conf-high');
     else if (tier === 'med') dot.classList.add('conf-med');
-    // Red is reserved for verification failures and low *grounding* (not confidence).
-    const groundingForReview = rec?.mechGrounding ?? rec?.grounding;
-    if (typeof groundingForReview === 'number' && groundingForReview < 0.5) dot.classList.add('review');
+    const reviewInfo = _guideStepReviewInfo(rec || st || {});
+    if (reviewInfo.length) {
+      dot.classList.add('review');
+      dot.dataset.review = reviewInfo.map(item => item.key).join(',');
+      dot.title = `${dot.title} — ${reviewInfo.map(item => item.label).join(', ')}`;
+    }
     if (st.verify) dot.classList.add(`verify-${st.verify}`);
     dot.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3648,19 +3679,31 @@ function addCollapsibleDebug(lines) {
 }
 
 // ===== Guide Mode Toggle (Manual vs Auto) =====
-// Manual: the user clicks each highlighted step. Auto: the agent performs reversible,
-// low-risk steps itself and hands control back for sensitive ones. The flag lives in
-// chrome.storage.local so the content script (guidev2.js) reads the same value.
+// Manual: the user clicks each highlighted step. Auto modes let the agent perform steps itself.
+// The "no ask" level bypasses risk/confirmation gates, while confidence and loop guards stay on.
 const GUIDE_AUTO_MODE_KEY = 'guideAutoMode';
+const GUIDE_AUTONOMY_LEVEL_KEY = 'guideAutonomyLevel';
 
-function _renderGuideMode(btn, auto) {
-  btn.innerHTML = auto ? `${UI_ICONS.bolt}Auto ▾` : `${UI_ICONS.hand}Manual ▾`;
-  btn.classList.toggle('pageguide-mode-auto', !!auto);
-  btn.title = auto
-    ? 'Autonomous mode: the agent completes low-risk steps and pauses for sensitive ones.'
-    : 'Manual mode: you do each step yourself.';
+function _normalizeGuideAutonomyMode(mode, auto = false) {
+  const raw = String(mode || '').trim();
+  if (raw === 'auto_no_ask' || raw === 'auto') return raw;
+  return auto === true ? 'auto' : 'manual';
+}
+
+function _renderGuideMode(btn, mode) {
+  const normalized = _normalizeGuideAutonomyMode(mode);
+  const auto = normalized !== 'manual';
+  const label = normalized === 'auto_no_ask' ? 'Auto: No Ask' : (auto ? 'Auto: Ask' : 'Manual');
+  btn.innerHTML = auto ? `${UI_ICONS.bolt}${label} ▾` : `${UI_ICONS.hand}${label} ▾`;
+  btn.classList.toggle('pageguide-mode-auto', auto);
+  btn.classList.toggle('pageguide-mode-noask', normalized === 'auto_no_ask');
+  btn.title = normalized === 'auto_no_ask'
+    ? 'Auto: No Ask bypasses risk and confirmation pauses; confidence and loop guards remain on.'
+    : (auto
+      ? 'Auto: Ask completes low-risk steps and pauses for confirmation or sensitive actions.'
+      : 'Manual mode: you do each step yourself.');
   document.querySelectorAll('.pageguide-mode-option').forEach(opt => {
-    opt.classList.toggle('active', opt.dataset.mode === (auto ? 'auto' : 'manual'));
+    opt.classList.toggle('active', opt.dataset.mode === normalized);
   });
 }
 
@@ -3668,9 +3711,9 @@ function initGuideModeToggle() {
   const btn = document.getElementById('pageguide-mode-toggle');
   const menu = document.getElementById('pageguide-mode-menu');
   if (!btn) return;
-  chrome.storage.local.get(GUIDE_AUTO_MODE_KEY)
-    .then(r => _renderGuideMode(btn, r[GUIDE_AUTO_MODE_KEY] === true))
-    .catch(() => _renderGuideMode(btn, false));
+  chrome.storage.local.get([GUIDE_AUTO_MODE_KEY, GUIDE_AUTONOMY_LEVEL_KEY])
+    .then(r => _renderGuideMode(btn, _normalizeGuideAutonomyMode(r[GUIDE_AUTONOMY_LEVEL_KEY], r[GUIDE_AUTO_MODE_KEY] === true)))
+    .catch(() => _renderGuideMode(btn, 'manual'));
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3681,9 +3724,14 @@ function initGuideModeToggle() {
     const option = e.target.closest('.pageguide-mode-option');
     if (!option) return;
     e.stopPropagation();
-    const auto = option.dataset.mode === 'auto';
-    try { await chrome.storage.local.set({ [GUIDE_AUTO_MODE_KEY]: auto }); } catch (e) {}
-    _renderGuideMode(btn, auto);
+    const mode = _normalizeGuideAutonomyMode(option.dataset.mode);
+    try {
+      await chrome.storage.local.set({
+        [GUIDE_AUTO_MODE_KEY]: mode !== 'manual',
+        [GUIDE_AUTONOMY_LEVEL_KEY]: mode
+      });
+    } catch (e) {}
+    _renderGuideMode(btn, mode);
     menu.style.display = 'none';
   });
 }
@@ -4195,8 +4243,8 @@ function addGuideStep(result) {
     resetLiveGuideTimelineForSession(result.sessionId, { title: currentGoal?.prompt || result.title || result.instruction || '' });
   }
   if (result?.sessionId) currentGuideSessionId = result.sessionId;
-  guideActive = !result.isLastStep;
-  guidePaused = false;
+  guidePaused = !!result.paused;
+  guideActive = !result.isLastStep && !guidePaused;
   hideTyping();
   updateGuidePauseButton();
   _setJourneyRecalledMode(false); // a live step replaces any recalled read-only view
@@ -5321,8 +5369,9 @@ Previous steps: None`;
 
             if (normalizedAction === 'goto_url' && targetUrl) {
               const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-              const autoModeResult = await chrome.storage.local.get('guideAutoMode');
-              const autoMode = autoModeResult.guideAutoMode === true;
+              const autoModeResult = await chrome.storage.local.get([GUIDE_AUTO_MODE_KEY, GUIDE_AUTONOMY_LEVEL_KEY]);
+              const autonomyLevel = _normalizeGuideAutonomyMode(autoModeResult[GUIDE_AUTONOMY_LEVEL_KEY], autoModeResult[GUIDE_AUTO_MODE_KEY] === true);
+              const autoMode = autonomyLevel !== 'manual';
               
               let screenshotBefore = null;
               try {
@@ -5434,6 +5483,7 @@ Previous steps: None`;
                 sessionId,
                 captureEnabled: true,
                 autoMode: autoMode,
+                autonomyLevel,
                 currentPlanStep: 1,
                 pendingResume: true,
                 timestamp: Date.now()
@@ -5457,6 +5507,7 @@ Previous steps: None`;
                 success: true,
                 isGuide: true,
                 autoMode: autoMode,
+                autonomyLevel,
                 answer: step.instruction || `Navigating to ${targetUrl}`,
                 action: 'goto_url',
                 navigateUrl: targetUrl,
@@ -5468,6 +5519,7 @@ Previous steps: None`;
                 success: true,
                 isGuide: true,
                 autoMode: autoMode,
+                autonomyLevel,
                 answer: step.instruction || 'Please navigate to the target site.',
                 action: step.action || 'done',
                 step: 1,
@@ -6350,7 +6402,6 @@ function handleContentMessage(message, sender, sendResponse) {
     }
     renderGoalCard({ route: 'guide', title: currentGuideTitle, step: currentGuideStep || 1 });
   } else if (message.action === 'guidePaused') {
-    if (!guideActive && !guidePaused) return;
     guideStopped = false;
     hideTyping();
     addGuidePausedMessage(message.reason);

@@ -499,6 +499,34 @@
       </div>
     </div>
 
+    <!-- Personalization Section -->
+    <div class="section">
+      <h2>🧠 Personalization</h2>
+      <div class="toggle-group">
+        <label class="toggle-label">
+          <div class="toggle-info">
+            <span class="toggle-title">Personalize responses</span>
+            <span class="toggle-desc">When enabled, facts you share below and what PageGuide learns about you over time are sent to the LLM with every Guide step to tailor tone and answers. Turn off to stop sending this data and stop learning new facts.</span>
+          </div>
+          <div class="toggle-switch">
+            <input type="checkbox" id="personalizationEnabled">
+            <span class="toggle-slider"></span>
+          </div>
+        </label>
+      </div>
+      <div class="form-group">
+        <label for="personalizationFacts">Tell PageGuide about yourself</label>
+        <textarea id="personalizationFacts" rows="3" placeholder="e.g. I'm a vegetarian, I prefer concise answers, I work in finance..." style="width: 100%; padding: 14px 16px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: #fff; font-size: 14px; font-family: inherit; resize: vertical;"></textarea>
+        <small>Saved with the Save button below. Only used when personalization is enabled.</small>
+      </div>
+      <div class="form-group">
+        <label>What PageGuide has learned about you</label>
+        <div id="personalizedProfileView" style="padding: 14px 16px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: #ccc; font-size: 13px; line-height: 1.5; min-height: 20px;">Nothing learned yet.</div>
+        <small id="personalizedProfileMeta"></small>
+        <button type="button" id="clearProfileBtn" class="secondary" style="margin-top: 12px;">🗑️ Clear learned profile</button>
+      </div>
+    </div>
+
     <!-- Rewind Capture Section -->
     <div class="section">
       <h2>🕘 Guide Rewind</h2>

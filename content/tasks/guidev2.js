@@ -78,6 +78,9 @@ EVIDENCE SCRATCHPAD:
 {{EVIDENCE_SCRATCHPAD}}
 
 Return the recap JSON.`;
+const PERSONALIZATION_PROFILE_UPDATER_SYSTEM_PROMPT = _GV2_PROMPTS.PERSONALIZATION_PROFILE_UPDATER_SYSTEM || `You maintain a compact rolling profile of a user based on their PageGuide usage. Merge the PRIOR PROFILE and the TASK TRAJECTORY into an updated profile. Reply with ONLY JSON: {"summary": "updated rolling profile, third person, under 1500 characters"}. Merge, don't append; drop stale details; never record secrets or sensitive categories.`;
+const PERSONALIZATION_PROFILE_UPDATER_USER_TEMPLATE = _GV2_PROMPTS.PERSONALIZATION_PROFILE_UPDATER_USER || `PRIOR PROFILE:\n{{PRIOR_PROFILE}}\n\nMANUAL FACTS:\n{{MANUAL_FACTS}}\n\nTASK GOAL: {{USER_GOAL}}\nOUTCOME: {{OUTCOME}}\nTRAJECTORY:\n{{TRAJECTORY}}\n\nReturn the updated profile JSON.`;
+
 if (typeof window !== 'undefined') window.GUIDE_V2_PROMPT = GUIDE_V2_PROMPT;
 if (typeof window !== 'undefined') window.GUIDE_EVIDENCE_ANNOTATOR_PROMPT = GUIDE_EVIDENCE_ANNOTATOR_PROMPT;
 if (typeof window !== 'undefined') window.GUIDE_RECAP_SUMMARIZER_SYSTEM_PROMPT = GUIDE_RECAP_SUMMARIZER_SYSTEM_PROMPT;
@@ -445,6 +448,7 @@ function _gv2StopForMaxSteps(g = window._guidev2) {
       if (recap) chrome.runtime.sendMessage({ action: 'guideRecap', recap });
     } catch (e) { /* non-fatal */ }
   })();
+  _gv2UpdatePersonalizedProfile(g, 'failed');
   return { success: false, progressed: false, error: message, stoppedByMaxSteps: true };
 }
 
@@ -468,8 +472,10 @@ async function gv2SaveFallback(extra = {}) {
         captureEnabled: s.captureEnabled,
         tutorialRef: s.tutorialRef,
         tutorialReason: s.tutorialReason,
+        personalizationContext: s.personalizationContext || '',
         currentPlanStep: s.currentPlanStep,
         autoMode: s.autoMode,
+        autonomyLevel: s.autonomyLevel || (s.autoMode ? 'auto' : 'manual'),
         paused: !!s.paused,
         lowConfidenceCount: s.lowConfidenceCount || 0,
         predictedGoalState: s.predictedGoalState || null,
@@ -675,8 +681,10 @@ async function _gv2ResumeFromState(state) {
     captureEnabled: state.captureEnabled,
     tutorialRef: state.tutorialRef || null,
     tutorialReason: state.tutorialReason || null,
+    personalizationContext: state.personalizationContext || '',
     currentPlanStep: state.currentPlanStep || 1,
     autoMode: state.autoMode === true,
+    autonomyLevel: _gv2NormalizeAutonomyLevel(state.autonomyLevel, state.autoMode === true),
     paused: false,
     lowConfidenceCount: state.lowConfidenceCount || 0,
     _mechKeys: Array.isArray(state.mechKeys) ? state.mechKeys : [],
@@ -844,10 +852,12 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
     const question = String(goal || '').trim();
 
     const captureEnabled = await _gv2IsCaptureEnabled();
-    const autoMode = await _gv2IsAutoMode();
+    const autonomyLevel = await _gv2AutonomyLevel();
+    const autoMode = autonomyLevel !== 'manual';
     // Tutorial lookup is best-effort — never let it block or break the steer.
     let match = null;
     try { match = await _gv2FindTutorial(question, window.location.href); } catch (e) { console.warn('[guidev2] steer tutorial lookup failed:', e); }
+    const personalizationContext = await _gv2LoadPersonalizationContext();
 
     _guidev2Stopped = false;
     window._guidev2 = {
@@ -859,9 +869,11 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       previousSteps: kept.map(r => `Step ${r.step}: ${r.instruction || ''}`),
       tutorialRef: match?.tutorial || null,
       tutorialReason: match?.reason || null,
+      personalizationContext,
       sessionId: payload.sessionId,
       captureEnabled,
       autoMode,
+      autonomyLevel,
       paused: false,
       lowConfidenceCount: 0,
       _mechKeys: [],
@@ -1347,11 +1359,13 @@ async function _gv2SetState(pendingResume) {
     captureEnabled: s.captureEnabled,
     tutorialRef: s.tutorialRef,
     tutorialReason: s.tutorialReason,
+    personalizationContext: s.personalizationContext || '',
     currentPlanStep: s.currentPlanStep,
     lastActionStepNumber: s._lastActionStepNumber || null,
     activeStepNumber: s._activeStepNumber || null,
     // Mode: carry Manual/Auto across navigations.
     autoMode: s.autoMode,
+    autonomyLevel: s.autonomyLevel || (s.autoMode ? 'auto' : 'manual'),
     paused: !!s.paused,
     lowConfidenceCount: s.lowConfidenceCount || 0,
     predictedGoalState: s.predictedGoalState || null,
@@ -1373,6 +1387,7 @@ async function _gv2SetState(pendingResume) {
   await gv2SaveFallback({
     pendingResume,
     paused: !!s.paused,
+    autonomyLevel: s.autonomyLevel || (s.autoMode ? 'auto' : 'manual'),
     lowConfidenceCount: s.lowConfidenceCount || 0,
     lastActionStepNumber: s._lastActionStepNumber || null,
     activeStepNumber: s._activeStepNumber || null,
@@ -1418,14 +1433,25 @@ async function _gv2IsCaptureEnabled() {
 //       back to the user for sensitive/high-risk ones.
 
 const _GV2_AUTOMODE_PREF_KEY = 'guideAutoMode';
+const _GV2_AUTONOMY_LEVEL_KEY = 'guideAutonomyLevel';
+
+function _gv2NormalizeAutonomyLevel(value, auto = false) {
+  const raw = String(value || '').trim();
+  if (raw === 'auto_no_ask' || raw === 'auto') return raw;
+  return auto === true ? 'auto' : 'manual';
+}
+
+async function _gv2AutonomyLevel() {
+  try {
+    const r = await chrome.storage.local.get([_GV2_AUTOMODE_PREF_KEY, _GV2_AUTONOMY_LEVEL_KEY]);
+    return _gv2NormalizeAutonomyLevel(r[_GV2_AUTONOMY_LEVEL_KEY], r[_GV2_AUTOMODE_PREF_KEY] === true);
+  } catch (e) {
+    return 'manual';
+  }
+}
 
 async function _gv2IsAutoMode() {
-  try {
-    const r = await chrome.storage.local.get(_GV2_AUTOMODE_PREF_KEY);
-    return r[_GV2_AUTOMODE_PREF_KEY] === true; // default false (manual)
-  } catch (e) {
-    return false;
-  }
+  return (await _gv2AutonomyLevel()) !== 'manual';
 }
 
 const _GV2_CONF_THRESHOLD_KEY = 'guideConfidenceThreshold';
@@ -1525,6 +1551,19 @@ async function _gv2IsEndSummaryOn() {
     return r[_GV2_END_SUMMARY_KEY] === 'on';
   } catch (e) {
     return false;
+  }
+}
+
+// Builds the personalization prompt block ONCE per guide session (cached on window._guidev2 by the
+// caller), so the per-step prompt builder never re-reads chrome.storage. Returns '' when
+// personalization is disabled or nothing has been captured about the user yet.
+async function _gv2LoadPersonalizationContext() {
+  try {
+    const s = await chrome.storage.sync.get(['personalizationEnabled', 'personalizationFacts', 'personalizedProfile']);
+    if (!s.personalizationEnabled) return '';
+    return gv2BuildPersonalizationSection({ facts: s.personalizationFacts, learned: s.personalizedProfile?.summary });
+  } catch (e) {
+    return '';
   }
 }
 
@@ -1850,9 +1889,15 @@ async function _gv2HydratePredictedGoalFromIndex(g) {
 // Keep the live session's mode in sync when the user toggles it mid-session.
 try {
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes[_GV2_AUTOMODE_PREF_KEY] && window._guidev2) {
-      const on = changes[_GV2_AUTOMODE_PREF_KEY].newValue === true;
+    if (area === 'local' && window._guidev2 && (changes[_GV2_AUTOMODE_PREF_KEY] || changes[_GV2_AUTONOMY_LEVEL_KEY])) {
+      const on = changes[_GV2_AUTOMODE_PREF_KEY]
+        ? changes[_GV2_AUTOMODE_PREF_KEY].newValue === true
+        : window._guidev2.autoMode === true;
+      const level = changes[_GV2_AUTONOMY_LEVEL_KEY]
+        ? _gv2NormalizeAutonomyLevel(changes[_GV2_AUTONOMY_LEVEL_KEY].newValue, on)
+        : _gv2NormalizeAutonomyLevel(window._guidev2.autonomyLevel, on);
       window._guidev2.autoMode = on;
+      window._guidev2.autonomyLevel = level;
       // Turning Auto off mid-session: drop the overlay and any pending auto action.
       if (!on) {
         _gv2ClearActionTimers();
@@ -1868,6 +1913,7 @@ try {
 function _gv2ShouldAutoExecute(step) {
   const g = window._guidev2;
   if (!g || !g.autoMode) return false;
+  g.autonomyLevel = _gv2NormalizeAutonomyLevel(g.autonomyLevel, g.autoMode === true);
   const risk = (typeof gv2AssessRisk === 'function') ? gv2AssessRisk(step) : 'low';
   return risk === 'low';
 }
@@ -2526,7 +2572,10 @@ function _gv2CoerceAnnotatorResult(raw, imageSize) {
 }
 
 async function gv2CaptureEvidenceItems(items, options = {}) {
-  const input = Array.isArray(items) ? items.slice(0, 5) : [];
+  const maxItems = Number(options.maxItems);
+  const input = Array.isArray(items)
+    ? (Number.isFinite(maxItems) && maxItems > 0 ? items.slice(0, Math.floor(maxItems)) : items.slice())
+    : [];
   const out = [];
   const startX = window.scrollX || 0;
   const startY = window.scrollY || 0;
@@ -2838,7 +2887,7 @@ async function gv2CaptureStepRecord(data) {
           }] : []);
       evidenceItems = await gv2CaptureEvidenceItems(rawEvidenceItems, { restoreScroll: true });
     }
-    const savedEvidenceItems = Array.isArray(data.savedEvidenceItems) ? data.savedEvidenceItems.slice(0, 5) : [];
+    const savedEvidenceItems = Array.isArray(data.savedEvidenceItems) ? data.savedEvidenceItems : [];
     const savedEvidenceCapturesRaw = savedEvidenceItems.length
       ? await gv2CaptureEvidenceItems(savedEvidenceItems, { restoreScroll: true })
       : [];
@@ -3097,8 +3146,12 @@ async function _handleStepByStepGuideV2(question) {
   // persisted state so the resumed page on the next navigation keeps writing to it.
   const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   const captureEnabled = await _gv2IsCaptureEnabled();
-  const autoMode = await _gv2IsAutoMode();
+  const autonomyLevel = await _gv2AutonomyLevel();
+  const autoMode = autonomyLevel !== 'manual';
   const recapOn = await _gv2IsVisualRecapOn();
+  // Personalization context (facts + learned profile) is read ONCE per session, like tutorialRef,
+  // so the ~20-step guide loop doesn't re-read chrome.storage on every step.
+  const personalizationContext = await _gv2LoadPersonalizationContext();
 
   window._guidev2 = {
     active: true,
@@ -3106,9 +3159,11 @@ async function _handleStepByStepGuideV2(question) {
     previousSteps: [],
     tutorialRef: match?.tutorial || null,
     tutorialReason: match?.reason || null,
+    personalizationContext,
     sessionId,
     captureEnabled,
     autoMode,
+    autonomyLevel,
     _recapOn: recapOn,
     paused: false,
     lowConfidenceCount: 0,
@@ -3201,7 +3256,6 @@ function _gv2StepContractIssue(content, g = null) {
     const finishEvidenceValid = finishEvidenceAttempted && typeof gv2NormalizeEvidenceList === 'function'
       ? gv2NormalizeEvidenceList(step.evidence, {
           ref_step_id: Number(step.step) || 0,
-          maxItems: 5,
           existingKeys: (Array.isArray(g?.evidenceScratchpad) ? g.evidenceScratchpad : []).map(e => e?.key)
         }).ok
       : false;
@@ -3221,16 +3275,15 @@ function _gv2StepContractIssue(content, g = null) {
 
   if (_gv2EvidenceAttempted(step.evidence)) {
     const normalized = (typeof gv2NormalizeEvidenceList === 'function')
-      ? gv2NormalizeEvidenceList(step.evidence, { ref_step_id: 0, maxItems: 5 })
+      ? gv2NormalizeEvidenceList(step.evidence, { ref_step_id: 0 })
       : {
           ok: (Array.isArray(step.evidence) ? step.evidence : [step.evidence])
-            .slice(0, 5)
             .some(e => e && typeof e === 'object' && String(e.key || '').trim() && String(e.note || '').trim())
         };
     if (!normalized.ok) {
       return {
         kind: 'invalid_evidence_sidecar',
-        message: 'If evidence is provided, it must be an array with 1-5 valid items.'
+        message: 'If evidence is provided, it must include at least one valid item.'
       };
     }
   }
@@ -3248,7 +3301,7 @@ Return corrected JSON for the same step only. Keep action="finish", keep answer 
 Return corrected JSON for the same step only. Choose the real browser action to perform now (click, type, clear_text, drag_drop, scroll_down, scroll_up, goto_url, watch_video, or finish). Keep the evidence array on that same step if the observed fact should be saved. Do not explain outside JSON.`;
   }
   if (issue?.kind === 'invalid_evidence_sidecar') {
-    return `Your previous JSON cannot be accepted: when "evidence" is present it must be an array with 1-5 valid items.
+    return `Your previous JSON cannot be accepted: when "evidence" is present it must be an array with at least one valid item.
 Return corrected JSON for the same step only. Keep the real browser action, and either set evidence to null or provide evidence items with key and note; use som_id for DOM/SoM evidence, or need_annotation=true with annotation_prompt for screenshot-only evidence. Do not explain outside JSON.`;
   }
   return `Your previous JSON cannot be accepted: ${issue?.message || 'missing required fields'}.
@@ -3448,6 +3501,7 @@ ${pageIndex.indexText}
 === USER GOAL ===
 ${activeQuestion}
 ${tutorialSection}
+${g.personalizationContext || ''}
 ${planSection}
 ${evidenceSection}
 === CURRENT STEP ===
@@ -3689,7 +3743,6 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const normalizedSaveEvidence = evidenceAttempted && recapOnForEvidence && typeof gv2NormalizeEvidenceList === 'function'
       ? gv2NormalizeEvidenceList(step.evidence, {
           ref_step_id: step.step,
-          maxItems: 5,
           existingKeys: (Array.isArray(g.evidenceScratchpad) ? g.evidenceScratchpad : []).map(e => e?.key)
         })
       : { ok: false, entries: [], errors: [] };
@@ -3980,25 +4033,31 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // captured for review but not executed.
     const isHighRiskJson = !isFind && !isVisualHighlight && !isWatchVideo && step.risk === 'high';
     const needsConfirmation = !isFind && !isVisualHighlight && !isWatchVideo && step.confirmation === 'needed';
+    const autonomyLevel = _gv2NormalizeAutonomyLevel(g.autonomyLevel, g.autoMode === true);
+    g.autonomyLevel = autonomyLevel;
+    const bypassNoAskStops = g.autoMode && autonomyLevel === 'auto_no_ask';
     const activeLoopScore = _gv2MaxFiniteScore(mech.loop);
     const loopStop = activeLoopScore !== null && activeLoopScore >= GV2_LOOP_STOP_THRESHOLD;
     const confidenceThreshold = await _gv2ConfidenceThreshold();
     if (confidence !== null && confidence < confidenceThreshold) {
       g.lowConfidenceCount = (g.lowConfidenceCount || 0) + 1;
     }
-    // A find step never pauses for low-confidence/risk gates, but loop detection still stops it
-    // from driving another autonomous step.
+    // A find step never pauses for low-confidence/risk gates. Auto: No Ask bypasses only the
+    // risk/confirmation permission gates; low-confidence and loop guards still stop the guide.
     const actionThreshold = await _gv2LowConfidenceActionThreshold();
-    const willPause = loopStop || (!isFind && !isVisualHighlight && !isWatchVideo && ((g.lowConfidenceCount >= actionThreshold) || isHighRiskJson || needsConfirmation));
+    const lowConfidenceStop = g.lowConfidenceCount >= actionThreshold;
+    const confirmationStop = !bypassNoAskStops && needsConfirmation;
+    const riskStop = !bypassNoAskStops && isHighRiskJson;
+    const willPause = loopStop || (!isFind && !isVisualHighlight && !isWatchVideo && (lowConfidenceStop || riskStop || confirmationStop));
     const loopPauseMessage = loopStop
       ? `Page Guide paused: loop score ${activeLoopScore.toFixed(2)} is above the ${GV2_LOOP_STOP_THRESHOLD.toFixed(1)} threshold. Review and resume when ready.`
       : '';
 
-    // Gate 1 (Risk) + hand-back override: the agent auto-performs only in Auto mode, for
-    // low-risk actions, and not when a prior gate handed control back for this step or we need to pause.
+    // Gate 1 (Risk) + hand-back override: Auto: Ask runs low-risk actions; Auto: No Ask bypasses
+    // the risk/confirmation gates and runs the step unless a prior hand-back override is active.
     const forcedManual = !!g._forceManualNextStep;
     g._forceManualNextStep = false;
-    const autoPerform = g.autoMode && !isHighRisk && !forcedManual && !willPause;
+    const autoPerform = g.autoMode && (!isHighRisk || bypassNoAskStops) && !forcedManual && !willPause;
     let pauseAfterCaptureMessage = '';
 
     if (isFind || isWatchVideo) {
@@ -4207,6 +4266,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
           finalStepRecords = Array.isArray(idx?.steps) ? idx.steps.filter(s => Number(s?.step) > 0) : [];
         }
       } catch (e) { finalStepRecords = []; }
+      _gv2UpdatePersonalizedProfile(g, 'completed');
       _gv2ClearState();
     }
 
@@ -4252,9 +4312,11 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       action,
       confidence,
       planStep,
+      paused: !!g.paused,
       highlightCount: isFind ? (findResult?.highlightCount || 0) : highlightCount,
       hasHighlights: isFind ? !!findResult?.hasHighlights : (highlightCount > 0),
       autoMode: !!g.autoMode,
+      autonomyLevel: g.autonomyLevel || (g.autoMode ? 'auto' : 'manual'),
       isGuide: true,
       hasSavedEvidence,
       isFinish,
@@ -4646,6 +4708,48 @@ async function _gv2BuildRecap(g, outcome = 'completed') {
   } catch (e) {
     console.warn('[guidev2] _gv2BuildRecap error:', e);
     return null;
+  }
+}
+
+// Fire-and-forget: after a guide trajectory ends (completed or failed), if personalization is
+// enabled, ask a cheap/fast model to fold the just-finished trajectory into the user's rolling
+// learned profile. Independent of _gv2IsEndSummaryOn — that toggle controls the separate visual
+// recap feature, not personalization. Never throws into the caller; a failed or malformed
+// response leaves the existing stored profile untouched (see gv2NormalizeProfileUpdate).
+async function _gv2UpdatePersonalizedProfile(g, outcome) {
+  try {
+    const s = await chrome.storage.sync.get(['personalizationEnabled', 'personalizationFacts', 'personalizedProfile']);
+    if (!s.personalizationEnabled) return;
+    const steps = Array.isArray(g?.previousSteps) ? g.previousSteps : [];
+    if (!steps.length) return;
+
+    const userPrompt = _gv2RenderTemplate(PERSONALIZATION_PROFILE_UPDATER_USER_TEMPLATE, {
+      PRIOR_PROFILE: s.personalizedProfile?.summary || '(none yet)',
+      MANUAL_FACTS: (s.personalizationFacts || '').trim() || '(none)',
+      USER_GOAL: g?.question || '',
+      OUTCOME: outcome,
+      TRAJECTORY: steps.join('\n')
+    });
+
+    // Cheap/fast router model (Gemini 2.5 Flash, falls back to the user's configured provider) —
+    // this is a background bookkeeping call, not a user-facing generation, so it should not ride
+    // on the user's potentially expensive main model.
+    const response = await safeSendMessage({
+      action: 'callRouterLLM',
+      systemPrompt: PERSONALIZATION_PROFILE_UPDATER_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userPrompt }]
+    });
+    const raw = response?.content ? gv2ExtractJsonObject(response.content) : null;
+    if (!raw || !raw.summary) return;
+
+    // Re-read the prior profile immediately before writing (rather than reusing the value read at
+    // the top of this function) to shrink the window for a cross-tab last-write-wins race.
+    const fresh = await chrome.storage.sync.get(['personalizedProfile']);
+    const normalized = gv2NormalizeProfileUpdate(raw, fresh.personalizedProfile);
+    if (!normalized) return;
+    await chrome.storage.sync.set({ personalizedProfile: normalized });
+  } catch (e) {
+    console.warn('[guidev2] _gv2UpdatePersonalizedProfile error:', e);
   }
 }
 
@@ -5559,8 +5663,10 @@ async function _gv2HydrateResumeState() {
     captureEnabled: saved.captureEnabled,
     tutorialRef: saved.tutorialRef || null,
     tutorialReason: saved.tutorialReason || null,
+    personalizationContext: saved.personalizationContext || '',
     currentPlanStep: saved.currentPlanStep || 1,
     autoMode: saved.autoMode === true,
+    autonomyLevel: _gv2NormalizeAutonomyLevel(saved.autonomyLevel, saved.autoMode === true),
     paused: !!saved.paused,
     lowConfidenceCount: saved.lowConfidenceCount || 0,
     predictedGoalState: saved.predictedGoalState || null,
@@ -5627,6 +5733,7 @@ async function gv2StopGuideWithRecap() {
   // The user stopped the guide before it finished → deterministically a failed run. When the
   // optional summary agent is enabled, the recap diagnoses where/why it broke down.
   try { if (await _gv2IsEndSummaryOn()) recap = await _gv2BuildRecap(g, 'failed'); } catch (e) { recap = null; }
+  _gv2UpdatePersonalizedProfile(g, 'failed');
   _gv2StopInternal();
   _gv2HidePanelTyping();
   return { success: true, stopped: true, recap };

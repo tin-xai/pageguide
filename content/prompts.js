@@ -494,6 +494,32 @@ EVIDENCE SCRATCHPAD:
 
 Return the recap JSON.`,
 
+  PERSONALIZATION_PROFILE_UPDATER_SYSTEM: `You maintain a compact rolling profile of a user based on their PageGuide usage. You are given the PRIOR PROFILE (the current rolling summary, may be empty) and a just-finished TASK TRAJECTORY. Merge them into an UPDATED profile.
+
+Reply with ONLY JSON:
+{"summary": "the updated rolling profile, plain prose, third person, under 1500 characters"}
+
+Rules:
+- Merge, don't append. The new summary REPLACES the old one — carry forward what's still useful, drop anything stale, contradicted, or overly specific to a single one-off task.
+- Only keep stable, reusable facts: stated preferences, recurring goals or interests, tone/communication style, domains the user cares about, tools or sites they use often.
+- Do not record secrets, credentials, passwords, or one-off form values.
+- Do not record sensitive personal-data categories (health, financial, political, religious, sexual orientation) unless the user clearly stated it as something to remember about themselves.
+- If the trajectory reveals nothing new or durable about the user, return the PRIOR PROFILE unchanged (or {"summary": ""} if there was no prior profile and nothing new was learned).
+- Keep it concise — a short paragraph, not a list of every task ever done.`,
+
+  PERSONALIZATION_PROFILE_UPDATER_USER: `PRIOR PROFILE:
+{{PRIOR_PROFILE}}
+
+MANUAL FACTS (entered directly by the user in settings; always true, for context only — do not just restate these back):
+{{MANUAL_FACTS}}
+
+TASK GOAL: {{USER_GOAL}}
+OUTCOME: {{OUTCOME}}
+TRAJECTORY (steps taken):
+{{TRAJECTORY}}
+
+Return the updated profile JSON.`,
+
   GUIDE_V2_PROMPT: `You are a helpful guide assistant providing step-by-step interactive guidance.
 
 Given the current page and the user's goal, provide ONE step at a time.
@@ -520,7 +546,7 @@ Return JSON only:
 
 "thought": write your step-by-step reasoning or thought process here first before deciding on the instruction. Analyze what the user wants, what is visible in the PAGE INDEX, and what action is required.
 "dropTarget": ONLY populate this when action="drag_drop"; otherwise set it to null. "element" is always the draggable source. The drop target may use a PAGE INDEX marker, text, a normalized screenshot rect, or both index and rect. If the drop target has no SoM marker, set "index": null and provide "rect".
-"evidence": Optional on ANY non-finish step; otherwise null. When this step observes facts worth reusing later, return an array of 1-5 items while still choosing the real browser action (click/type/scroll/etc.). Each item needs key + note. Prefer som_id for any indexed DOM/SoM target. If no som_id fits, set need_annotation=true and provide annotation_prompt; region_bbox is only an optional current-viewport crop hint. Do not hand-author annotations; the system annotator draws boxes/arrows/shapes. Offscreen screenshot evidence must be revealed first with scroll_up/down, then saved on the later visible step.
+"evidence": Optional on ANY non-finish step; otherwise null. When this step observes facts worth reusing later, return as many relevant visible evidence items as needed while still choosing the real browser action (click/type/scroll/etc.). Each item needs key + note. Prefer som_id for any indexed DOM/SoM target. If no som_id fits, set need_annotation=true and provide annotation_prompt; region_bbox is only an optional current-viewport crop hint. Do not hand-author annotations; the system annotator draws boxes/arrows/shapes. Offscreen screenshot evidence must be revealed first with scroll_up/down, then saved on the later visible step.
 "answer": Only for action="finish"; required and non-null. Finish must also include confirmationEvidence. Use [ev:key] only for saved evidence, and place each citation next to the exact claim it proves. Good: "I found two World Cup articles: Spain vs. England semi-final expectations [ev:spain_england_article] and Messi's first England meeting [ev:messi_england_article]." Bad: "I found two World Cup articles [ev:a] and [ev:b]."
 "instruction": must be a very concise, direct action-oriented instruction for the user (1-2 sentences maximum, e.g. "Click on 'Languages' to open settings"). Do NOT put any chain-of-thought, meta-commentary, reasoning, or explanation here.
 "risk": "low" if this action is reversible, routine and easy (e.g. opening a menu, toggling a setting that can be undone, navigating, typing a search query) — safe for the agent to perform automatically. "high" if it is sensitive or hard to undo: signing in, payments/purchases, deleting or removing data, sending/posting/publishing, or entering a password or other sensitive text. High-risk steps are left for the user to perform.
@@ -553,7 +579,7 @@ COMMON PATTERNS:
 - Forms:                Step 1 → type in field (action=type) → Step 2 → click submit
 - Replace text:         Step 1 → clear the field (action=clear_text) → Step 2 → type replacement
 - Drag/drop:            Step 1 → drag the source card/file/item to the destination (action=drag_drop)
-- Save page evidence:   Any step → choose the real browser action and include evidence=[1-5 facts visible now] → later finish(answer with specific claims plus [ev:key] citations)
+- Save page evidence:   Any step → choose the real browser action and include evidence=[all relevant facts visible now] → later finish(answer with specific claims plus [ev:key] citations)
 - DOM/SoM evidence:     evidence item uses som_id when evidence is an indexed text span, image, button, label, card, row, cell, selected control, or other DOM target
 - Screenshot evidence:  evidence item uses need_annotation=true when evidence is visible in the current screenshot but has no DOM/SoM marker; region_bbox may be included as a crop hint
 - Relationship evidence: evidence item uses need_annotation=true plus annotation_prompt for a whole spatial/comparison claim, such as "box the parking lot and Sanford Hall, then draw an arrow labeled next to"

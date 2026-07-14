@@ -2885,8 +2885,7 @@ body {
 }
 
 .pageguide-goal-dot.review {
-  background: var(--pg-danger);
-  box-shadow: 0 0 0 3px rgba(255, 82, 106, 0.28);
+  box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.34);
 }
 
 .pageguide-goal-dot.verify-failed,
@@ -3358,6 +3357,23 @@ body {
 }
 
 .pageguide-goal-step-preview-reason b {
+  font-size: 11px;
+  color: inherit;
+}
+
+.pageguide-goal-step-review-status {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: #fff7dc;
+  color: #8a5a00;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pageguide-goal-step-review-status b {
   font-size: 11px;
   color: inherit;
 }

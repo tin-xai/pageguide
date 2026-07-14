@@ -22,7 +22,10 @@ async function loadSettings() {
     'debugEnabled',
     'debugSteerContextEnabled',
     'alwaysShowPromptBtn',
-    'maxSteps'
+    'maxSteps',
+    'personalizationEnabled',
+    'personalizationFacts',
+    'personalizedProfile'
   ]);
 
   // Set current provider
@@ -50,6 +53,11 @@ async function loadSettings() {
   // Load Max Steps setting (default: 20)
   document.getElementById('maxSteps').value = settings.maxSteps || 20;
 
+  // Load Personalization settings (default: disabled)
+  document.getElementById('personalizationEnabled').checked = settings.personalizationEnabled === true;
+  document.getElementById('personalizationFacts').value = settings.personalizationFacts || '';
+  renderPersonalizedProfile(settings.personalizedProfile);
+
   // Load Debug setting (default: disabled)
   const debugEnabled = settings.debugEnabled === true;
   document.getElementById('debugEnabled').checked = debugEnabled;
@@ -73,6 +81,22 @@ async function loadSettings() {
     const actionThresholdInput = document.getElementById('guideLowConfidenceActionThreshold');
     if (actionThresholdInput) actionThresholdInput.value = Number.isFinite(Number(local.guideLowConfidenceActionThreshold)) ? Number(local.guideLowConfidenceActionThreshold) : 5;
   } catch (e) {}
+}
+
+// Render the read-only "what PageGuide has learned about you" viewer
+function renderPersonalizedProfile(profile) {
+  const view = document.getElementById('personalizedProfileView');
+  const meta = document.getElementById('personalizedProfileMeta');
+  if (!view || !meta) return;
+  const summary = profile?.summary || '';
+  if (!summary) {
+    view.textContent = 'Nothing learned yet.';
+    meta.textContent = '';
+    return;
+  }
+  view.textContent = summary;
+  const updatedAt = profile?.updatedAt ? new Date(profile.updatedAt).toLocaleString() : 'unknown';
+  meta.textContent = `Last updated ${updatedAt}, v${profile?.version || 0}`;
 }
 
 // Update UI to show selected provider
@@ -111,6 +135,7 @@ async function saveSettings() {
     visionEnabled: document.getElementById('visionEnabled').checked,
     somEnabled: document.getElementById('somEnabled').checked,
     maxSteps: parseInt(document.getElementById('maxSteps').value, 10) || 20,
+    personalizationFacts: document.getElementById('personalizationFacts').value.trim(),
     debugEnabled: document.getElementById('debugEnabled').checked,
     debugSteerContextEnabled: document.getElementById('debugSteerContextEnabled').checked,
     alwaysShowPromptBtn: document.getElementById('alwaysShowPromptBtn').checked
@@ -325,6 +350,29 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         await chrome.storage.local.set({ guideLowConfidenceActionThreshold: value });
         showStatus(`Low confidence action threshold set to ${value}`, 'success');
+      } catch (e) {}
+    });
+  }
+
+  // Personalization toggle persists immediately (no "test" step like the API key flow)
+  const personalizationToggle = document.getElementById('personalizationEnabled');
+  if (personalizationToggle) {
+    personalizationToggle.addEventListener('change', async () => {
+      try {
+        await chrome.storage.sync.set({ personalizationEnabled: personalizationToggle.checked });
+        showStatus(personalizationToggle.checked ? 'Personalization enabled' : 'Personalization disabled', 'success');
+      } catch (e) {}
+    });
+  }
+
+  const clearProfileBtn = document.getElementById('clearProfileBtn');
+  if (clearProfileBtn) {
+    clearProfileBtn.addEventListener('click', async () => {
+      const resetProfile = { summary: '', updatedAt: 0, version: 0 };
+      try {
+        await chrome.storage.sync.set({ personalizedProfile: resetProfile });
+        renderPersonalizedProfile(resetProfile);
+        showStatus('Learned profile cleared', 'success');
       } catch (e) {}
     });
   }
