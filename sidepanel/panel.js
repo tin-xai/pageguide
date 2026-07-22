@@ -14,6 +14,10 @@ let uploadedFileSize = null;    // Byte size of the attached file (for the chip 
 let currentSelectedText = null; // Stores text selected on the webpage
 let guideActive = false; // True while guide is generating steps (shows stop button)
 let guidePaused = false; // True when an active guide is paused and can be resumed
+// Tab id the guide is actually running on (from the sender of its guide* messages), as opposed
+// to currentTabId which tracks whatever tab the user currently has focused. These can diverge:
+// the user is free to switch to a different tab while the guide keeps working in the background.
+let guideTabId = null;
 let noPageContext = false; // When true, skip page scraping and answer from AI knowledge only
 let panelForcedMode = null; // Sticky route chosen by Find / Guide / Hide tabs; null = Auto
 let panelLastRoute = null;  // Last route returned by the router, used only for tab highlight
@@ -2229,14 +2233,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Listen for tab changes.
   // Save the outgoing tab's session, then restore the incoming tab's session
   // (or start fresh if this is the first time visiting that tab).
-  // Guide-triggered tab transitions are left untouched (guideActive guard).
+  // Transitions onto the guide's own tab are left untouched (guideTabId guard) — switching to
+  // any OTHER tab always gets its own separate session, even while the guide keeps running
+  // in the background on its tab.
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const prevTabId = currentTabId;
     currentTabId = activeInfo.tabId;
     _hiddenTabChips.delete(activeInfo.tabId);
     refreshWorkingTabChip(activeInfo.tabId);
 
-    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive)) return;
+    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive, guideTabId)) return;
 
     // Snapshot the outgoing tab's conversation
     _saveTabSession(prevTabId);
@@ -4177,7 +4183,7 @@ async function resumeGuideFromPanel() {
   if (stopBtn) stopBtn.disabled = true;
   showTyping();
   try {
-    const res = await sendToContentScript({ action: 'resumeGuide' });
+    const res = await sendToContentScript({ action: 'resumeGuide' }, guideTabId);
     if (!res || res.success === false) throw new Error(res?.error || 'Could not resume guide');
     guidePaused = false;
     guideActive = true;
@@ -4187,6 +4193,7 @@ async function resumeGuideFromPanel() {
     if (/Guide not active/i.test(String(err.message || ''))) {
       guidePaused = false;
       guideActive = false;
+      guideTabId = null;
       updateGuidePauseButton();
     } else if (btn) {
       btn.disabled = false;
@@ -4202,7 +4209,7 @@ async function pauseGuide(message = 'Guide paused.') {
   if (btn) btn.disabled = true;
   if (stopBtn) stopBtn.disabled = true;
   try {
-    const res = await sendToContentScript({ action: 'pauseGuide', reason: message });
+    const res = await sendToContentScript({ action: 'pauseGuide', reason: message }, guideTabId);
     if (!res || res.success === false) throw new Error(res?.error || 'Guide not active');
     guidePaused = true;
     guideActive = false;
@@ -4222,11 +4229,12 @@ async function stopPausedGuideWithRecap() {
   if (stopBtn) stopBtn.disabled = true;
   showTyping();
   try {
-    const res = await sendToContentScript({ action: 'stopGuideWithRecap' });
+    const res = await sendToContentScript({ action: 'stopGuideWithRecap' }, guideTabId);
     if (!res || res.success === false) throw new Error(res?.error || 'Could not stop guide');
     guideActive = false;
     guidePaused = false;
     guideStopped = true;
+    guideTabId = null;
     hideTyping();
     updateGuidePauseButton();
     try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
@@ -4259,6 +4267,7 @@ function addGuideStep(result) {
   if (result?.sessionId) currentGuideSessionId = result.sessionId;
   guidePaused = !!result.paused;
   guideActive = !result.isLastStep && !guidePaused;
+  if (result.isLastStep) guideTabId = null; // guide finished normally — no tab is "owned" anymore
   hideTyping();
   updateGuidePauseButton();
   _setJourneyRecalledMode(false); // a live step replaces any recalled read-only view
@@ -4553,9 +4562,11 @@ function showTyping(statusText = '') {
  * @param {string} [message] - Optional message shown in chat; defaults to generic stop notice.
  */
 async function stopGuide(message = '⏹ Guide stopped.') {
+  const targetTabId = guideTabId; // capture before clearing below
   guideActive = false;
   guidePaused = false;
   guideStopped = true; // suppress any late running-state messages from an in-flight content script
+  guideTabId = null;
   hideTyping();
   updateGuidePauseButton();
   // Set the Stop tombstone + clear the resume fallback BEFORE messaging the content script, so
@@ -4567,7 +4578,7 @@ async function stopGuide(message = '⏹ Guide stopped.') {
   // Clear SW state directly so it won't tell the next page to resume.
   try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
   try {
-    await sendToContentScript({ action: 'stopGuide' });
+    await sendToContentScript({ action: 'stopGuide' }, targetTabId);
   } catch (e) { /* content script may not be reachable */ }
   addMessage(message, 'system');
 }
@@ -4588,20 +4599,26 @@ function hideTyping() {
 }
 
 /**
- * Send message to content script
+ * Send message to content script.
+ * @param {object} message
+ * @param {number} [targetTabId] - Send to this tab instead of whatever tab is currently focused.
+ *   Guide control actions (pause/resume/stop) pass guideTabId here so they always reach the tab
+ *   actually running the guide, even if the user has switched focus to a different tab.
  */
-async function sendToContentScript(message) {
-  if (!currentTabId) {
+async function sendToContentScript(message, targetTabId) {
+  let tabId = targetTabId != null ? targetTabId : currentTabId;
+  if (!tabId) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    currentTabId = tab?.id;
+    tabId = tab?.id;
+    if (!targetTabId) currentTabId = tabId;
   }
-  
-  if (!currentTabId) {
+
+  if (!tabId) {
     throw new Error('No active tab found');
   }
-  
+
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(currentTabId, message, response => {
+    chrome.tabs.sendMessage(tabId, message, response => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
       } else {
@@ -5925,14 +5942,19 @@ ${pdfTextContent}`;
  * Exposed on window so unit tests can call it directly.
  *
  * Rules:
- *  - Never reset while the guide agent is active (it manages its own tab transitions).
  *  - Never reset on the very first activation (prevTabId is null).
  *  - Never reset when the same tab is re-activated (shouldn't normally happen).
- *  - Reset in every other case (user opened/switched to a real new tab).
+ *  - While the guide is active, never reset when the newly-activated tab IS the guide's own
+ *    tab (guideTabId) — that's the guide navigating/opening tabs itself, or the user coming
+ *    back to check on it, not a fresh unrelated tab.
+ *  - If the guide is active but we don't know which tab it's bound to yet, be conservative and
+ *    don't reset (matches the old behavior for that edge case).
+ *  - Reset in every other case, INCLUDING when the guide is active elsewhere: switching to any
+ *    other, unrelated tab should always get that tab's own separate session.
  */
-function _shouldResetOnTabSwitch(prevTabId, newTabId, isGuideActive) {
-  if (isGuideActive) return false;
+function _shouldResetOnTabSwitch(prevTabId, newTabId, isGuideActive, guideTabId) {
   if (!prevTabId || prevTabId === newTabId) return false;
+  if (isGuideActive && (guideTabId == null || newTabId === guideTabId)) return false;
   return true;
 }
 window._shouldResetOnTabSwitch = _shouldResetOnTabSwitch;
@@ -6035,6 +6057,10 @@ async function resetChat(showMessage = true) {
   _resettingChat = true;
   guideActive = false;
   guidePaused = false;
+  // Only clear the guide's tab binding if we're actually resetting the guide's own tab (e.g. the
+  // user hit "New chat" while on it). Don't clear it when this reset is initializing a fresh,
+  // unrelated tab the user just switched to — the guide may still be running in the background.
+  if (currentTabId != null && currentTabId === guideTabId) guideTabId = null;
 
   // Rewind (Slice 1): clear the step timeline (content 'reset' clears the store).
   if (typeof RewindTimeline !== 'undefined') RewindTimeline.clear();
@@ -6486,8 +6512,17 @@ function loadHistoryChat(entry) {
   });
 }
 
+// Guide-lifecycle messages that come from the content script actually running the guide.
+// Their sender.tab.id is the ground truth for which tab the guide is bound to — currentTabId
+// only tells us which tab the user is currently looking at, and the two can differ.
+const GUIDE_TAB_MESSAGES = new Set(['guideStep', 'guidePlan', 'guideStepRecord', 'guidePaused', 'guideFinalState', 'guideRecap']);
+
 // Listen for messages from content script and background
 function handleContentMessage(message, sender, sendResponse) {
+  if (GUIDE_TAB_MESSAGES.has(message.action) && sender?.tab?.id != null) {
+    guideTabId = sender.tab.id;
+  }
+
   // After a Stop, an in-flight content script can still emit "still working" messages. Drop them
   // so the running animation, the red Stop button, and the timeline dots don't re-arm themselves.
   // A new send (sendMessage) or a user-initiated steer (steerRestoreReady, handled below) clears it.

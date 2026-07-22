@@ -430,6 +430,23 @@ async function _doCaptureScreenshot(tabId, windowId) {
     }
     if (!tabId) return { error: 'No active tab found' };
 
+    // chrome.tabs.captureVisibleTab takes a windowId, NOT a tabId — it always grabs whichever tab
+    // is currently the active/visible one in that window. If the tab we actually want a shot of
+    // (tabId, e.g. the tab a guide run is working on) has lost focus — the user switched to a
+    // different tab in the same window — a capture right now would silently return pixels from
+    // that OTHER tab instead. Detect that and fail loudly rather than handing the vision pipeline
+    // a screenshot of the wrong page; callers already fall back to a cached screenshot/placeholder
+    // when capture fails (see gv2CaptureStepRecord in content/tasks/guidev2.js).
+    try {
+      const targetTab = await chrome.tabs.get(tabId);
+      if (targetTab && targetTab.active === false) {
+        return { error: 'Tab is not active/visible — cannot capture a background tab' };
+      }
+      if (!windowId) windowId = targetTab?.windowId;
+    } catch (e) {
+      // Tab may have been closed since; let captureVisibleTab below surface its own error.
+    }
+
     // Throttle: ensure at least _CAPTURE_MIN_GAP_MS since the previous capture.
     const since = Date.now() - _lastCaptureTs;
     if (since < _CAPTURE_MIN_GAP_MS) {

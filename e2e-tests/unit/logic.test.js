@@ -3494,3 +3494,114 @@ describe('sidepanel panel.js visual annotations status (sidepanel/panel.js)', ()
     expect(html).toContain('Annotated note 1');
   });
 });
+
+describe('_shouldResetOnTabSwitch (sidepanel/panel.js) — per-tab session vs. guide tab', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `<div id="pageguide-goal-dots"></div>`;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('never resets on the very first activation (no prevTabId)', () => {
+    expect(window._shouldResetOnTabSwitch(null, 5, false, null)).toBe(false);
+  });
+
+  test('never resets when the same tab is re-activated', () => {
+    expect(window._shouldResetOnTabSwitch(5, 5, false, null)).toBe(false);
+  });
+
+  test('resets when switching tabs and the guide is not active', () => {
+    expect(window._shouldResetOnTabSwitch(1, 2, false, null)).toBe(true);
+  });
+
+  test('does not reset when switching onto the guide\'s own tab', () => {
+    // Guide is running on tab 7 (e.g. it opened/navigated within it); arriving there
+    // shouldn't wipe the live guide session.
+    expect(window._shouldResetOnTabSwitch(1, 7, true, 7)).toBe(false);
+  });
+
+  test('is conservative when the guide is active but its tab is not yet known', () => {
+    expect(window._shouldResetOnTabSwitch(1, 2, true, null)).toBe(false);
+  });
+
+  test('REGRESSION: switching to an unrelated tab while the guide runs elsewhere starts a separate session', () => {
+    // Guide is actively working on tab 7 in the background. The user switches to tab 9 to
+    // browse something else. Previously this was suppressed just because a guide was active
+    // *anywhere*, so the panel kept showing tab 7's session while looking at tab 9. Tab 9 is
+    // unrelated to the guide and must get its own session.
+    expect(window._shouldResetOnTabSwitch(7, 9, true, 7)).toBe(true);
+  });
+});
+
+describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)', () => {
+  beforeAll(() => {
+    // Minimal chrome mock covering every top-level chrome.*.addListener call service-worker.js
+    // makes when it's first loaded, plus everything _doCaptureScreenshot touches.
+    window.chrome = {
+      action: { onClicked: { addListener: jest.fn() } },
+      runtime: {
+        onConnect: { addListener: jest.fn() },
+        onMessage: { addListener: jest.fn() },
+        sendMessage: jest.fn(),
+        getPlatformInfo: jest.fn()
+      },
+      tabs: {
+        onCreated: { addListener: jest.fn() },
+        get: jest.fn(),
+        query: jest.fn(),
+        captureVisibleTab: jest.fn(),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        sync: { get: jest.fn().mockResolvedValue({}) },
+        local: { get: jest.fn().mockResolvedValue({}) },
+        session: { get: jest.fn(), set: jest.fn(), remove: jest.fn() }
+      }
+    };
+    loadScript('background/service-worker.js');
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('REGRESSION: refuses to capture a tab that has lost focus instead of silently grabbing whatever tab is now visible', async () => {
+    // chrome.tabs.captureVisibleTab only ever captures the currently-active tab of a window —
+    // it can't target tabId directly. If tabId is no longer that window's active tab (the user
+    // switched away), capturing would silently return a screenshot of the WRONG tab.
+    window.chrome.tabs.get.mockResolvedValue({ id: 7, windowId: 1, active: false });
+    const result = await window._doCaptureScreenshot(7, 1);
+    expect(result.error).toMatch(/not active/i);
+    expect(window.chrome.tabs.captureVisibleTab).not.toHaveBeenCalled();
+  });
+
+  test('captures normally when the target tab is still the active/visible tab', async () => {
+    window.chrome.tabs.get.mockResolvedValue({ id: 7, windowId: 1, active: true });
+    window.chrome.tabs.captureVisibleTab.mockResolvedValue('data:image/jpeg;base64,AAAA');
+    const result = await window._doCaptureScreenshot(7, 1);
+    expect(result.success).toBe(true);
+    expect(result.imageBase64).toBe('AAAA');
+    expect(window.chrome.tabs.captureVisibleTab).toHaveBeenCalledWith(1, { format: 'jpeg', quality: 80 });
+  });
+
+  test('still attempts capture (and surfaces captureVisibleTab\'s own error) when chrome.tabs.get fails, e.g. the tab was closed', async () => {
+    window.chrome.tabs.get.mockRejectedValue(new Error('No tab with id: 7'));
+    window.chrome.tabs.captureVisibleTab.mockRejectedValue(new Error('No window with id: 1'));
+    const result = await window._doCaptureScreenshot(7, 1);
+    expect(result.error).toMatch(/Screenshot failed/);
+  });
+});
