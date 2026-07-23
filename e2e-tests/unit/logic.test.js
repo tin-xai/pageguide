@@ -3897,6 +3897,70 @@ describe('Background-tab guide messages no longer leak into the currently displa
   });
 });
 
+describe('Step panel no longer shows a redundant finish notice (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon">
+        <span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('REGRESSION: a plain guide finish hides the step panel instead of showing "I have completed your task..."', () => {
+    window.addGuideStep({ sessionId: 'finish-s1', step: 1, planStep: 1, isLastStep: true, instruction: 'Finish up' });
+
+    const panel = document.getElementById('pageguide-step-panel');
+    expect(panel.style.display).toBe('none');
+    expect(panel.innerHTML.trim()).toBe('');
+  });
+
+  test('REGRESSION: the ANSWER card still posts to chat when isFinish+finalAnswer, even though the step panel stays hidden', () => {
+    window.addGuideStep({
+      sessionId: 'finish-s2', step: 1, planStep: 1, isLastStep: true,
+      isFinish: true, finalAnswer: 'Order placed successfully.'
+    });
+
+    const panel = document.getElementById('pageguide-step-panel');
+    expect(panel.style.display).toBe('none');
+    expect(panel.innerHTML.trim()).toBe('');
+
+    const card = document.querySelector('#pageguide-messages .pageguide-answer-card');
+    expect(card).toBeTruthy();
+    expect(card.textContent).toContain('Order placed successfully.');
+  });
+
+  test('find/watch-video terminal steps still get their own step-panel card (unaffected by the finish-notice removal)', () => {
+    document.getElementById('pageguide-step-panel').innerHTML = '';
+    window.addGuideStep({
+      sessionId: 'finish-s3', step: 1, planStep: 1, isLastStep: true,
+      isFind: true, findAnswer: 'The return window is 30 days.'
+    });
+
+    const panel = document.getElementById('pageguide-step-panel');
+    expect(panel.style.display).not.toBe('none');
+    expect(panel.innerHTML).toContain('completed your request');
+  });
+});
+
 describe('Per-tab guide session isolation (background/service-worker.js)', () => {
   let onMessage, onConnect, onCreated;
 

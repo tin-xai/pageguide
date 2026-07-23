@@ -4474,13 +4474,6 @@ function addGuideStep(result) {
     stepText = 'I have completed your request. Please see the answer in the chatbox.';
   } else if (result.isWatchVideo) {
     stepText = 'I watched the video. Please see the answer in the chatbox.';
-  } else if (result.isFinish && result.finalAnswer) {
-    // The full answer lives in the chatbox ANSWER card (with its guaranteed evidence link); the
-    // under-timeline box is just a terse pointer so it doesn't duplicate the whole answer.
-    stepText = 'I have completed your task. Please see the answer in the chatbox.';
-  } else if (result.isLastStep && !result.isVisualHighlight) {
-    // Navigate-only / terminal completion: keep the under-timeline status to one quiet line.
-    stepText = 'I have completed your task. Please see the answer in the chatbox.';
   } else {
     const displayAnswer = result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || '');
     stepText = escapeHtml(_stripEvidenceRefs(displayAnswer));
@@ -4490,48 +4483,61 @@ function addGuideStep(result) {
     ? `<div class="pageguide-step-meta">${targetRow}${urlRow}</div>`
     : '';
 
-  panel.innerHTML = `
-    <div class="pageguide-step-card ${isFinishNotice ? 'pageguide-step-card-finish' : ''} ${result.hasHighlights && !isFinishNotice ? 'pageguide-clickable' : ''}">
-      <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
-      <div class="pageguide-guide-step">
-        ${stepBadge ? `<span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>` : ''}
-        <span class="pageguide-step-text">${stepText}</span>
+  // A plain guide finish (no find/video/visual-highlight deliverable of its own) used to render a
+  // pinned card above the whole conversation reading "I have completed your task. Please see the
+  // answer in the chatbox." — the real answer already lives in the chatbox (the View Journey
+  // timeline collapses to it, and renderGuideFinalAnswer posts the full ANSWER card below), so
+  // that pointer was pure redundant chrome sitting at the very top of the panel. Just hide the
+  // step panel for that case instead of building a card whose only content was that sentence.
+  // (Note: this must NOT skip the answer/recap posting below — isFinishNotice implies isLastStep,
+  // and result.isFinish's renderGuideFinalAnswer call still needs to run.)
+  if (isFinishNotice) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+  } else {
+    panel.innerHTML = `
+      <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
+        <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
+        <div class="pageguide-guide-step">
+          ${stepBadge ? `<span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>` : ''}
+          <span class="pageguide-step-text">${stepText}</span>
+        </div>
+        ${metaHtml}
+        ${warning}
+        <div class="pageguide-step-btn-row"></div>
       </div>
-      ${metaHtml}
-      ${warning}
-      <div class="pageguide-step-btn-row"></div>
-    </div>
-  `;
-  panel.style.display = '';
+    `;
+    panel.style.display = '';
 
-  if (isTruncated) {
-    const expandBtn = panel.querySelector('.pageguide-step-expand');
-    expandBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const contentSpan = panel.querySelector('.pageguide-step-text-content');
-      if (contentSpan) {
-        contentSpan.innerHTML = parseCitations(parseMarkdown(rawAnswer));
+    if (isTruncated) {
+      const expandBtn = panel.querySelector('.pageguide-step-expand');
+      expandBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const contentSpan = panel.querySelector('.pageguide-step-text-content');
+        if (contentSpan) {
+          contentSpan.innerHTML = parseCitations(parseMarkdown(rawAnswer));
+        }
+        expandBtn.style.display = 'none';
+      });
+    }
+    panel.onclick = (e) => {
+      if (e.target.closest('button')) return;
+      // The messages-container delegate doesn't cover this panel, so handle find's citation
+      // chips here: a chip scrolls to its own passage, not to the first highlight.
+      const cit = e.target.closest('.pageguide-citation');
+      if (cit) {
+        e.stopPropagation();
+        sendToContentScript({ action: 'scrollToIndex', index: parseInt(cit.dataset.index, 10) });
+        return;
       }
-      expandBtn.style.display = 'none';
+      if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
+    };
+    // Collapse (✕) hides the current-step panel in guide mode.
+    panel.querySelector('.pageguide-step-collapse')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.style.display = 'none';
     });
   }
-  panel.onclick = (e) => {
-    if (e.target.closest('button')) return;
-    // The messages-container delegate doesn't cover this panel, so handle find's citation
-    // chips here: a chip scrolls to its own passage, not to the first highlight.
-    const cit = e.target.closest('.pageguide-citation');
-    if (cit) {
-      e.stopPropagation();
-      sendToContentScript({ action: 'scrollToIndex', index: parseInt(cit.dataset.index, 10) });
-      return;
-    }
-    if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
-  };
-  // Collapse (✕) hides the current-step panel in guide mode.
-  panel.querySelector('.pageguide-step-collapse')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    panel.style.display = 'none';
-  });
 
   // Post the find answer to the chat so it survives collapsing the card or ending the guide.
   // Keyed by step so a re-render of the same step doesn't post it twice.
