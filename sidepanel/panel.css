@@ -4483,14 +4483,41 @@ body:not(.light-mode) .pageguide-send-btn {
 /* ---- Guide card menu placement and borderless light composer ---- */
 .pageguide-goal-title-row {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-/* Export PDF / Save trajectory buttons, now living in the branch ("Diverted Journeys")
-   header instead of the goal card. */
-.pageguide-branch-hdr-actions {
+.pageguide-goal-title-row .pageguide-goal-title {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The "View Journey" bubble now lives INLINE in the chat message stream (see
+   ensureGoalCardMessage in panel.js) instead of being pinned above it. */
+.pageguide-goal--chat {
+  margin: 0 0 10px;
+}
+
+/* Export PDF / Save trajectory buttons, on the View Journey bubble's title row. */
+.pageguide-goal-journey-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+}
+
+/* A sealed (finished, historical) journey bubble: static record, no live interactivity. */
+.pageguide-goal--sealed .pageguide-goal-row {
+  cursor: default;
+}
+.pageguide-goal--sealed .pageguide-goal-row:hover {
+  background: none;
+}
+.pageguide-goal--sealed .pageguide-goal-row-dot.current {
+  animation: none;
+  box-shadow: none;
+  background: var(--pg-success, #22c55e);
 }
 
 .pageguide-card-export-btn {

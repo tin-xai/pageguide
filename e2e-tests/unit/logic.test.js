@@ -3707,12 +3707,6 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
       }
     };
     document.body.innerHTML = `
-      <div id="pageguide-goal" style="display:none;">
-        <div class="pageguide-goal-title-row"><div id="pageguide-goal-title"></div></div>
-        <div id="pageguide-goal-timeline"></div>
-        <div id="pageguide-plan-list" style="display:none;"></div>
-        <div id="pageguide-conf-chart" style="display:none;"></div>
-      </div>
       <div id="pageguide-step-panel" style="display:none;"></div>
       <div id="pageguide-messages"></div>
       <div id="pageguide-tab-chip" style="display:none;">
@@ -3723,24 +3717,33 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
     loadScript('sidepanel/panel.js');
   });
 
-  test('renders one timeline row per step and keeps the list expanded while the guide is working', () => {
+  test('creates a "View Journey" bubble inline in the chat and renders one row per step while working', () => {
     window.addGuideStep({ sessionId: 'timeline-s1', step: 1, planStep: 1, isLastStep: false, instruction: 'Open settings' });
     window.renderGoalCard({ route: 'guide', prompt: 'Test task', step: 1, total: 2, title: 'Test task' });
 
-    const rows = document.querySelectorAll('#pageguide-goal-timeline .pageguide-goal-row');
+    const card = document.getElementById('pageguide-goal');
+    expect(card).toBeTruthy();
+    expect(document.getElementById('pageguide-messages').contains(card)).toBe(true);
+
+    const rows = card.querySelectorAll('.pageguide-goal-row');
     expect(rows.length).toBe(2);
     expect(rows[0].querySelector('.pageguide-goal-row-dot').classList.contains('current')).toBe(true);
 
-    const details = document.querySelector('#pageguide-goal-timeline details');
+    const details = card.querySelector('details');
     expect(details.open).toBe(true);
   });
 
-  test('REGRESSION: auto-collapses the timeline and marks the tab chip done once the guide finishes', () => {
+  test('REGRESSION: collapses to "View Journey", seals the bubble, and marks the tab chip done once the guide finishes', () => {
     window.addGuideStep({ sessionId: 'timeline-s1', step: 2, planStep: 2, isLastStep: true, instruction: 'Save changes' });
-    window.renderGoalCard({ route: 'guide', step: 2, total: 2 });
 
-    const details = document.querySelector('#pageguide-goal-timeline details');
-    expect(details.open).toBe(false);
+    // The card is "sealed" on finish: its id is freed up (so the next session gets a fresh,
+    // fully-interactive bubble) and it's left behind as static chat history.
+    expect(document.getElementById('pageguide-goal')).toBeNull();
+    const sealed = document.querySelector('.pageguide-goal--sealed');
+    expect(sealed).toBeTruthy();
+    expect(sealed.querySelector('details').open).toBe(false);
+    expect(sealed.querySelector('.pageguide-goal-timeline-summary').textContent).toBe('View Journey');
+
     expect(window._getTabChipDone()).toBe(true);
     expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
   });
@@ -3761,6 +3764,22 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
     window._restoreTabSession(savedForTab501);
     expect(window._getTabChipDone()).toBe(true);
     expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
+  });
+
+  test('REGRESSION: a new session after one finishes gets its own fresh card, leaving the sealed one as static history', () => {
+    const sealedCountBefore = document.querySelectorAll('.pageguide-goal--sealed').length;
+
+    window.addGuideStep({ sessionId: 'timeline-s2', step: 1, planStep: 1, isLastStep: false, instruction: 'Start a new task' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Second task', step: 1, total: 1, title: 'Second task' });
+
+    // The previously-sealed bubble from session s1 is untouched...
+    expect(document.querySelectorAll('.pageguide-goal--sealed').length).toBe(sealedCountBefore);
+    // ...and the new session got its own fresh, live card alongside it, not a reused one.
+    const liveCard = document.getElementById('pageguide-goal');
+    expect(liveCard).toBeTruthy();
+    expect(liveCard.classList.contains('pageguide-goal--sealed')).toBe(false);
+    expect(liveCard.querySelector('#pageguide-goal-title').textContent).toBe('Second task');
+    expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(2);
   });
 });
 

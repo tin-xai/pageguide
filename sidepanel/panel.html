@@ -32,26 +32,6 @@
           <button type="button" class="pg-zoom-btn" id="pg-zoom-in" title="Zoom In">+</button>
           <button type="button" class="pg-zoom-btn" id="pg-zoom-reset" title="Reset Zoom">↺</button>
         </div>
-        <div class="pageguide-branch-hdr-actions">
-          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-export-pdf" title="Export the guide journey as a PDF">
-            <span class="pageguide-inline-icon">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3v12"/>
-                <path d="m7 10 5 5 5-5"/>
-                <path d="M5 21h14"/>
-              </svg>
-            </span>
-          </button>
-          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo">
-            <span class="pageguide-inline-icon">
-              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                <polyline points="17 21 17 13 7 13 7 21"/>
-                <polyline points="7 3 7 8 15 8"/>
-              </svg>
-            </span>
-          </button>
-        </div>
         <button class="pageguide-branch-close-btn" id="pageguide-branch-close" title="Close" aria-label="Close branch panel">✕</button>
       </div>
       <div class="pageguide-branch-body" id="pageguide-branch-body"></div>
@@ -76,25 +56,10 @@
       </div>
     </div>
 
-    <!-- Goal card (compact summary of the user's prompt + a vertical, live step timeline) -->
-    <div class="pageguide-goal" id="pageguide-goal" style="display:none;">
-      <div class="pageguide-goal-main">
-        <div class="pageguide-goal-title-row">
-          <div class="pageguide-goal-title" id="pageguide-goal-title"></div>
-        </div>
-
-        <!-- Vertical step timeline: a dot on the left, the action taken on the right, updating
-             live as the agent works. Hovering/clicking a dot shows that step's screenshot
-             (reuses showGoalStepPreview). Collapses automatically once the guide finishes. -->
-        <div class="pageguide-goal-timeline" id="pageguide-goal-timeline"></div>
-
-        <div class="pageguide-plan-list" id="pageguide-plan-list" style="display:none;"></div>
-
-        <!-- Debug-only: double-line chart comparing the two confidence formulas across steps. -->
-        <div class="pageguide-conf-chart" id="pageguide-conf-chart" style="display:none;"></div>
-
-      </div>
-    </div>
+    <!-- The goal/"View Journey" card is now created dynamically INSIDE #pageguide-messages
+         (see ensureGoalCardMessage() in panel.js) so it appears inline in the chat, at the
+         position where the guide's work started — right where the typing indicator would
+         otherwise sit — instead of as a separate fixed card above the conversation. -->
 
     <!-- Current guide step panel (updates in place; history lives in the Journey) -->
     <div class="pageguide-step-panel" id="pageguide-step-panel" style="display:none;"></div>

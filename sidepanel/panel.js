@@ -1659,11 +1659,11 @@ function renderGoalTimeline(current, total) {
   }
 
   // Auto-collapse exactly once, right at the moment the guide stops being active (finished
-  // or stopped), so the step list tucks away and only the final answer shows in chat. We
-  // never force it open again on our own afterward — the user can still expand it manually.
-  if (!guideActive && container.dataset.wasActive === '1') {
-    details.open = false;
-  }
+  // or stopped), so the step list tucks away into "View Journey" and only the final answer
+  // shows in chat. We never force it open again on our own afterward — the user can still
+  // click "View Journey" to re-expand the vertical trail.
+  const justFinished = !guideActive && container.dataset.wasActive === '1';
+  if (justFinished) details.open = false;
   container.dataset.wasActive = guideActive ? '1' : '0';
 
   // Derive each row's state by PLAN step, aggregating the concrete step records that
@@ -1681,7 +1681,7 @@ function renderGoalTimeline(current, total) {
   const count = Math.max(total || 0, states.length);
   summary.textContent = guideActive
     ? `Working… step ${Math.max(1, Math.min(current, count))} of ${count}`
-    : `Steps (${count})`;
+    : 'View Journey';
 
   list.innerHTML = '';
 
@@ -1699,6 +1699,10 @@ function renderGoalTimeline(current, total) {
   if (guideActive && list.lastElementChild && typeof list.lastElementChild.scrollIntoView === 'function') {
     list.lastElementChild.scrollIntoView({ block: 'nearest' });
   }
+
+  // Seal AFTER the final row is drawn, so the frozen static history shows the completed
+  // trail, not whatever was on screen before this last render.
+  if (justFinished) _sealGoalCardMessage();
 }
 
 const CONF_CHART_SPECS = {
@@ -1840,10 +1844,86 @@ function renderConfChart() {
   box.style.display = '';
 }
 
-function renderGoalCard({ prompt, route, title, step, total } = {}) {
+// Creates (or returns the existing) "View Journey" bubble INSIDE the chat message stream,
+// at the position corresponding to whenever the current guide session started — this is
+// what replaces the old fixed card pinned above the chat. There is only ever one LIVE/
+// interactive instance of it at a time (id="pageguide-goal"); once a session finishes or a
+// new one starts, the old one is "sealed" (see _sealGoalCardMessage) so its id frees up and
+// a brand-new bubble is created fresh for the next session, further down the chat.
+function ensureGoalCardMessage() {
+  let card = document.getElementById('pageguide-goal');
+  if (card) return card;
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return null;
+  card = document.createElement('div');
+  card.id = 'pageguide-goal';
+  card.className = 'pageguide-goal pageguide-goal--chat';
+  card.innerHTML = `
+    <div class="pageguide-goal-main">
+      <div class="pageguide-goal-title-row">
+        <div class="pageguide-goal-title" id="pageguide-goal-title"></div>
+        <div class="pageguide-goal-journey-actions" id="pageguide-goal-journey-actions">
+          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-export-pdf" title="Export the guide journey as a PDF">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12"/>
+                <path d="m7 10 5 5 5-5"/>
+                <path d="M5 21h14"/>
+              </svg>
+            </span>
+          </button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </span>
+          </button>
+        </div>
+      </div>
+      <div class="pageguide-goal-timeline" id="pageguide-goal-timeline"></div>
+      <div class="pageguide-plan-list" id="pageguide-plan-list" style="display:none;"></div>
+      <div class="pageguide-conf-chart" id="pageguide-conf-chart" style="display:none;"></div>
+    </div>
+  `;
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => exportJourneyPdf());
+  document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => saveTrajectoryToRepo());
+  return card;
+}
+
+// Removes an empty card that never got real content (e.g. the route flipped away before any
+// step arrived). A card that already has content is left alone — once it's shown something
+// real, it's part of the chat history and should stay, matching every other chat bubble.
+function hideGoalCardMessageIfEmpty() {
+  const card = document.getElementById('pageguide-goal');
+  if (card && card.dataset.hasContent !== '1') card.remove();
+}
+
+// "Seals" the currently-live View Journey bubble: frees its id (so the next session gets a
+// fresh, fully interactive card) and strips the click/hover listeners off its rows. Old rows'
+// listeners read LIVE global state (currentGuideRecords/currentGuidePlan/etc.) via
+// showGoalStepPreview, which by definition has moved on to the NEXT session once one starts —
+// so a sealed card is left as a plain, correct static record instead of a misleading one.
+function _sealGoalCardMessage() {
   const card = document.getElementById('pageguide-goal');
   if (!card) return;
+  if (card.dataset.hasContent !== '1') { card.remove(); return; }
+  card.id = '';
+  card.classList.add('pageguide-goal--sealed');
+  card.querySelectorAll('.pageguide-goal-row').forEach(row => { row.replaceWith(row.cloneNode(true)); });
+  ['pageguide-goal-title', 'pageguide-goal-timeline', 'pageguide-plan-list', 'pageguide-conf-chart',
+   'pageguide-goal-journey-actions', 'pageguide-card-export-pdf', 'pageguide-card-save-trajectory',
+   'pageguide-goal-collapse'].forEach(id => {
+    const el = card.querySelector(`#${id}`);
+    if (el) el.id = '';
+  });
+}
 
+function renderGoalCard({ prompt, route, title, step, total } = {}) {
   if (prompt != null || route != null) {
     currentGoal = {
       prompt: prompt != null ? prompt : currentGoal?.prompt || '',
@@ -1861,16 +1941,20 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   const isGuide = normalized === 'guide' || currentGuidePlan.length > 0 || currentGuideStep > 0;
   document.body.classList.toggle('pageguide-guide-mode', !!isGuide);
   if (normalized === 'find' || normalized === 'hide') {
-    card.style.display = 'none';
+    hideGoalCardMessageIfEmpty();
     refreshGuideOnlyActions();
     return;
   }
   const promptText = currentGoal?.prompt || '';
   const titleText = isGuide ? (currentGuideTitle || _truncateText(promptText)) : _truncateText(promptText);
   if (!titleText) {
-    card.style.display = 'none';
+    hideGoalCardMessageIfEmpty();
     return;
   }
+
+  const card = ensureGoalCardMessage();
+  if (!card) return;
+  card.dataset.hasContent = '1';
 
   const titleEl = document.getElementById('pageguide-goal-title');
   const timeline = document.getElementById('pageguide-goal-timeline');
@@ -1915,7 +1999,6 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   }
 
   if (isGuide) _ensureGoalCollapseBtn();
-  card.style.display = '';
   refreshGuideOnlyActions();
   checkShowBranchButton();
 }
@@ -1952,8 +2035,11 @@ function resetLiveGuideTimelineForSession(sessionId, options = {}) {
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
   hideGoalStepPreview();
-  const tl = document.getElementById('pageguide-goal-timeline');
-  if (tl) { tl.innerHTML = ''; delete tl.dataset.wasActive; }
+  // A genuinely new session is starting (possibly in the same chat, right after a previous one
+  // finished). Seal whatever card is currently live so it's left behind as static history and
+  // the new session gets its own fresh, fully-interactive "View Journey" bubble further down
+  // the chat — never reusing/overwriting the previous session's card.
+  _sealGoalCardMessage();
   updateTabChipDoneState(false);
   return true;
 }
@@ -1980,10 +2066,9 @@ function clearGoalAndStepPanel() {
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
   hideGoalStepPreview();
-  const goal = document.getElementById('pageguide-goal');
+  hideGoalCardMessageIfEmpty();
   const stepPanel = document.getElementById('pageguide-step-panel');
   const cardExportBtn = document.getElementById('pageguide-card-export-pdf');
-  if (goal) goal.style.display = 'none';
   if (stepPanel) {
     stepPanel.style.display = 'none';
     stepPanel.innerHTML = '';
@@ -2156,12 +2241,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-save-chat')?.addEventListener('click', async () => {
     await saveCurrentChat();
   });
-  document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => {
-    exportJourneyPdf();
-  });
-  document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => {
-    saveTrajectoryToRepo();
-  });
+  // Export PDF / Save trajectory now live on the dynamically-created "View Journey" chat
+  // bubble (see ensureGoalCardMessage), which attaches their click listeners itself at
+  // creation time since the buttons don't exist in the static HTML anymore.
   setExportEnabled(false);
   try {
     if (typeof rewindGetIndex === 'function') {
@@ -4258,6 +4340,11 @@ async function stopPausedGuideWithRecap() {
     try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
     try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
     updateTabChipDoneState(true);
+    // Force the timeline to re-render now that guideActive is false, so the "View Journey"
+    // collapse + seal happens immediately rather than waiting on some later unrelated render.
+    if (document.getElementById('pageguide-goal-timeline')) {
+      renderGoalTimeline(currentGuideStep, Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0));
+    }
     if (res.recap && res.recap.summary) {
       await renderGuideRecap(res.recap);
     } else {
@@ -4297,6 +4384,9 @@ function addGuideStep(result) {
   currentGuideStep = result.step || result.planStep || currentGuideStep;
   if (result.step != null) delete currentGuideWarnings[result.step];
   if (result.isLastStep) clearGuideWarning();
+  // This unconditional re-render is also what triggers the "View Journey" auto-collapse +
+  // seal (see renderGoalTimeline): guideActive was already flipped false above for the
+  // isLastStep case, so this call is the "next render after finishing" that catches it.
   renderGoalCard({
     route: 'guide',
     step: currentGuideStep,
@@ -4561,6 +4651,15 @@ function showTyping(statusText = '') {
   setRunning(true);
   const container = document.getElementById('pageguide-messages');
   if (!container) return;
+  // While a guide session is live, the "View Journey" timeline bubble already shows progress
+  // in-chat ("Working… step X of Y" + a pulsing current-step dot) — skip the generic typing
+  // bubble so there's exactly one "agent is working" indicator, not two. (Just remove any
+  // stray typing element; don't call the full hideTyping(), which also resets the working-
+  // status timers and flips the running/stop-button state we just turned on above.)
+  if (guideActive && document.getElementById('pageguide-goal')) {
+    container.querySelector('.pageguide-typing')?.remove();
+    return;
+  }
   const existing = container.querySelector('.pageguide-typing');
   const label = statusText || currentGuideWorkingStatus || (_isGuideWorkingContext() ? 'Agent thinking…' : 'Thinking…');
   if (existing) {
@@ -6059,8 +6158,12 @@ function _restoreTabSession(session) {
         RewindTimeline.addStep(rec);
       }
       if (currentGuidePlan.length > 0) RewindTimeline.setPlan(currentGuidePlan);
-      
-      if (currentGoal) {
+
+      // Only re-render if the restored HTML snapshot still has a LIVE (unsealed) card — a
+      // finished/sealed session is already fully represented as static history in the
+      // just-restored container.innerHTML, so re-rendering here would create a duplicate
+      // "View Journey" bubble alongside it.
+      if (currentGoal && document.getElementById('pageguide-goal')) {
         renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
       }
       updateGuidePauseButton();
@@ -6626,11 +6729,10 @@ function handleContentMessage(message, sender, sendResponse) {
           // Label the journey by THIS prompt (currentGoal.prompt), not the stale guide title,
           // so each prompt's button is distinguishable.
           if (!j.title) j.title = currentGoal?.prompt || message.meta.instruction || '';
-          // First step of a new guide session → post a "View journey" recall button.
-          if (Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
-            _journeyBtnSessions.add(sid);
-            addJourneyRecallMessage(sid, j.title);
-          }
+          // No separate "View journey" recall button here anymore — the inline timeline
+          // bubble created by renderGoalCard/ensureGoalCardMessage above already IS the
+          // "View Journey" element for this live session (it collapses to that label and
+          // stays in the chat once the guide finishes), so there's nothing extra to post.
         }
 
         // If the branch tree overlay is open, update the tree in real time (preserving zoom/scroll)
