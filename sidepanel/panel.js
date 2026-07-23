@@ -79,6 +79,13 @@ function _normalizeConfidenceThreshold(value) {
 // Cleared when the tab is closed, navigates to a new URL, or the user manually resets.
 const _tabSessions = new Map();
 const _hiddenTabChips = new Set();
+// A guide can keep running on a tab after the user switches away from it. Its step/finish/recap
+// messages arrive here regardless of which tab is currently on screen — queue them per source
+// tab instead of rendering them into whatever OTHER tab's chat currently happens to be live, and
+// replay them (see _drainPendingGuideMessages) once the user actually switches back to that tab.
+// This is what previously let a background tab's completion/answer card "leak" into the tab the
+// user had switched to. Cleared when that tab is closed.
+const _pendingBackgroundGuideMessages = new Map();
 
 // Open a persistent port to the service worker.
 // When the panel is closed (by any means — X button, keyboard shortcut, etc.)
@@ -1666,6 +1673,12 @@ function renderGoalTimeline(current, total) {
   // or stopped), so the step list tucks away into "View Journey" and only the final answer
   // shows in chat. We never force it open again on our own afterward — the user can still
   // click "View Journey" to re-expand the vertical trail.
+  //
+  // Note: this does NOT seal the card. A compound ask can be internally decomposed into
+  // several back-to-back phases, each with its own isLastStep:true — sealing right here would
+  // free the card's id before the NEXT phase (same ask) ever gets a chance to find and replace
+  // it via resetLiveGuideTimelineForSession, which is exactly what produced duplicate bubbles.
+  // Sealing only happens once we know for sure a genuinely different ask has started.
   const justFinished = !guideActive && container.dataset.wasActive === '1';
   if (justFinished) details.open = false;
   container.dataset.wasActive = guideActive ? '1' : '0';
@@ -1703,10 +1716,6 @@ function renderGoalTimeline(current, total) {
   if (guideActive && list.lastElementChild && typeof list.lastElementChild.scrollIntoView === 'function') {
     list.lastElementChild.scrollIntoView({ block: 'nearest' });
   }
-
-  // Seal AFTER the final row is drawn, so the frozen static history shows the completed
-  // trail, not whatever was on screen before this last render.
-  if (justFinished) _sealGoalCardMessage();
 }
 
 const CONF_CHART_SPECS = {
@@ -2329,16 +2338,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Listen for tab changes.
   // Save the outgoing tab's session, then restore the incoming tab's session
   // (or start fresh if this is the first time visiting that tab).
-  // Transitions onto the guide's own tab are left untouched (guideTabId guard) — switching to
-  // any OTHER tab always gets its own separate session, even while the guide keeps running
-  // in the background on its tab.
+  // Transitions onto the guide's own tab are normally left untouched (guideTabId guard) — switching
+  // to any OTHER tab always gets its own separate session, even while the guide keeps running
+  // in the background on its tab. That guard is skipped if messages were queued for the tab being
+  // activated (see hasQueuedForThisTab below), since a queue only exists if the live view had
+  // already moved on to some other tab in the meantime.
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const prevTabId = currentTabId;
     currentTabId = activeInfo.tabId;
     _hiddenTabChips.delete(activeInfo.tabId);
     refreshWorkingTabChip(activeInfo.tabId);
 
-    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive, guideTabId)) return;
+    // The guideTabId guard normally assumes landing on the guide's own tab means the live view
+    // never diverged from it (e.g. the guide itself opened/activated that tab). That assumption
+    // breaks if messages were queued for this tab (see _pendingBackgroundGuideMessages) — a queue
+    // only builds up once currentTabId has actually moved away from this tab, which means the
+    // live DOM right now belongs to whatever OTHER tab was showing, not this one. Treat that case
+    // as a real switch too, so this tab's own session gets saved-into/restored-from properly
+    // instead of drained on top of a stale, unrelated tab's chat.
+    const hasQueuedForThisTab = _pendingBackgroundGuideMessages.has(activeInfo.tabId);
+    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive, guideTabId) && !hasQueuedForThisTab) return;
 
     // Snapshot the outgoing tab's conversation
     _saveTabSession(prevTabId);
@@ -2355,6 +2374,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       await resetChat(false);
     }
+
+    // Replay any guide progress/completion messages that arrived for this tab while it was in
+    // the background — now that currentTabId matches, they'll render into this tab's own chat
+    // instead of wherever the user was looking when they originally arrived.
+    _drainPendingGuideMessages(activeInfo.tabId);
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -2367,6 +2391,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.tabs.onRemoved.addListener((tabId) => {
     _tabSessions.delete(tabId);
     _hiddenTabChips.delete(tabId);
+    _pendingBackgroundGuideMessages.delete(tabId);
   });
 
   // Debug prompt button listener
@@ -2836,6 +2861,8 @@ window._getChatMessages = () => chatMessages;
 // so they never become window properties on their own. Exposed for unit tests only.
 window._getTabChipDone = () => tabChipDone;
 window._getTabSession = (tabId) => _tabSessions.get(tabId);
+window._setCurrentTabIdForTest = (tabId) => { currentTabId = tabId; };
+window._getCurrentTabIdForTest = () => currentTabId;
 // Test-only: simulate a genuinely new user submission (sendMessage() normally bumps this).
 window._startNewAskForTest = () => { _currentAskId += 1; };
 
@@ -6671,10 +6698,34 @@ function loadHistoryChat(entry) {
 // only tells us which tab the user is currently looking at, and the two can differ.
 const GUIDE_TAB_MESSAGES = new Set(['guideStep', 'guidePlan', 'guideStepRecord', 'guidePaused', 'guideFinalState', 'guideRecap']);
 
+// Messages that render into the live chat/step panel (chat bubbles, the View Journey timeline,
+// the working-tab chip status, etc). If one of these arrives from a tab OTHER than the one
+// currently on screen, applying it immediately would paint that background tab's progress or
+// completion straight into the currently-displayed tab's chat. Instead these get queued per
+// source tab (see _pendingBackgroundGuideMessages) and replayed once the user switches back to
+// that tab, so the render logic below only ever runs against the tab it's actually about.
+const TAB_SCOPED_RENDER_MESSAGES = new Set([
+  'guideStep', 'guidePlan', 'guidePaused', 'guideStepRecord', 'steerRestoreReady',
+  'askStep', 'askComplete', 'showTyping', 'hideTyping', 'guideWorkingStatus',
+  'guideFinalState', 'guideRecap'
+]);
+
 // Listen for messages from content script and background
 function handleContentMessage(message, sender, sendResponse) {
   if (GUIDE_TAB_MESSAGES.has(message.action) && sender?.tab?.id != null) {
     guideTabId = sender.tab.id;
+  }
+
+  if (
+    TAB_SCOPED_RENDER_MESSAGES.has(message.action) &&
+    sender?.tab?.id != null &&
+    currentTabId != null &&
+    sender.tab.id !== currentTabId
+  ) {
+    const tabId = sender.tab.id;
+    if (!_pendingBackgroundGuideMessages.has(tabId)) _pendingBackgroundGuideMessages.set(tabId, []);
+    _pendingBackgroundGuideMessages.get(tabId).push(message);
+    return;
   }
 
   // After a Stop, an in-flight content script can still emit "still working" messages. Drop them
@@ -6829,6 +6880,21 @@ function handleContentMessage(message, sender, sendResponse) {
     }
   }
 }
+/**
+ * Replay any guide messages that arrived for tabId while it was in the background (queued by the
+ * gate in handleContentMessage above). Must only be called after currentTabId has already been
+ * updated to tabId, so the replayed messages pass that gate and render normally this time.
+ */
+function _drainPendingGuideMessages(tabId) {
+  const pending = _pendingBackgroundGuideMessages.get(tabId);
+  _pendingBackgroundGuideMessages.delete(tabId);
+  if (pending && pending.length) {
+    pending.forEach((message) => handleContentMessage(message, { tab: { id: tabId } }, () => {}));
+  }
+}
+window._drainPendingGuideMessages = _drainPendingGuideMessages;
+window._getPendingBackgroundGuideMessages = (tabId) => _pendingBackgroundGuideMessages.get(tabId);
+
 chrome.runtime.onMessage.addListener(handleContentMessage);
 if (typeof window !== 'undefined') window.handleContentMessage = handleContentMessage;
 

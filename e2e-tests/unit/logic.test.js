@@ -3733,16 +3733,18 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
     expect(details.open).toBe(true);
   });
 
-  test('REGRESSION: collapses to "View Journey", seals the bubble, and marks the tab chip done once the guide finishes', () => {
+  test('REGRESSION: collapses to "View Journey" once the guide finishes, and marks the tab chip done', () => {
     window.addGuideStep({ sessionId: 'timeline-s1', step: 2, planStep: 2, isLastStep: true, instruction: 'Save changes' });
 
-    // The card is "sealed" on finish: its id is freed up (so the next session gets a fresh,
-    // fully-interactive bubble) and it's left behind as static chat history.
-    expect(document.getElementById('pageguide-goal')).toBeNull();
-    const sealed = document.querySelector('.pageguide-goal--sealed');
-    expect(sealed).toBeTruthy();
-    expect(sealed.querySelector('details').open).toBe(false);
-    expect(sealed.querySelector('.pageguide-goal-timeline-summary').textContent).toBe('View Journey');
+    // The card stays live (same id, not sealed) right after finishing — a compound ask can be
+    // decomposed into several back-to-back phases, each reporting isLastStep:true, so sealing
+    // here would free the id before the next same-ask phase gets a chance to find and replace
+    // this card. It still collapses to "View Journey" right away, visually.
+    const card = document.getElementById('pageguide-goal');
+    expect(card).toBeTruthy();
+    expect(card.classList.contains('pageguide-goal--sealed')).toBe(false);
+    expect(card.querySelector('details').open).toBe(false);
+    expect(card.querySelector('.pageguide-goal-timeline-summary').textContent).toBe('View Journey');
 
     expect(window._getTabChipDone()).toBe(true);
     expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
@@ -3766,18 +3768,24 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
     expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
   });
 
-  test('REGRESSION: a new session after one finishes gets its own fresh card, leaving the sealed one as static history', () => {
-    const sealedCountBefore = document.querySelectorAll('.pageguide-goal--sealed').length;
+  test('REGRESSION: a genuinely new ask after one finishes seals the previous card as history and gets its own fresh one', () => {
+    // The card left over from the previous test is still live (unsealed) — collapsed to
+    // "View Journey", but not yet sealed, since sealing is deferred until we know for sure
+    // a different ask has started (see resetLiveGuideTimelineForSession).
+    const prevCard = document.getElementById('pageguide-goal');
+    expect(prevCard).toBeTruthy();
+    expect(prevCard.classList.contains('pageguide-goal--sealed')).toBe(false);
 
     window._startNewAskForTest(); // this is a genuinely new user submission, not an internal phase
     window.addGuideStep({ sessionId: 'timeline-s2', step: 1, planStep: 1, isLastStep: false, instruction: 'Start a new task' });
     window.renderGoalCard({ route: 'guide', prompt: 'Second task', step: 1, total: 1, title: 'Second task' });
 
-    // The previously-sealed bubble from session s1 is untouched...
-    expect(document.querySelectorAll('.pageguide-goal--sealed').length).toBe(sealedCountBefore);
-    // ...and the new session got its own fresh, live card alongside it, not a reused one.
+    // NOW the previous card gets sealed, as static history...
+    expect(prevCard.classList.contains('pageguide-goal--sealed')).toBe(true);
+    // ...and the new ask got its own fresh, live card alongside it, not a reused one.
     const liveCard = document.getElementById('pageguide-goal');
     expect(liveCard).toBeTruthy();
+    expect(liveCard).not.toBe(prevCard);
     expect(liveCard.classList.contains('pageguide-goal--sealed')).toBe(false);
     expect(liveCard.querySelector('#pageguide-goal-title').textContent).toBe('Second task');
     expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(2);
@@ -3805,6 +3813,87 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
     // Still exactly one bubble — the phase-1 card was replaced, not sealed alongside a new one.
     expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(1);
     expect(document.querySelectorAll('.pageguide-goal--sealed').length).toBe(0);
+  });
+});
+
+describe('Background-tab guide messages no longer leak into the currently displayed tab (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon">
+        <span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('REGRESSION: a guideStep message from a background tab is queued, not painted into the tab currently on screen', () => {
+    // The user is looking at tab 200 (e.g. an unrelated docs page) while a guide keeps running
+    // in the background on tab 100 (e.g. BBC News). Its final-answer message arrives here.
+    window._setCurrentTabIdForTest(200);
+
+    window.handleContentMessage(
+      {
+        action: 'guideStep',
+        result: {
+          sessionId: 'bg-session', step: 2, planStep: 2, isLastStep: true,
+          isFinish: true, finalAnswer: 'I found two World Cup news items.', instruction: 'Wrap up'
+        }
+      },
+      { tab: { id: 100 } }
+    );
+
+    // Nothing was rendered into tab 200's chat — no leaked View Journey / answer card.
+    expect(document.getElementById('pageguide-goal')).toBeNull();
+    expect(document.getElementById('pageguide-messages').children.length).toBe(0);
+
+    // The message is held for tab 100 instead of being dropped.
+    const pending = window._getPendingBackgroundGuideMessages(100);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action).toBe('guideStep');
+  });
+
+  test('REGRESSION: switching back to that tab replays the queued message and renders it there', () => {
+    window._setCurrentTabIdForTest(100);
+    window._drainPendingGuideMessages(100);
+
+    const card = document.getElementById('pageguide-goal');
+    expect(card).toBeTruthy();
+    expect(document.getElementById('pageguide-messages').contains(card)).toBe(true);
+
+    // Queue is now empty — replayed exactly once.
+    expect(window._getPendingBackgroundGuideMessages(100)).toBeUndefined();
+  });
+
+  test('messages from the tab currently on screen still render immediately (no regression for the common case)', () => {
+    document.getElementById('pageguide-messages').innerHTML = '';
+    window._startNewAskForTest();
+    window._setCurrentTabIdForTest(300);
+
+    window.handleContentMessage(
+      { action: 'guideStep', result: { sessionId: 'same-tab-session', step: 1, planStep: 1, isLastStep: false, instruction: 'Open settings' } },
+      { tab: { id: 300 } }
+    );
+
+    expect(document.getElementById('pageguide-goal')).toBeTruthy();
+    expect(window._getPendingBackgroundGuideMessages(300)).toBeUndefined();
   });
 });
 
