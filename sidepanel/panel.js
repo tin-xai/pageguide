@@ -37,6 +37,15 @@ let pendingGuideWorkingStatus = '';
 const GUIDE_WORKING_STATUS_MIN_MS = 1200;
 let goalDotsExpanded = false;
 let guideTimelineCheckpointSteps = null;
+// Whether the CURRENTLY DISPLAYED tab's guide has finished (drives the green "done" state on
+// the working-tab chip). Per-tab, so it round-trips through _saveTabSession/_restoreTabSession
+// just like the rest of the guide state — switching tabs must never leak one tab's completion
+// badge onto another tab.
+let tabChipDone = false;
+// Bumped once per real user submission (sendMessage()). Tags each View Journey card with the
+// ask it belongs to, so internal phase changes within ONE ask can be told apart from the user
+// genuinely starting a new one — see resetLiveGuideTimelineForSession.
+let _currentAskId = 0;
 let _lastFindMessageStep = null; // Step number whose find answer was already posted to chat
 let _lastVisualHighlightStep = null; // Step whose visual_highlight image was already posted to chat
 let _lastWatchVideoMessageStep = null; // Step number whose watch_video answer was already posted to chat
@@ -70,6 +79,13 @@ function _normalizeConfidenceThreshold(value) {
 // Cleared when the tab is closed, navigates to a new URL, or the user manually resets.
 const _tabSessions = new Map();
 const _hiddenTabChips = new Set();
+// A guide can keep running on a tab after the user switches away from it. Its step/finish/recap
+// messages arrive here regardless of which tab is currently on screen — queue them per source
+// tab instead of rendering them into whatever OTHER tab's chat currently happens to be live, and
+// replay them (see _drainPendingGuideMessages) once the user actually switches back to that tab.
+// This is what previously let a background tab's completion/answer card "leak" into the tab the
+// user had switched to. Cleared when that tab is closed.
+const _pendingBackgroundGuideMessages = new Map();
 
 // Open a persistent port to the service worker.
 // When the panel is closed (by any means — X button, keyboard shortcut, etc.)
@@ -248,6 +264,18 @@ function renderWorkingTabChip(tab) {
   if (label) label.textContent = `Working on “${_truncateText(title, 58)}”`;
   chip.title = [title, url].filter(Boolean).join('\n');
   chip.style.display = '';
+  chip.classList.toggle('pageguide-tab-chip--done', tabChipDone);
+}
+
+// Marks (or clears) the working-tab chip's "done" (green) state for whichever tab is currently
+// displayed. Called at the guide-finish edge (last step / stop-with-recap) and reset back to
+// false whenever a fresh guide session starts or the goal card is cleared. This is per-tab state
+// (round-trips through _saveTabSession/_restoreTabSession below) so switching tabs always shows
+// the correct completion badge for THAT tab, never a leftover from another tab.
+function updateTabChipDoneState(done) {
+  tabChipDone = !!done;
+  const chip = document.getElementById('pageguide-tab-chip');
+  if (chip) chip.classList.toggle('pageguide-tab-chip--done', tabChipDone);
 }
 
 async function refreshWorkingTabChip(tabId = currentTabId) {
@@ -1581,14 +1609,82 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-function renderGoalDots(current, total) {
-  const dots = document.getElementById('pageguide-goal-dots');
-  if (!dots) return;
-  dots.innerHTML = '';
+// Builds one row of the vertical step timeline: a status dot on the left, the step's
+// action/label text on the right. Hover/click on the dot reuses the existing
+// showGoalStepPreview screenshot popover, so the "hover a dot to see the screenshot"
+// behavior is identical to the old horizontal dot row.
+function _buildGoalTimelineRow(step, label, st, rec, isInitial) {
+  const row = document.createElement('div');
+  row.className = 'pageguide-goal-row' + (isInitial ? ' initial' : '');
+  row.dataset.step = String(step);
 
-  // Derive each dot's state by PLAN step, aggregating the concrete step records that
-  // belong to it (fixes the plan-vs-concrete-step conflation that left dots perma-gray).
-  // gv2DotState is the unit-tested pure helper shared from content/utils.js.
+  const dot = document.createElement('span');
+  dot.className = 'pageguide-goal-row-dot';
+  if (st.status === 'done') dot.classList.add('done');
+  else if (st.status === 'current') dot.classList.add('current');
+  // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
+  const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
+  if (tier === 'high') dot.classList.add('conf-high');
+  else if (tier === 'med') dot.classList.add('conf-med');
+  const reviewInfo = _guideStepReviewInfo(rec || st || {});
+  if (reviewInfo.length) dot.classList.add('review');
+  if (st.verify) dot.classList.add(`verify-${st.verify}`);
+
+  const text = document.createElement('span');
+  text.className = 'pageguide-goal-row-text';
+  text.textContent = label;
+
+  row.title = reviewInfo.length ? `${label} — ${reviewInfo.map(item => item.label).join(', ')}` : label;
+  row.appendChild(dot);
+  row.appendChild(text);
+  row.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(step, dot); });
+  _attachDotHoverPreview(dot, step);
+  return row;
+}
+
+// Vertical, live-updating step timeline: a dot on the left, the action on the right.
+// Tucked inside a native <details> so it can be collapsed once the guide finishes,
+// leaving only the final answer visible in the chat (per-tab state, so it naturally
+// stays isolated the same way currentGuideRecords/currentGuideStep already are).
+function renderGoalTimeline(current, total) {
+  const container = document.getElementById('pageguide-goal-timeline');
+  if (!container) return;
+
+  let details = container.querySelector('details.pageguide-goal-timeline-details');
+  let summary, list;
+  if (!details) {
+    details = document.createElement('details');
+    details.className = 'pageguide-goal-timeline-details';
+    details.open = true;
+    summary = document.createElement('summary');
+    summary.className = 'pageguide-goal-timeline-summary';
+    list = document.createElement('div');
+    list.className = 'pageguide-goal-timeline-list';
+    details.appendChild(summary);
+    details.appendChild(list);
+    container.innerHTML = '';
+    container.appendChild(details);
+  } else {
+    summary = details.querySelector('.pageguide-goal-timeline-summary');
+    list = details.querySelector('.pageguide-goal-timeline-list');
+  }
+
+  // Auto-collapse exactly once, right at the moment the guide stops being active (finished
+  // or stopped), so the step list tucks away into "View Journey" and only the final answer
+  // shows in chat. We never force it open again on our own afterward — the user can still
+  // click "View Journey" to re-expand the vertical trail.
+  //
+  // Note: this does NOT seal the card. A compound ask can be internally decomposed into
+  // several back-to-back phases, each with its own isLastStep:true — sealing right here would
+  // free the card's id before the NEXT phase (same ask) ever gets a chance to find and replace
+  // it via resetLiveGuideTimelineForSession, which is exactly what produced duplicate bubbles.
+  // Sealing only happens once we know for sure a genuinely different ask has started.
+  const justFinished = !guideActive && container.dataset.wasActive === '1';
+  if (justFinished) details.open = false;
+  container.dataset.wasActive = guideActive ? '1' : '0';
+
+  // Derive each row's state by PLAN step, aggregating the concrete step records that
+  // belong to it. gv2DotState is the unit-tested pure helper shared from content/utils.js.
   const states = (typeof gv2DotState === 'function')
     ? gv2DotState({
         plan: currentGuidePlan,
@@ -1599,67 +1695,26 @@ function renderGoalDots(current, total) {
       })
     : [];
 
-  // Initial-state node (step 0): a distinct first dot, never counted as a step.
+  const count = Math.max(total || 0, states.length);
+  summary.textContent = guideActive
+    ? `Working… step ${Math.max(1, Math.min(current, count))} of ${count}`
+    : 'View Journey';
+
+  list.innerHTML = '';
+
+  // Initial-state node (step 0): a distinct first row, never counted as a step.
   if (currentGuideInitial) {
-    const idot = document.createElement('button');
-    idot.type = 'button';
-    idot.className = 'pageguide-goal-dot initial';
-    idot.dataset.step = '0';
-    idot.title = 'Initial state';
-    idot.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(0, idot); });
-    _attachDotHoverPreview(idot, 0);
-    dots.appendChild(idot);
+    list.appendChild(_buildGoalTimelineRow(0, 'Initial state', { status: 'done' }, currentGuideInitial, true));
   }
 
-  // Always render at least `total` dots so the count matches the "Step X of N" text.
-  const count = Math.max(total || 0, states.length);
-  const checkpointSteps = Array.isArray(guideTimelineCheckpointSteps)
-    ? guideTimelineCheckpointSteps.filter(n => Number.isFinite(Number(n)) && Number(n) >= 1 && Number(n) <= count).map(n => Number(n))
-    : [];
-  const compact = !goalDotsExpanded && count > 8 && checkpointSteps.length > 0 && !guideActive;
-  const important = new Set([1, current, count]);
-  checkpointSteps.forEach(n => important.add(n));
-  currentGuideRecords.forEach(r => {
-    const n = Number(r.step);
-    if (!Number.isFinite(n) || n < 1 || n > count) return;
-    const hasAnn = (Array.isArray(r.savedEvidenceCaptures) && r.savedEvidenceCaptures.some(c => c.need_annotation || (Array.isArray(c.annotations) && c.annotations.length > 0))) || (Array.isArray(r.annotations) && r.annotations.length > 0);
-    if (r.evidenceKey || r.hasVisualEvidence || r.isLastStep || r.finalVerdict || r.verification || hasAnn) important.add(n);
-  });
-  const visibleSteps = compact
-    ? Array.from(important).filter(n => Number.isFinite(n)).sort((a, b) => a - b).slice(0, 10)
-    : Array.from({ length: count }, (_, i) => i + 1);
-  dots.classList.toggle('is-compact', compact);
-  dots.title = compact ? 'Showing checkpoints. Use Show all steps to expand.' : '';
-  for (const i of visibleSteps) {
+  for (let i = 1; i <= count; i++) {
     const st = states[i - 1] || { status: i < current ? 'done' : (i === current ? 'current' : 'pending'), review: false, verify: null };
     const rec = getGuideStepMeta(i);
-    const dot = document.createElement('button');
-    dot.type = 'button';
-    dot.className = 'pageguide-goal-dot';
-    dot.dataset.step = String(i);
-    dot.title = getGuideStepLabel(i);
-    if (compact && count > 1) {
-      dot.style.setProperty('--pg-dot-pos', String(Math.max(0, Math.min(1, (i - 1) / (count - 1)))));
-    }
-    if (st.status === 'done') dot.classList.add('done');
-    else if (st.status === 'current') dot.classList.add('current');
-    // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
-    const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
-    if (tier === 'high') dot.classList.add('conf-high');
-    else if (tier === 'med') dot.classList.add('conf-med');
-    const reviewInfo = _guideStepReviewInfo(rec || st || {});
-    if (reviewInfo.length) {
-      dot.classList.add('review');
-      dot.dataset.review = reviewInfo.map(item => item.key).join(',');
-      dot.title = `${dot.title} — ${reviewInfo.map(item => item.label).join(', ')}`;
-    }
-    if (st.verify) dot.classList.add(`verify-${st.verify}`);
-    dot.addEventListener('click', (e) => {
-      e.stopPropagation();
-      showGoalStepPreview(i, dot);
-    });
-    _attachDotHoverPreview(dot, i);
-    dots.appendChild(dot);
+    list.appendChild(_buildGoalTimelineRow(i, getGuideStepLabel(i), st, rec, false));
+  }
+
+  if (guideActive && list.lastElementChild && typeof list.lastElementChild.scrollIntoView === 'function') {
+    list.lastElementChild.scrollIntoView({ block: 'nearest' });
   }
 }
 
@@ -1802,10 +1857,87 @@ function renderConfChart() {
   box.style.display = '';
 }
 
-function renderGoalCard({ prompt, route, title, step, total } = {}) {
+// Creates (or returns the existing) "View Journey" bubble INSIDE the chat message stream,
+// at the position corresponding to whenever the current guide session started — this is
+// what replaces the old fixed card pinned above the chat. There is only ever one LIVE/
+// interactive instance of it at a time (id="pageguide-goal"); once a session finishes or a
+// new one starts, the old one is "sealed" (see _sealGoalCardMessage) so its id frees up and
+// a brand-new bubble is created fresh for the next session, further down the chat.
+function ensureGoalCardMessage() {
+  let card = document.getElementById('pageguide-goal');
+  if (card) return card;
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return null;
+  card = document.createElement('div');
+  card.id = 'pageguide-goal';
+  card.className = 'pageguide-goal pageguide-goal--chat';
+  card.dataset.askId = String(_currentAskId);
+  card.innerHTML = `
+    <div class="pageguide-goal-main">
+      <div class="pageguide-goal-title-row">
+        <div class="pageguide-goal-title" id="pageguide-goal-title"></div>
+        <div class="pageguide-goal-journey-actions" id="pageguide-goal-journey-actions">
+          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-export-pdf" title="Export the guide journey as a PDF">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12"/>
+                <path d="m7 10 5 5 5-5"/>
+                <path d="M5 21h14"/>
+              </svg>
+            </span>
+          </button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </span>
+          </button>
+        </div>
+      </div>
+      <div class="pageguide-goal-timeline" id="pageguide-goal-timeline"></div>
+      <div class="pageguide-plan-list" id="pageguide-plan-list" style="display:none;"></div>
+      <div class="pageguide-conf-chart" id="pageguide-conf-chart" style="display:none;"></div>
+    </div>
+  `;
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => exportJourneyPdf());
+  document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => saveTrajectoryToRepo());
+  return card;
+}
+
+// Removes an empty card that never got real content (e.g. the route flipped away before any
+// step arrived). A card that already has content is left alone — once it's shown something
+// real, it's part of the chat history and should stay, matching every other chat bubble.
+function hideGoalCardMessageIfEmpty() {
+  const card = document.getElementById('pageguide-goal');
+  if (card && card.dataset.hasContent !== '1') card.remove();
+}
+
+// "Seals" the currently-live View Journey bubble: frees its id (so the next session gets a
+// fresh, fully interactive card) and strips the click/hover listeners off its rows. Old rows'
+// listeners read LIVE global state (currentGuideRecords/currentGuidePlan/etc.) via
+// showGoalStepPreview, which by definition has moved on to the NEXT session once one starts —
+// so a sealed card is left as a plain, correct static record instead of a misleading one.
+function _sealGoalCardMessage() {
   const card = document.getElementById('pageguide-goal');
   if (!card) return;
+  if (card.dataset.hasContent !== '1') { card.remove(); return; }
+  card.id = '';
+  card.classList.add('pageguide-goal--sealed');
+  card.querySelectorAll('.pageguide-goal-row').forEach(row => { row.replaceWith(row.cloneNode(true)); });
+  ['pageguide-goal-title', 'pageguide-goal-timeline', 'pageguide-plan-list', 'pageguide-conf-chart',
+   'pageguide-goal-journey-actions', 'pageguide-card-export-pdf', 'pageguide-card-save-trajectory',
+   'pageguide-goal-collapse'].forEach(id => {
+    const el = card.querySelector(`#${id}`);
+    if (el) el.id = '';
+  });
+}
 
+function renderGoalCard({ prompt, route, title, step, total } = {}) {
   if (prompt != null || route != null) {
     currentGoal = {
       prompt: prompt != null ? prompt : currentGoal?.prompt || '',
@@ -1823,25 +1955,25 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   const isGuide = normalized === 'guide' || currentGuidePlan.length > 0 || currentGuideStep > 0;
   document.body.classList.toggle('pageguide-guide-mode', !!isGuide);
   if (normalized === 'find' || normalized === 'hide') {
-    card.style.display = 'none';
+    hideGoalCardMessageIfEmpty();
     refreshGuideOnlyActions();
     return;
   }
   const promptText = currentGoal?.prompt || '';
   const titleText = isGuide ? (currentGuideTitle || _truncateText(promptText)) : _truncateText(promptText);
   if (!titleText) {
-    card.style.display = 'none';
+    hideGoalCardMessageIfEmpty();
     return;
   }
 
-  const icon = document.getElementById('pageguide-goal-icon');
+  const card = ensureGoalCardMessage();
+  if (!card) return;
+  card.dataset.hasContent = '1';
+
   const titleEl = document.getElementById('pageguide-goal-title');
-  const progress = document.getElementById('pageguide-goal-progress');
-  const stepText = document.getElementById('pageguide-goal-steptext');
-  const fill = document.getElementById('pageguide-goal-bar-fill');
+  const timeline = document.getElementById('pageguide-goal-timeline');
   const planList = document.getElementById('pageguide-plan-list');
 
-  if (icon) icon.textContent = ROUTE_ICONS[activeRoute] || ROUTE_ICONS[normalized] || '🎯';
   if (titleEl) titleEl.textContent = titleText;
 
   const totalSteps = Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0);
@@ -1855,40 +1987,12 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
 
   if (isGuide && totalSteps > 0 && currentGuideStep > 0) {
     const safeStep = Math.max(1, Math.min(currentGuideStep, totalSteps));
-    const planTotal = currentGuidePlan.length;
     planCompleted = highestDone;
-    const concreteCount = Math.max(currentGuideRecords.length, safeStep);
-    if (progress) progress.style.display = 'flex';
-    if (stepText) {
-      stepText.textContent = planTotal
-        ? `Plan ${Math.min(planCompleted, planTotal)}/${planTotal} · Step ${concreteCount}`
-        : `Step ${safeStep} of ${totalSteps}`;
-    }
-    if (fill) fill.style.width = `${Math.round(((planTotal ? Math.min(planCompleted, planTotal) : safeStep) / (planTotal || totalSteps)) * 100)}%`;
-    let dotsToggle = document.getElementById('pageguide-goal-dots-toggle');
-    const hasSummaryCheckpoints = Array.isArray(guideTimelineCheckpointSteps) && guideTimelineCheckpointSteps.length > 0 && !guideActive;
-    if (progress && totalSteps > 8 && hasSummaryCheckpoints) {
-      if (!dotsToggle) {
-        dotsToggle = document.createElement('button');
-        dotsToggle.type = 'button';
-        dotsToggle.id = 'pageguide-goal-dots-toggle';
-        dotsToggle.className = 'pageguide-goal-dots-toggle';
-        dotsToggle.addEventListener('click', (e) => {
-          e.stopPropagation();
-          goalDotsExpanded = !goalDotsExpanded;
-          renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
-        });
-        progress.insertBefore(dotsToggle, document.getElementById('pageguide-goal-dots'));
-      }
-      dotsToggle.textContent = goalDotsExpanded ? 'Show checkpoints' : 'Show all steps';
-      dotsToggle.style.display = '';
-    } else if (dotsToggle) {
-      dotsToggle.style.display = 'none';
-    }
-    renderGoalDots(safeStep, totalSteps);
+    renderGoalTimeline(safeStep, totalSteps);
     renderConfChart();
-  } else if (progress) {
-    progress.style.display = 'none';
+  } else if (timeline) {
+    timeline.innerHTML = '';
+    delete timeline.dataset.wasActive;
   }
   
   if (planList) {
@@ -1909,7 +2013,6 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   }
 
   if (isGuide) _ensureGoalCollapseBtn();
-  card.style.display = '';
   refreshGuideOnlyActions();
   checkShowBranchButton();
 }
@@ -1932,6 +2035,18 @@ if (typeof window !== 'undefined') window.pruneGuideAfter = pruneGuideAfter;
 function resetLiveGuideTimelineForSession(sessionId, options = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid || currentGuideSessionId === sid) return false;
+
+  // The agent sometimes splits ONE user request into multiple internal phases, each getting
+  // its own session id (e.g. "go to bbc news" as one phase, "find 2 news items" as another) —
+  // but it's still visually the same task to the user. Comparing titles turned out to be too
+  // fragile (state that feeds the title can get cleared between phases, and a user can also
+  // retype the identical prompt as a genuinely NEW ask). Instead, tag the card with the id of
+  // the user ask that created it (_currentAskId, bumped once per real sendMessage() call): a
+  // phase continuation always happens under the SAME ask id, so this is reliable regardless of
+  // title text. Only a real new ask (a fresh _currentAskId) seals the old card as history.
+  const existingCard = document.getElementById('pageguide-goal');
+  const sameAskContinuing = !!existingCard && existingCard.dataset.askId === String(_currentAskId);
+
   currentGuideSessionId = sid;
   currentGuidePlan = Array.isArray(options.plan) ? options.plan : [];
   currentGuideTitle = options.title || '';
@@ -1946,6 +2061,16 @@ function resetLiveGuideTimelineForSession(sessionId, options = {}) {
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
   hideGoalStepPreview();
+  if (sameAskContinuing) {
+    existingCard.remove();
+  } else {
+    // A genuinely different task is starting (possibly right after a previous one finished, in
+    // the same chat). Seal whatever card is currently live so it's left behind as static history
+    // and this new task gets its own fresh, fully-interactive "View Journey" bubble further down
+    // the chat — never reusing/overwriting the previous task's card.
+    _sealGoalCardMessage();
+  }
+  updateTabChipDoneState(false);
   return true;
 }
 
@@ -1971,25 +2096,21 @@ function clearGoalAndStepPanel() {
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
   hideGoalStepPreview();
-  const goal = document.getElementById('pageguide-goal');
+  hideGoalCardMessageIfEmpty();
   const stepPanel = document.getElementById('pageguide-step-panel');
-  const exportBtn = document.getElementById('pageguide-export-pdf');
   const cardExportBtn = document.getElementById('pageguide-card-export-pdf');
-  if (goal) goal.style.display = 'none';
   if (stepPanel) {
     stepPanel.style.display = 'none';
     stepPanel.innerHTML = '';
   }
-  if (exportBtn) exportBtn.disabled = true;
   if (cardExportBtn) cardExportBtn.disabled = true;
   const cardSaveBtn = document.getElementById('pageguide-card-save-trajectory');
   if (cardSaveBtn) cardSaveBtn.disabled = true;
+  updateTabChipDoneState(false);
   refreshGuideOnlyActions();
 }
 
 function setExportEnabled(on) {
-  const btn = document.getElementById('pageguide-export-pdf');
-  if (btn) btn.disabled = !on;
   const cardBtn = document.getElementById('pageguide-card-export-pdf');
   if (cardBtn) cardBtn.disabled = !on;
   const saveBtn = document.getElementById('pageguide-card-save-trajectory');
@@ -1997,23 +2118,9 @@ function setExportEnabled(on) {
   refreshGuideOnlyActions();
 }
 
-function moveMoreMenuForGuideMode(hasGuide) {
-  const wrap = document.getElementById('pageguide-more-wrap');
-  if (!wrap) return;
-  const guideActions = document.getElementById('pageguide-guide-card-actions');
-  const inputActions = document.querySelector('.pageguide-input-actions');
-  const sendBtn = document.getElementById('pageguide-send');
-  if (hasGuide && guideActions && wrap.parentElement !== guideActions) {
-    guideActions.appendChild(wrap);
-  } else if (!hasGuide && inputActions && wrap.parentElement !== inputActions) {
-    inputActions.insertBefore(wrap, sendBtn || null);
-  }
-}
-
 function refreshGuideOnlyActions() {
   const hasGuide = !!(currentGuidePlan.length || currentGuideRecords.length || currentGuideStep);
   document.body.classList.toggle('pageguide-guide-mode', hasGuide);
-  moveMoreMenuForGuideMode(hasGuide);
   hideMoreMenu();
   document.querySelectorAll('.pageguide-guide-only-action').forEach(el => {
     el.style.display = hasGuide ? '' : 'none';
@@ -2162,7 +2269,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-history-close')?.addEventListener('click', hideHistoryPanel);
   document.getElementById('pageguide-history-back')?.addEventListener('click', () => renderHistoryList());
   document.getElementById('pageguide-save-chat')?.addEventListener('click', async () => {
-    hideMoreMenu();
     await saveCurrentChat();
   });
   // User Study (defined in study.js, loaded after this file)
@@ -2170,16 +2276,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     hideMoreMenu();
     if (typeof window.openStudyPanel === 'function') window.openStudyPanel();
   });
-  document.getElementById('pageguide-export-pdf')?.addEventListener('click', () => {
-    hideMoreMenu();
-    exportJourneyPdf();
-  });
-  document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => {
-    exportJourneyPdf();
-  });
-  document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => {
-    saveTrajectoryToRepo();
-  });
+  // Export PDF / Save trajectory now live on the dynamically-created "View Journey" chat
+  // bubble (see ensureGoalCardMessage), which attaches their click listeners itself at
+  // creation time since the buttons don't exist in the static HTML anymore.
   setExportEnabled(false);
   try {
     if (typeof rewindGetIndex === 'function') {
@@ -2244,16 +2343,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Listen for tab changes.
   // Save the outgoing tab's session, then restore the incoming tab's session
   // (or start fresh if this is the first time visiting that tab).
-  // Transitions onto the guide's own tab are left untouched (guideTabId guard) — switching to
-  // any OTHER tab always gets its own separate session, even while the guide keeps running
-  // in the background on its tab.
+  // Transitions onto the guide's own tab are normally left untouched (guideTabId guard) — switching
+  // to any OTHER tab always gets its own separate session, even while the guide keeps running
+  // in the background on its tab. That guard is skipped if messages were queued for the tab being
+  // activated (see hasQueuedForThisTab below), since a queue only exists if the live view had
+  // already moved on to some other tab in the meantime.
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const prevTabId = currentTabId;
     currentTabId = activeInfo.tabId;
     _hiddenTabChips.delete(activeInfo.tabId);
     refreshWorkingTabChip(activeInfo.tabId);
 
-    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive, guideTabId)) return;
+    // The guideTabId guard normally assumes landing on the guide's own tab means the live view
+    // never diverged from it (e.g. the guide itself opened/activated that tab). That assumption
+    // breaks if messages were queued for this tab (see _pendingBackgroundGuideMessages) — a queue
+    // only builds up once currentTabId has actually moved away from this tab, which means the
+    // live DOM right now belongs to whatever OTHER tab was showing, not this one. Treat that case
+    // as a real switch too, so this tab's own session gets saved-into/restored-from properly
+    // instead of drained on top of a stale, unrelated tab's chat.
+    const hasQueuedForThisTab = _pendingBackgroundGuideMessages.has(activeInfo.tabId);
+    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive, guideTabId) && !hasQueuedForThisTab) return;
 
     // Snapshot the outgoing tab's conversation
     _saveTabSession(prevTabId);
@@ -2270,6 +2379,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       await resetChat(false);
     }
+
+    // Replay any guide progress/completion messages that arrived for this tab while it was in
+    // the background — now that currentTabId matches, they'll render into this tab's own chat
+    // instead of wherever the user was looking when they originally arrived.
+    _drainPendingGuideMessages(activeInfo.tabId);
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -2282,6 +2396,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.tabs.onRemoved.addListener((tabId) => {
     _tabSessions.delete(tabId);
     _hiddenTabChips.delete(tabId);
+    _pendingBackgroundGuideMessages.delete(tabId);
   });
 
   // Debug prompt button listener
@@ -2747,6 +2862,14 @@ window._recordAssistantMessage = _recordAssistantMessage;
 // window property on its own. Expose the live array by reference so unit tests can inspect/reset
 // it without needing a dedicated setter.
 window._getChatMessages = () => chatMessages;
+// Same rationale as above, for the per-tab "done" badge and its snapshot map — both `let`/`const`
+// so they never become window properties on their own. Exposed for unit tests only.
+window._getTabChipDone = () => tabChipDone;
+window._getTabSession = (tabId) => _tabSessions.get(tabId);
+window._setCurrentTabIdForTest = (tabId) => { currentTabId = tabId; };
+window._getCurrentTabIdForTest = () => currentTabId;
+// Test-only: simulate a genuinely new user submission (sendMessage() normally bumps this).
+window._startNewAskForTest = () => { _currentAskId += 1; };
 
 /**
  * Add a message to the chat
@@ -4258,8 +4381,9 @@ async function stopPausedGuideWithRecap() {
   if (resumeBtn) resumeBtn.disabled = true;
   if (stopBtn) stopBtn.disabled = true;
   showTyping();
+  const targetTabId = guideTabId; // capture before clearing below — SW state is keyed per-tab now
   try {
-    const res = await sendToContentScript({ action: 'stopGuideWithRecap' }, guideTabId);
+    const res = await sendToContentScript({ action: 'stopGuideWithRecap' }, targetTabId);
     if (!res || res.success === false) throw new Error(res?.error || 'Could not stop guide');
     guideActive = false;
     guidePaused = false;
@@ -4269,7 +4393,13 @@ async function stopPausedGuideWithRecap() {
     updateGuidePauseButton();
     try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
     try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
-    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
+    updateTabChipDoneState(true);
+    // Force the timeline to re-render now that guideActive is false, so the "View Journey"
+    // collapse + seal happens immediately rather than waiting on some later unrelated render.
+    if (document.getElementById('pageguide-goal-timeline')) {
+      renderGoalTimeline(currentGuideStep, Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0));
+    }
     if (res.recap && res.recap.summary) {
       await renderGuideRecap(res.recap);
     } else {
@@ -4297,7 +4427,10 @@ function addGuideStep(result) {
   if (result?.sessionId) currentGuideSessionId = result.sessionId;
   guidePaused = !!result.paused;
   guideActive = !result.isLastStep && !guidePaused;
-  if (result.isLastStep) guideTabId = null; // guide finished normally — no tab is "owned" anymore
+  if (result.isLastStep) {
+    guideTabId = null; // guide finished normally — no tab is "owned" anymore
+    updateTabChipDoneState(true);
+  }
   hideTyping();
   updateGuidePauseButton();
   _setJourneyRecalledMode(false); // a live step replaces any recalled read-only view
@@ -4306,6 +4439,9 @@ function addGuideStep(result) {
   currentGuideStep = result.step || result.planStep || currentGuideStep;
   if (result.step != null) delete currentGuideWarnings[result.step];
   if (result.isLastStep) clearGuideWarning();
+  // This unconditional re-render is also what triggers the "View Journey" auto-collapse +
+  // seal (see renderGoalTimeline): guideActive was already flipped false above for the
+  // isLastStep case, so this call is the "next render after finishing" that catches it.
   renderGoalCard({
     route: 'guide',
     step: currentGuideStep,
@@ -4343,13 +4479,6 @@ function addGuideStep(result) {
     stepText = 'I have completed your request. Please see the answer in the chatbox.';
   } else if (result.isWatchVideo) {
     stepText = 'I watched the video. Please see the answer in the chatbox.';
-  } else if (result.isFinish && result.finalAnswer) {
-    // The full answer lives in the chatbox ANSWER card (with its guaranteed evidence link); the
-    // under-timeline box is just a terse pointer so it doesn't duplicate the whole answer.
-    stepText = 'I have completed your task. Please see the answer in the chatbox.';
-  } else if (result.isLastStep && !result.isVisualHighlight) {
-    // Navigate-only / terminal completion: keep the under-timeline status to one quiet line.
-    stepText = 'I have completed your task. Please see the answer in the chatbox.';
   } else {
     const displayAnswer = result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || '');
     stepText = escapeHtml(_stripEvidenceRefs(displayAnswer));
@@ -4359,48 +4488,61 @@ function addGuideStep(result) {
     ? `<div class="pageguide-step-meta">${targetRow}${urlRow}</div>`
     : '';
 
-  panel.innerHTML = `
-    <div class="pageguide-step-card ${isFinishNotice ? 'pageguide-step-card-finish' : ''} ${result.hasHighlights && !isFinishNotice ? 'pageguide-clickable' : ''}">
-      <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
-      <div class="pageguide-guide-step">
-        ${stepBadge ? `<span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>` : ''}
-        <span class="pageguide-step-text">${stepText}</span>
+  // A plain guide finish (no find/video/visual-highlight deliverable of its own) used to render a
+  // pinned card above the whole conversation reading "I have completed your task. Please see the
+  // answer in the chatbox." — the real answer already lives in the chatbox (the View Journey
+  // timeline collapses to it, and renderGuideFinalAnswer posts the full ANSWER card below), so
+  // that pointer was pure redundant chrome sitting at the very top of the panel. Just hide the
+  // step panel for that case instead of building a card whose only content was that sentence.
+  // (Note: this must NOT skip the answer/recap posting below — isFinishNotice implies isLastStep,
+  // and result.isFinish's renderGuideFinalAnswer call still needs to run.)
+  if (isFinishNotice) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+  } else {
+    panel.innerHTML = `
+      <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
+        <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
+        <div class="pageguide-guide-step">
+          ${stepBadge ? `<span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>` : ''}
+          <span class="pageguide-step-text">${stepText}</span>
+        </div>
+        ${metaHtml}
+        ${warning}
+        <div class="pageguide-step-btn-row"></div>
       </div>
-      ${metaHtml}
-      ${warning}
-      <div class="pageguide-step-btn-row"></div>
-    </div>
-  `;
-  panel.style.display = '';
+    `;
+    panel.style.display = '';
 
-  if (isTruncated) {
-    const expandBtn = panel.querySelector('.pageguide-step-expand');
-    expandBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const contentSpan = panel.querySelector('.pageguide-step-text-content');
-      if (contentSpan) {
-        contentSpan.innerHTML = parseCitations(parseMarkdown(rawAnswer));
+    if (isTruncated) {
+      const expandBtn = panel.querySelector('.pageguide-step-expand');
+      expandBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const contentSpan = panel.querySelector('.pageguide-step-text-content');
+        if (contentSpan) {
+          contentSpan.innerHTML = parseCitations(parseMarkdown(rawAnswer));
+        }
+        expandBtn.style.display = 'none';
+      });
+    }
+    panel.onclick = (e) => {
+      if (e.target.closest('button')) return;
+      // The messages-container delegate doesn't cover this panel, so handle find's citation
+      // chips here: a chip scrolls to its own passage, not to the first highlight.
+      const cit = e.target.closest('.pageguide-citation');
+      if (cit) {
+        e.stopPropagation();
+        sendToContentScript({ action: 'scrollToIndex', index: parseInt(cit.dataset.index, 10) });
+        return;
       }
-      expandBtn.style.display = 'none';
+      if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
+    };
+    // Collapse (✕) hides the current-step panel in guide mode.
+    panel.querySelector('.pageguide-step-collapse')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.style.display = 'none';
     });
   }
-  panel.onclick = (e) => {
-    if (e.target.closest('button')) return;
-    // The messages-container delegate doesn't cover this panel, so handle find's citation
-    // chips here: a chip scrolls to its own passage, not to the first highlight.
-    const cit = e.target.closest('.pageguide-citation');
-    if (cit) {
-      e.stopPropagation();
-      sendToContentScript({ action: 'scrollToIndex', index: parseInt(cit.dataset.index, 10) });
-      return;
-    }
-    if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
-  };
-  // Collapse (✕) hides the current-step panel in guide mode.
-  panel.querySelector('.pageguide-step-collapse')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    panel.style.display = 'none';
-  });
 
   // Post the find answer to the chat so it survives collapsing the card or ending the guide.
   // Keyed by step so a re-render of the same step doesn't post it twice.
@@ -4570,6 +4712,15 @@ function showTyping(statusText = '') {
   setRunning(true);
   const container = document.getElementById('pageguide-messages');
   if (!container) return;
+  // While a guide session is live, the "View Journey" timeline bubble already shows progress
+  // in-chat ("Working… step X of Y" + a pulsing current-step dot) — skip the generic typing
+  // bubble so there's exactly one "agent is working" indicator, not two. (Just remove any
+  // stray typing element; don't call the full hideTyping(), which also resets the working-
+  // status timers and flips the running/stop-button state we just turned on above.)
+  if (guideActive && document.getElementById('pageguide-goal')) {
+    container.querySelector('.pageguide-typing')?.remove();
+    return;
+  }
   const existing = container.querySelector('.pageguide-typing');
   const label = statusText || currentGuideWorkingStatus || (_isGuideWorkingContext() ? 'Agent thinking…' : 'Thinking…');
   if (existing) {
@@ -4606,7 +4757,7 @@ async function stopGuide(message = '⏹ Guide stopped.') {
   try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
   try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
   // Clear SW state directly so it won't tell the next page to resume.
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
   try {
     await sendToContentScript({ action: 'stopGuide' }, targetTabId);
   } catch (e) { /* content script may not be reachable */ }
@@ -5278,6 +5429,7 @@ async function sendMessage() {
   if (input) input.value = '';
   cancelRequested = false;
   guideStopped = false; // a fresh send re-arms the panel for running-state messages
+  _currentAskId += 1; // a genuinely new user ask — see resetLiveGuideTimelineForSession
 
   // Track if a specific routing is forced by the user
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
@@ -6018,7 +6170,8 @@ function _saveTabSession(tabId) {
     activeSessionId: typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.getSessionId === 'function' ? RewindTimeline.getSessionId() : null,
     currentGoal: currentGoal,
     currentGuideTitle: currentGuideTitle,
-    guidePaused: guidePaused
+    guidePaused: guidePaused,
+    tabChipDone: tabChipDone
   });
 }
 
@@ -6074,13 +6227,20 @@ function _restoreTabSession(session) {
         RewindTimeline.addStep(rec);
       }
       if (currentGuidePlan.length > 0) RewindTimeline.setPlan(currentGuidePlan);
-      
-      if (currentGoal) {
+
+      // Only re-render if the restored HTML snapshot still has a LIVE (unsealed) card — a
+      // finished/sealed session is already fully represented as static history in the
+      // just-restored container.innerHTML, so re-rendering here would create a duplicate
+      // "View Journey" bubble alongside it.
+      if (currentGoal && document.getElementById('pageguide-goal')) {
         renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
       }
       updateGuidePauseButton();
     }
   }
+  // Restore this tab's own completion badge last, so it isn't clobbered by clearGoalAndStepPanel()
+  // (called above) or by the guide-restore block, both of which run before we know the saved value.
+  updateTabChipDoneState(!!session.tabChipDone);
 }
 
 /**
@@ -6112,8 +6272,10 @@ async function resetChat(showMessage = true) {
     chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
   } catch (e) {}
 
-  // Clear guide state in SW directly (doesn't depend on content script being available)
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+  // Clear guide state in SW directly (doesn't depend on content script being available).
+  // Scoped to currentTabId only — the SW now keeps one guide session per tab, so this can't
+  // wipe out a DIFFERENT tab's guide that's still actively running in the background.
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: currentTabId }); } catch (e) {}
 
   // Clear highlights on the active page
   try {
@@ -6554,10 +6716,34 @@ function loadHistoryChat(entry) {
 // only tells us which tab the user is currently looking at, and the two can differ.
 const GUIDE_TAB_MESSAGES = new Set(['guideStep', 'guidePlan', 'guideStepRecord', 'guidePaused', 'guideFinalState', 'guideRecap']);
 
+// Messages that render into the live chat/step panel (chat bubbles, the View Journey timeline,
+// the working-tab chip status, etc). If one of these arrives from a tab OTHER than the one
+// currently on screen, applying it immediately would paint that background tab's progress or
+// completion straight into the currently-displayed tab's chat. Instead these get queued per
+// source tab (see _pendingBackgroundGuideMessages) and replayed once the user switches back to
+// that tab, so the render logic below only ever runs against the tab it's actually about.
+const TAB_SCOPED_RENDER_MESSAGES = new Set([
+  'guideStep', 'guidePlan', 'guidePaused', 'guideStepRecord', 'steerRestoreReady',
+  'askStep', 'askComplete', 'showTyping', 'hideTyping', 'guideWorkingStatus',
+  'guideFinalState', 'guideRecap'
+]);
+
 // Listen for messages from content script and background
 function handleContentMessage(message, sender, sendResponse) {
   if (GUIDE_TAB_MESSAGES.has(message.action) && sender?.tab?.id != null) {
     guideTabId = sender.tab.id;
+  }
+
+  if (
+    TAB_SCOPED_RENDER_MESSAGES.has(message.action) &&
+    sender?.tab?.id != null &&
+    currentTabId != null &&
+    sender.tab.id !== currentTabId
+  ) {
+    const tabId = sender.tab.id;
+    if (!_pendingBackgroundGuideMessages.has(tabId)) _pendingBackgroundGuideMessages.set(tabId, []);
+    _pendingBackgroundGuideMessages.get(tabId).push(message);
+    return;
   }
 
   // After a Stop, an in-flight content script can still emit "still working" messages. Drop them
@@ -6636,11 +6822,10 @@ function handleContentMessage(message, sender, sendResponse) {
           // Label the journey by THIS prompt (currentGoal.prompt), not the stale guide title,
           // so each prompt's button is distinguishable.
           if (!j.title) j.title = currentGoal?.prompt || message.meta.instruction || '';
-          // First step of a new guide session → post a "View journey" recall button.
-          if (Number(message.meta.step) === 1 && !_journeyBtnSessions.has(sid)) {
-            _journeyBtnSessions.add(sid);
-            addJourneyRecallMessage(sid, j.title);
-          }
+          // No separate "View journey" recall button here anymore — the inline timeline
+          // bubble created by renderGoalCard/ensureGoalCardMessage above already IS the
+          // "View Journey" element for this live session (it collapses to that label and
+          // stays in the chat once the guide finishes), so there's nothing extra to post.
         }
 
         // If the branch tree overlay is open, update the tree in real time (preserving zoom/scroll)
@@ -6713,6 +6898,21 @@ function handleContentMessage(message, sender, sendResponse) {
     }
   }
 }
+/**
+ * Replay any guide messages that arrived for tabId while it was in the background (queued by the
+ * gate in handleContentMessage above). Must only be called after currentTabId has already been
+ * updated to tabId, so the replayed messages pass that gate and render normally this time.
+ */
+function _drainPendingGuideMessages(tabId) {
+  const pending = _pendingBackgroundGuideMessages.get(tabId);
+  _pendingBackgroundGuideMessages.delete(tabId);
+  if (pending && pending.length) {
+    pending.forEach((message) => handleContentMessage(message, { tab: { id: tabId } }, () => {}));
+  }
+}
+window._drainPendingGuideMessages = _drainPendingGuideMessages;
+window._getPendingBackgroundGuideMessages = (tabId) => _pendingBackgroundGuideMessages.get(tabId);
+
 chrome.runtime.onMessage.addListener(handleContentMessage);
 if (typeof window !== 'undefined') window.handleContentMessage = handleContentMessage;
 

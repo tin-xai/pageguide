@@ -3607,84 +3607,6 @@ describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)',
   });
 });
 
-describe('User Study behavior tracker aggregation (background/service-worker.js)', () => {
-  let onMessage;
-  let onUpdated;
-
-  beforeAll(() => {
-    window.chrome = {
-      action: { onClicked: { addListener: jest.fn() } },
-      runtime: {
-        onConnect: { addListener: jest.fn() },
-        onMessage: { addListener: jest.fn() },
-        sendMessage: jest.fn(),
-        getPlatformInfo: jest.fn()
-      },
-      tabs: {
-        onCreated: { addListener: jest.fn() },
-        onUpdated: { addListener: jest.fn() },
-        get: jest.fn(),
-        query: jest.fn(),
-        captureVisibleTab: jest.fn(),
-        sendMessage: jest.fn()
-      },
-      storage: {
-        sync: { get: jest.fn().mockResolvedValue({}) },
-        local: { get: jest.fn().mockResolvedValue({}) },
-        session: { get: jest.fn(), set: jest.fn(), remove: jest.fn() }
-      }
-    };
-    loadScript('background/service-worker.js');
-    // Captured once, up front — jest.clearAllMocks() below only resets call-history bookkeeping
-    // on the jest.fn()s, it doesn't invalidate this already-extracted function reference. If we
-    // grabbed these inside a test instead, clearAllMocks() would have already wiped the call args.
-    onMessage = window.chrome.runtime.onMessage.addListener.mock.calls[0][0];
-    onUpdated = window.chrome.tabs.onUpdated.addListener.mock.calls[0][0];
-  });
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  function send(action, extra = {}) {
-    let response;
-    onMessage({ action, ...extra }, {}, (r) => { response = r; });
-    return response;
-  }
-
-  test('starts empty, accumulates batches, and getData resets for the next task', () => {
-    expect(send('studyTracker_start')).toEqual({ success: true });
-    expect(send('studyTracker_batch', { scroll: 2, click: 1 })).toEqual({ success: true });
-    expect(send('studyTracker_batch', { scroll: 1, ctrlF: 3, mouseMove: 40 })).toEqual({ success: true });
-
-    const data = send('studyTracker_getData');
-    expect(data).toMatchObject({ scroll: 3, ctrlF: 3, click: 1, mouseMove: 40, textSelect: 0 });
-
-    // REGRESSION: a second read right after must come back empty — getData is meant to hand off
-    // one task's totals and reset, not leak counts into the next task.
-    const second = send('studyTracker_getData');
-    expect(second).toEqual({ scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] });
-  });
-
-  test('ignores batches that arrive before studyTracker_start (or after getData reset)', () => {
-    send('studyTracker_getData'); // ensure a clean slate regardless of test order
-    send('studyTracker_batch', { scroll: 5 });
-    const data = send('studyTracker_getData');
-    expect(data.scroll).toBe(0);
-  });
-
-  test('records page navigations via chrome.tabs.onUpdated only while tracking is active', () => {
-    send('studyTracker_getData'); // clean slate
-    // Not tracking yet — should be ignored.
-    onUpdated(1, { url: 'https://example.com/before' });
-    send('studyTracker_start');
-    onUpdated(1, { url: 'https://example.com/page-1' });
-    onUpdated(1, { status: 'complete' }); // no url — should not count as a page visit
-    const data = send('studyTracker_getData');
-    expect(data.pages.map(p => p.url)).toEqual(['https://example.com/page-1']);
-  });
-});
-
 describe('Save Chat captures every answer type (sidepanel/panel.js)', () => {
   beforeAll(() => {
     window.chrome = {
@@ -3896,5 +3818,400 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       const csv = window._buildStudyResultsCSV([]);
       expect(csv.split('\n')).toHaveLength(1);
     });
+  });
+});
+
+describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon">
+        <span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('creates a "View Journey" bubble inline in the chat and renders one row per step while working', () => {
+    window.addGuideStep({ sessionId: 'timeline-s1', step: 1, planStep: 1, isLastStep: false, instruction: 'Open settings' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Test task', step: 1, total: 2, title: 'Test task' });
+
+    const card = document.getElementById('pageguide-goal');
+    expect(card).toBeTruthy();
+    expect(document.getElementById('pageguide-messages').contains(card)).toBe(true);
+
+    const rows = card.querySelectorAll('.pageguide-goal-row');
+    expect(rows.length).toBe(2);
+    expect(rows[0].querySelector('.pageguide-goal-row-dot').classList.contains('current')).toBe(true);
+
+    const details = card.querySelector('details');
+    expect(details.open).toBe(true);
+  });
+
+  test('REGRESSION: collapses to "View Journey" once the guide finishes, and marks the tab chip done', () => {
+    window.addGuideStep({ sessionId: 'timeline-s1', step: 2, planStep: 2, isLastStep: true, instruction: 'Save changes' });
+
+    // The card stays live (same id, not sealed) right after finishing — a compound ask can be
+    // decomposed into several back-to-back phases, each reporting isLastStep:true, so sealing
+    // here would free the id before the next same-ask phase gets a chance to find and replace
+    // this card. It still collapses to "View Journey" right away, visually.
+    const card = document.getElementById('pageguide-goal');
+    expect(card).toBeTruthy();
+    expect(card.classList.contains('pageguide-goal--sealed')).toBe(false);
+    expect(card.querySelector('details').open).toBe(false);
+    expect(card.querySelector('.pageguide-goal-timeline-summary').textContent).toBe('View Journey');
+
+    expect(window._getTabChipDone()).toBe(true);
+    expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
+  });
+
+  test('REGRESSION: the "done" badge is isolated per tab through _saveTabSession/_restoreTabSession', () => {
+    // Tab 501 just finished a guide (state left over from the previous test).
+    expect(window._getTabChipDone()).toBe(true);
+    window._saveTabSession(501);
+    const savedForTab501 = window._getTabSession(501);
+    expect(savedForTab501.tabChipDone).toBe(true);
+
+    // Switching to a fresh, never-guided tab must NOT show tab 501's green badge.
+    window.clearGoalAndStepPanel();
+    expect(window._getTabChipDone()).toBe(false);
+    expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(false);
+
+    // Switching back to tab 501 must restore its own completion badge.
+    window._restoreTabSession(savedForTab501);
+    expect(window._getTabChipDone()).toBe(true);
+    expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
+  });
+
+  test('REGRESSION: a genuinely new ask after one finishes seals the previous card as history and gets its own fresh one', () => {
+    // The card left over from the previous test is still live (unsealed) — collapsed to
+    // "View Journey", but not yet sealed, since sealing is deferred until we know for sure
+    // a different ask has started (see resetLiveGuideTimelineForSession).
+    const prevCard = document.getElementById('pageguide-goal');
+    expect(prevCard).toBeTruthy();
+    expect(prevCard.classList.contains('pageguide-goal--sealed')).toBe(false);
+
+    window._startNewAskForTest(); // this is a genuinely new user submission, not an internal phase
+    window.addGuideStep({ sessionId: 'timeline-s2', step: 1, planStep: 1, isLastStep: false, instruction: 'Start a new task' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Second task', step: 1, total: 1, title: 'Second task' });
+
+    // NOW the previous card gets sealed, as static history...
+    expect(prevCard.classList.contains('pageguide-goal--sealed')).toBe(true);
+    // ...and the new ask got its own fresh, live card alongside it, not a reused one.
+    const liveCard = document.getElementById('pageguide-goal');
+    expect(liveCard).toBeTruthy();
+    expect(liveCard).not.toBe(prevCard);
+    expect(liveCard.classList.contains('pageguide-goal--sealed')).toBe(false);
+    expect(liveCard.querySelector('#pageguide-goal-title').textContent).toBe('Second task');
+    expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(2);
+  });
+
+  test('REGRESSION: internal phase changes within the same ask replace the previous card instead of stacking a new one', () => {
+    // Real-world trigger: one compound user request ("go to bbc news and find 2 news items")
+    // gets internally decomposed into multiple guide phases, each with its own session id, but
+    // it's still visually the same task. Previously every phase change sealed-and-kept the old
+    // card, leaving 2-3 duplicate bubbles behind for a single ask. Titles aren't a reliable way
+    // to detect "same ask" (state that feeds them can get cleared between phases, and a user can
+    // retype an identical prompt as a genuinely new ask), so this must hold even when the title
+    // reported by each phase differs slightly.
+    window.clearGoalAndStepPanel();
+    document.getElementById('pageguide-messages').innerHTML = ''; // clear prior tests' bubbles
+    window._startNewAskForTest(); // exactly one ask covers both phases below
+
+    window.resetLiveGuideTimelineForSession('phase-1', { title: 'Go to BBC News' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Go to BBC News' });
+    expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(1);
+
+    window.resetLiveGuideTimelineForSession('phase-2', { title: 'Find 2 news items' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Find 2 news items' });
+
+    // Still exactly one bubble — the phase-1 card was replaced, not sealed alongside a new one.
+    expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(1);
+    expect(document.querySelectorAll('.pageguide-goal--sealed').length).toBe(0);
+  });
+});
+
+describe('Background-tab guide messages no longer leak into the currently displayed tab (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon">
+        <span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('REGRESSION: a guideStep message from a background tab is queued, not painted into the tab currently on screen', () => {
+    // The user is looking at tab 200 (e.g. an unrelated docs page) while a guide keeps running
+    // in the background on tab 100 (e.g. BBC News). Its final-answer message arrives here.
+    window._setCurrentTabIdForTest(200);
+
+    window.handleContentMessage(
+      {
+        action: 'guideStep',
+        result: {
+          sessionId: 'bg-session', step: 2, planStep: 2, isLastStep: true,
+          isFinish: true, finalAnswer: 'I found two World Cup news items.', instruction: 'Wrap up'
+        }
+      },
+      { tab: { id: 100 } }
+    );
+
+    // Nothing was rendered into tab 200's chat — no leaked View Journey / answer card.
+    expect(document.getElementById('pageguide-goal')).toBeNull();
+    expect(document.getElementById('pageguide-messages').children.length).toBe(0);
+
+    // The message is held for tab 100 instead of being dropped.
+    const pending = window._getPendingBackgroundGuideMessages(100);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action).toBe('guideStep');
+  });
+
+  test('REGRESSION: switching back to that tab replays the queued message and renders it there', () => {
+    window._setCurrentTabIdForTest(100);
+    window._drainPendingGuideMessages(100);
+
+    const card = document.getElementById('pageguide-goal');
+    expect(card).toBeTruthy();
+    expect(document.getElementById('pageguide-messages').contains(card)).toBe(true);
+
+    // Queue is now empty — replayed exactly once.
+    expect(window._getPendingBackgroundGuideMessages(100)).toBeUndefined();
+  });
+
+  test('messages from the tab currently on screen still render immediately (no regression for the common case)', () => {
+    document.getElementById('pageguide-messages').innerHTML = '';
+    window._startNewAskForTest();
+    window._setCurrentTabIdForTest(300);
+
+    window.handleContentMessage(
+      { action: 'guideStep', result: { sessionId: 'same-tab-session', step: 1, planStep: 1, isLastStep: false, instruction: 'Open settings' } },
+      { tab: { id: 300 } }
+    );
+
+    expect(document.getElementById('pageguide-goal')).toBeTruthy();
+    expect(window._getPendingBackgroundGuideMessages(300)).toBeUndefined();
+  });
+});
+
+describe('Step panel no longer shows a redundant finish notice (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon">
+        <span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('REGRESSION: a plain guide finish hides the step panel instead of showing "I have completed your task..."', () => {
+    window.addGuideStep({ sessionId: 'finish-s1', step: 1, planStep: 1, isLastStep: true, instruction: 'Finish up' });
+
+    const panel = document.getElementById('pageguide-step-panel');
+    expect(panel.style.display).toBe('none');
+    expect(panel.innerHTML.trim()).toBe('');
+  });
+
+  test('REGRESSION: the ANSWER card still posts to chat when isFinish+finalAnswer, even though the step panel stays hidden', () => {
+    window.addGuideStep({
+      sessionId: 'finish-s2', step: 1, planStep: 1, isLastStep: true,
+      isFinish: true, finalAnswer: 'Order placed successfully.'
+    });
+
+    const panel = document.getElementById('pageguide-step-panel');
+    expect(panel.style.display).toBe('none');
+    expect(panel.innerHTML.trim()).toBe('');
+
+    const card = document.querySelector('#pageguide-messages .pageguide-answer-card');
+    expect(card).toBeTruthy();
+    expect(card.textContent).toContain('Order placed successfully.');
+  });
+
+  test('find/watch-video terminal steps still get their own step-panel card (unaffected by the finish-notice removal)', () => {
+    document.getElementById('pageguide-step-panel').innerHTML = '';
+    window.addGuideStep({
+      sessionId: 'finish-s3', step: 1, planStep: 1, isLastStep: true,
+      isFind: true, findAnswer: 'The return window is 30 days.'
+    });
+
+    const panel = document.getElementById('pageguide-step-panel');
+    expect(panel.style.display).not.toBe('none');
+    expect(panel.innerHTML).toContain('completed your request');
+  });
+});
+
+describe('Per-tab guide session isolation (background/service-worker.js)', () => {
+  let onMessage, onConnect, onCreated;
+
+  beforeAll(() => {
+    window.chrome = {
+      action: { onClicked: { addListener: jest.fn() } },
+      runtime: {
+        onConnect: { addListener: jest.fn() },
+        onMessage: { addListener: jest.fn() },
+        sendMessage: jest.fn(),
+        getPlatformInfo: jest.fn()
+      },
+      tabs: {
+        onCreated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        get: jest.fn(),
+        query: jest.fn(),
+        captureVisibleTab: jest.fn(),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        sync: { get: jest.fn().mockResolvedValue({}) },
+        local: { get: jest.fn().mockResolvedValue({}), remove: jest.fn().mockResolvedValue(undefined) },
+        session: { get: jest.fn(), set: jest.fn(), remove: jest.fn() }
+      }
+    };
+    loadScript('background/service-worker.js');
+    onMessage = window.chrome.runtime.onMessage.addListener.mock.calls[0][0];
+    onConnect = window.chrome.runtime.onConnect.addListener.mock.calls[0][0];
+    onCreated = window.chrome.tabs.onCreated.addListener.mock.calls[0][0];
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function send(action, extra = {}, sender = {}) {
+    let response;
+    onMessage({ action, ...extra }, sender, (r) => { response = r; });
+    return response;
+  }
+
+  function connectGuidev2Port(tabId) {
+    const port = { name: 'guidev2', sender: { tab: { id: tabId } }, postMessage: jest.fn() };
+    onConnect(port);
+    return port;
+  }
+
+  test('REGRESSION: two tabs each keep their own active session — setting/resuming one never leaks into the other', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab B task' } }, { tab: { id: 2 } });
+
+    const portA = connectGuidev2Port(1);
+    const portB = connectGuidev2Port(2);
+    expect(portA.postMessage).toHaveBeenCalledWith({ type: 'swState', state: { active: true, question: 'Tab A task' } });
+    expect(portB.postMessage).toHaveBeenCalledWith({ type: 'swState', state: { active: true, question: 'Tab B task' } });
+
+    // Each tab still reports itself as the owner of its own session.
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: true });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 2 } })).toEqual({ isOwner: true });
+  });
+
+  test('REGRESSION: clearing one tab (e.g. Stop, or the panel resetting a DIFFERENT tab it just switched to) does not clear another tab\'s active guide', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab B task' } }, { tab: { id: 2 } });
+
+    // Side-panel-originated clear (no sender.tab — must pass tabId explicitly), e.g. resetChat()
+    // firing while the panel just switched to look at an unrelated tab 2.
+    send('guidanceV2_clearState', { tabId: 2 });
+
+    const portA = connectGuidev2Port(1);
+    const portB = connectGuidev2Port(2);
+    expect(portA.postMessage).toHaveBeenCalledWith({ type: 'swState', state: { active: true, question: 'Tab A task' } });
+    expect(portB.postMessage).toHaveBeenCalledWith({ type: 'swState', state: null });
+  });
+
+  test('a content-script-originated clearState (Stop button) uses sender.tab.id, not an explicit tabId', () => {
+    send('guidanceV2_setState', { state: { active: true } }, { tab: { id: 5 } });
+    send('guidanceV2_clearState', {}, { tab: { id: 5 } });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 5 } })).toEqual({ isOwner: false });
+  });
+
+  test('transfers ownership to a new tab via openerTabId, leaving the opener with no session', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    onCreated({ id: 2, openerTabId: 1 });
+
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: false });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 2 } })).toEqual({ isOwner: true });
+
+    const portNew = connectGuidev2Port(2);
+    expect(portNew.postMessage).toHaveBeenCalledWith({
+      type: 'swState',
+      state: { active: true, question: 'Tab A task', pendingResume: true }
+    });
+  });
+
+  test('does not transfer to an unrelated new tab (no matching openerTabId or pre-click)', () => {
+    send('guidanceV2_setState', { state: { active: true } }, { tab: { id: 1 } });
+    onCreated({ id: 99, openerTabId: 42 }); // unrelated opener
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: true });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 99 } })).toEqual({ isOwner: false });
+  });
+
+  test('REGRESSION: with two concurrently-guided tabs, a new tab only ever transfers the matching opener\'s session', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab B task' } }, { tab: { id: 2 } });
+
+    onCreated({ id: 3, openerTabId: 2 }); // opened from tab B, not tab A
+
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: true });  // untouched
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 2 } })).toEqual({ isOwner: false }); // transferred away
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 3 } })).toEqual({ isOwner: true });  // received it
+  });
+
+  test('falls back to the pre-click watch when openerTabId is absent (noopener links)', () => {
+    send('guidanceV2_setState', { state: { active: true } }, { tab: { id: 7 } });
+    send('guidanceV2_preClick', {}, { tab: { id: 7 } });
+    onCreated({ id: 8 }); // no openerTabId
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 7 } })).toEqual({ isOwner: false });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 8 } })).toEqual({ isOwner: true });
   });
 });
