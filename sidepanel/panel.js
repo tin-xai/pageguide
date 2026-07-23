@@ -2021,6 +2021,16 @@ if (typeof window !== 'undefined') window.pruneGuideAfter = pruneGuideAfter;
 function resetLiveGuideTimelineForSession(sessionId, options = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid || currentGuideSessionId === sid) return false;
+
+  // The agent sometimes splits ONE user request into multiple internal phases, each getting
+  // its own session id (e.g. "go to bbc news" as one phase, "find 2 news items" as another) —
+  // but it's still visually the same task to the user. Detect that by comparing titles: if
+  // unchanged, this is a phase continuation, so drop the previous phase's card instead of
+  // sealing it as separate history, so the user ends up with exactly one bubble per ask
+  // instead of one per internal phase.
+  const incomingTitle = String(options.title || '').trim();
+  const sameTaskContinuing = !!incomingTitle && incomingTitle === String(currentGuideTitle || '').trim();
+
   currentGuideSessionId = sid;
   currentGuidePlan = Array.isArray(options.plan) ? options.plan : [];
   currentGuideTitle = options.title || '';
@@ -2035,11 +2045,15 @@ function resetLiveGuideTimelineForSession(sessionId, options = {}) {
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
   hideGoalStepPreview();
-  // A genuinely new session is starting (possibly in the same chat, right after a previous one
-  // finished). Seal whatever card is currently live so it's left behind as static history and
-  // the new session gets its own fresh, fully-interactive "View Journey" bubble further down
-  // the chat — never reusing/overwriting the previous session's card.
-  _sealGoalCardMessage();
+  if (sameTaskContinuing) {
+    document.getElementById('pageguide-goal')?.remove();
+  } else {
+    // A genuinely different task is starting (possibly right after a previous one finished, in
+    // the same chat). Seal whatever card is currently live so it's left behind as static history
+    // and this new task gets its own fresh, fully-interactive "View Journey" bubble further down
+    // the chat — never reusing/overwriting the previous task's card.
+    _sealGoalCardMessage();
+  }
   updateTabChipDoneState(false);
   return true;
 }

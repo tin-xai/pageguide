@@ -3781,6 +3781,26 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
     expect(liveCard.querySelector('#pageguide-goal-title').textContent).toBe('Second task');
     expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(2);
   });
+
+  test('REGRESSION: internal phase changes under the same task title replace the previous card instead of stacking a new one', () => {
+    // Real-world trigger: one compound user request ("go to bbc news and find 2 news items")
+    // gets internally decomposed into multiple guide phases, each with its own session id, but
+    // it's still visually the same task. Previously every phase change sealed-and-kept the old
+    // card, leaving 2-3 duplicate bubbles behind for a single ask.
+    window.clearGoalAndStepPanel();
+    document.getElementById('pageguide-messages').innerHTML = ''; // clear prior tests' bubbles
+
+    window.resetLiveGuideTimelineForSession('phase-1', { title: 'Compound task' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Compound task' });
+    expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(1);
+
+    window.resetLiveGuideTimelineForSession('phase-2', { title: 'Compound task' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Compound task' });
+
+    // Still exactly one bubble — the phase-1 card was replaced, not sealed alongside a new one.
+    expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(1);
+    expect(document.querySelectorAll('.pageguide-goal--sealed').length).toBe(0);
+  });
 });
 
 describe('Per-tab guide session isolation (background/service-worker.js)', () => {
