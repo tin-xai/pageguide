@@ -3689,6 +3689,81 @@ describe('Save Chat captures every answer type (sidepanel/panel.js)', () => {
   });
 });
 
+describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-goal" style="display:none;">
+        <div class="pageguide-goal-title-row"><div id="pageguide-goal-title"></div></div>
+        <div id="pageguide-goal-timeline"></div>
+        <div id="pageguide-plan-list" style="display:none;"></div>
+        <div id="pageguide-conf-chart" style="display:none;"></div>
+      </div>
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon">
+        <span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('renders one timeline row per step and keeps the list expanded while the guide is working', () => {
+    window.addGuideStep({ sessionId: 'timeline-s1', step: 1, planStep: 1, isLastStep: false, instruction: 'Open settings' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Test task', step: 1, total: 2, title: 'Test task' });
+
+    const rows = document.querySelectorAll('#pageguide-goal-timeline .pageguide-goal-row');
+    expect(rows.length).toBe(2);
+    expect(rows[0].querySelector('.pageguide-goal-row-dot').classList.contains('current')).toBe(true);
+
+    const details = document.querySelector('#pageguide-goal-timeline details');
+    expect(details.open).toBe(true);
+  });
+
+  test('REGRESSION: auto-collapses the timeline and marks the tab chip done once the guide finishes', () => {
+    window.addGuideStep({ sessionId: 'timeline-s1', step: 2, planStep: 2, isLastStep: true, instruction: 'Save changes' });
+    window.renderGoalCard({ route: 'guide', step: 2, total: 2 });
+
+    const details = document.querySelector('#pageguide-goal-timeline details');
+    expect(details.open).toBe(false);
+    expect(window._getTabChipDone()).toBe(true);
+    expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
+  });
+
+  test('REGRESSION: the "done" badge is isolated per tab through _saveTabSession/_restoreTabSession', () => {
+    // Tab 501 just finished a guide (state left over from the previous test).
+    expect(window._getTabChipDone()).toBe(true);
+    window._saveTabSession(501);
+    const savedForTab501 = window._getTabSession(501);
+    expect(savedForTab501.tabChipDone).toBe(true);
+
+    // Switching to a fresh, never-guided tab must NOT show tab 501's green badge.
+    window.clearGoalAndStepPanel();
+    expect(window._getTabChipDone()).toBe(false);
+    expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(false);
+
+    // Switching back to tab 501 must restore its own completion badge.
+    window._restoreTabSession(savedForTab501);
+    expect(window._getTabChipDone()).toBe(true);
+    expect(document.getElementById('pageguide-tab-chip').classList.contains('pageguide-tab-chip--done')).toBe(true);
+  });
+});
+
 describe('Per-tab guide session isolation (background/service-worker.js)', () => {
   let onMessage, onConnect, onCreated;
 

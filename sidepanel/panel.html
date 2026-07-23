@@ -32,6 +32,26 @@
           <button type="button" class="pg-zoom-btn" id="pg-zoom-in" title="Zoom In">+</button>
           <button type="button" class="pg-zoom-btn" id="pg-zoom-reset" title="Reset Zoom">↺</button>
         </div>
+        <div class="pageguide-branch-hdr-actions">
+          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-export-pdf" title="Export the guide journey as a PDF">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12"/>
+                <path d="m7 10 5 5 5-5"/>
+                <path d="M5 21h14"/>
+              </svg>
+            </span>
+          </button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </span>
+          </button>
+        </div>
         <button class="pageguide-branch-close-btn" id="pageguide-branch-close" title="Close" aria-label="Close branch panel">✕</button>
       </div>
       <div class="pageguide-branch-body" id="pageguide-branch-body"></div>
@@ -47,45 +67,27 @@
         <button class="pageguide-icon-btn" id="pageguide-new-chat" title="New Chat" aria-label="New Chat">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>
+        <button class="pageguide-icon-btn" id="pageguide-save-chat" title="Save current chat to history" aria-label="Save current chat to history">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+        </button>
         <button class="pageguide-icon-btn" id="pageguide-settings" title="Settings" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
         </button>
       </div>
     </div>
 
-    <!-- Goal card (compact summary of the user's prompt) -->
+    <!-- Goal card (compact summary of the user's prompt + a vertical, live step timeline) -->
     <div class="pageguide-goal" id="pageguide-goal" style="display:none;">
-      <div class="pageguide-goal-icon" id="pageguide-goal-icon">🎯</div>
       <div class="pageguide-goal-main">
         <div class="pageguide-goal-title-row">
           <div class="pageguide-goal-title" id="pageguide-goal-title"></div>
-          <span class="pageguide-goal-caret">⌄</span>
-          <div class="pageguide-guide-card-actions" id="pageguide-guide-card-actions">
-            <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-export-pdf" title="Export the guide journey as a PDF">
-              <span class="pageguide-inline-icon">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 3v12"/>
-                  <path d="m7 10 5 5 5-5"/>
-                  <path d="M5 21h14"/>
-                </svg>
-              </span>
-            </button>
-            <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo" style="margin-left: 4px;">
-              <span class="pageguide-inline-icon">
-                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                  <polyline points="17 21 17 13 7 13 7 21"/>
-                  <polyline points="7 3 7 8 15 8"/>
-                </svg>
-              </span>
-            </button>
-          </div>
         </div>
-        <div class="pageguide-goal-progress" id="pageguide-goal-progress" style="display:none;">
-          <span class="pageguide-goal-steptext" id="pageguide-goal-steptext"></span>
-          <div class="pageguide-goal-dots" id="pageguide-goal-dots"></div>
-          <div class="pageguide-goal-bar"><div class="pageguide-goal-bar-fill" id="pageguide-goal-bar-fill"></div></div>
-        </div>
+
+        <!-- Vertical step timeline: a dot on the left, the action taken on the right, updating
+             live as the agent works. Hovering/clicking a dot shows that step's screenshot
+             (reuses showGoalStepPreview). Collapses automatically once the guide finishes. -->
+        <div class="pageguide-goal-timeline" id="pageguide-goal-timeline"></div>
+
         <div class="pageguide-plan-list" id="pageguide-plan-list" style="display:none;"></div>
 
         <!-- Debug-only: double-line chart comparing the two confidence formulas across steps. -->
@@ -217,9 +219,7 @@
           <div class="pageguide-menu-wrap" id="pageguide-more-wrap">
             <button class="pageguide-quick-btn pageguide-more-btn" id="pageguide-more-btn" title="More">⋯</button>
             <div class="pageguide-menu" id="pageguide-more-menu" style="display:none;">
-              <button class="pageguide-menu-item" id="pageguide-save-chat" title="Save current chat to history"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></span>Save chat</button>
               <button class="pageguide-menu-item" id="pageguide-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/></svg></span>Page: On</button>
-              <button class="pageguide-menu-item pageguide-guide-only-action" id="pageguide-export-pdf" title="Export the guide journey as a PDF"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span>Export PDF</button>
               <button class="pageguide-menu-item pageguide-pdf-reader-btn" id="pageguide-pdf-reader"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg></span>Open PDF reader</button>
             </div>
           </div>

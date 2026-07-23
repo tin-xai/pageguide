@@ -37,6 +37,11 @@ let pendingGuideWorkingStatus = '';
 const GUIDE_WORKING_STATUS_MIN_MS = 1200;
 let goalDotsExpanded = false;
 let guideTimelineCheckpointSteps = null;
+// Whether the CURRENTLY DISPLAYED tab's guide has finished (drives the green "done" state on
+// the working-tab chip). Per-tab, so it round-trips through _saveTabSession/_restoreTabSession
+// just like the rest of the guide state — switching tabs must never leak one tab's completion
+// badge onto another tab.
+let tabChipDone = false;
 let _lastFindMessageStep = null; // Step number whose find answer was already posted to chat
 let _lastVisualHighlightStep = null; // Step whose visual_highlight image was already posted to chat
 let _lastWatchVideoMessageStep = null; // Step number whose watch_video answer was already posted to chat
@@ -248,6 +253,18 @@ function renderWorkingTabChip(tab) {
   if (label) label.textContent = `Working on “${_truncateText(title, 58)}”`;
   chip.title = [title, url].filter(Boolean).join('\n');
   chip.style.display = '';
+  chip.classList.toggle('pageguide-tab-chip--done', tabChipDone);
+}
+
+// Marks (or clears) the working-tab chip's "done" (green) state for whichever tab is currently
+// displayed. Called at the guide-finish edge (last step / stop-with-recap) and reset back to
+// false whenever a fresh guide session starts or the goal card is cleared. This is per-tab state
+// (round-trips through _saveTabSession/_restoreTabSession below) so switching tabs always shows
+// the correct completion badge for THAT tab, never a leftover from another tab.
+function updateTabChipDoneState(done) {
+  tabChipDone = !!done;
+  const chip = document.getElementById('pageguide-tab-chip');
+  if (chip) chip.classList.toggle('pageguide-tab-chip--done', tabChipDone);
 }
 
 async function refreshWorkingTabChip(tabId = currentTabId) {
@@ -1581,14 +1598,76 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-function renderGoalDots(current, total) {
-  const dots = document.getElementById('pageguide-goal-dots');
-  if (!dots) return;
-  dots.innerHTML = '';
+// Builds one row of the vertical step timeline: a status dot on the left, the step's
+// action/label text on the right. Hover/click on the dot reuses the existing
+// showGoalStepPreview screenshot popover, so the "hover a dot to see the screenshot"
+// behavior is identical to the old horizontal dot row.
+function _buildGoalTimelineRow(step, label, st, rec, isInitial) {
+  const row = document.createElement('div');
+  row.className = 'pageguide-goal-row' + (isInitial ? ' initial' : '');
+  row.dataset.step = String(step);
 
-  // Derive each dot's state by PLAN step, aggregating the concrete step records that
-  // belong to it (fixes the plan-vs-concrete-step conflation that left dots perma-gray).
-  // gv2DotState is the unit-tested pure helper shared from content/utils.js.
+  const dot = document.createElement('span');
+  dot.className = 'pageguide-goal-row-dot';
+  if (st.status === 'done') dot.classList.add('done');
+  else if (st.status === 'current') dot.classList.add('current');
+  // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
+  const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
+  if (tier === 'high') dot.classList.add('conf-high');
+  else if (tier === 'med') dot.classList.add('conf-med');
+  const reviewInfo = _guideStepReviewInfo(rec || st || {});
+  if (reviewInfo.length) dot.classList.add('review');
+  if (st.verify) dot.classList.add(`verify-${st.verify}`);
+
+  const text = document.createElement('span');
+  text.className = 'pageguide-goal-row-text';
+  text.textContent = label;
+
+  row.title = reviewInfo.length ? `${label} — ${reviewInfo.map(item => item.label).join(', ')}` : label;
+  row.appendChild(dot);
+  row.appendChild(text);
+  row.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(step, dot); });
+  _attachDotHoverPreview(dot, step);
+  return row;
+}
+
+// Vertical, live-updating step timeline: a dot on the left, the action on the right.
+// Tucked inside a native <details> so it can be collapsed once the guide finishes,
+// leaving only the final answer visible in the chat (per-tab state, so it naturally
+// stays isolated the same way currentGuideRecords/currentGuideStep already are).
+function renderGoalTimeline(current, total) {
+  const container = document.getElementById('pageguide-goal-timeline');
+  if (!container) return;
+
+  let details = container.querySelector('details.pageguide-goal-timeline-details');
+  let summary, list;
+  if (!details) {
+    details = document.createElement('details');
+    details.className = 'pageguide-goal-timeline-details';
+    details.open = true;
+    summary = document.createElement('summary');
+    summary.className = 'pageguide-goal-timeline-summary';
+    list = document.createElement('div');
+    list.className = 'pageguide-goal-timeline-list';
+    details.appendChild(summary);
+    details.appendChild(list);
+    container.innerHTML = '';
+    container.appendChild(details);
+  } else {
+    summary = details.querySelector('.pageguide-goal-timeline-summary');
+    list = details.querySelector('.pageguide-goal-timeline-list');
+  }
+
+  // Auto-collapse exactly once, right at the moment the guide stops being active (finished
+  // or stopped), so the step list tucks away and only the final answer shows in chat. We
+  // never force it open again on our own afterward — the user can still expand it manually.
+  if (!guideActive && container.dataset.wasActive === '1') {
+    details.open = false;
+  }
+  container.dataset.wasActive = guideActive ? '1' : '0';
+
+  // Derive each row's state by PLAN step, aggregating the concrete step records that
+  // belong to it. gv2DotState is the unit-tested pure helper shared from content/utils.js.
   const states = (typeof gv2DotState === 'function')
     ? gv2DotState({
         plan: currentGuidePlan,
@@ -1599,67 +1678,26 @@ function renderGoalDots(current, total) {
       })
     : [];
 
-  // Initial-state node (step 0): a distinct first dot, never counted as a step.
+  const count = Math.max(total || 0, states.length);
+  summary.textContent = guideActive
+    ? `Working… step ${Math.max(1, Math.min(current, count))} of ${count}`
+    : `Steps (${count})`;
+
+  list.innerHTML = '';
+
+  // Initial-state node (step 0): a distinct first row, never counted as a step.
   if (currentGuideInitial) {
-    const idot = document.createElement('button');
-    idot.type = 'button';
-    idot.className = 'pageguide-goal-dot initial';
-    idot.dataset.step = '0';
-    idot.title = 'Initial state';
-    idot.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(0, idot); });
-    _attachDotHoverPreview(idot, 0);
-    dots.appendChild(idot);
+    list.appendChild(_buildGoalTimelineRow(0, 'Initial state', { status: 'done' }, currentGuideInitial, true));
   }
 
-  // Always render at least `total` dots so the count matches the "Step X of N" text.
-  const count = Math.max(total || 0, states.length);
-  const checkpointSteps = Array.isArray(guideTimelineCheckpointSteps)
-    ? guideTimelineCheckpointSteps.filter(n => Number.isFinite(Number(n)) && Number(n) >= 1 && Number(n) <= count).map(n => Number(n))
-    : [];
-  const compact = !goalDotsExpanded && count > 8 && checkpointSteps.length > 0 && !guideActive;
-  const important = new Set([1, current, count]);
-  checkpointSteps.forEach(n => important.add(n));
-  currentGuideRecords.forEach(r => {
-    const n = Number(r.step);
-    if (!Number.isFinite(n) || n < 1 || n > count) return;
-    const hasAnn = (Array.isArray(r.savedEvidenceCaptures) && r.savedEvidenceCaptures.some(c => c.need_annotation || (Array.isArray(c.annotations) && c.annotations.length > 0))) || (Array.isArray(r.annotations) && r.annotations.length > 0);
-    if (r.evidenceKey || r.hasVisualEvidence || r.isLastStep || r.finalVerdict || r.verification || hasAnn) important.add(n);
-  });
-  const visibleSteps = compact
-    ? Array.from(important).filter(n => Number.isFinite(n)).sort((a, b) => a - b).slice(0, 10)
-    : Array.from({ length: count }, (_, i) => i + 1);
-  dots.classList.toggle('is-compact', compact);
-  dots.title = compact ? 'Showing checkpoints. Use Show all steps to expand.' : '';
-  for (const i of visibleSteps) {
+  for (let i = 1; i <= count; i++) {
     const st = states[i - 1] || { status: i < current ? 'done' : (i === current ? 'current' : 'pending'), review: false, verify: null };
     const rec = getGuideStepMeta(i);
-    const dot = document.createElement('button');
-    dot.type = 'button';
-    dot.className = 'pageguide-goal-dot';
-    dot.dataset.step = String(i);
-    dot.title = getGuideStepLabel(i);
-    if (compact && count > 1) {
-      dot.style.setProperty('--pg-dot-pos', String(Math.max(0, Math.min(1, (i - 1) / (count - 1)))));
-    }
-    if (st.status === 'done') dot.classList.add('done');
-    else if (st.status === 'current') dot.classList.add('current');
-    // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
-    const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
-    if (tier === 'high') dot.classList.add('conf-high');
-    else if (tier === 'med') dot.classList.add('conf-med');
-    const reviewInfo = _guideStepReviewInfo(rec || st || {});
-    if (reviewInfo.length) {
-      dot.classList.add('review');
-      dot.dataset.review = reviewInfo.map(item => item.key).join(',');
-      dot.title = `${dot.title} — ${reviewInfo.map(item => item.label).join(', ')}`;
-    }
-    if (st.verify) dot.classList.add(`verify-${st.verify}`);
-    dot.addEventListener('click', (e) => {
-      e.stopPropagation();
-      showGoalStepPreview(i, dot);
-    });
-    _attachDotHoverPreview(dot, i);
-    dots.appendChild(dot);
+    list.appendChild(_buildGoalTimelineRow(i, getGuideStepLabel(i), st, rec, false));
+  }
+
+  if (guideActive && list.lastElementChild && typeof list.lastElementChild.scrollIntoView === 'function') {
+    list.lastElementChild.scrollIntoView({ block: 'nearest' });
   }
 }
 
@@ -1834,14 +1872,10 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
     return;
   }
 
-  const icon = document.getElementById('pageguide-goal-icon');
   const titleEl = document.getElementById('pageguide-goal-title');
-  const progress = document.getElementById('pageguide-goal-progress');
-  const stepText = document.getElementById('pageguide-goal-steptext');
-  const fill = document.getElementById('pageguide-goal-bar-fill');
+  const timeline = document.getElementById('pageguide-goal-timeline');
   const planList = document.getElementById('pageguide-plan-list');
 
-  if (icon) icon.textContent = ROUTE_ICONS[activeRoute] || ROUTE_ICONS[normalized] || '🎯';
   if (titleEl) titleEl.textContent = titleText;
 
   const totalSteps = Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0);
@@ -1855,40 +1889,12 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
 
   if (isGuide && totalSteps > 0 && currentGuideStep > 0) {
     const safeStep = Math.max(1, Math.min(currentGuideStep, totalSteps));
-    const planTotal = currentGuidePlan.length;
     planCompleted = highestDone;
-    const concreteCount = Math.max(currentGuideRecords.length, safeStep);
-    if (progress) progress.style.display = 'flex';
-    if (stepText) {
-      stepText.textContent = planTotal
-        ? `Plan ${Math.min(planCompleted, planTotal)}/${planTotal} · Step ${concreteCount}`
-        : `Step ${safeStep} of ${totalSteps}`;
-    }
-    if (fill) fill.style.width = `${Math.round(((planTotal ? Math.min(planCompleted, planTotal) : safeStep) / (planTotal || totalSteps)) * 100)}%`;
-    let dotsToggle = document.getElementById('pageguide-goal-dots-toggle');
-    const hasSummaryCheckpoints = Array.isArray(guideTimelineCheckpointSteps) && guideTimelineCheckpointSteps.length > 0 && !guideActive;
-    if (progress && totalSteps > 8 && hasSummaryCheckpoints) {
-      if (!dotsToggle) {
-        dotsToggle = document.createElement('button');
-        dotsToggle.type = 'button';
-        dotsToggle.id = 'pageguide-goal-dots-toggle';
-        dotsToggle.className = 'pageguide-goal-dots-toggle';
-        dotsToggle.addEventListener('click', (e) => {
-          e.stopPropagation();
-          goalDotsExpanded = !goalDotsExpanded;
-          renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
-        });
-        progress.insertBefore(dotsToggle, document.getElementById('pageguide-goal-dots'));
-      }
-      dotsToggle.textContent = goalDotsExpanded ? 'Show checkpoints' : 'Show all steps';
-      dotsToggle.style.display = '';
-    } else if (dotsToggle) {
-      dotsToggle.style.display = 'none';
-    }
-    renderGoalDots(safeStep, totalSteps);
+    renderGoalTimeline(safeStep, totalSteps);
     renderConfChart();
-  } else if (progress) {
-    progress.style.display = 'none';
+  } else if (timeline) {
+    timeline.innerHTML = '';
+    delete timeline.dataset.wasActive;
   }
   
   if (planList) {
@@ -1946,6 +1952,9 @@ function resetLiveGuideTimelineForSession(sessionId, options = {}) {
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
   hideGoalStepPreview();
+  const tl = document.getElementById('pageguide-goal-timeline');
+  if (tl) { tl.innerHTML = ''; delete tl.dataset.wasActive; }
+  updateTabChipDoneState(false);
   return true;
 }
 
@@ -1973,23 +1982,20 @@ function clearGoalAndStepPanel() {
   hideGoalStepPreview();
   const goal = document.getElementById('pageguide-goal');
   const stepPanel = document.getElementById('pageguide-step-panel');
-  const exportBtn = document.getElementById('pageguide-export-pdf');
   const cardExportBtn = document.getElementById('pageguide-card-export-pdf');
   if (goal) goal.style.display = 'none';
   if (stepPanel) {
     stepPanel.style.display = 'none';
     stepPanel.innerHTML = '';
   }
-  if (exportBtn) exportBtn.disabled = true;
   if (cardExportBtn) cardExportBtn.disabled = true;
   const cardSaveBtn = document.getElementById('pageguide-card-save-trajectory');
   if (cardSaveBtn) cardSaveBtn.disabled = true;
+  updateTabChipDoneState(false);
   refreshGuideOnlyActions();
 }
 
 function setExportEnabled(on) {
-  const btn = document.getElementById('pageguide-export-pdf');
-  if (btn) btn.disabled = !on;
   const cardBtn = document.getElementById('pageguide-card-export-pdf');
   if (cardBtn) cardBtn.disabled = !on;
   const saveBtn = document.getElementById('pageguide-card-save-trajectory');
@@ -1997,23 +2003,9 @@ function setExportEnabled(on) {
   refreshGuideOnlyActions();
 }
 
-function moveMoreMenuForGuideMode(hasGuide) {
-  const wrap = document.getElementById('pageguide-more-wrap');
-  if (!wrap) return;
-  const guideActions = document.getElementById('pageguide-guide-card-actions');
-  const inputActions = document.querySelector('.pageguide-input-actions');
-  const sendBtn = document.getElementById('pageguide-send');
-  if (hasGuide && guideActions && wrap.parentElement !== guideActions) {
-    guideActions.appendChild(wrap);
-  } else if (!hasGuide && inputActions && wrap.parentElement !== inputActions) {
-    inputActions.insertBefore(wrap, sendBtn || null);
-  }
-}
-
 function refreshGuideOnlyActions() {
   const hasGuide = !!(currentGuidePlan.length || currentGuideRecords.length || currentGuideStep);
   document.body.classList.toggle('pageguide-guide-mode', hasGuide);
-  moveMoreMenuForGuideMode(hasGuide);
   hideMoreMenu();
   document.querySelectorAll('.pageguide-guide-only-action').forEach(el => {
     el.style.display = hasGuide ? '' : 'none';
@@ -2162,12 +2154,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-history-close')?.addEventListener('click', hideHistoryPanel);
   document.getElementById('pageguide-history-back')?.addEventListener('click', () => renderHistoryList());
   document.getElementById('pageguide-save-chat')?.addEventListener('click', async () => {
-    hideMoreMenu();
     await saveCurrentChat();
-  });
-  document.getElementById('pageguide-export-pdf')?.addEventListener('click', () => {
-    hideMoreMenu();
-    exportJourneyPdf();
   });
   document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => {
     exportJourneyPdf();
@@ -2742,6 +2729,10 @@ window._recordAssistantMessage = _recordAssistantMessage;
 // window property on its own. Expose the live array by reference so unit tests can inspect/reset
 // it without needing a dedicated setter.
 window._getChatMessages = () => chatMessages;
+// Same rationale as above, for the per-tab "done" badge and its snapshot map — both `let`/`const`
+// so they never become window properties on their own. Exposed for unit tests only.
+window._getTabChipDone = () => tabChipDone;
+window._getTabSession = (tabId) => _tabSessions.get(tabId);
 
 /**
  * Add a message to the chat
@@ -4266,6 +4257,7 @@ async function stopPausedGuideWithRecap() {
     try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
     try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
     try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
+    updateTabChipDoneState(true);
     if (res.recap && res.recap.summary) {
       await renderGuideRecap(res.recap);
     } else {
@@ -4293,7 +4285,10 @@ function addGuideStep(result) {
   if (result?.sessionId) currentGuideSessionId = result.sessionId;
   guidePaused = !!result.paused;
   guideActive = !result.isLastStep && !guidePaused;
-  if (result.isLastStep) guideTabId = null; // guide finished normally — no tab is "owned" anymore
+  if (result.isLastStep) {
+    guideTabId = null; // guide finished normally — no tab is "owned" anymore
+    updateTabChipDoneState(true);
+  }
   hideTyping();
   updateGuidePauseButton();
   _setJourneyRecalledMode(false); // a live step replaces any recalled read-only view
@@ -6007,7 +6002,8 @@ function _saveTabSession(tabId) {
     activeSessionId: typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.getSessionId === 'function' ? RewindTimeline.getSessionId() : null,
     currentGoal: currentGoal,
     currentGuideTitle: currentGuideTitle,
-    guidePaused: guidePaused
+    guidePaused: guidePaused,
+    tabChipDone: tabChipDone
   });
 }
 
@@ -6070,6 +6066,9 @@ function _restoreTabSession(session) {
       updateGuidePauseButton();
     }
   }
+  // Restore this tab's own completion badge last, so it isn't clobbered by clearGoalAndStepPanel()
+  // (called above) or by the guide-restore block, both of which run before we know the saved value.
+  updateTabChipDoneState(!!session.tabChipDone);
 }
 
 /**
