@@ -750,6 +750,7 @@ function renderGuideFinalStateCard(message) {
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(`[${verdict.label}] ${message.reason || ''}`);
 }
 
 // Render a visual_highlight answer as a persistent assistant bubble: the cropped screenshot region
@@ -773,6 +774,7 @@ function renderVisualHighlightAnswer(result) {
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(caption);
 }
 
 // Render a find answer as a persistent assistant bubble using the recap styling.
@@ -793,6 +795,7 @@ function renderFindAnswer(result) {
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(result.findAnswer);
 }
 
 function renderWatchVideoAnswer(result) {
@@ -820,6 +823,7 @@ function renderWatchVideoAnswer(result) {
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(raw);
 }
 
 function _compactAnswerMarkdown(text) {
@@ -1192,6 +1196,7 @@ async function renderGuideFinalAnswer(result) {
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(result.finalAnswer);
 }
 
 
@@ -1332,6 +1337,7 @@ async function renderGuideRecap(recap) {
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(recap.summary);
 }
 
 // Compute all three confidence formula versions for a step from its stored LLM signals
@@ -2717,6 +2723,25 @@ function _setupMessageContainerDelegate(container) {
     _scheduleRecapEvidenceHide();
   });
 }
+
+/**
+ * Record an assistant answer into chatMessages (the plain-text log that Save Chat / History
+ * reads from) WITHOUT touching the DOM. Several answer cards — find, visual-highlight,
+ * watch-video, and the guide final-state/recap cards — render their own custom HTML directly
+ * (images, evidence links, etc.) instead of going through addMessage(), which is the only other
+ * place chatMessages gets appended to. Without this, those answers show up fine in the panel but
+ * are silently missing from a saved chat. Exposed on window so unit tests can call it directly.
+ */
+function _recordAssistantMessage(content) {
+  const text = String(content || '').trim();
+  if (!text) return;
+  chatMessages.push({ content: text, type: 'assistant', timestamp: Date.now() });
+}
+window._recordAssistantMessage = _recordAssistantMessage;
+// chatMessages is declared with `let`, so (unlike the functions here) it never becomes a
+// window property on its own. Expose the live array by reference so unit tests can inspect/reset
+// it without needing a dedicated setter.
+window._getChatMessages = () => chatMessages;
 
 /**
  * Add a message to the chat

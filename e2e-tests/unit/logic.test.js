@@ -3605,3 +3605,86 @@ describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)',
     expect(result.error).toMatch(/Screenshot failed/);
   });
 });
+
+describe('Save Chat captures every answer type (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() },
+        local: {
+          get: jest.fn().mockResolvedValue({}),
+          set: jest.fn().mockResolvedValue(undefined)
+        }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-goal-dots"></div>
+      <div id="pageguide-messages"></div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  beforeEach(() => {
+    // Fresh chat + mock call history for every test.
+    window._getChatMessages().length = 0;
+    jest.clearAllMocks();
+    window.chrome.storage.local.get.mockResolvedValue({});
+    window.chrome.storage.local.set.mockResolvedValue(undefined);
+    document.getElementById('pageguide-messages').innerHTML = '';
+  });
+
+  test('_recordAssistantMessage pushes a plain-text assistant entry', () => {
+    window._recordAssistantMessage('The answer is 42.');
+    expect(window._getChatMessages()).toEqual([
+      expect.objectContaining({ content: 'The answer is 42.', type: 'assistant' })
+    ]);
+  });
+
+  test('_recordAssistantMessage is a no-op for empty/whitespace content', () => {
+    window._recordAssistantMessage('');
+    window._recordAssistantMessage('   ');
+    window._recordAssistantMessage(undefined);
+    expect(window._getChatMessages()).toHaveLength(0);
+  });
+
+  test('REGRESSION: renderFindAnswer, renderVisualHighlightAnswer, renderWatchVideoAnswer, ' +
+    'renderGuideFinalAnswer, and renderGuideRecap all reach chatMessages, not just addMessage()', async () => {
+    // Before this fix, these five render functions built their own DOM bubble directly and never
+    // touched chatMessages, so saveCurrentChat() silently dropped every Guide/Find/Visual-Highlight/
+    // Watch-Video answer — only the user's own question (added via addMessage) got saved.
+    addMessage('What is the return policy?', 'user');
+    window.renderFindAnswer({ findAnswer: 'Returns are accepted within 30 days.' });
+    window.renderVisualHighlightAnswer({ visualHighlightImage: 'AAAA', visualHighlightCaption: 'The banner shows free shipping.' });
+    window.renderWatchVideoAnswer({ watchVideoAnswer: 'The video explains setup in the first 2 minutes.' });
+    await window.renderGuideFinalAnswer({ finalAnswer: 'Task completed: order was placed.' });
+    await window.renderGuideRecap({ summary: 'Guide finished after 5 steps.', milestones: [] });
+    window.renderGuideFinalStateCard({ step: 1, verdict: 'unclear', reason: 'Reached the final page.' });
+
+    const texts = window._getChatMessages().map(m => m.content);
+    expect(texts).toEqual(expect.arrayContaining([
+      'What is the return policy?',
+      'Returns are accepted within 30 days.',
+      'The banner shows free shipping.',
+      'The video explains setup in the first 2 minutes.',
+      'Task completed: order was placed.',
+      'Guide finished after 5 steps.',
+      '[Unsure] Reached the final page.'
+    ]));
+
+    await window.saveCurrentChat();
+    expect(window.chrome.storage.local.set).toHaveBeenCalled();
+    const saved = window.chrome.storage.local.set.mock.calls[0][0]['pageguide_history'][0];
+    const savedTexts = saved.messages.map(m => m.content);
+    expect(savedTexts).toEqual(expect.arrayContaining(texts));
+  });
+});
