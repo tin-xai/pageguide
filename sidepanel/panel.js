@@ -4253,8 +4253,9 @@ async function stopPausedGuideWithRecap() {
   if (resumeBtn) resumeBtn.disabled = true;
   if (stopBtn) stopBtn.disabled = true;
   showTyping();
+  const targetTabId = guideTabId; // capture before clearing below — SW state is keyed per-tab now
   try {
-    const res = await sendToContentScript({ action: 'stopGuideWithRecap' }, guideTabId);
+    const res = await sendToContentScript({ action: 'stopGuideWithRecap' }, targetTabId);
     if (!res || res.success === false) throw new Error(res?.error || 'Could not stop guide');
     guideActive = false;
     guidePaused = false;
@@ -4264,7 +4265,7 @@ async function stopPausedGuideWithRecap() {
     updateGuidePauseButton();
     try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
     try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
-    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
     if (res.recap && res.recap.summary) {
       await renderGuideRecap(res.recap);
     } else {
@@ -4601,7 +4602,7 @@ async function stopGuide(message = '⏹ Guide stopped.') {
   try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
   try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
   // Clear SW state directly so it won't tell the next page to resume.
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
   try {
     await sendToContentScript({ action: 'stopGuide' }, targetTabId);
   } catch (e) { /* content script may not be reachable */ }
@@ -6100,8 +6101,10 @@ async function resetChat(showMessage = true) {
     chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
   } catch (e) {}
 
-  // Clear guide state in SW directly (doesn't depend on content script being available)
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+  // Clear guide state in SW directly (doesn't depend on content script being available).
+  // Scoped to currentTabId only — the SW now keeps one guide session per tab, so this can't
+  // wipe out a DIFFERENT tab's guide that's still actively running in the background.
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: currentTabId }); } catch (e) {}
 
   // Clear highlights on the active page
   try {

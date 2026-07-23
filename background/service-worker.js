@@ -71,9 +71,17 @@ let sidePanelOpen = false;
 // Primary state store — survives page navigations as long as the SW is alive.
 // Content scripts read this by connecting a 'guidev2' port on every page load.
 // Session storage in guidev2.js is the fallback if the SW was killed.
-let _gv2State = null;   // { active, question, previousSteps, pendingResume, lastUrl }
-let _gv2TabId = null;   // Tab ID that owns the active guidance session
-let _gv2PreClickTs = 0; // Timestamp of last guided click — used to catch new tabs when openerTabId is absent
+//
+// Keyed by tabId (NOT a single global) so multiple tabs can each run their own,
+// fully isolated guide session at the same time. Before this, _gv2State/_gv2TabId were single
+// globals: starting (or even just resetting the chat on) a second tab would silently overwrite
+// the first tab's entry, so the first guide would fail to resume after its next navigation, or
+// briefly become "ownerless" and think it had been stopped elsewhere.
+let _gv2Sessions = new Map(); // tabId -> { active, question, previousSteps, pendingResume, lastUrl }
+// Per-tab timestamps for the "guided click about to open a new tab" watch window — used to
+// transfer ownership to the new tab when openerTabId is unavailable (e.g. noopener links).
+// Also keyed by tabId so two tabs guiding concurrently don't stomp on each other's click watch.
+let _gv2PreClickTsByTab = new Map(); // tabId -> timestamp
 
 // ===== Extension Icon Click - Toggle Side Panel =====
 chrome.action.onClicked.addListener(async (tab) => {
@@ -147,12 +155,11 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'guidev2') {
     // A content script just loaded on a (possibly new) page.
     // Send it the current guidance state immediately so it can decide whether to resume.
-    // Only share state with the tab that owns the guidance session.
+    // Only share state with THIS tab's own session — each tab has its own map entry, so one
+    // tab's content script can never see or resume another tab's in-progress guide.
     const senderTabId = port.sender?.tab?.id;
-    const stateForThisTab =
-      (senderTabId && senderTabId === _gv2TabId && _gv2State?.active)
-        ? _gv2State
-        : null;
+    const session = senderTabId ? _gv2Sessions.get(senderTabId) : null;
+    const stateForThisTab = session?.active ? session : null;
 
     try {
       port.postMessage({ type: 'swState', state: stateForThisTab });
@@ -163,25 +170,36 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // ===== New Tab Detection for Guidance =====
-// When the guided tab opens a link in a new tab (target="_blank" or window.open),
+// When a guided tab opens a link in a new tab (target="_blank" or window.open),
 // openerTabId on the created tab identifies the originating tab.
-// We transfer guidance ownership so the new tab's content script can resume.
+// We transfer THAT tab's session to the new tab so its content script can resume — every other
+// tab's session (there may be several running concurrently) is left completely untouched.
 chrome.tabs.onCreated.addListener((tab) => {
-  if (!(_gv2State?.active && _gv2TabId)) return;
-  // Transfer guidance when the new tab was opened from the guided tab.
-  // Two detection paths:
-  //   1. openerTabId — reliable when Chrome sets it (most target="_blank" links)
-  //   2. _gv2PreClickTs — fallback for links where openerTabId is absent
-  //      (e.g. window.open with noopener, JS-redirected links)
-  const byOpener = tab.openerTabId === _gv2TabId;
-  const byPreClick = _gv2PreClickTs > 0 && (Date.now() - _gv2PreClickTs < 2000);
-  if (byOpener || byPreClick) {
-    console.log('[SW guidev2] New tab', tab.id, 'opened from guided tab', _gv2TabId,
-      byOpener ? '(openerTabId)' : '(preClick watch)', '— transferring guidance');
-    _gv2TabId = tab.id;
-    _gv2State = { ..._gv2State, pendingResume: true };
-    _gv2PreClickTs = 0; // consume the flag — one transfer per click
+  // 1. openerTabId — reliable when Chrome sets it (most target="_blank" links).
+  let sourceTabId = (tab.openerTabId != null && _gv2Sessions.get(tab.openerTabId)?.active)
+    ? tab.openerTabId
+    : null;
+
+  // 2. Fallback for links where openerTabId is absent (e.g. window.open with noopener,
+  //    JS-redirected links): the most recently-armed pre-click watch, if still within 2s.
+  if (sourceTabId == null) {
+    let newestTs = 0;
+    for (const [tabId, ts] of _gv2PreClickTsByTab) {
+      if (Date.now() - ts < 2000 && ts > newestTs && _gv2Sessions.get(tabId)?.active) {
+        newestTs = ts;
+        sourceTabId = tabId;
+      }
+    }
   }
+
+  if (sourceTabId == null) return;
+
+  const detectedBy = tab.openerTabId === sourceTabId ? '(openerTabId)' : '(preClick watch)';
+  console.log('[SW guidev2] New tab', tab.id, 'opened from guided tab', sourceTabId, detectedBy, '— transferring guidance');
+  const session = _gv2Sessions.get(sourceTabId);
+  _gv2Sessions.delete(sourceTabId);
+  _gv2Sessions.set(tab.id, { ...session, pendingResume: true });
+  _gv2PreClickTsByTab.delete(sourceTabId); // consume the flag — one transfer per click
 });
 
 // Append a debug prompt history entry, capping at 50 to avoid quota storage issues
@@ -318,34 +336,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'guidanceV2_setState') {
-    // Content script saves guidance state to SW memory.
-    // Kept in sync by guidev2.js whenever the step changes.
-    _gv2State = request.state || null;
-    _gv2TabId = request.tabId ?? sender.tab?.id ?? _gv2TabId;
+    // Content script saves guidance state to SW memory, keyed by ITS OWN tab id.
+    // Kept in sync by guidev2.js whenever the step changes. Setting/clearing one tab's entry
+    // never touches any other tab's — that's the whole point of keying by tabId.
+    const targetTabId = request.tabId ?? sender.tab?.id;
+    if (targetTabId != null) {
+      if (request.state) _gv2Sessions.set(targetTabId, request.state);
+      else _gv2Sessions.delete(targetTabId);
+    }
     // Synchronous response — do NOT return true (that keeps the channel open and
     // causes "message channel closed before response received" warnings).
     sendResponse({ success: true });
     return false;
   }
   if (request.action === 'guidanceV2_clearState') {
-    _gv2State = null;
-    _gv2TabId = null;
+    // Messages from a content script carry no explicit tabId (sender.tab.id is authoritative);
+    // messages from the side panel (no sender.tab) must pass one explicitly — see panel.js's
+    // stopGuide/stopPausedGuideWithRecap/resetChat, which all target guideTabId/currentTabId.
+    const targetTabId = request.tabId ?? sender.tab?.id;
+    if (targetTabId != null) _gv2Sessions.delete(targetTabId);
     chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
     sendResponse({ success: true });
     return false;
   }
   if (request.action === 'guidanceV2_isOwner') {
-    // Content script asks: does this tab still own the active guidance session?
-    // Used to detect when a click transferred guidance to a new tab.
+    // Content script asks: does this tab still have an active guidance session?
+    // Used to detect when a click transferred guidance to a new tab (see chrome.tabs.onCreated
+    // above, which deletes the source tab's entry as part of the transfer).
     const senderTabId = sender.tab?.id;
-    sendResponse({ isOwner: !!senderTabId && senderTabId === _gv2TabId });
+    sendResponse({ isOwner: !!senderTabId && !!_gv2Sessions.get(senderTabId)?.active });
     return false;
   }
   if (request.action === 'guidanceV2_preClick') {
     // Content script signals that a guided click is about to fire.
-    // Arm the pre-click watch window so onCreated can transfer guidance
+    // Arm this tab's pre-click watch window so onCreated can transfer guidance
     // even when tab.openerTabId is not available.
-    _gv2PreClickTs = Date.now();
+    const senderTabId = sender.tab?.id;
+    if (senderTabId != null) _gv2PreClickTsByTab.set(senderTabId, Date.now());
     sendResponse({ success: true });
     return false;
   }

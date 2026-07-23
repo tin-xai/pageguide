@@ -3688,3 +3688,126 @@ describe('Save Chat captures every answer type (sidepanel/panel.js)', () => {
     expect(savedTexts).toEqual(expect.arrayContaining(texts));
   });
 });
+
+describe('Per-tab guide session isolation (background/service-worker.js)', () => {
+  let onMessage, onConnect, onCreated;
+
+  beforeAll(() => {
+    window.chrome = {
+      action: { onClicked: { addListener: jest.fn() } },
+      runtime: {
+        onConnect: { addListener: jest.fn() },
+        onMessage: { addListener: jest.fn() },
+        sendMessage: jest.fn(),
+        getPlatformInfo: jest.fn()
+      },
+      tabs: {
+        onCreated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        get: jest.fn(),
+        query: jest.fn(),
+        captureVisibleTab: jest.fn(),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        sync: { get: jest.fn().mockResolvedValue({}) },
+        local: { get: jest.fn().mockResolvedValue({}), remove: jest.fn().mockResolvedValue(undefined) },
+        session: { get: jest.fn(), set: jest.fn(), remove: jest.fn() }
+      }
+    };
+    loadScript('background/service-worker.js');
+    onMessage = window.chrome.runtime.onMessage.addListener.mock.calls[0][0];
+    onConnect = window.chrome.runtime.onConnect.addListener.mock.calls[0][0];
+    onCreated = window.chrome.tabs.onCreated.addListener.mock.calls[0][0];
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function send(action, extra = {}, sender = {}) {
+    let response;
+    onMessage({ action, ...extra }, sender, (r) => { response = r; });
+    return response;
+  }
+
+  function connectGuidev2Port(tabId) {
+    const port = { name: 'guidev2', sender: { tab: { id: tabId } }, postMessage: jest.fn() };
+    onConnect(port);
+    return port;
+  }
+
+  test('REGRESSION: two tabs each keep their own active session — setting/resuming one never leaks into the other', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab B task' } }, { tab: { id: 2 } });
+
+    const portA = connectGuidev2Port(1);
+    const portB = connectGuidev2Port(2);
+    expect(portA.postMessage).toHaveBeenCalledWith({ type: 'swState', state: { active: true, question: 'Tab A task' } });
+    expect(portB.postMessage).toHaveBeenCalledWith({ type: 'swState', state: { active: true, question: 'Tab B task' } });
+
+    // Each tab still reports itself as the owner of its own session.
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: true });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 2 } })).toEqual({ isOwner: true });
+  });
+
+  test('REGRESSION: clearing one tab (e.g. Stop, or the panel resetting a DIFFERENT tab it just switched to) does not clear another tab\'s active guide', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab B task' } }, { tab: { id: 2 } });
+
+    // Side-panel-originated clear (no sender.tab — must pass tabId explicitly), e.g. resetChat()
+    // firing while the panel just switched to look at an unrelated tab 2.
+    send('guidanceV2_clearState', { tabId: 2 });
+
+    const portA = connectGuidev2Port(1);
+    const portB = connectGuidev2Port(2);
+    expect(portA.postMessage).toHaveBeenCalledWith({ type: 'swState', state: { active: true, question: 'Tab A task' } });
+    expect(portB.postMessage).toHaveBeenCalledWith({ type: 'swState', state: null });
+  });
+
+  test('a content-script-originated clearState (Stop button) uses sender.tab.id, not an explicit tabId', () => {
+    send('guidanceV2_setState', { state: { active: true } }, { tab: { id: 5 } });
+    send('guidanceV2_clearState', {}, { tab: { id: 5 } });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 5 } })).toEqual({ isOwner: false });
+  });
+
+  test('transfers ownership to a new tab via openerTabId, leaving the opener with no session', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    onCreated({ id: 2, openerTabId: 1 });
+
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: false });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 2 } })).toEqual({ isOwner: true });
+
+    const portNew = connectGuidev2Port(2);
+    expect(portNew.postMessage).toHaveBeenCalledWith({
+      type: 'swState',
+      state: { active: true, question: 'Tab A task', pendingResume: true }
+    });
+  });
+
+  test('does not transfer to an unrelated new tab (no matching openerTabId or pre-click)', () => {
+    send('guidanceV2_setState', { state: { active: true } }, { tab: { id: 1 } });
+    onCreated({ id: 99, openerTabId: 42 }); // unrelated opener
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: true });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 99 } })).toEqual({ isOwner: false });
+  });
+
+  test('REGRESSION: with two concurrently-guided tabs, a new tab only ever transfers the matching opener\'s session', () => {
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab A task' } }, { tab: { id: 1 } });
+    send('guidanceV2_setState', { state: { active: true, question: 'Tab B task' } }, { tab: { id: 2 } });
+
+    onCreated({ id: 3, openerTabId: 2 }); // opened from tab B, not tab A
+
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 1 } })).toEqual({ isOwner: true });  // untouched
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 2 } })).toEqual({ isOwner: false }); // transferred away
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 3 } })).toEqual({ isOwner: true });  // received it
+  });
+
+  test('falls back to the pre-click watch when openerTabId is absent (noopener links)', () => {
+    send('guidanceV2_setState', { state: { active: true } }, { tab: { id: 7 } });
+    send('guidanceV2_preClick', {}, { tab: { id: 7 } });
+    onCreated({ id: 8 }); // no openerTabId
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 7 } })).toEqual({ isOwner: false });
+    expect(send('guidanceV2_isOwner', {}, { tab: { id: 8 } })).toEqual({ isOwner: true });
+  });
+});
