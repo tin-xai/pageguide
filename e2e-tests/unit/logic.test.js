@@ -3769,6 +3769,7 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
   test('REGRESSION: a new session after one finishes gets its own fresh card, leaving the sealed one as static history', () => {
     const sealedCountBefore = document.querySelectorAll('.pageguide-goal--sealed').length;
 
+    window._startNewAskForTest(); // this is a genuinely new user submission, not an internal phase
     window.addGuideStep({ sessionId: 'timeline-s2', step: 1, planStep: 1, isLastStep: false, instruction: 'Start a new task' });
     window.renderGoalCard({ route: 'guide', prompt: 'Second task', step: 1, total: 1, title: 'Second task' });
 
@@ -3782,20 +3783,24 @@ describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)'
     expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(2);
   });
 
-  test('REGRESSION: internal phase changes under the same task title replace the previous card instead of stacking a new one', () => {
+  test('REGRESSION: internal phase changes within the same ask replace the previous card instead of stacking a new one', () => {
     // Real-world trigger: one compound user request ("go to bbc news and find 2 news items")
     // gets internally decomposed into multiple guide phases, each with its own session id, but
     // it's still visually the same task. Previously every phase change sealed-and-kept the old
-    // card, leaving 2-3 duplicate bubbles behind for a single ask.
+    // card, leaving 2-3 duplicate bubbles behind for a single ask. Titles aren't a reliable way
+    // to detect "same ask" (state that feeds them can get cleared between phases, and a user can
+    // retype an identical prompt as a genuinely new ask), so this must hold even when the title
+    // reported by each phase differs slightly.
     window.clearGoalAndStepPanel();
     document.getElementById('pageguide-messages').innerHTML = ''; // clear prior tests' bubbles
+    window._startNewAskForTest(); // exactly one ask covers both phases below
 
-    window.resetLiveGuideTimelineForSession('phase-1', { title: 'Compound task' });
-    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Compound task' });
+    window.resetLiveGuideTimelineForSession('phase-1', { title: 'Go to BBC News' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Go to BBC News' });
     expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(1);
 
-    window.resetLiveGuideTimelineForSession('phase-2', { title: 'Compound task' });
-    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Compound task' });
+    window.resetLiveGuideTimelineForSession('phase-2', { title: 'Find 2 news items' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Compound task', step: 1, total: 1, title: 'Find 2 news items' });
 
     // Still exactly one bubble — the phase-1 card was replaced, not sealed alongside a new one.
     expect(document.querySelectorAll('#pageguide-messages > .pageguide-goal').length).toBe(1);

@@ -42,6 +42,10 @@ let guideTimelineCheckpointSteps = null;
 // just like the rest of the guide state — switching tabs must never leak one tab's completion
 // badge onto another tab.
 let tabChipDone = false;
+// Bumped once per real user submission (sendMessage()). Tags each View Journey card with the
+// ask it belongs to, so internal phase changes within ONE ask can be told apart from the user
+// genuinely starting a new one — see resetLiveGuideTimelineForSession.
+let _currentAskId = 0;
 let _lastFindMessageStep = null; // Step number whose find answer was already posted to chat
 let _lastVisualHighlightStep = null; // Step whose visual_highlight image was already posted to chat
 let _lastWatchVideoMessageStep = null; // Step number whose watch_video answer was already posted to chat
@@ -1858,6 +1862,7 @@ function ensureGoalCardMessage() {
   card = document.createElement('div');
   card.id = 'pageguide-goal';
   card.className = 'pageguide-goal pageguide-goal--chat';
+  card.dataset.askId = String(_currentAskId);
   card.innerHTML = `
     <div class="pageguide-goal-main">
       <div class="pageguide-goal-title-row">
@@ -2024,12 +2029,14 @@ function resetLiveGuideTimelineForSession(sessionId, options = {}) {
 
   // The agent sometimes splits ONE user request into multiple internal phases, each getting
   // its own session id (e.g. "go to bbc news" as one phase, "find 2 news items" as another) —
-  // but it's still visually the same task to the user. Detect that by comparing titles: if
-  // unchanged, this is a phase continuation, so drop the previous phase's card instead of
-  // sealing it as separate history, so the user ends up with exactly one bubble per ask
-  // instead of one per internal phase.
-  const incomingTitle = String(options.title || '').trim();
-  const sameTaskContinuing = !!incomingTitle && incomingTitle === String(currentGuideTitle || '').trim();
+  // but it's still visually the same task to the user. Comparing titles turned out to be too
+  // fragile (state that feeds the title can get cleared between phases, and a user can also
+  // retype the identical prompt as a genuinely NEW ask). Instead, tag the card with the id of
+  // the user ask that created it (_currentAskId, bumped once per real sendMessage() call): a
+  // phase continuation always happens under the SAME ask id, so this is reliable regardless of
+  // title text. Only a real new ask (a fresh _currentAskId) seals the old card as history.
+  const existingCard = document.getElementById('pageguide-goal');
+  const sameAskContinuing = !!existingCard && existingCard.dataset.askId === String(_currentAskId);
 
   currentGuideSessionId = sid;
   currentGuidePlan = Array.isArray(options.plan) ? options.plan : [];
@@ -2045,8 +2052,8 @@ function resetLiveGuideTimelineForSession(sessionId, options = {}) {
   visibleJourneyTitle = '';
   visibleJourneyRecalled = false;
   hideGoalStepPreview();
-  if (sameTaskContinuing) {
-    document.getElementById('pageguide-goal')?.remove();
+  if (sameAskContinuing) {
+    existingCard.remove();
   } else {
     // A genuinely different task is starting (possibly right after a previous one finished, in
     // the same chat). Seal whatever card is currently live so it's left behind as static history
@@ -2829,6 +2836,8 @@ window._getChatMessages = () => chatMessages;
 // so they never become window properties on their own. Exposed for unit tests only.
 window._getTabChipDone = () => tabChipDone;
 window._getTabSession = (tabId) => _tabSessions.get(tabId);
+// Test-only: simulate a genuinely new user submission (sendMessage() normally bumps this).
+window._startNewAskForTest = () => { _currentAskId += 1; };
 
 /**
  * Add a message to the chat
@@ -5375,6 +5384,7 @@ async function sendMessage() {
   if (input) input.value = '';
   cancelRequested = false;
   guideStopped = false; // a fresh send re-arms the panel for running-state messages
+  _currentAskId += 1; // a genuinely new user ask — see resetLiveGuideTimelineForSession
 
   // Track if a specific routing is forced by the user
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
