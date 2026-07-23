@@ -3561,6 +3561,7 @@ describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)',
       },
       tabs: {
         onCreated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
         get: jest.fn(),
         query: jest.fn(),
         captureVisibleTab: jest.fn(),
@@ -3603,6 +3604,84 @@ describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)',
     window.chrome.tabs.captureVisibleTab.mockRejectedValue(new Error('No window with id: 1'));
     const result = await window._doCaptureScreenshot(7, 1);
     expect(result.error).toMatch(/Screenshot failed/);
+  });
+});
+
+describe('User Study behavior tracker aggregation (background/service-worker.js)', () => {
+  let onMessage;
+  let onUpdated;
+
+  beforeAll(() => {
+    window.chrome = {
+      action: { onClicked: { addListener: jest.fn() } },
+      runtime: {
+        onConnect: { addListener: jest.fn() },
+        onMessage: { addListener: jest.fn() },
+        sendMessage: jest.fn(),
+        getPlatformInfo: jest.fn()
+      },
+      tabs: {
+        onCreated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        get: jest.fn(),
+        query: jest.fn(),
+        captureVisibleTab: jest.fn(),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        sync: { get: jest.fn().mockResolvedValue({}) },
+        local: { get: jest.fn().mockResolvedValue({}) },
+        session: { get: jest.fn(), set: jest.fn(), remove: jest.fn() }
+      }
+    };
+    loadScript('background/service-worker.js');
+    // Captured once, up front — jest.clearAllMocks() below only resets call-history bookkeeping
+    // on the jest.fn()s, it doesn't invalidate this already-extracted function reference. If we
+    // grabbed these inside a test instead, clearAllMocks() would have already wiped the call args.
+    onMessage = window.chrome.runtime.onMessage.addListener.mock.calls[0][0];
+    onUpdated = window.chrome.tabs.onUpdated.addListener.mock.calls[0][0];
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function send(action, extra = {}) {
+    let response;
+    onMessage({ action, ...extra }, {}, (r) => { response = r; });
+    return response;
+  }
+
+  test('starts empty, accumulates batches, and getData resets for the next task', () => {
+    expect(send('studyTracker_start')).toEqual({ success: true });
+    expect(send('studyTracker_batch', { scroll: 2, click: 1 })).toEqual({ success: true });
+    expect(send('studyTracker_batch', { scroll: 1, ctrlF: 3, mouseMove: 40 })).toEqual({ success: true });
+
+    const data = send('studyTracker_getData');
+    expect(data).toMatchObject({ scroll: 3, ctrlF: 3, click: 1, mouseMove: 40, textSelect: 0 });
+
+    // REGRESSION: a second read right after must come back empty — getData is meant to hand off
+    // one task's totals and reset, not leak counts into the next task.
+    const second = send('studyTracker_getData');
+    expect(second).toEqual({ scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] });
+  });
+
+  test('ignores batches that arrive before studyTracker_start (or after getData reset)', () => {
+    send('studyTracker_getData'); // ensure a clean slate regardless of test order
+    send('studyTracker_batch', { scroll: 5 });
+    const data = send('studyTracker_getData');
+    expect(data.scroll).toBe(0);
+  });
+
+  test('records page navigations via chrome.tabs.onUpdated only while tracking is active', () => {
+    send('studyTracker_getData'); // clean slate
+    // Not tracking yet — should be ignored.
+    onUpdated(1, { url: 'https://example.com/before' });
+    send('studyTracker_start');
+    onUpdated(1, { url: 'https://example.com/page-1' });
+    onUpdated(1, { status: 'complete' }); // no url — should not count as a page visit
+    const data = send('studyTracker_getData');
+    expect(data.pages.map(p => p.url)).toEqual(['https://example.com/page-1']);
   });
 });
 
@@ -3686,5 +3765,136 @@ describe('Save Chat captures every answer type (sidepanel/panel.js)', () => {
     const saved = window.chrome.storage.local.set.mock.calls[0][0]['pageguide_history'][0];
     const savedTexts = saved.messages.map(m => m.content);
     expect(savedTexts).toEqual(expect.arrayContaining(texts));
+  });
+});
+
+describe('User Study pure helpers (sidepanel/study.js)', () => {
+  beforeAll(() => {
+    loadScript('sidepanel/study.js');
+  });
+
+  describe('_formatStudyTime', () => {
+    test('formats whole minutes', () => {
+      expect(window._formatStudyTime(3 * 60 * 1000)).toBe('03:00');
+    });
+    test('formats partial minutes with padding', () => {
+      expect(window._formatStudyTime(65 * 1000)).toBe('01:05');
+    });
+    test('clamps negative durations to 00:00', () => {
+      expect(window._formatStudyTime(-500)).toBe('00:00');
+    });
+  });
+
+  describe('_buildTaskQueue', () => {
+    test('flattens find then guide tasks, preserving file order', () => {
+      const data = {
+        find: [{ id: 'f1' }, { id: 'f2' }],
+        guide: [{ id: 'g1' }],
+      };
+      const queue = window._buildTaskQueue(data);
+      expect(queue).toEqual([
+        { taskType: 'find', task: { id: 'f1' } },
+        { taskType: 'find', task: { id: 'f2' } },
+        { taskType: 'guide', task: { id: 'g1' } },
+      ]);
+    });
+
+    test('tolerates missing arrays', () => {
+      expect(window._buildTaskQueue({})).toEqual([]);
+      expect(window._buildTaskQueue(null)).toEqual([]);
+    });
+  });
+
+  describe('_gradeFindAnswer', () => {
+    test('grades case- and whitespace-insensitively', () => {
+      expect(window._gradeFindAnswer('  1936 ', '1936')).toBe(true);
+      expect(window._gradeFindAnswer('Guido Van Rossum', 'guido van rossum')).toBe(true);
+    });
+    test('marks a wrong answer incorrect', () => {
+      expect(window._gradeFindAnswer('1943', '1936')).toBe(false);
+    });
+  });
+
+  describe('_shuffleStudyOptions', () => {
+    test('is a pure permutation (same elements, injectable RNG for determinism)', () => {
+      const input = ['a', 'b', 'c', 'd'];
+      const shuffled = window._shuffleStudyOptions(input, () => 0.999); // deterministic RNG
+      expect(shuffled.slice().sort()).toEqual(input.slice().sort());
+      expect(input).toEqual(['a', 'b', 'c', 'd']); // does not mutate the input
+    });
+  });
+
+  describe('_buildStudyResultRecord', () => {
+    test('grades a find task and fills in interaction/chat counts', () => {
+      const record = window._buildStudyResultRecord({
+        participantId: 'P07',
+        taskIndex: 0,
+        totalTasks: 6,
+        taskType: 'find',
+        task: { id: 'find-1', question: 'When?', answer: '1936', url: 'https://example.com' },
+        elapsedMs: 45000,
+        answer: '1936',
+        confidence: 'very',
+        helpfulness: 'very',
+        chatSnapshot: { chat_turn_count: 2, chat_transcript: [{ role: 'user', content: 'hi' }] },
+        behaviorData: { scroll: 3, ctrlF: 1, textSelect: 0, click: 5, mouseMove: 120, pages: [{ url: 'https://example.com' }] },
+      });
+      expect(record).toMatchObject({
+        tool: 'pageguide',
+        participant_id: 'P07',
+        task_id: 'find-1',
+        task_type: 'find',
+        answer: '1936',
+        answer_correct: true,
+        chat_turn_count: 2,
+        scroll_count: 3,
+        ctrl_f_count: 1,
+        click_count: 5,
+        mouse_move_px: 120,
+        page_visit_count: 1,
+        page_visit_urls: ['https://example.com'],
+      });
+    });
+
+    test('REGRESSION: guide tasks are never graded right/wrong (self-reported completion only)', () => {
+      const record = window._buildStudyResultRecord({
+        participantId: 'P07',
+        taskIndex: 2,
+        totalTasks: 6,
+        taskType: 'guide',
+        task: { id: 'guide-1', task: 'Do the thing', url: 'https://example.com' },
+        elapsedMs: 90000,
+        answer: 'completed',
+        confidence: 'somewhat',
+        helpfulness: 'somewhat',
+        chatSnapshot: null,
+        behaviorData: null,
+      });
+      expect(record.answer_correct).toBeNull();
+      expect(record.answer).toBe('completed');
+      expect(record.chat_turn_count).toBe(0);
+      expect(record.scroll_count).toBe(0);
+    });
+  });
+
+  describe('_buildStudyResultsCSV', () => {
+    test('produces a header row plus one row per result, quoting fields with commas', () => {
+      const csv = window._buildStudyResultsCSV([
+        { tool: 'pageguide', participant_id: 'P07', task_id: 'find-1', task_type: 'find', answer: 'a, b', page_visit_urls: ['https://a.com'] },
+      ]);
+      const lines = csv.split('\n');
+      expect(lines[0]).toBe(
+        'tool,participant_id,task_index,total_tasks,task_id,task_type,question_or_task,url,time_ms,answer,answer_correct,confidence,helpfulness,chat_turn_count,scroll_count,ctrl_f_count,text_select_count,click_count,mouse_move_px,page_visit_count,page_visit_urls,completed_at'
+      );
+      expect(lines[1]).toContain('"a, b"');
+      // page_visit_urls is an array — JSON-stringified, then CSV-quoted since that JSON contains
+      // both commas and quotes (the inner quotes get doubled per CSV escaping rules).
+      expect(lines[1]).toContain('"[""https://a.com""]"');
+    });
+
+    test('an empty result set is just the header row', () => {
+      const csv = window._buildStudyResultsCSV([]);
+      expect(csv.split('\n')).toHaveLength(1);
+    });
   });
 });

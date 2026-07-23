@@ -1,6 +1,7 @@
 # API Keys - DO NOT COMMIT
 config.js
 keys.py
+sidepanel/supabase_config.js
 
 # Dependencies
 node_modules/

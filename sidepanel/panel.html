@@ -5,9 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PageGuide</title>
   <link rel="stylesheet" href="panel.css">
+  <link rel="stylesheet" href="study.css">
 </head>
 <body>
   <div class="pageguide-panel">
+
+    <!-- User Study mini-bar (shown while a study task is running so the chat stays usable) -->
+    <div class="study-mini-bar" id="study-mini-bar" style="display:none;"></div>
+
+    <!-- User Study overlay (welcome/setup/answer/summary screens) -->
+    <div class="study-overlay" id="study-overlay" style="display:none;"></div>
 
     <!-- History overlay (covers whole panel when visible) -->
     <div class="pageguide-history-overlay" id="pageguide-history" style="display:none;">
@@ -221,6 +228,7 @@
               <button class="pageguide-menu-item" id="pageguide-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/></svg></span>Page: On</button>
               <button class="pageguide-menu-item pageguide-guide-only-action" id="pageguide-export-pdf" title="Export the guide journey as a PDF"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span>Export PDF</button>
               <button class="pageguide-menu-item pageguide-pdf-reader-btn" id="pageguide-pdf-reader"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg></span>Open PDF reader</button>
+              <button class="pageguide-menu-item" id="pageguide-open-study" title="Run the Find/Guide user study"><span class="pageguide-inline-icon">📋</span>User Study</button>
             </div>
           </div>
 
@@ -249,5 +257,9 @@
   <script src="../content/utils.js"></script>
   <script src="rewind_timeline.js"></script>
   <script src="panel.js"></script>
+  <!-- Optional, gitignored — defines SUPABASE_URL/SUPABASE_ANON_KEY for study.js.
+       See supabase_config.example.js. Safe to leave as placeholders (study.js checks for that). -->
+  <script src="supabase_config.js"></script>
+  <script src="study.js"></script>
 </body>
 </html>

@@ -2165,6 +2165,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     hideMoreMenu();
     await saveCurrentChat();
   });
+  // User Study (defined in study.js, loaded after this file)
+  document.getElementById('pageguide-open-study')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel();
+  });
   document.getElementById('pageguide-export-pdf')?.addEventListener('click', () => {
     hideMoreMenu();
     exportJourneyPdf();
@@ -5255,11 +5260,18 @@ async function sendMessage() {
 
   if (panelRunning) return; // already running — the send button is acting as Stop
 
-  const query = input?.value.trim() || '';
+  let query = input?.value.trim() || '';
 
   // Only return early if we have no query AND no attached context
   if (!query && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
     return;
+  }
+
+  // User Study: study.js pre-fills the input with the clean task text (no visible slash command)
+  // and stashes the routing prefix here so the task still routes to the right mode automatically.
+  if (input?.dataset.studyPrefix) {
+    query = `${input.dataset.studyPrefix} ${query}`;
+    delete input.dataset.studyPrefix;
   }
 
   _hideSlashMenu();

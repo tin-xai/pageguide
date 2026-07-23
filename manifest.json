@@ -47,6 +47,7 @@
         "content/tasks/guidev2.js",
         "content/tasks/protection.js",
         "content/tasks/image_ask.js",
+        "content/study_tracker.js",
         "content/content.js"
       ],
       "css": ["content/content.css"],
@@ -61,7 +62,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json", "rewind/*"],
+      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json", "rewind/*", "user_study_data/*"],
       "matches": ["<all_urls>"]
     }
   ]

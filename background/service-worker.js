@@ -61,6 +61,7 @@ const CONTENT_SCRIPTS = [
   'content/tasks/ask.js',
   'content/tasks/ask_pdf.js',
   'content/tasks/image_ask.js',
+  'content/study_tracker.js',
   'content/content.js'
 ];
 
@@ -184,6 +185,18 @@ chrome.tabs.onCreated.addListener((tab) => {
   }
 });
 
+// ===== User Study Behavior Tracker =====
+// Accumulates per-task behavioral events (from content/study_tracker.js) across page
+// navigations, since a single task can span multiple pages. Reset by studyTracker_start,
+// read + cleared by studyTracker_getData (called once the participant hits "Done").
+let _studyTracker = null; // { active, scroll, ctrlF, textSelect, click, mouseMove, pages: [{url, ts}] }
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (_studyTracker && _studyTracker.active && changeInfo.url) {
+    _studyTracker.pages.push({ url: changeInfo.url, ts: Date.now() });
+  }
+});
+
 // Append a debug prompt history entry, capping at 50 to avoid quota storage issues
 async function appendDebugPrompt(promptData) {
   try {
@@ -278,6 +291,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     captureScreenshot(targetTabId, targetWindowId)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'studyTracker_start') {
+    _studyTracker = { active: true, scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
+    sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === 'studyTracker_batch') {
+    if (_studyTracker && _studyTracker.active) {
+      _studyTracker.scroll     += request.scroll     || 0;
+      _studyTracker.ctrlF      += request.ctrlF      || 0;
+      _studyTracker.textSelect += request.textSelect || 0;
+      _studyTracker.click      += request.click      || 0;
+      _studyTracker.mouseMove  += request.mouseMove  || 0;
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === 'studyTracker_getData') {
+    const data = _studyTracker
+      ? { scroll: _studyTracker.scroll, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, click: _studyTracker.click, mouseMove: _studyTracker.mouseMove, pages: [..._studyTracker.pages] }
+      : { scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
+    _studyTracker = null;
+    sendResponse(data);
     return true;
   }
   if (request.action === 'extractPdfText') {
