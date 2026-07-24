@@ -3322,7 +3322,11 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     window.chrome = {
       runtime: { sendMessage: jest.fn() },
       storage: {
-        session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) }
+        session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) },
+        // Non-grounding baseline mode (isNonGroundingModeOn, content/functions/highlight.js)
+        // reads this directly — default empty (unset) so existing tests keep their original
+        // "grounding on" behavior unless a test overrides the mock's resolved value.
+        local: { get: jest.fn(async () => ({})) }
       }
     };
     window.getPageBackground = () => ({ isDark: false });
@@ -3334,14 +3338,17 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     window.captureScreenshot = jest.fn(async () => 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
     window.IS_TEST_ENV = true;
     window.PROMPTS = { ANSWER_AND_HIGHLIGHT: 'CONTENT:{pageContent}\nINDEX:{pageIndex}' };
-    // guidev2.js calls gv2ParseFindResponse/gv2StepHasTarget, which utils.js defines — the
-    // same order manifest.json loads them in. Load it here so this block stands alone.
+    // guidev2.js calls gv2ParseFindResponse/gv2StepHasTarget, which utils.js defines, and
+    // isNonGroundingModeOn, which highlight.js defines — the same order manifest.json loads
+    // them in. Load both here so this block stands alone.
     loadScript('content/utils.js');
+    loadScript('content/functions/highlight.js');
     loadScript('content/tasks/guidev2.js');
   });
 
   beforeEach(() => {
     jest.clearAllMocks();
+    window.chrome.storage.local.get = jest.fn(async () => ({})); // grounding on (default) unless overridden
     window.getVisibleText = jest.fn(() => 'Lost property. Contact the depot within 30 days of travel.');
     window.createPageIndex = jest.fn(() => ({ indexText: '[12] Contact the depot within 30 days', count: 1 }));
     window.safeSendMessage = jest.fn(async () => ({ content: CITED_ANSWER }));
@@ -3434,6 +3441,21 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     expect(result.isFind).toBe(true);
     const paused = window.chrome.runtime.sendMessage.mock.calls.find(c => c[0]?.action === 'guidePaused');
     expect(paused).toBeUndefined();
+  });
+
+  test('REGRESSION: Non-grounding baseline mode skips highlighting entirely, even with valid on-page citations', async () => {
+    // Same cited answer as the very first test in this block ("reads the page with a CONTENT
+    // index and highlights the cited passages"), which asserts highlighting DOES happen by
+    // default — this proves the only thing that changed is the stored toggle, not the routing,
+    // LLM call, or answer text.
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideNonGrounding: 'on' }));
+
+    const result = await window.gv2ProcessResponse(findStep());
+
+    expect(window.applyHighlightsFromCitations).not.toHaveBeenCalled();
+    expect(result.answer).toBe(CITED_ANSWER); // plain-text answer is unchanged
+    expect(result.highlightCount).toBe(0);
+    expect(result.hasHighlights).toBe(false);
   });
 });
 
@@ -3818,6 +3840,108 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       const csv = window._buildStudyResultsCSV([]);
       expect(csv.split('\n')).toHaveLength(1);
     });
+  });
+});
+
+describe('isNonGroundingModeOn (content/functions/highlight.js)', () => {
+  beforeAll(() => {
+    document.body.innerHTML = '';
+    loadScript('content/functions/highlight.js');
+  });
+
+  test('defaults to false (grounding on) when nothing is stored', async () => {
+    window.chrome = { storage: { local: { get: jest.fn().mockResolvedValue({}) } } };
+    await expect(window.isNonGroundingModeOn()).resolves.toBe(false);
+  });
+
+  test('returns true when the stored value is "on"', async () => {
+    window.chrome = { storage: { local: { get: jest.fn().mockResolvedValue({ pageguideNonGrounding: 'on' }) } } };
+    await expect(window.isNonGroundingModeOn()).resolves.toBe(true);
+  });
+
+  test('returns false when the stored value is "off"', async () => {
+    window.chrome = { storage: { local: { get: jest.fn().mockResolvedValue({ pageguideNonGrounding: 'off' }) } } };
+    await expect(window.isNonGroundingModeOn()).resolves.toBe(false);
+  });
+
+  test('fails safe to false (grounding on) if chrome.storage throws', async () => {
+    window.chrome = { storage: { local: { get: jest.fn().mockRejectedValue(new Error('boom')) } } };
+    await expect(window.isNonGroundingModeOn()).resolves.toBe(false);
+  });
+});
+
+describe('Grounding toggle button (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() },
+        local: {
+          get: jest.fn().mockResolvedValue({}),
+          set: jest.fn().mockResolvedValue(undefined)
+        }
+      }
+    };
+    document.body.innerHTML = `<div id="pageguide-goal-dots"></div>`;
+    loadScript('sidepanel/panel.js');
+  });
+
+  // Fresh markup + a fresh init() call per test, so each test's button/menu has exactly one
+  // set of listeners — initNonGroundingToggle() attaches new ones every call, and reusing a
+  // single persisted DOM across tests would double them up.
+  beforeEach(async () => {
+    document.body.innerHTML = `
+      <button class="pageguide-mode-btn" id="pageguide-nongrounding-toggle"></button>
+      <div class="pageguide-mode-menu" id="pageguide-nongrounding-menu" style="display:none;">
+        <button class="pageguide-mode-option" data-nongrounding="off"></button>
+        <button class="pageguide-mode-option" data-nongrounding="on"></button>
+      </div>
+    `;
+    window.chrome.storage.local.get.mockClear().mockResolvedValue({});
+    window.chrome.storage.local.set.mockClear();
+    window.initNonGroundingToggle();
+    await Promise.resolve(); // flush the init's chrome.storage.local.get(...).then(render)
+  });
+
+  test('defaults to "Grounding: On" and does not mark itself active', () => {
+    const btn = document.getElementById('pageguide-nongrounding-toggle');
+    expect(btn.textContent).toContain('Grounding: On');
+    expect(btn.classList.contains('pageguide-quick-btn--active')).toBe(false);
+  });
+
+  test('REGRESSION: clicking "Non-grounding (baseline)" persists it to chrome.storage.local and flips the button to a visible active state', async () => {
+    const menu = document.getElementById('pageguide-nongrounding-menu');
+    const onOption = menu.querySelector('[data-nongrounding="on"]');
+
+    onOption.dispatchEvent(new Event('click', { bubbles: true }));
+    await Promise.resolve(); // flush the async storage.set + re-render
+
+    expect(window.chrome.storage.local.set).toHaveBeenCalledWith({ pageguideNonGrounding: 'on' });
+    const btn = document.getElementById('pageguide-nongrounding-toggle');
+    expect(btn.textContent).toContain('Non-grounding');
+    expect(btn.classList.contains('pageguide-quick-btn--active')).toBe(true);
+  });
+
+  test('clicking back to "Grounding On" clears the active state', async () => {
+    const menu = document.getElementById('pageguide-nongrounding-menu');
+    menu.querySelector('[data-nongrounding="on"]').dispatchEvent(new Event('click', { bubbles: true }));
+    await Promise.resolve();
+    menu.querySelector('[data-nongrounding="off"]').dispatchEvent(new Event('click', { bubbles: true }));
+    await Promise.resolve();
+
+    expect(window.chrome.storage.local.set).toHaveBeenLastCalledWith({ pageguideNonGrounding: 'off' });
+    const btn = document.getElementById('pageguide-nongrounding-toggle');
+    expect(btn.textContent).toContain('Grounding: On');
+    expect(btn.classList.contains('pageguide-quick-btn--active')).toBe(false);
   });
 });
 

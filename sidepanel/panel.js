@@ -2242,6 +2242,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initGuideVisualInputToggle();
   initEndSummaryToggle();
   initVisualRecapToggle();
+  initNonGroundingToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -4190,6 +4191,57 @@ function initEndSummaryToggle() {
     const val = _normalizeEndSummary(option.dataset.summaryagent);
     try { await chrome.storage.local.set({ [GUIDE_END_SUMMARY_KEY]: val }); } catch (err) {}
     _renderEndSummary(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+// Non-grounding baseline mode: a user-study A/B toggle, always visible (not debug-only, unlike
+// the toggles above). Same routing/LLM answers, but the content scripts (ask.js, guidev2.js) skip
+// all on-page highlighting, marker overlays, and visual-highlight screenshots when this is 'on'.
+// Stored under the SAME key/values the content scripts read directly via isNonGroundingModeOn()
+// in content/functions/highlight.js — keep that key in sync if this one ever changes.
+// Default OFF (normal grounding behavior).
+const GUIDE_NON_GROUNDING_KEY = 'pageguideNonGrounding';
+
+function _normalizeNonGrounding(v) {
+  return v === 'on' ? 'on' : 'off'; // off (grounding on) is default
+}
+
+function _renderNonGrounding(btn, val) {
+  val = _normalizeNonGrounding(val);
+  const icon = '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h4Z"/><path d="M13 5h4a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-4Z"/><path d="M13 5v16"/></svg></span>';
+  btn.innerHTML = val === 'on' ? `${icon}Non-grounding ▾` : `${icon}Grounding: On ▾`;
+  btn.title = val === 'on'
+    ? 'Non-grounding baseline: Find/Ask/Guide answers are plain text — no highlights, markers, or visual-evidence screenshots.'
+    : 'Find/Ask/Guide answers highlight the supporting evidence on the page (default).';
+  // Reuse the existing amber "active" treatment as a visible reminder that the baseline is on,
+  // so a tester can't accidentally leave it flipped between sessions without noticing.
+  btn.classList.toggle('pageguide-quick-btn--active', val === 'on');
+  document.querySelectorAll('#pageguide-nongrounding-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.nongrounding === val);
+  });
+}
+
+function initNonGroundingToggle() {
+  const btn = document.getElementById('pageguide-nongrounding-toggle');
+  const menu = document.getElementById('pageguide-nongrounding-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_NON_GROUNDING_KEY)
+    .then(r => _renderNonGrounding(btn, _normalizeNonGrounding(r[GUIDE_NON_GROUNDING_KEY])))
+    .catch(() => _renderNonGrounding(btn, 'off'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeNonGrounding(option.dataset.nongrounding);
+    try { await chrome.storage.local.set({ [GUIDE_NON_GROUNDING_KEY]: val }); } catch (err) {}
+    _renderNonGrounding(btn, val);
     menu.style.display = 'none';
   });
 }

@@ -950,6 +950,23 @@ body.light-mode .pageguide-history-load-btn:hover {
   color: #ffc933;
 }
 
+/* Non-grounding baseline toggle: an ID-anchored override so the amber "active" treatment reliably
+   wins over the many theme-scoped .pageguide-mode-btn rules elsewhere in this file (several use
+   compound selectors like "body:not(.light-mode) .pageguide-mode-btn" with higher specificity
+   than a bare .pageguide-quick-btn--active class would have on its own). This is a visible
+   reminder for a tester running the study that the baseline is currently flipped on. */
+#pageguide-nongrounding-toggle.pageguide-quick-btn--active {
+  background: rgba(255, 180, 0, 0.15);
+  border-color: rgba(255, 180, 0, 0.45);
+  color: #ffb400;
+}
+
+#pageguide-nongrounding-toggle.pageguide-quick-btn--active:hover {
+  background: rgba(255, 180, 0, 0.25);
+  border-color: rgba(255, 180, 0, 0.65);
+  color: #ffc933;
+}
+
 .pageguide-pdf-reader-btn {
   background: linear-gradient(135deg, rgba(124, 92, 255, 0.2), rgba(180, 100, 255, 0.2));
   border-color: rgba(124, 92, 255, 0.4);

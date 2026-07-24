@@ -242,9 +242,11 @@ async function handleAskWithVision(query) {
     if (parsed.canAnswer && parsed.answer) {
       console.log('👁️ Found answer at step', step);
       lastAnswer = parsed.answer;
-      
-      // Apply highlights from citations
-      const highlightCount = applyHighlightsFromCitations(parsed.answer);
+
+      // Apply highlights from citations — skipped entirely in Non-grounding baseline mode,
+      // which returns the same answer text with no on-page highlighting at all.
+      const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+      const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(parsed.answer);
       cleanupSom();
       
       return {
@@ -414,10 +416,12 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
   }
   
   console.log('🤖 Answer with citations:', answer);
-  
-  // Extract citations and apply highlights
-  const highlightCount = applyHighlightsFromCitations(answer);
-  
+
+  // Extract citations and apply highlights — skipped entirely in Non-grounding baseline mode,
+  // which returns the same answer text with no on-page highlighting at all.
+  const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+  const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(answer);
+
   return {
     success: true,
     answer: answer,

@@ -4036,6 +4036,13 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const planTotal = Array.isArray(g.guidePlan) ? g.guidePlan.length : 0;
     const planCompleted = planTotal ? Math.max(0, Math.min(planTotal, (g.currentPlanStep || 1) - 1)) : null;
 
+    // Non-grounding baseline mode: read fresh each step (like recapOn/captureEnabled above),
+    // so flipping the toggle mid-session takes effect on the very next step. Used below to skip
+    // the pre-action target highlight and the visual_highlight marker screenshot — click/type
+    // mechanics are unaffected, since g.currentTargetEl is set unconditionally regardless of
+    // whether a highlight was actually drawn (see the hasTarget block just below).
+    const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+
     // Clear previous highlights
     if (typeof clearHighlights === 'function') clearHighlights();
     window._pageguideHighlights = [];
@@ -4058,7 +4065,7 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
         console.log(`[guidev2] No text match for "${step.element.text}", using LLM index ${step.element.index}`);
       }
 
-      highlightCount = applyIndexedHighlight(idxToUse, step.element.text, style);
+      highlightCount = nonGrounding ? 0 : applyIndexedHighlight(idxToUse, step.element.text, style);
       const alignedRegionCapture = await _gv2ShouldUseAlignedRegionCapture(g);
       if (window._pageguideHighlights?.length > 0 && !alignedRegionCapture && !g.autoMode) {
         setTimeout(() => { if (typeof scrollToHighlight === 'function') scrollToHighlight(0); }, 300);
@@ -4139,12 +4146,17 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // (SoM markers already cleaned up above) and return it as the answer image. No second LLM pass.
     let visualHighlightResult = null;
     if (isVisualHighlight) {
-      _gv2ShowIndicator('Capturing…');
       const caption = (visualEvidence?.reason || step.instruction || '').trim();
-      try {
-        const cap = await gv2CaptureEvidenceRegion(evidenceEl, evidenceIndex, evidenceRect);
-        visualHighlightResult = { image: cap?.visualEvidenceShot || null, caption };
-      } catch (e) { visualHighlightResult = { image: null, caption }; }
+      if (nonGrounding) {
+        // Baseline mode: keep the plain-text caption, skip the marked-up evidence screenshot.
+        visualHighlightResult = { image: null, caption };
+      } else {
+        _gv2ShowIndicator('Capturing…');
+        try {
+          const cap = await gv2CaptureEvidenceRegion(evidenceEl, evidenceIndex, evidenceRect);
+          visualHighlightResult = { image: cap?.visualEvidenceShot || null, caption };
+        } catch (e) { visualHighlightResult = { image: null, caption }; }
+      }
       if (_gv2IsStopped()) return null;
     }
 
@@ -5214,7 +5226,8 @@ async function gv2RunFind(findQuery) {
   const { notOnPage } = gv2ParseFindResponse(answer);
 
   let highlightCount = 0;
-  if (answer && !notOnPage && typeof applyHighlightsFromCitations === 'function') {
+  const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+  if (!nonGrounding && answer && !notOnPage && typeof applyHighlightsFromCitations === 'function') {
     highlightCount = applyHighlightsFromCitations(answer);
     if (highlightCount > 0 && typeof scrollToHighlight === 'function') {
       setTimeout(() => scrollToHighlight(0), 300);

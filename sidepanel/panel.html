@@ -149,6 +149,21 @@
             </div>
           </div>
 
+          <!-- Non-grounding baseline mode: always visible (not debug-only) — a user-study A/B
+               toggle. Same routing/answers, but no on-page highlighting, marker overlays, or
+               visual-highlight screenshots when set to Non-grounding. -->
+          <div class="pageguide-mode-wrap pageguide-nongrounding-wrap">
+            <button class="pageguide-mode-btn" id="pageguide-nongrounding-toggle" title="Toggle the Non-grounding baseline (no on-page highlighting)"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h4Z"/><path d="M13 5h4a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-4Z"/><path d="M13 5v16"/></svg></span>Grounding: On ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-nongrounding-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-nongrounding="off">
+                <span class="pageguide-mode-opt-text"><b>Grounding On</b><small>Default. Find/Ask/Guide answers highlight the supporting evidence on the page.</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-nongrounding="on">
+                <span class="pageguide-mode-opt-text"><b>Non-grounding (baseline)</b><small>Plain text answers only — no highlights, markers, or visual-evidence screenshots. For A/B baseline comparison.</small></span>
+              </button>
+            </div>
+          </div>
+
           <!-- Visual input mode (debug-only): send a screenshot for the same 5000-element Guide index. -->
           <div class="pageguide-mode-wrap pageguide-visualinput-wrap" style="display:none;">
             <button class="pageguide-mode-btn" id="pageguide-visualinput-toggle" title="Send a marked screenshot with Guide step prompts"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Visual: Off ▾</button>

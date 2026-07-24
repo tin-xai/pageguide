@@ -360,6 +360,26 @@ function isAlreadyHighlighted(element, highlightedElements) {
   return false;
 }
 
+// ===== NON-GROUNDING BASELINE MODE =====
+// A user-study A/B baseline: same agent, same routing, same LLM answers — but no on-page
+// highlighting, marker overlays, or visual-highlight screenshots. Toggled from the side panel's
+// "Grounding" button (sidepanel/panel.js), stored in chrome.storage.local so every content
+// script (ask.js, guidev2.js) reads the same current value fresh, the same way isSomEnabled()
+// and _gv2IsVisualRecapOn() already do for their own settings.
+const PAGEGUIDE_NON_GROUNDING_KEY = 'pageguideNonGrounding';
+
+/**
+ * Check if Non-grounding baseline mode is on (default: off, i.e. normal grounding behavior).
+ */
+async function isNonGroundingModeOn() {
+  try {
+    const settings = await chrome.storage.local.get([PAGEGUIDE_NON_GROUNDING_KEY]);
+    return settings[PAGEGUIDE_NON_GROUNDING_KEY] === 'on';
+  } catch (e) {
+    return false;
+  }
+}
+
 // ===== SET OF MARKS (SoM) =====
 // Visual overlay showing indexed elements with their numbers
 
