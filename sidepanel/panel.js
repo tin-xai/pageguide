@@ -69,6 +69,15 @@ let scrollTop = 0;
 let wasDragging = false;
 let guideConfidenceThreshold = 0.7;
 
+// Panel-side mirror of the Non-grounding baseline flag (content scripts read the same
+// chrome.storage.local key via isNonGroundingModeOn in content/functions/highlight.js). Kept as a
+// plain synchronous boolean because every render path that needs it — the timeline row builder,
+// the answer/evidence HTML builders, the reasoning trail, the recap card — is synchronous and
+// runs on a hot path, so it can't await storage. Seeded at init and kept fresh by the toggle
+// itself and by a storage.onChanged listener, so flipping it applies to the next render.
+let panelNonGrounding = false;
+function _isPanelNonGrounding() { return panelNonGrounding; }
+
 function _normalizeConfidenceThreshold(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.7;
@@ -477,6 +486,9 @@ function hideRecapEvidencePopover() { document.getElementById('pageguide-recap-e
 function _scheduleRecapEvidenceHide() { _cancelRecapEvidenceHide(); _recapEvidenceHideTimer = setTimeout(hideRecapEvidencePopover, 200); }
 
 async function _showRecapEvidencePopover(anchor, sessionId, step) {
+  // Final guard for the Non-grounding baseline: no screenshot popover is ever shown, no matter
+  // which path reaches here (hover delegate, click handler, or older markup still in the chat).
+  if (_isPanelNonGrounding()) return;
   _cancelRecapEvidenceHide();
   hideRecapEvidencePopover();
   let rec = null;
@@ -864,6 +876,13 @@ function _compactAnswerMarkdown(text) {
 }
 
 function _buildAnswerEvidenceModel(answer, scratchpad, answerEvidence) {
+  // Non-grounding baseline: no evidence citations at all. Strip the [ev:key] markers so the
+  // answer reads as plain prose, and return an empty evidence list so the "Evidence: 📷 …" tail
+  // and the numbered chips never get built.
+  if (_isPanelNonGrounding()) {
+    const plain = _compactAnswerMarkdown(_stripEvidenceRefs(answer));
+    return { answerHtml: parseMarkdown(plain), evidence: [] };
+  }
   const normEvKey = (value) => {
     if (typeof gv2NormalizeEvidenceKey === 'function') return gv2NormalizeEvidenceKey(value);
     return String(value || '').toLowerCase();
@@ -986,10 +1005,16 @@ function _answerReasoningTrailHtml(recap, sessionId) {
     const completed = status === 'wrong' ? '' : (status === 'unclear'
       ? '<span class="pageguide-answer-trail-pill is-unclear">Review</span>'
       : (idx === milestones.length - 1 ? '<span class="pageguide-answer-trail-pill is-complete">Completed</span>' : ''));
+    // Non-grounding baseline: the trail still lists what the agent did, but the step text is
+    // inert (no pageguide-recap-link class / data-session / data-step), so there's nothing to
+    // hover or click through to a screenshot.
+    const textHtml = _isPanelNonGrounding()
+      ? `<span class="pageguide-answer-trail-text">${escapeHtml(m.text || '')}</span>`
+      : `<span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}">${escapeHtml(m.text || '')}</span>`;
     return `<div class="pageguide-answer-trail-row ${cls}">
       <span class="pageguide-answer-trail-dot">${escapeHtml(stepLabel)}</span>
       <span class="pageguide-answer-trail-text-wrap">
-        <span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}">${escapeHtml(m.text || '')}</span>
+        ${textHtml}
       </span>
       ${score || completed}
     </div>`;
@@ -1001,6 +1026,7 @@ function _answerReasoningTrailHtml(recap, sessionId) {
 }
 
 function _answerStepScreenshotChip(sessionId, step, label = '') {
+  if (_isPanelNonGrounding()) return ''; // no "📷 Step N" screenshot chips in the baseline
   const n = Number(step);
   if (!Number.isFinite(n) || n <= 0) return '';
   const chipLabel = label || `Step ${n}`;
@@ -1008,6 +1034,9 @@ function _answerStepScreenshotChip(sessionId, step, label = '') {
 }
 
 function _answerSummarySegmentLink(segment, sessionId, label) {
+  // Non-grounding baseline: the summary sentence stays, but its phrases aren't linked to
+  // screenshots, so it renders as plain text.
+  if (_isPanelNonGrounding()) return escapeHtml(label);
   const step = Number(segment?.step);
   if (!Number.isFinite(step) || step <= 0) return escapeHtml(label);
   const evidenceKey = String(segment?.evidenceKey || segment?.evidence_key || '').trim();
@@ -1289,7 +1318,11 @@ async function renderGuideRecap(recap) {
     const text = m.text || '';
     const phrase = (m.phrase && text.toLowerCase().includes(m.phrase.toLowerCase())) ? m.phrase : '';
     const clickStep = m.firstStep != null ? m.firstStep : m.step;
-    const link = (label) => `<span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}">${escapeHtml(label)}</span>`;
+    // Non-grounding baseline: milestone text is inert (no recap-link), so hovering/clicking a
+    // recap step opens no screenshot checkpoint.
+    const link = (label) => _isPanelNonGrounding()
+      ? escapeHtml(label)
+      : `<span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}">${escapeHtml(label)}</span>`;
     const status = String(m.status || '').toLowerCase();
     const errorLabel = String(m.errorLabel || '').trim();
     const reason = String(m.reason || '').trim();
@@ -1297,8 +1330,12 @@ async function renderGuideRecap(recap) {
       ? `<span class="pageguide-recap-error-label" title="${escapeHtml(reason)}">(${escapeHtml(errorLabel)})</span>`
       : (status === 'unclear' ? `<span class="pageguide-recap-error-label unclear" title="${escapeHtml(reason)}">(unclear)</span>` : '');
     const stepValue = String(m.step || '');
+    // Baseline: keep the step number as a plain label instead of a button that opens the
+    // step's screenshot checkpoint.
     const stepNumHtml = stepValue
-      ? `<button type="button" class="pageguide-recap-step-num" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}" title="Open step ${escapeHtml(stepValue)} checkpoint">${escapeHtml(stepValue)}</button>`
+      ? (_isPanelNonGrounding()
+          ? `<span class="pageguide-recap-step-num">${escapeHtml(stepValue)}</span>`
+          : `<button type="button" class="pageguide-recap-step-num" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}" title="Open step ${escapeHtml(stepValue)} checkpoint">${escapeHtml(stepValue)}</button>`)
       : '';
     let inner;
     if (phrase) {
@@ -1307,9 +1344,12 @@ async function renderGuideRecap(recap) {
     } else {
       inner = link(text);
     }
-    // Merge in the captured visual evidence for this step
+    // Merge in the captured visual evidence for this step. Skipped entirely in the
+    // Non-grounding baseline — the whole "Visual evidence" block is a grounding affordance.
     let evidenceHtml = '';
-    if (m.isCollapsedScroll) {
+    if (_isPanelNonGrounding()) {
+      evidenceHtml = '';
+    } else if (m.isCollapsedScroll) {
       const allEvItems = [];
       (m.mergedEvidenceSteps || []).forEach(stepNum => {
         const ev = recap.evidenceByStep && recap.evidenceByStep[stepNum];
@@ -1343,14 +1383,18 @@ async function renderGuideRecap(recap) {
   const finalStep = Number.isFinite(Number(recap.finalStep)) ? Number(recap.finalStep)
     : (milestones.length ? milestones[milestones.length - 1].step : null);
   const finalVerdict = recap?.final?.verdict || recap?.finalVerdict || 'unclear';
-  const finalChipHtml = (finalStep != null) ? _recapFinalButtonHtml(sessionId, finalStep, finalVerdict) : '';
+  // Baseline: the Checkpoints strip is nothing but buttons into per-step screenshots, so the
+  // whole row (including the Final State chip) is dropped rather than rendered inert.
+  const finalChipHtml = (finalStep != null && !_isPanelNonGrounding())
+    ? _recapFinalButtonHtml(sessionId, finalStep, finalVerdict)
+    : '';
   const statusInfo = _recapStatusText(recap);
   const bodyNote = (statusInfo.summary && statusInfo.summary !== statusInfo.title && !statusInfo.summary.endsWith(statusInfo.title))
     ? statusInfo.summary
     : '';
-  const chipsHtml = milestones.map((m) =>
+  const chipsHtml = _isPanelNonGrounding() ? '' : (milestones.map((m) =>
     `<button type="button" class="pageguide-recap-checkpoint" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Open step ${escapeHtml(String(m.step))} detail">${escapeHtml(String(m.step))}</button>`
-  ).join('') + finalChipHtml;
+  ).join('') + finalChipHtml);
   const recapSteps = recap.steps || milestones.map(m => m.step);
   msg.innerHTML = `
     <div class="pageguide-recap" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(recapSteps))}">
@@ -1361,7 +1405,7 @@ async function renderGuideRecap(recap) {
       </div>
       ${bodyNote ? `<div class="pageguide-recap-body-note">${escapeHtml(bodyNote)}</div>` : ''}
       ${displayMilestones.length ? `<div class="pageguide-recap-list">${rowsHtml}</div>` : ''}
-      ${(milestones.length || finalChipHtml) ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
+      ${chipsHtml ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
@@ -1437,6 +1481,10 @@ function _timelineDetailTextHtml(label, text) {
 }
 
 async function showGoalStepPreview(step, anchor) {
+  // Final guard for the Non-grounding baseline — the View Journey step popover (screenshot +
+  // saved/annotated evidence + "Inspect more") is a grounding affordance. _buildGoalTimelineRow
+  // already skips wiring the listeners; this also covers rows built before the toggle flipped.
+  if (_isPanelNonGrounding()) return;
   hideGoalStepPreview();
   const isInitialNode = Number(step) === 0;
   const meta = isInitialNode ? currentGuideInitial : getGuideStepMeta(step);
@@ -1637,8 +1685,12 @@ function _buildGoalTimelineRow(step, label, st, rec, isInitial) {
   row.title = reviewInfo.length ? `${label} — ${reviewInfo.map(item => item.label).join(', ')}` : label;
   row.appendChild(dot);
   row.appendChild(text);
-  row.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(step, dot); });
-  _attachDotHoverPreview(dot, step);
+  // Non-grounding baseline: the step's screenshot popover is a grounding affordance, so the row
+  // stays as plain text with no hover/click preview at all.
+  if (!_isPanelNonGrounding()) {
+    row.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(step, dot); });
+    _attachDotHoverPreview(dot, step);
+  }
   return row;
 }
 
@@ -2452,6 +2504,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       guideConfidenceThreshold = _normalizeConfidenceThreshold(changes.guideConfidenceThreshold.newValue);
       renderGoalCard({ route: currentGoal?.route || 'guide', step: currentGuideStep });
     }
+    // Keep the synchronous render-path mirror fresh even if the flag is changed from somewhere
+    // other than this panel's own toggle (another panel instance, or storage edited directly).
+    if (namespace === 'local' && changes[GUIDE_NON_GROUNDING_KEY]) {
+      panelNonGrounding = _normalizeNonGrounding(changes[GUIDE_NON_GROUNDING_KEY].newValue) === 'on';
+    }
   });
 });
 
@@ -2832,6 +2889,10 @@ function _setupMessageContainerDelegate(container) {
   });
 
   container.addEventListener('mouseover', (e) => {
+    // Non-grounding baseline: the builders above already omit recap-links, but older messages
+    // rendered before the toggle was flipped still carry the markup — refuse to pop their
+    // screenshot popovers too, so the whole session is consistently grounding-free.
+    if (_isPanelNonGrounding()) return;
     const link = e.target.closest('.pageguide-recap-link');
     if (!link || !container.contains(link)) return;
     if (link.contains(e.relatedTarget)) return;
@@ -4212,6 +4273,7 @@ function _normalizeNonGrounding(v) {
 
 function _renderNonGrounding(btn, val) {
   val = _normalizeNonGrounding(val);
+  panelNonGrounding = val === 'on'; // keep the synchronous render-path mirror in sync
   const icon = '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h4Z"/><path d="M13 5h4a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-4Z"/><path d="M13 5v16"/></svg></span>';
   btn.innerHTML = val === 'on' ? `${icon}Non-grounding ▾` : `${icon}Grounding: On ▾`;
   btn.title = val === 'on'

@@ -4035,6 +4035,141 @@ describe('Grounding toggle button (sidepanel/panel.js)', () => {
   });
 });
 
+describe('Non-grounding removes every Guide-mode grounding affordance (sidepanel/panel.js)', () => {
+  // Flips the panel-side mirror by driving the real toggle, the same way the UI does.
+  function setNonGrounding(on) {
+    document.body.innerHTML = `
+      <button class="pageguide-mode-btn" id="pageguide-nongrounding-toggle"></button>
+      <div class="pageguide-mode-menu" id="pageguide-nongrounding-menu">
+        <button class="pageguide-mode-option" data-nongrounding="off"></button>
+        <button class="pageguide-mode-option" data-nongrounding="on"></button>
+      </div>
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon"><span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    window.initNonGroundingToggle();
+    const btn = document.getElementById('pageguide-nongrounding-toggle');
+    window._renderNonGrounding(btn, on ? 'on' : 'off');
+  }
+
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() },
+        local: { get: jest.fn().mockResolvedValue({}), set: jest.fn().mockResolvedValue(undefined) }
+      }
+    };
+    document.body.innerHTML = `<div id="pageguide-goal-dots"></div>`;
+    loadScript('sidepanel/panel.js');
+  });
+
+  afterAll(() => setNonGrounding(false)); // don't leak the flag into later describe blocks
+
+  test('REQ 1: View Journey step rows get no hover/click screenshot preview', () => {
+    setNonGrounding(true);
+    window.addGuideStep({ sessionId: 'ng-s1', step: 1, planStep: 1, isLastStep: false, instruction: 'Open the page' });
+    window.renderGoalCard({ route: 'guide', prompt: 'Task', step: 1, total: 1, title: 'Task' });
+
+    const row = document.querySelector('.pageguide-goal-row');
+    expect(row).toBeTruthy();
+    // showGoalStepPreview also self-guards, so even a directly-dispatched click pops nothing.
+    row.dispatchEvent(new Event('click', { bubbles: true }));
+    expect(document.getElementById('pageguide-goal-step-pop')).toBeNull();
+  });
+
+  test('REQ 2: the final answer has no [ev:] evidence chips and no "Evidence:" tail', () => {
+    setNonGrounding(true);
+    const model = window._buildAnswerEvidenceModel(
+      'Found two articles [ev:shot_a] on the homepage [ev:shot_b].',
+      [{ key: 'shot_a', ref_step_id: 1, note: 'First article' },
+       { key: 'shot_b', ref_step_id: 2, note: 'Second article' }],
+      [{ key: 'shot_a', step: 1, note: 'First article', source: 'cited' }]
+    );
+
+    expect(model.evidence).toEqual([]);
+    expect(model.answerHtml).not.toContain('pageguide-answer-citation-chip');
+    expect(model.answerHtml).not.toContain('pageguide-answer-evidence-tail');
+    expect(model.answerHtml).not.toContain('[ev:'); // markers stripped, not just unlinked
+    expect(model.answerHtml).toContain('Found two articles');
+  });
+
+  test('REQ 2 CONTRAST: with grounding on, the same answer DOES build evidence chips', () => {
+    setNonGrounding(false);
+    const model = window._buildAnswerEvidenceModel(
+      'Found two articles [ev:shot_a] on the homepage.',
+      [{ key: 'shot_a', ref_step_id: 1, note: 'First article' }],
+      []
+    );
+    expect(model.evidence.length).toBe(1);
+    expect(model.answerHtml).toContain('pageguide-answer-citation-chip');
+  });
+
+  test('REQ 3: the Reasoning Trail rows carry no recap-link / screenshot chips', () => {
+    setNonGrounding(true);
+    const html = window._answerReasoningTrailHtml({
+      summary: 'Opened the site and found the articles.',
+      milestones: [
+        { step: 1, text: 'Opened BBC News', status: 'ok' },
+        { step: 2, text: 'Found two articles', status: 'ok' }
+      ]
+    }, 'ng-s1');
+
+    expect(html).toContain('Opened BBC News'); // the trail itself still renders
+    expect(html).not.toContain('pageguide-recap-link');
+    expect(html).not.toContain('pageguide-answer-trail-shot');
+    expect(html).not.toContain('data-session');
+  });
+
+  test('REQ 3: the recap card has inert step text, no Visual evidence blocks, no Checkpoints strip', () => {
+    setNonGrounding(true);
+    document.getElementById('pageguide-messages').innerHTML = '';
+    window.renderGuideRecap({
+      sessionId: 'ng-s1',
+      summary: 'Found two news articles.',
+      milestones: [{ step: 1, text: 'Found two articles', status: 'ok', phrase: 'two articles' }],
+      evidenceByStep: { 1: { hasShot: true, reason: 'Why this step is correct', items: [{ hasShot: true, reason: 'Article headline' }] } }
+    });
+
+    const card = document.querySelector('#pageguide-messages .pageguide-recap');
+    expect(card).toBeTruthy();
+    expect(card.textContent).toContain('Found two articles'); // recap content survives
+    expect(card.querySelector('.pageguide-recap-link')).toBeNull();
+    expect(card.querySelector('.pageguide-recap-evidence')).toBeNull();
+    expect(card.querySelector('.pageguide-recap-checkpoint')).toBeNull();
+    expect(card.textContent).not.toContain('Visual evidence');
+    expect(card.textContent).not.toContain('Checkpoints');
+  });
+
+  test('REQ 3 CONTRAST: with grounding on, the same recap DOES render evidence + checkpoints', () => {
+    setNonGrounding(false);
+    document.getElementById('pageguide-messages').innerHTML = '';
+    window.renderGuideRecap({
+      sessionId: 'ng-s2',
+      summary: 'Found two news articles.',
+      milestones: [{ step: 1, text: 'Found two articles', status: 'ok', phrase: 'two articles' }],
+      evidenceByStep: { 1: { hasShot: true, reason: 'Why this step is correct', items: [{ hasShot: true, reason: 'Article headline' }] } }
+    });
+
+    const card = document.querySelector('#pageguide-messages .pageguide-recap');
+    expect(card.querySelector('.pageguide-recap-link')).toBeTruthy();
+    expect(card.querySelector('.pageguide-recap-evidence')).toBeTruthy();
+    expect(card.querySelector('.pageguide-recap-checkpoint')).toBeTruthy();
+  });
+});
+
 describe('renderGoalCard only builds the View Journey card for Guide-routed tasks (sidepanel/panel.js)', () => {
   beforeAll(() => {
     window.chrome = {
