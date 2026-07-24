@@ -6032,8 +6032,10 @@ Previous steps: None`;
         }
       }
       
-      // Add collapsible debug section if there's debug info
-      if (debugLines.length > 0) {
+      // Add collapsible debug section if there's debug info. Debug-only (routing/confidence
+      // internals, not meant for regular use) — gated on the same __pgDebugEnabled flag that
+      // hides the Visual/Summary/Recap toggles, so it no longer clutters every Ask/Find answer.
+      if (window.__pgDebugEnabled && debugLines.length > 0) {
         addCollapsibleDebug(debugLines);
       }
       
