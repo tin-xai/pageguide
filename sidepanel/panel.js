@@ -6032,10 +6032,10 @@ Previous steps: None`;
         }
       }
       
-      // Add collapsible debug section if there's debug info. Debug-only (routing/confidence
-      // internals, not meant for regular use) — gated on the same __pgDebugEnabled flag that
-      // hides the Visual/Summary/Recap toggles, so it no longer clutters every Ask/Find answer.
-      if (window.__pgDebugEnabled && debugLines.length > 0) {
+      // Add collapsible debug section if there's debug info. Routing/confidence internals are
+      // only relevant while a guide task is being set up — Find/Ask/other modes never show
+      // this box at all, regardless of debug settings.
+      if (routedTo === 'guide' && debugLines.length > 0) {
         addCollapsibleDebug(debugLines);
       }
       

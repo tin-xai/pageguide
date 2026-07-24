@@ -7,8 +7,8 @@
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
-  background: linear-gradient(90deg, rgba(0,217,255,0.12) 0%, rgba(0,255,136,0.08) 100%);
-  border-bottom: 1px solid rgba(0, 217, 255, 0.25);
+  background: linear-gradient(90deg, rgba(155, 132, 255, 0.18) 0%, rgba(184, 156, 255, 0.1) 100%);
+  border-bottom: 1px solid rgba(155, 132, 255, 0.28);
   flex-shrink: 0;
   z-index: 500;
 }
@@ -24,7 +24,7 @@
 .study-mini-label {
   font-size: 10px;
   font-weight: 700;
-  color: #00d9ff;
+  color: #b89cff;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -33,7 +33,7 @@
   font-size: 1.1rem;
   font-weight: 700;
   font-family: 'Courier New', monospace;
-  color: #00d9ff;
+  color: #b89cff;
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
@@ -74,10 +74,10 @@
 .study-mini-copy-btn:hover { background: rgba(255, 255, 255, 0.18); }
 
 .study-mini-done-btn {
-  background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
+  background: linear-gradient(135deg, #7357ff 0%, #b89cff 100%);
   border: none;
   border-radius: 8px;
-  color: #0d0d1a;
+  color: #fff;
   cursor: pointer;
   font-size: 11px;
   font-weight: 700;
@@ -90,12 +90,12 @@
 
 /* Light mode */
 body.light-mode .study-mini-bar {
-  background: linear-gradient(90deg, rgba(0,119,170,0.08) 0%, rgba(0,120,64,0.06) 100%);
-  border-color: rgba(0,119,170,0.25);
+  background: linear-gradient(90deg, rgba(120, 87, 255, 0.1) 0%, rgba(154, 109, 255, 0.07) 100%);
+  border-color: rgba(120, 87, 255, 0.22);
 }
-body.light-mode .study-mini-label { color: #0077aa; }
+body.light-mode .study-mini-label { color: #7857ff; }
 body.light-mode .study-mini-q     { color: #111; }
-body.light-mode .study-mini-timer { color: #0077aa; }
+body.light-mode .study-mini-timer { color: #7857ff; }
 body.light-mode .study-mini-copy-btn {
   background: rgba(0,0,0,0.06);
   border-color: rgba(0,0,0,0.15);
@@ -130,14 +130,14 @@ body.light-mode .study-mini-copy-btn {
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px 8px;
-  border-bottom: 1px solid rgba(0, 217, 255, 0.15);
+  border-bottom: 1px solid rgba(155, 132, 255, 0.18);
   flex-shrink: 0;
 }
 
 .study-title {
   font-size: 15px;
   font-weight: 700;
-  color: #00d9ff;
+  color: #b89cff;
   letter-spacing: 0.02em;
 }
 
@@ -194,7 +194,7 @@ body.light-mode .study-mini-copy-btn {
 
 .study-input {
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(0, 217, 255, 0.25);
+  border: 1px solid rgba(155, 132, 255, 0.28);
   border-radius: 8px;
   color: #fff;
   font-size: 14px;
@@ -203,8 +203,8 @@ body.light-mode .study-mini-copy-btn {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .study-input:focus {
-  border-color: #00d9ff;
-  box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.12);
+  border-color: #9b84ff;
+  box-shadow: 0 0 0 3px rgba(155, 132, 255, 0.14);
 }
 .study-input::placeholder { color: rgba(255, 255, 255, 0.3); }
 
@@ -230,13 +230,13 @@ body.light-mode .study-mini-copy-btn {
 .study-btn:active { transform: scale(0.97); }
 
 .study-btn-primary {
-  background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
-  color: #0d0d1a;
+  background: linear-gradient(135deg, #7357ff 0%, #b89cff 100%);
+  color: #fff;
 }
 
 .study-btn-done {
-  background: linear-gradient(135deg, #ff6b35 0%, #ffd700 100%);
-  color: #0d0d1a;
+  background: linear-gradient(135deg, #7c5cff 0%, #ff8a1d 100%);
+  color: #fff;
 }
 
 .study-btn-secondary {
@@ -248,7 +248,7 @@ body.light-mode .study-mini-copy-btn {
 /* Condition card */
 .study-condition-card {
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(0, 217, 255, 0.15);
+  border: 1px solid rgba(155, 132, 255, 0.18);
   border-radius: 12px;
   padding: 14px;
   display: flex;
@@ -279,7 +279,7 @@ body.light-mode .study-mini-copy-btn {
   font-weight: 700;
   padding: 4px 10px;
 }
-.study-tag-ext  { background: rgba(0, 255, 136, 0.15); color: #00ff88; border: 1px solid rgba(0,255,136,0.3); }
+.study-tag-ext  { background: rgba(155, 132, 255, 0.16); color: #b89cff; border: 1px solid rgba(155, 132, 255, 0.32); }
 
 /* Task preview pills */
 .study-task-preview {
@@ -301,14 +301,14 @@ body.light-mode .study-mini-copy-btn {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.7);
   padding: 4px 0;
-  border-left: 2px solid rgba(0, 217, 255, 0.4);
+  border-left: 2px solid rgba(155, 132, 255, 0.46);
   padding-left: 8px;
 }
 
 /* Task card */
 .study-task-card {
-  background: rgba(0, 217, 255, 0.05);
-  border: 1px solid rgba(0, 217, 255, 0.18);
+  background: rgba(155, 132, 255, 0.07);
+  border: 1px solid rgba(155, 132, 255, 0.22);
   border-radius: 12px;
   padding: 14px;
   display: flex;
@@ -322,7 +322,7 @@ body.light-mode .study-mini-copy-btn {
 .study-task-type-badge {
   font-size: 11px;
   font-weight: 700;
-  color: #00d9ff;
+  color: #b89cff;
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
@@ -360,11 +360,11 @@ body.light-mode .study-mini-copy-btn {
   font-size: 2rem;
   font-weight: 700;
   font-family: 'Courier New', monospace;
-  color: #00d9ff;
+  color: #b89cff;
   letter-spacing: 0.05em;
 }
 .study-timer-stopped {
-  color: #00ff88;
+  color: #9b84ff;
 }
 
 /* Radio group */
@@ -395,26 +395,26 @@ body.light-mode .study-mini-copy-btn {
   transition: background 0.15s, border-color 0.15s;
 }
 .study-radio-btn:hover {
-  background: rgba(0, 217, 255, 0.08);
-  border-color: rgba(0, 217, 255, 0.3);
+  background: rgba(155, 132, 255, 0.1);
+  border-color: rgba(155, 132, 255, 0.34);
 }
 .study-radio-btn input[type="radio"] {
-  accent-color: #00d9ff;
+  accent-color: #9b84ff;
   width: 15px;
   height: 15px;
   cursor: pointer;
   flex-shrink: 0;
 }
 .study-radio-btn:has(input:checked) {
-  background: rgba(0, 217, 255, 0.12);
-  border-color: #00d9ff;
+  background: rgba(155, 132, 255, 0.16);
+  border-color: #9b84ff;
   color: #fff;
 }
 
 /* Find task — inline citation passage */
 .study-citation-block {
-  background: rgba(0, 217, 255, 0.05);
-  border: 1px solid rgba(0, 217, 255, 0.2);
+  background: rgba(155, 132, 255, 0.07);
+  border: 1px solid rgba(155, 132, 255, 0.22);
   border-radius: 10px;
   overflow: hidden;
 }
@@ -424,7 +424,7 @@ body.light-mode .study-mini-copy-btn {
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 700;
-  color: #00d9ff;
+  color: #b89cff;
   list-style: none;
   display: flex;
   align-items: center;
@@ -458,10 +458,10 @@ body.light-mode .study-mini-copy-btn {
 }
 
 body.light-mode .study-citation-block {
-  background: rgba(0, 119, 170, 0.05);
-  border-color: rgba(0, 119, 170, 0.2);
+  background: rgba(120, 87, 255, 0.06);
+  border-color: rgba(120, 87, 255, 0.2);
 }
-body.light-mode .study-citation-summary { color: #0077aa; }
+body.light-mode .study-citation-summary { color: #7857ff; }
 body.light-mode .study-citation-hint    { color: rgba(0,0,0,0.35); }
 body.light-mode .study-citation-text    { color: rgba(0,0,0,0.65); }
 body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color: #7a5c00; }
@@ -484,7 +484,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 }
 .study-notes-textarea:focus,
 .study-mini-notes:focus {
-  border-color: rgba(0, 217, 255, 0.5);
+  border-color: rgba(155, 132, 255, 0.55);
 }
 .study-notes-textarea { margin-bottom: 10px; }
 .study-mini-notes {
@@ -552,8 +552,8 @@ body.light-mode .study-notes-display-text  { color: rgba(0,0,0,0.75); }
 
 /* Complete screen */
 .study-complete-msg {
-  background: rgba(0, 255, 136, 0.05);
-  border: 1px solid rgba(0, 255, 136, 0.2);
+  background: rgba(155, 132, 255, 0.07);
+  border: 1px solid rgba(155, 132, 255, 0.22);
   border-radius: 12px;
   padding: 16px;
   text-align: center;
@@ -563,48 +563,49 @@ body.light-mode .study-notes-display-text  { color: rgba(0,0,0,0.75); }
 }
 .study-complete-emoji { font-size: 2.5rem; }
 .study-complete-msg p { font-size: 13px; color: rgba(255,255,255,0.8); margin: 0; }
-.study-save-status  { color: #00ff88; font-size: 12px; }
-.study-save-notice  { color: #ffa500; font-size: 12px; }
+.study-save-status  { color: #b89cff; font-size: 12px; }
+.study-save-notice  { color: #ffb45c; font-size: 12px; }
 
 /* Light mode overrides */
 body.light-mode .study-overlay {
   background: linear-gradient(160deg, #f0f4f8 0%, #e8eef5 100%);
 }
-body.light-mode .study-title { color: #0077aa; }
+body.light-mode .study-title { color: #7857ff; }
 body.light-mode .study-intro { color: rgba(0,0,0,0.7); }
 body.light-mode .study-label { color: rgba(0,0,0,0.5); }
 body.light-mode .study-input {
   background: rgba(0,0,0,0.05);
-  border-color: rgba(0,119,170,0.3);
+  border-color: rgba(120, 87, 255, 0.3);
   color: #111;
 }
 body.light-mode .study-input::placeholder { color: rgba(0,0,0,0.35); }
 body.light-mode .study-condition-card {
   background: rgba(0,0,0,0.04);
-  border-color: rgba(0,119,170,0.2);
+  border-color: rgba(120, 87, 255, 0.2);
 }
 body.light-mode .study-condition-label { color: rgba(0,0,0,0.4); }
 body.light-mode .study-condition-note { color: rgba(0,0,0,0.7); }
 body.light-mode .study-task-preview  { background: rgba(0,0,0,0.03); }
-body.light-mode .study-task-pill     { color: rgba(0,0,0,0.6); border-color: rgba(0,119,170,0.4); }
-body.light-mode .study-task-card     { background: rgba(0,119,170,0.05); border-color: rgba(0,119,170,0.2); }
+body.light-mode .study-task-pill     { color: rgba(0,0,0,0.6); border-color: rgba(120, 87, 255, 0.4); }
+body.light-mode .study-task-card     { background: rgba(120, 87, 255, 0.06); border-color: rgba(120, 87, 255, 0.2); }
 body.light-mode .study-task-card-running { background: rgba(255,140,0,0.05); border-color: rgba(255,140,0,0.3); }
-body.light-mode .study-task-type-badge { color: #0077aa; }
+body.light-mode .study-task-type-badge { color: #7857ff; }
 body.light-mode .study-task-desc     { color: rgba(0,0,0,0.45); }
 body.light-mode .study-task-question { color: #111; }
 body.light-mode .study-timer-display { background: rgba(0,0,0,0.04); }
-body.light-mode .study-timer         { color: #0077aa; }
-body.light-mode .study-timer-stopped { color: #007a40; }
+body.light-mode .study-timer-label   { color: rgba(0,0,0,0.62); }
+body.light-mode .study-timer         { color: #7857ff; }
+body.light-mode .study-timer-stopped { color: #6757e8; }
 body.light-mode .study-question-text { color: rgba(0,0,0,0.8); }
 body.light-mode .study-radio-btn     { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.12); color: rgba(0,0,0,0.75); }
-body.light-mode .study-radio-btn:hover { background: rgba(0,119,170,0.07); border-color: rgba(0,119,170,0.35); }
-body.light-mode .study-radio-btn:has(input:checked) { background: rgba(0,119,170,0.1); border-color: #0077aa; color: #111; }
+body.light-mode .study-radio-btn:hover { background: rgba(120, 87, 255, 0.08); border-color: rgba(120, 87, 255, 0.35); }
+body.light-mode .study-radio-btn:has(input:checked) { background: rgba(120, 87, 255, 0.12); border-color: #7857ff; color: #111; }
 body.light-mode .study-results-table th { color: rgba(0,0,0,0.4); border-color: rgba(0,0,0,0.1); }
 body.light-mode .study-results-table td { color: rgba(0,0,0,0.75); border-color: rgba(0,0,0,0.06); }
-body.light-mode .study-complete-msg  { background: rgba(0,120,64,0.05); border-color: rgba(0,120,64,0.2); }
+body.light-mode .study-complete-msg  { background: rgba(120, 87, 255, 0.06); border-color: rgba(120, 87, 255, 0.2); }
 body.light-mode .study-complete-msg p { color: rgba(0,0,0,0.8); }
 body.light-mode .study-progress      { color: rgba(0,0,0,0.4); }
 body.light-mode .study-btn-secondary { background: rgba(0,0,0,0.06); border-color: rgba(0,0,0,0.15); color: rgba(0,0,0,0.65); }
 body.light-mode .study-close-btn     { color: rgba(0,0,0,0.4); }
 body.light-mode .study-close-btn:hover { color: #111; background: rgba(0,0,0,0.06); }
-body.light-mode .study-header        { border-color: rgba(0,119,170,0.15); }
+body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }

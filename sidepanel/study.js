@@ -247,13 +247,13 @@ if (typeof window !== 'undefined') {
       const modal = document.createElement('div');
       modal.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);';
       modal.innerHTML = `
-        <div style="background:#1a1a2e;border:1px solid rgba(0,217,255,0.3);border-radius:12px;padding:24px 20px;max-width:260px;text-align:center;font-family:system-ui;color:#fff;">
+        <div style="background:#1a1a2e;border:1px solid rgba(155,132,255,0.34);border-radius:12px;padding:24px 20px;max-width:260px;text-align:center;font-family:system-ui;color:#fff;">
           <div style="font-size:32px;margin-bottom:10px">📸</div>
           <div style="font-weight:700;font-size:15px;margin-bottom:8px">Take a screenshot?</div>
           <div style="font-size:13px;color:#aaa;margin-bottom:20px;line-height:1.5">We'd like to capture the current page to record your guide result.</div>
           <div style="display:flex;gap:8px">
             <button id="study-ss-deny" style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:transparent;color:#ccc;cursor:pointer;font-size:13px">No thanks</button>
-            <button id="study-ss-allow" style="flex:1;padding:10px;border-radius:8px;border:none;background:#00d9ff;color:#000;cursor:pointer;font-size:13px;font-weight:700">Allow</button>
+            <button id="study-ss-allow" style="flex:1;padding:10px;border-radius:8px;border:none;background:#9b84ff;color:#fff;cursor:pointer;font-size:13px;font-weight:700">Allow</button>
           </div>
         </div>`;
       document.body.appendChild(modal);
@@ -320,7 +320,7 @@ if (typeof window !== 'undefined') {
         <div class="study-body">
           <p class="study-intro">You'll complete <strong>${s.queue.length} tasks</strong>: Find-information tasks and Guide tasks, always using PageGuide.</p>
           <label class="study-question-text" for="study-pid-input" style="margin-top:8px;">Participant ID (optional)</label>
-          <input type="text" id="study-pid-input" placeholder="e.g. P07" style="padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:#fff;font-size:14px;">
+          <input type="text" class="study-input" id="study-pid-input" placeholder="e.g. P07">
           <button class="study-btn study-btn-primary" id="study-start-btn" style="margin-top:16px;">Start Study →</button>
         </div>
       </div>
@@ -555,7 +555,7 @@ if (typeof window !== 'undefined') {
         <div class="study-header"><span class="study-title">Study Complete!</span></div>
         <div class="study-body" style="text-align:center;">
           <p style="font-size:15px;">🎉 Thank you for completing all ${s.queue.length} tasks.</p>
-          <p class="study-save-status" style="color:${supaConfigured ? '#4caf50' : '#e0c97f'};">
+          <p class="study-save-status" style="color:${supaConfigured ? '#9b84ff' : '#b89cff'};">
             ${supaConfigured ? '✅ Results saved to Supabase after each task.' : 'ℹ️ Results are saved locally in this browser. Download the CSV to keep a copy.'}
           </p>
           <button class="study-btn study-btn-primary" id="study-download-btn">⬇ Download Results CSV</button>
