@@ -1954,7 +1954,10 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   const normalized = _normalizeRouteForTab(activeRoute);
   const isGuide = normalized === 'guide' || currentGuidePlan.length > 0 || currentGuideStep > 0;
   document.body.classList.toggle('pageguide-guide-mode', !!isGuide);
-  if (normalized === 'find' || normalized === 'hide') {
+  // The View Journey card (prompt repeated with Export/Save icons + step timeline) is a
+  // Guide-only concept. Previously only 'find'/'hide' were excluded here, which left 'ask' (the
+  // route plain Find/Q&A questions actually take) falling through and getting a card of its own.
+  if (!isGuide) {
     hideGoalCardMessageIfEmpty();
     refreshGuideOnlyActions();
     return;

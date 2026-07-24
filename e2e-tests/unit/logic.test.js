@@ -4035,6 +4035,53 @@ describe('Grounding toggle button (sidepanel/panel.js)', () => {
   });
 });
 
+describe('renderGoalCard only builds the View Journey card for Guide-routed tasks (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() }
+      }
+    };
+    document.body.innerHTML = `
+      <div id="pageguide-step-panel" style="display:none;"></div>
+      <div id="pageguide-messages"></div>
+      <div id="pageguide-tab-chip" style="display:none;">
+        <img id="pageguide-tab-chip-favicon">
+        <span id="pageguide-tab-chip-title"></span>
+      </div>
+    `;
+    loadScript('sidepanel/panel.js');
+  });
+
+  test('REGRESSION: an "ask" route never creates the View Journey card (previously only "find"/"hide" were excluded)', () => {
+    document.getElementById('pageguide-messages').innerHTML = '';
+    window.renderGoalCard({ prompt: 'who disallowed oil drilling in the reef?', route: 'ask' });
+    expect(document.getElementById('pageguide-goal')).toBeNull();
+  });
+
+  test('a "find" route still never creates the card', () => {
+    document.getElementById('pageguide-messages').innerHTML = '';
+    window.renderGoalCard({ prompt: 'find the return policy', route: 'find' });
+    expect(document.getElementById('pageguide-goal')).toBeNull();
+  });
+
+  test('a "guide" route does create the card', () => {
+    document.getElementById('pageguide-messages').innerHTML = '';
+    window.renderGoalCard({ prompt: 'go to bbc news and find world cup articles', route: 'guide' });
+    expect(document.getElementById('pageguide-goal')).toBeTruthy();
+  });
+});
+
 describe('Vertical goal timeline + working-tab "done" chip (sidepanel/panel.js)', () => {
   beforeAll(() => {
     window.chrome = {
