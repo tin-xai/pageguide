@@ -5235,8 +5235,15 @@ async function gv2RunFind(findQuery) {
   }
 
   console.log('[guidev2] find:', notOnPage ? 'not on page' : `${highlightCount} passage(s) highlighted`);
+  // Non-grounding baseline mode: strip citation markers from the answer text too, not just skip
+  // applying the on-page highlight — otherwise the side panel's parseCitations() would still
+  // render clickable citation chips, and clicking one triggers scrollToIndex()'s own flash
+  // highlight independent of applyHighlightsFromCitations.
+  const answerOut = nonGrounding && typeof stripCitationMarkers === 'function'
+    ? stripCitationMarkers(answer)
+    : answer;
   return {
-    answer,
+    answer: answerOut,
     notOnPage,
     highlightCount,
     hasHighlights: highlightCount > 0,

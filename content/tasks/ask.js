@@ -244,14 +244,19 @@ async function handleAskWithVision(query) {
       lastAnswer = parsed.answer;
 
       // Apply highlights from citations — skipped entirely in Non-grounding baseline mode,
-      // which returns the same answer text with no on-page highlighting at all.
+      // which also strips the citation markers themselves so no clickable chips appear in the
+      // chat (parseCitations in the side panel would otherwise still turn them into chips even
+      // with no on-page highlight applied).
       const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
       const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(parsed.answer);
+      const answerOut = nonGrounding && typeof stripCitationMarkers === 'function'
+        ? stripCitationMarkers(parsed.answer)
+        : parsed.answer;
       cleanupSom();
-      
+
       return {
         success: true,
-        answer: parsed.answer,
+        answer: answerOut,
         useVision: true,
         visionSteps: step,
         visionActions: previousActions,
@@ -418,13 +423,18 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
   console.log('🤖 Answer with citations:', answer);
 
   // Extract citations and apply highlights — skipped entirely in Non-grounding baseline mode,
-  // which returns the same answer text with no on-page highlighting at all.
+  // which also strips the citation markers themselves so no clickable chips appear in the chat
+  // (parseCitations in the side panel would otherwise still turn them into chips even with no
+  // on-page highlight applied).
   const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
   const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(answer);
+  const answerOut = nonGrounding && typeof stripCitationMarkers === 'function'
+    ? stripCitationMarkers(answer)
+    : answer;
 
   return {
     success: true,
-    answer: answer,
+    answer: answerOut,
     highlightCount: highlightCount,
     hasHighlights: highlightCount > 0
   };
@@ -593,5 +603,30 @@ function applyHighlightsFromCitations(answer) {
   
   return count;
 }
+
+/**
+ * Strip [N:"text"]/[N:'text']/[N:text]/[N] citation markers from an answer, leaving clean
+ * prose behind. Used by Non-grounding baseline mode (isNonGroundingModeOn) so the displayed
+ * answer has no clickable citation chips at all — not just no on-page highlight — since
+ * parseCitations() in the side panel would otherwise turn any leftover markers into clickable
+ * spans regardless of whether applyHighlightsFromCitations() ever ran on the page.
+ * @param {string} answer - Answer text with citation markers
+ * @returns {string} The same text with citation markers removed
+ */
+function stripCitationMarkers(answer) {
+  if (!answer) return answer;
+  const normalized = String(answer)
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'");
+  return normalized
+    .replace(/\[(\d+):\s*"[^"]+"\]/g, '')  // [N:"text"]
+    .replace(/\[(\d+):\s*'[^']+'\]/g, '')  // [N:'text']
+    .replace(/\[(\d+):\s*[^\]"']+\]/g, '') // [N:text]
+    .replace(/\[(\d+)\](?!:)/g, '')        // [N]
+    .replace(/\s+([.,;:!?])/g, '$1')       // drop stray space a removed marker left before punctuation
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+if (typeof window !== 'undefined') window.stripCitationMarkers = stripCitationMarkers;
 
 console.log('💬 ask.js loaded');

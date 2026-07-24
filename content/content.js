@@ -49,16 +49,23 @@ async function handleMessage(request) {
       if (typeof clearUploadedImage === 'function') clearUploadedImage();
       return { success: true };
     
-    case 'scrollToHighlight':
-      if (typeof scrollToHighlight === 'function') scrollToHighlight(0);
+    case 'scrollToHighlight': {
+      // The scroll-to flash is itself a form of on-page highlighting — skip it in Non-grounding
+      // baseline mode, same as the highlighting that would normally have put something in
+      // window._pageguideHighlights in the first place.
+      const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+      if (typeof scrollToHighlight === 'function') scrollToHighlight(0, !nonGrounding);
       return { success: true };
-    
-    case 'scrollToIndex':
+    }
+
+    case 'scrollToIndex': {
+      const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
       if (typeof scrollToIndex === 'function') {
-        const scrolled = scrollToIndex(request.index);
+        const scrolled = scrollToIndex(request.index, !nonGrounding);
         return { success: scrolled };
       }
       return { success: false, error: 'Scroll function not loaded' };
+    }
     
     case 'navigateToPdfPage':
       if (typeof navigateToPdfPage === 'function') {

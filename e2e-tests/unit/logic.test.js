@@ -3338,11 +3338,12 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     window.captureScreenshot = jest.fn(async () => 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
     window.IS_TEST_ENV = true;
     window.PROMPTS = { ANSWER_AND_HIGHLIGHT: 'CONTENT:{pageContent}\nINDEX:{pageIndex}' };
-    // guidev2.js calls gv2ParseFindResponse/gv2StepHasTarget, which utils.js defines, and
-    // isNonGroundingModeOn, which highlight.js defines — the same order manifest.json loads
-    // them in. Load both here so this block stands alone.
+    // guidev2.js calls gv2ParseFindResponse/gv2StepHasTarget (utils.js), isNonGroundingModeOn
+    // (highlight.js), and stripCitationMarkers (ask.js) — the same order manifest.json loads
+    // them in. Load all three here so this block stands alone.
     loadScript('content/utils.js');
     loadScript('content/functions/highlight.js');
+    loadScript('content/tasks/ask.js');
     loadScript('content/tasks/guidev2.js');
   });
 
@@ -3443,17 +3444,19 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     expect(paused).toBeUndefined();
   });
 
-  test('REGRESSION: Non-grounding baseline mode skips highlighting entirely, even with valid on-page citations', async () => {
+  test('REGRESSION: Non-grounding baseline mode skips highlighting entirely and strips citation markers, even with valid on-page citations', async () => {
     // Same cited answer as the very first test in this block ("reads the page with a CONTENT
     // index and highlights the cited passages"), which asserts highlighting DOES happen by
-    // default — this proves the only thing that changed is the stored toggle, not the routing,
-    // LLM call, or answer text.
+    // default — this proves the only thing that changed is the stored toggle, not the routing
+    // or LLM call. The citation marker itself is also stripped from the displayed answer (not
+    // just left unhighlighted), so no clickable chip survives into the chat.
     window.chrome.storage.local.get = jest.fn(async () => ({ pageguideNonGrounding: 'on' }));
 
     const result = await window.gv2ProcessResponse(findStep());
 
     expect(window.applyHighlightsFromCitations).not.toHaveBeenCalled();
-    expect(result.answer).toBe(CITED_ANSWER); // plain-text answer is unchanged
+    expect(result.answer).toBe('Contact the depot of travel.'); // citation marker removed, prose intact
+    expect(result.answer).not.toMatch(/\[\d+/); // no citation bracket syntax left at all
     expect(result.highlightCount).toBe(0);
     expect(result.hasHighlights).toBe(false);
   });
@@ -3867,6 +3870,93 @@ describe('isNonGroundingModeOn (content/functions/highlight.js)', () => {
   test('fails safe to false (grounding on) if chrome.storage throws', async () => {
     window.chrome = { storage: { local: { get: jest.fn().mockRejectedValue(new Error('boom')) } } };
     await expect(window.isNonGroundingModeOn()).resolves.toBe(false);
+  });
+});
+
+describe('stripCitationMarkers (content/tasks/ask.js)', () => {
+  beforeAll(() => {
+    document.body.innerHTML = '';
+    window.chrome = { storage: { local: { get: jest.fn().mockResolvedValue({}) } } };
+    loadScript('content/tasks/ask.js');
+  });
+
+  test('removes a double-quoted citation and cleans up the leftover space', () => {
+    expect(window.stripCitationMarkers('Contact the depot [12:"within 30 days"] of travel.'))
+      .toBe('Contact the depot of travel.');
+  });
+
+  test('removes a single-quoted citation', () => {
+    expect(window.stripCitationMarkers("The fee is $5 [3:'per item'] at checkout."))
+      .toBe('The fee is $5 at checkout.');
+  });
+
+  test('removes an unquoted citation', () => {
+    expect(window.stripCitationMarkers('Open on weekdays [4:9am-5pm] only.'))
+      .toBe('Open on weekdays only.');
+  });
+
+  test('removes a bare index-only citation', () => {
+    expect(window.stripCitationMarkers('The office closes early on Fridays [7].'))
+      .toBe('The office closes early on Fridays.');
+  });
+
+  test('removes multiple citations in the same answer', () => {
+    expect(window.stripCitationMarkers('Returns [1:"within 30 days"] are free [2:"for members"] only.'))
+      .toBe('Returns are free only.');
+  });
+
+  test('leaves plain text with no citations untouched', () => {
+    expect(window.stripCitationMarkers('There is nothing to cite here.'))
+      .toBe('There is nothing to cite here.');
+  });
+
+  test('handles empty/undefined input without throwing', () => {
+    expect(window.stripCitationMarkers('')).toBe('');
+    expect(window.stripCitationMarkers(null)).toBeNull();
+    expect(window.stripCitationMarkers(undefined)).toBeUndefined();
+  });
+});
+
+describe('Non-grounding mode skips the scrollToIndex/scrollToHighlight flash effect (content/functions/scroll.js)', () => {
+  beforeAll(() => {
+    document.body.innerHTML = '';
+    loadScript('content/functions/scroll.js');
+  });
+
+  test('scrollToIndex still scrolls but skips the outline/background flash when applyFlash is false', () => {
+    const el = document.createElement('div');
+    el.scrollIntoView = jest.fn();
+    window._pageguideIndex = { 5: el };
+    window.getIndexedElement = (i) => window._pageguideIndex[i];
+
+    const result = window.scrollToIndex(5, false);
+
+    expect(result).toBe(true);
+    expect(el.scrollIntoView).toHaveBeenCalled();
+    expect(el.style.outline).toBe('');
+    expect(el.style.backgroundColor).toBe('');
+  });
+
+  test('scrollToIndex still flashes by default (applyFlash defaults to true)', () => {
+    const el = document.createElement('div');
+    el.scrollIntoView = jest.fn();
+    window._pageguideIndex = { 6: el };
+    window.getIndexedElement = (i) => window._pageguideIndex[i];
+
+    window.scrollToIndex(6);
+
+    expect(el.style.outline).toBe('4px solid #ffd93d');
+  });
+
+  test('scrollToHighlight still scrolls but skips the background flash when applyFlash is false', () => {
+    const el = document.createElement('div');
+    el.scrollIntoView = jest.fn();
+    window._pageguideHighlights = [el];
+
+    window.scrollToHighlight(0, false);
+
+    expect(el.scrollIntoView).toHaveBeenCalled();
+    expect(el.style.backgroundColor).toBe('');
   });
 });
 
