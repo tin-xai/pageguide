@@ -3547,6 +3547,54 @@ describe('_shouldResetOnTabSwitch (sidepanel/panel.js) — per-tab session vs. g
   });
 });
 
+describe('_shouldRetryGuideActionOnActiveTab (sidepanel/panel.js) — recover from a stale guideTabId', () => {
+  // Pause→Resume regression: resume routes strictly to the panel's tracked guideTabId. If that id
+  // went stale (the guide opened/moved tabs), the message hits a tab with no live session and
+  // returns "Guide not active". We then retry on the tab actually in front before failing.
+  test('retries on the active tab when the tracked tab reports no active guide', () => {
+    const res = { success: false, error: 'Guide not active' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, 9)).toBe(true);
+  });
+
+  test('does not retry when the active tab IS the tab we already tried', () => {
+    const res = { success: false, error: 'Guide not active' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, 7)).toBe(false);
+  });
+
+  test('does not retry on unrelated failures (only the not-active case)', () => {
+    const res = { success: false, error: 'Could not generate the next step' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, 9)).toBe(false);
+  });
+
+  test('does not retry when the action succeeded', () => {
+    expect(window._shouldRetryGuideActionOnActiveTab({ success: true }, 7, 9)).toBe(false);
+  });
+
+  test('does not retry when there is no active tab id to fall back to', () => {
+    const res = { success: false, error: 'Guide not active' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, null)).toBe(false);
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, undefined)).toBe(false);
+  });
+
+  test('a null response (messaging dropped, no error text) does not trigger the not-active retry', () => {
+    expect(window._shouldRetryGuideActionOnActiveTab(null, 7, 9)).toBe(false);
+  });
+
+  // REGRESSION: a guide that re-pauses while resume is still awaiting must stay marked paused.
+  describe('_shouldApplyResumeSuccess — a pause landing mid-resume wins', () => {
+    test('clean resume (no pause arrived while awaiting) marks the guide running again', () => {
+      expect(window._shouldApplyResumeSuccess(3, 3)).toBe(true);
+    });
+
+    test('REGRESSION: a guidePaused message during the resume await is not clobbered', () => {
+      // resume awaits the whole next-step generation; if that step re-trips the loop /
+      // low-confidence guard, guidePaused arrives first and bumps the counter. Clearing
+      // guidePaused afterwards left the button on "Pause", so the user could never resume.
+      expect(window._shouldApplyResumeSuccess(3, 4)).toBe(false);
+    });
+  });
+});
+
 describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)', () => {
   beforeAll(() => {
     // Minimal chrome mock covering every top-level chrome.*.addListener call service-worker.js
@@ -4081,5 +4129,52 @@ describe('Per-tab guide session isolation (background/service-worker.js)', () =>
     onCreated({ id: 8 }); // no openerTabId
     expect(send('guidanceV2_isOwner', {}, { tab: { id: 7 } })).toEqual({ isOwner: false });
     expect(send('guidanceV2_isOwner', {}, { tab: { id: 8 } })).toEqual({ isOwner: true });
+  });
+});
+
+describe('_gv2ResetPauseGuards (content/tasks/guidev2.js) — Resume must clear the stop guards', () => {
+  beforeAll(() => {
+    if (!window.gv2LoopScore) loadScript('content/utils.js');
+    window.chrome = window.chrome || {
+      runtime: {
+        connect: jest.fn(() => ({
+          onMessage: { addListener: jest.fn() },
+          onDisconnect: { addListener: jest.fn() }
+        })),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) },
+        local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) }
+      }
+    };
+    if (!window._gv2ResetPauseGuards) loadScript('content/tasks/guidev2.js');
+  });
+
+  test('clears the low-confidence streak', () => {
+    const g = { active: true, lowConfidenceCount: 3 };
+    window._gv2ResetPauseGuards(g);
+    expect(g.lowConfidenceCount).toBe(0);
+  });
+
+  // REGRESSION: the loop guard is cumulative (score = matches/10 over every element key the guide
+  // has targeted, stop at >= 0.3). Resume used to clear only lowConfidenceCount, so the same three
+  // matches were still in _mechElementTexts and the guide re-paused on the very next step —
+  // forever, since each re-pause appended another match. Resume now starts both guards over.
+  test('clears the loop-detection history so the loop score drops back under the stop threshold', () => {
+    const key = 'submit';
+    const g = { active: true, lowConfidenceCount: 3, _mechElementTexts: [key, key, key], _mechKeys: [key] };
+
+    expect(window.gv2LoopScore(g._mechElementTexts, key)).toBeGreaterThanOrEqual(0.3); // was stopping
+
+    window._gv2ResetPauseGuards(g);
+
+    expect(g._mechElementTexts).toEqual([]);
+    expect(g._mechKeys).toEqual([]);
+    expect(window.gv2LoopScore(g._mechElementTexts, key)).toBe(0);
+  });
+
+  test('is a no-op on a missing guide state', () => {
+    expect(window._gv2ResetPauseGuards(null)).toBe(null);
   });
 });
