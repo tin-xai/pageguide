@@ -4068,7 +4068,9 @@ describe('Non-grounding mode skips the scrollToIndex/scrollToHighlight flash eff
     expect(el.style.backgroundColor).toBe('');
   });
 
-  test('scrollToIndex still flashes by default (applyFlash defaults to true)', () => {
+  // Was: 'scrollToIndex still flashes by default'. The default path still marks the element, but
+  // with the shared flat tint instead of a yellow outline that vanished again after 1.5s.
+  test('scrollToIndex marks the element by default, with no yellow flash', () => {
     const el = document.createElement('div');
     el.scrollIntoView = jest.fn();
     window._pageguideIndex = { 6: el };
@@ -4076,7 +4078,8 @@ describe('Non-grounding mode skips the scrollToIndex/scrollToHighlight flash eff
 
     window.scrollToIndex(6);
 
-    expect(el.style.outline).toBe('4px solid #ffd93d');
+    expect(el.style.outline).toBe('');
+    expect(el.getAttribute('data-pageguide-styled')).toBe('true');
   });
 
   test('scrollToHighlight still scrolls but skips the background flash when applyFlash is false', () => {
@@ -4875,5 +4878,63 @@ describe('Highlight styling (content/functions/highlight.js) — one effect, one
       expect(highlight({ block: true }).classList.contains('pageguide-highlight-block')).toBe(true);
       expect(highlight().classList.contains('pageguide-highlight-block')).toBe(false);
     });
+  });
+});
+
+describe('Scroll-to-citation feedback (content/functions/scroll.js) — no flash', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {
+      storage: { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } },
+      runtime: { sendMessage: jest.fn() }
+    };
+    Element.prototype.scrollIntoView = jest.fn();
+    loadScript('content/functions/scroll.js');
+    if (!window.getRandomHighlightStyle) loadScript('content/functions/highlight.js');
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    window._pageguideHighlights = [];
+    window._pageguideIndex = {};
+  });
+
+  // REGRESSION: clicking a citation used to blink the element bright yellow for 500ms and then
+  // leave it yellow permanently, overriding the purple tint it already carried.
+  test('scrollToHighlight scrolls without repainting the element', () => {
+    const el = document.createElement('p');
+    el.style.backgroundColor = 'rgb(1, 2, 3)';
+    document.body.appendChild(el);
+    window._pageguideHighlights = [el];
+
+    window.scrollToHighlight(0);
+
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(el.style.backgroundColor).toBe('rgb(1, 2, 3)');
+  });
+
+  // REGRESSION: scrollToIndex used to add a yellow 4px outline plus a yellow background that
+  // vanished after 1.5s — a flash, in a colour nothing else on the page used.
+  test('scrollToIndex marks the element with the shared tint and no yellow outline', () => {
+    const el = document.createElement('p');
+    document.body.appendChild(el);
+    window._pageguideIndex = { 12: el };
+
+    expect(window.scrollToIndex(12)).toBe(true);
+
+    expect(el.style.outline).toBe('');
+    expect(el.classList.contains('pageguide-highlight')).toBe(true);
+    expect(el.style.getPropertyValue('--pageguide-color')).toBe(window.getRandomHighlightStyle(false).color);
+    expect(window._pageguideHighlights).toContain(el);
+  });
+
+  test('scrollToIndex leaves the element untouched when the caller opts out (non-grounding)', () => {
+    const el = document.createElement('p');
+    document.body.appendChild(el);
+    window._pageguideIndex = { 12: el };
+
+    window.scrollToIndex(12, false);
+
+    expect(el.className).toBe('');
+    expect(el.getAttribute('data-pageguide-styled')).toBeNull();
   });
 });

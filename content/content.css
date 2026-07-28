@@ -3,15 +3,15 @@
 /* ===== HIGHLIGHT ===== */
 
 /*
- * One highlight, one effect. Highlights used to pick a random color out of three and a random
- * animation out of four per citation (pulse / spotlight / left-to-right shimmer sweep / glow), so
- * a single answer covered the page in several colors moving in several ways at once. Now every
- * cited span gets the same accent (getRandomHighlightStyle in content/functions/highlight.js) and
- * the same treatment: a soft tint that fades in once and then holds still. No glow, no outline,
- * no sweep, nothing that repeats.
+ * The highlight is a color, nothing else. It used to pick a random color out of three and a
+ * random animation out of four per citation (pulse / spotlight / left-to-right shimmer sweep /
+ * glow), so a single answer covered the page in several colors moving in several ways at once.
+ * Now every cited span gets the same accent (getRandomHighlightStyle in
+ * content/functions/highlight.js) and the same flat tint. No animation at all — no fade, no glow,
+ * no outline, no sweep. Anything that moves pulls the eye away from the text being read.
  *
- * The legacy effect class names are kept as aliases of the calm style so a stale class string
- * left anywhere can never bring the motion back.
+ * The legacy effect class names are kept as aliases of this style so a stale class string left
+ * anywhere can never bring the motion back.
  */
 .pageguide-highlight,
 .pageguide-highlight-soft,
@@ -26,7 +26,8 @@
   margin: 0 1px;
   box-shadow: none;
   outline: none;
-  animation: pageguide-highlight-in 180ms ease-out 1;
+  animation: none;
+  transition: none;
 }
 
 /* Whole-element highlights sit *behind* cited phrases, so they stay lighter — otherwise the
@@ -35,22 +36,6 @@
   background-color: color-mix(in srgb, var(--pageguide-color, #7857ff) 8%, transparent);
   padding: 2px 4px;
   margin: 0;
-}
-
-@keyframes pageguide-highlight-in {
-  from { background-color: transparent; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pageguide-highlight,
-  .pageguide-highlight-soft,
-  .pageguide-highlight-pulse,
-  .pageguide-highlight-spotlight,
-  .pageguide-highlight-shimmer,
-  .pageguide-highlight-shimmer-block,
-  .pageguide-highlight-glow {
-    animation: none;
-  }
 }
 
 [data-pageguide-styled] {

@@ -7,9 +7,9 @@ window._pageguideHighlights = window._pageguideHighlights || [];
 /**
  * Scroll to a highlighted element by index
  * @param {number} index - Which highlight to scroll to (cycles through window._pageguideHighlights)
- * @param {boolean} applyFlash - Whether to flash the element's background. Callers pass false in
- *   Non-grounding baseline mode (isNonGroundingModeOn), since this flash is itself a form of
- *   on-page highlighting, independent of applyHighlightsFromCitations/applyIndexedHighlight.
+ * @param {boolean} applyFlash - Kept for the Non-grounding baseline callers (isNonGroundingModeOn),
+ *   which pass false. Nothing flashes either way now: this used to blink the element bright yellow
+ *   for 500ms and then leave it yellow for good, overriding the tint it already carried.
  */
 function scrollToHighlight(index = 0, applyFlash = true) {
   const highlights = window._pageguideHighlights;
@@ -22,16 +22,8 @@ function scrollToHighlight(index = 0, applyFlash = true) {
   const targetIndex = index % highlights.length;
   const element = highlights[targetIndex];
 
-  if (element) {
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    if (!applyFlash) return;
-    // Flash effect
-    const originalBg = element.style.backgroundColor;
-    element.style.backgroundColor = 'rgba(255, 200, 0, 0.8)';
-    setTimeout(() => {
-      element.style.backgroundColor = originalBg || 'rgba(255, 255, 0, 0.5)';
-    }, 500);
-  }
+  // Every element in _pageguideHighlights is already tinted, so scrolling is all that's needed.
+  if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 /**
@@ -54,20 +46,22 @@ function scrollToIndex(index, applyFlash = true) {
   element.scrollIntoView({ behavior: 'smooth', block: 'center' });
   if (!applyFlash) return true;
 
-  // Flash effect to highlight it temporarily
-  const originalOutline = element.style.outline;
-  const originalOutlineOffset = element.style.outlineOffset;
-  const originalBg = element.style.backgroundColor;
+  // Mark it with the same flat tint every other highlight uses. This used to be a yellow 4px
+  // outline plus a yellow background that appeared and then vanished after 1.5s — a flash, in a
+  // colour nothing else on the page used. The tint just stays until the next answer clears
+  // highlights, so nothing blinks and the marked element matches the cited spans around it.
+  const isDark = typeof getPageBackground === 'function' ? getPageBackground().isDark : false;
+  const style = typeof getRandomHighlightStyle === 'function'
+    ? getRandomHighlightStyle(isDark)
+    : { color: '#7857ff', animation: 'soft' };
 
-  element.style.outline = '4px solid #ffd93d';
-  element.style.outlineOffset = '2px';
-  element.style.backgroundColor = 'rgba(255, 217, 61, 0.3)';
-
-  setTimeout(() => {
-    element.style.outline = originalOutline;
-    element.style.outlineOffset = originalOutlineOffset;
-    element.style.backgroundColor = originalBg;
-  }, 1500);
+  if (typeof applyAnimatedHighlight === 'function') {
+    applyAnimatedHighlight(element, style.color, style.animation, { block: true });
+  } else {
+    element.style.backgroundColor = `color-mix(in srgb, ${style.color} 8%, transparent)`;
+  }
+  window._pageguideHighlights = window._pageguideHighlights || [];
+  window._pageguideHighlights.push(element);
 
   return true;
 }

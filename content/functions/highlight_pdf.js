@@ -6,9 +6,10 @@
  */
 if (typeof PDF_CONFIG === 'undefined') {
   var PDF_CONFIG = {
-    highlightColor: 'rgba(255, 235, 59, 0.4)',  // Yellow highlight
-    highlightBorder: '2px solid #FFC107',
-    animationDuration: 2000,  // ms for highlight pulse animation
+    // Same purple family and same flat treatment as the web highlight (content/content.css) —
+    // it used to be yellow and pulse three times, so a PDF answer looked like a different feature.
+    highlightColor: 'rgba(120, 87, 255, 0.16)',
+    highlightBorder: '1px solid rgba(120, 87, 255, 0.35)',
     scrollPadding: 100  // px padding when scrolling to highlight
   };
 }
@@ -62,25 +63,15 @@ function showPdfSearchNotification(pageNumber, searchText) {
     const style = document.createElement('style');
     style.id = 'pageguide-pdf-notification-styles';
     style.textContent = `
+      /* Fade only — the notice used to slide in from the right, which reads as motion in the
+         corner of the eye while you are trying to read the page. */
       @keyframes pageguide-slide-in {
-        from {
-          opacity: 0;
-          transform: translateX(100px);
-        }
-        to {
-          opacity: 1;
-          transform: translateX(0);
-        }
+        from { opacity: 0; }
+        to { opacity: 1; }
       }
       @keyframes pageguide-slide-out {
-        from {
-          opacity: 1;
-          transform: translateX(0);
-        }
-        to {
-          opacity: 0;
-          transform: translateX(100px);
-        }
+        from { opacity: 1; }
+        to { opacity: 0; }
       }
     `;
     document.head.appendChild(style);
@@ -422,7 +413,6 @@ function createPdfHighlight(pageNumber, bbox, text) {
     border-radius: 2px;
     pointer-events: none;
     z-index: 10;
-    animation: pageguide-pdf-pulse 1.5s ease-in-out 3;
   `;
   
   // Ensure page container has relative positioning
@@ -443,25 +433,15 @@ function createPdfHighlight(pageNumber, bbox, text) {
 }
 
 /**
- * Add CSS animation for PDF highlights
+ * Styles for PDF highlights. Deliberately motionless — the highlight is a colour, nothing else
+ * (the pulse keyframes that used to live here ran three times on every citation).
  */
 function injectPdfHighlightStyles() {
   if (document.getElementById('pageguide-pdf-styles')) return;
-  
+
   const style = document.createElement('style');
   style.id = 'pageguide-pdf-styles';
   style.textContent = `
-    @keyframes pageguide-pdf-pulse {
-      0%, 100% {
-        background-color: rgba(255, 235, 59, 0.4);
-        box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
-      }
-      50% {
-        background-color: rgba(255, 235, 59, 0.7);
-        box-shadow: 0 0 10px 5px rgba(255, 193, 7, 0.3);
-      }
-    }
-    
     .pageguide-pdf-highlight {
       transition: opacity 0.3s ease;
     }
