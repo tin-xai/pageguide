@@ -14,6 +14,9 @@ let uploadedFileSize = null;    // Byte size of the attached file (for the chip 
 let currentSelectedText = null; // Stores text selected on the webpage
 let guideActive = false; // True while guide is generating steps (shows stop button)
 let guidePaused = false; // True when an active guide is paused and can be resumed
+// Monotonic counter of pauses observed. Resume snapshots it before awaiting so it can tell a
+// pause that landed *during* the resume (guide re-tripped a guard) from a clean resume.
+let guidePauseSeq = 0;
 // Tab id the guide is actually running on (from the sender of its guide* messages), as opposed
 // to currentTabId which tracks whatever tab the user currently has focused. These can diverge:
 // the user is free to switch to a different tab while the guide keeps working in the background.
@@ -4443,8 +4446,34 @@ function addGuidePausedMessage(reason = '') {
   }
   guidePaused = true;
   guideActive = false;
+  guidePauseSeq++;
   updateGuidePauseButton();
 }
+
+/**
+ * Pure decision helper (unit-tested): after `resumeGuide` resolved successfully, may we mark the
+ * guide as running again? Only if no new pause arrived while we were awaiting it. Resume awaits
+ * the whole next-step generation, so a guide that re-pauses mid-resume (loop / low-confidence /
+ * risk gate) delivers its `guidePaused` message *before* resume returns — blindly clearing
+ * `guidePaused` afterwards left the button showing "Pause" for a paused guide, so the next click
+ * paused instead of resuming and the guide could never be restarted.
+ */
+function _shouldApplyResumeSuccess(pauseSeqBefore, pauseSeqAfter) {
+  return pauseSeqBefore === pauseSeqAfter;
+}
+window._shouldApplyResumeSuccess = _shouldApplyResumeSuccess;
+
+/**
+ * Pure decision helper (unit-tested): after trying a guide control action on `triedTabId`, should
+ * we retry it on the tab that's actually in front? Yes only when the tried tab reported no live
+ * session ("Guide not active") and the active tab is a different, real tab — this recovers from a
+ * stale guideTabId left behind when the guide moved/opened tabs.
+ */
+function _shouldRetryGuideActionOnActiveTab(res, triedTabId, activeTabId) {
+  const notActive = (!res || res.success === false) && /not active/i.test(String(res?.error || ''));
+  return notActive && activeTabId != null && activeTabId !== triedTabId;
+}
+window._shouldRetryGuideActionOnActiveTab = _shouldRetryGuideActionOnActiveTab;
 
 async function resumeGuideFromPanel() {
   const btn = document.getElementById('pageguide-guide-pause');
@@ -4452,11 +4481,23 @@ async function resumeGuideFromPanel() {
   if (btn) btn.disabled = true;
   if (stopBtn) stopBtn.disabled = true;
   showTyping();
+  const pauseSeqBefore = guidePauseSeq;
   try {
-    const res = await sendToContentScript({ action: 'resumeGuide' }, guideTabId);
+    let res = await sendToContentScript({ action: 'resumeGuide' }, guideTabId);
+    // guideTabId can go stale after the guide opened/moved between tabs; if the tracked tab has no
+    // live session, retry on the tab actually in front (the guide's own tab) before giving up.
+    if ((!res || res.success === false) && /not active/i.test(String(res?.error || ''))) {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (_shouldRetryGuideActionOnActiveTab(res, guideTabId, activeTab?.id)) {
+        const retry = await sendToContentScript({ action: 'resumeGuide' }, activeTab.id);
+        if (retry && retry.success !== false) { guideTabId = activeTab.id; res = retry; }
+      }
+    }
     if (!res || res.success === false) throw new Error(res?.error || 'Could not resume guide');
-    guidePaused = false;
-    guideActive = true;
+    if (_shouldApplyResumeSuccess(pauseSeqBefore, guidePauseSeq)) {
+      guidePaused = false;
+      guideActive = true;
+    }
     updateGuidePauseButton();
   } catch (err) {
     hideTyping();

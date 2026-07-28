@@ -6,18 +6,26 @@
  * Includes timeout to prevent hanging on SPAs (X, ChatGPT, Claude, etc.)
  */
 async function safeSendMessage(message, timeoutMs = 60000) {
+  // Time agent "thinking" turns for the user study: the wall-clock of each planning LLM call.
+  // Emitted to the study tracker (ignored there unless a study task is running). Router/embedding
+  // calls are excluded so this reflects the guide agent's step reasoning.
+  const _isAgentThink = message && (message.action === 'callLLM' || message.action === 'callLLMWithImages');
+  const _thinkStart = _isAgentThink ? Date.now() : 0;
   try {
     // Create a timeout promise
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('Request timeout')), timeoutMs);
     });
-    
+
     // Race between the actual message and timeout
     const response = await Promise.race([
       chrome.runtime.sendMessage(message),
       timeoutPromise
     ]);
-    
+
+    if (_isAgentThink) {
+      try { chrome.runtime.sendMessage({ action: 'studyTracker_agentThink', durationMs: Date.now() - _thinkStart }); } catch (e2) {}
+    }
     return response;
   } catch (e) {
     const errorMsg = e.message || '';

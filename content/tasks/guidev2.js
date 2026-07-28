@@ -1953,8 +1953,14 @@ async function _gv2ScrollRegionTargetIntoView(el) {
   } catch (e) { /* best-effort */ }
   const instant = evalMode || window._guidev2?.autoMode === true;
   const scrollEl = el.closest('a, button, [role="button"], [role="link"], [role="menuitem"], li, summary, nav') || el;
+  // Flag this scroll as agent-driven so the study tracker attributes the resulting gesture to the
+  // agent, not the participant. Cleared after the scroll settles + the tracker's 300 ms debounce.
+  if (typeof window !== 'undefined') window._xwaAgentScrolling = true;
   scrollEl.scrollIntoView({ behavior: instant ? 'instant' : 'smooth', block: 'center', inline: 'nearest' });
   await new Promise((resolve) => setTimeout(resolve, instant ? 200 : 550));
+  if (typeof window !== 'undefined') {
+    setTimeout(() => { window._xwaAgentScrolling = false; }, 400);
+  }
 }
 
 async function gv2CaptureRegion(screenshotBase64, options = {}) {
@@ -4927,11 +4933,33 @@ async function _gv2UpdatePersonalizedProfile(g, outcome) {
   }
 }
 
+/**
+ * Clear the accumulated pause-guard evidence on the guide state so a resume actually resumes.
+ *
+ * Both stop guards are *cumulative*: `lowConfidenceCount` counts low-confidence actions for the
+ * whole session, and the loop score is `matches / 10` over `_mechElementTexts` — the running list
+ * of every element key the guide has targeted. Once either crossed its threshold, resuming with
+ * the history intact re-tripped the same guard on the very next step (and the loop list only ever
+ * grew, so it could never fall back under 0.3). The user reviewed the situation and pressed
+ * Resume, so both guards start over: they must see a fresh streak before stopping again.
+ *
+ * @param {object|null} g guide state (mutated in place)
+ * @returns {object|null} the same object, for chaining
+ */
+function _gv2ResetPauseGuards(g) {
+  if (!g) return g;
+  g.lowConfidenceCount = 0;
+  g._mechElementTexts = [];
+  g._mechKeys = [];
+  return g;
+}
+if (typeof window !== 'undefined') window._gv2ResetPauseGuards = _gv2ResetPauseGuards;
+
 async function gv2RetryGuideStep() {
   const g = window._guidev2;
   if (!g || !g.active) return { success: false, error: 'Guide not active' };
   g.paused = false;
-  g.lowConfidenceCount = 0;
+  _gv2ResetPauseGuards(g);
   await _gv2SetState(false);
   return _gv2GenerateAndDispatch();
 }
@@ -5868,7 +5896,7 @@ async function gv2ResumeGuide() {
   _guidev2Stopped = false;
   await _gv2ClearStopMark();
   g.paused = false;
-  g.lowConfidenceCount = 0;
+  _gv2ResetPauseGuards(g);
   await _gv2SetState(false);
   try { chrome.runtime.sendMessage({ action: 'showTyping' }); } catch (e) {}
   await new Promise(r => setTimeout(r, 250));

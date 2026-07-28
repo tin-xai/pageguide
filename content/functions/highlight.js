@@ -39,21 +39,40 @@ function getPageBackground() {
 }
 
 /**
- * Get random highlight style (color + animation)
- * Automatically picks contrasting colors based on page background
+ * Get the highlight style (color + effect) for a page.
+ *
+ * Deliberately deterministic despite the legacy name: it used to pick a random color out of three
+ * purples and a random animation out of four (pulse / spotlight / left-to-right shimmer / glow)
+ * *per citation*, so a single answer lit the page up in several colors moving in several
+ * different ways at once. One answer now reads as one thing — a single accent, a single calm
+ * effect (see .pageguide-highlight in content/content.css). The only variation left is page
+ * background: a lighter purple on dark pages so the tint stays legible.
+ *
+ * @param {boolean} isDarkPage - from getPageBackground().isDark
+ * @returns {{color: string, animation: string}} accent color + effect name
  */
 function getRandomHighlightStyle(isDarkPage = false) {
   // Keep PageGuide highlights in the same purple family as the side panel.
-  const darkPageColors = ['#b89cff', '#9b84ff', '#c4b5fd'];
-  const lightPageColors = ['#7857ff', '#8b5cf6', '#6d5dfc'];
+  return {
+    color: isDarkPage ? '#b89cff' : '#7857ff',
+    animation: 'soft'
+  };
+}
 
-  const animations = ['pulse', 'spotlight', 'shimmer', 'glow'];
-  
-  const colors = isDarkPage ? darkPageColors : lightPageColors;
-  const color = colors[Math.floor(Math.random() * colors.length)];
-  const animation = animations[Math.floor(Math.random() * animations.length)];
-  
-  return { color, animation };
+/** Span-level vs block-level tint strength. Blocks stay lighter so cited phrases nested inside a
+ *  whole-element highlight still read against it. */
+const PAGEGUIDE_TINT_SPAN = 16;
+const PAGEGUIDE_TINT_BLOCK = 8;
+
+/**
+ * Background tint for a highlight, in the accent color.
+ * @param {string} color - accent color
+ * @param {boolean} block - true for whole-element highlights (lighter)
+ * @returns {string} a color-mix() background value
+ */
+function pageguideHighlightTint(color, block = false) {
+  const strength = block ? PAGEGUIDE_TINT_BLOCK : PAGEGUIDE_TINT_SPAN;
+  return `color-mix(in srgb, ${color} ${strength}%, transparent)`;
 }
 
 /**
@@ -148,8 +167,8 @@ function applyIndexedHighlight(index, text, style = {}) {
     return highlightTextInElement(element, text.trim(), color, animation);
   }
   
-  // Otherwise highlight the whole element
-  applyAnimatedHighlight(element, color, animation);
+  // Otherwise highlight the whole element (lighter tint — see pageguideHighlightTint)
+  applyAnimatedHighlight(element, color, animation, { block: true });
   window._pageguideHighlights.push(element);
   return 1;
 }
@@ -157,21 +176,21 @@ function applyIndexedHighlight(index, text, style = {}) {
 /**
  * Apply animated highlight to an element
  */
-function applyAnimatedHighlight(element, color, animation) {
+/**
+ * Apply the highlight treatment to an element.
+ * @param {Element} element
+ * @param {string} color - accent color
+ * @param {string} animation - effect name from getRandomHighlightStyle ('soft')
+ * @param {{block?: boolean}} opts - block: this is a whole-element highlight, so tint it lighter
+ */
+function applyAnimatedHighlight(element, color, animation, opts = {}) {
   // Set CSS variable for the color
   element.style.setProperty('--pageguide-color', color);
-  
-  // Add animation class
+
   const animClass = `pageguide-highlight-${animation}`;
   element.classList.add('pageguide-highlight', animClass);
+  if (opts.block) element.classList.add('pageguide-highlight-block');
   element.setAttribute('data-pageguide-styled', 'true');
-  
-  // For block elements using shimmer, use the block variant
-  const display = window.getComputedStyle(element).display;
-  if (animation === 'shimmer' && display !== 'inline') {
-    element.classList.remove(animClass);
-    element.classList.add('pageguide-highlight-shimmer-block');
-  }
 }
 
 /**
@@ -212,9 +231,9 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
           // Found a matching child element - highlight it directly
           console.log('🎯 Found matching child element:', child.tagName, child.textContent?.slice(0, 30));
           applyAnimatedHighlight(child, color, animation);
-          
+
           // Also add inline styles for visibility
-          child.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
+          child.style.backgroundColor = pageguideHighlightTint(color);
           child.style.borderRadius = '3px';
           child.style.padding = '1px 4px';
           
@@ -298,7 +317,7 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
       const span = document.createElement('span');
       span.className = `pageguide-highlight pageguide-highlight-${animation}`;
       span.style.setProperty('--pageguide-color', color);
-      span.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
+      span.style.backgroundColor = pageguideHighlightTint(color);
       span.style.borderRadius = '3px';
       span.style.padding = '1px 4px';
       span.setAttribute('data-pageguide-styled', 'true');
@@ -320,8 +339,8 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
     // directly instead of falling all the way back to the giant root element.
     if (count === 0 && targetEl !== element) {
       console.log('🤖 Cross-span text detected, highlighting narrowed container:', targetEl.tagName);
-      applyAnimatedHighlight(targetEl, color, animation);
-      targetEl.style.backgroundColor = `color-mix(in srgb, ${color} 30%, transparent)`;
+      applyAnimatedHighlight(targetEl, color, animation, { block: true });
+      targetEl.style.backgroundColor = pageguideHighlightTint(color, true);
       targetEl.style.borderRadius = '3px';
       window._pageguideHighlights.push(targetEl);
       count++;
@@ -331,7 +350,7 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
   // STRATEGY 3: If still nothing matched, highlight the whole element
   if (count === 0) {
     console.log('🤖 No text match, highlighting whole element');
-    applyAnimatedHighlight(element, color, animation);
+    applyAnimatedHighlight(element, color, animation, { block: true });
     window._pageguideHighlights.push(element);
     count = 1;
   }

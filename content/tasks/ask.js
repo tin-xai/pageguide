@@ -605,25 +605,42 @@ function applyHighlightsFromCitations(answer) {
 }
 
 /**
- * Strip [N:"text"]/[N:'text']/[N:text]/[N] citation markers from an answer, leaving clean
- * prose behind. Used by Non-grounding baseline mode (isNonGroundingModeOn) so the displayed
- * answer has no clickable citation chips at all — not just no on-page highlight — since
- * parseCitations() in the side panel would otherwise turn any leftover markers into clickable
- * spans regardless of whether applyHighlightsFromCitations() ever ran on the page.
+ * Unwrap citation markers in an answer: keep the quoted span the model cited, drop only the
+ * bracket + index that turns it into a page link. Used by Non-grounding baseline mode
+ * (isNonGroundingModeOn) so the displayed answer has no clickable citation chips at all — not
+ * just no on-page highlight — since parseCitations() in the side panel would otherwise turn any
+ * leftover markers into clickable spans regardless of whether applyHighlightsFromCitations()
+ * ever ran on the page.
+ *
+ * The cited span is part of the sentence, not decoration: grounding mode renders it inline
+ * (`<span class="citation-text">` in parseCitations), so deleting it here left the baseline
+ * answer with gaps — "Contact the depot [12:"within 30 days"] of travel." came out as
+ * "Contact the depot of travel." Non-grounding must show the LLM's full text; only the link
+ * goes away. Markers that carry no text of their own ([N], [N, M], [idx:1-2]) are still removed
+ * outright — there is nothing to keep.
+ *
  * @param {string} answer - Answer text with citation markers
- * @returns {string} The same text with citation markers removed
+ * @returns {string} The same text with every citation marker replaced by its cited span
  */
 function stripCitationMarkers(answer) {
   if (!answer) return answer;
+  // Curly quotes must be folded to straight ones with explicit escapes — a literal ["”] in the
+  // source is just a straight quote twice and never matched the smart quotes models emit.
   const normalized = String(answer)
-    .replace(/[""]/g, '"')
-    .replace(/['']/g, "'");
+    .replace(/[“”„‟"]/g, '"')
+    .replace(/[‘’‚‛']/g, "'");
   return normalized
-    .replace(/\[(\d+):\s*"[^"]+"\]/g, '')  // [N:"text"]
-    .replace(/\[(\d+):\s*'[^']+'\]/g, '')  // [N:'text']
-    .replace(/\[(\d+):\s*[^\]"']+\]/g, '') // [N:text]
-    .replace(/\[(\d+)\](?!:)/g, '')        // [N]
-    .replace(/\s+([.,;:!?])/g, '$1')       // drop stray space a removed marker left before punctuation
+    // Markers carrying a cited span → keep the span, drop the brackets/index. The index part
+    // allows comma-separated lists ([517, 519:"text"]) the same way parseCitations does.
+    .replace(/\[Page\s*\d+:\s*"([^"]+)"\]/gi, '$1')     // [Page N:"text"] (PDF)
+    .replace(/\[Page\s*\d+:\s*'([^']+)'\]/gi, '$1')     // [Page N:'text'] (PDF)
+    .replace(/\[[\d,\s]+:\s*"([^"]+)"\]/g, '$1')        // [N:"text"]
+    .replace(/\[[\d,\s]+:\s*'([^']+)'\]/g, '$1')        // [N:'text']
+    .replace(/\[[\d,\s]+:\s*([^\]"']+)\]/g, '$1')       // [N:text]
+    // Markers with no text of their own → nothing to keep.
+    .replace(/\[idx:[^\]]+\]/gi, '')                    // [idx:1-2] (PDF element ranges)
+    .replace(/\[[\d,\s]+\](?!:)/g, '')                  // [N] / [N, M]
+    .replace(/\s+([.,;:!?])/g, '$1')                    // drop stray space a removed marker left before punctuation
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }

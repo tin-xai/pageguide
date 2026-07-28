@@ -1,136 +1,56 @@
 /* PageGuide Content Script Styles */
 
-/* ===== HIGHLIGHT ANIMATIONS ===== */
+/* ===== HIGHLIGHT ===== */
 
-/* Pulse - Gentle pulsing glow */
-.pageguide-highlight-pulse {
-  animation: pageguide-pulse 2s ease-in-out infinite;
-}
-
-@keyframes pageguide-pulse {
-  0%, 100% { 
-    box-shadow: 0 0 5px var(--pageguide-color, #ffd93d);
-    opacity: 1;
-  }
-  50% { 
-    box-shadow: 0 0 25px var(--pageguide-color, #ffd93d), 0 0 50px var(--pageguide-color, #ffd93d);
-    opacity: 0.9;
-  }
-}
-
-/* Spotlight - Bright spotlight effect */
-.pageguide-highlight-spotlight {
-  animation: pageguide-spotlight 1.5s ease-out forwards;
-  position: relative;
-}
-
-@keyframes pageguide-spotlight {
-  0% {
-    box-shadow: 0 0 0 0 var(--pageguide-color, #ffd93d);
-    background-color: transparent;
-  }
-  30% {
-    box-shadow: 0 0 60px 20px var(--pageguide-color, #ffd93d);
-  }
-  100% {
-    box-shadow: 0 0 20px 5px var(--pageguide-color, #ffd93d);
-    background-color: color-mix(in srgb, var(--pageguide-color, #ffd93d) 25%, transparent);
-  }
-}
-
-/* Shimmer - Moving highlight sweep */
-.pageguide-highlight-shimmer {
-  position: relative;
-  display: inline-block;
-  overflow: hidden;
-  background-color: color-mix(in srgb, var(--pageguide-color, #ffd93d) 20%, transparent);
-  border-radius: 3px;
-  padding: 0 2px;
-}
-
-.pageguide-highlight-shimmer::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 50%;
-  height: 100%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--pageguide-color, #ffd93d) 60%, white),
-    transparent
-  );
-  animation: pageguide-shimmer 1.5s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@keyframes pageguide-shimmer {
-  0% { left: -50%; }
-  100% { left: 100%; }
-}
-
-/* Shimmer for block elements */
-.pageguide-highlight-shimmer-block {
-  position: relative;
-  overflow: hidden;
-}
-
-.pageguide-highlight-shimmer-block::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--pageguide-color, #ffd93d) 40%, transparent),
-    transparent
-  );
-  animation: pageguide-shimmer-move 2s linear infinite;
-}
-
-@keyframes pageguide-shimmer-move {
-  0% { left: -100%; }
-  100% { left: 100%; }
-}
-
-/* Glow - Steady glowing outline */
+/*
+ * One highlight, one effect. Highlights used to pick a random color out of three and a random
+ * animation out of four per citation (pulse / spotlight / left-to-right shimmer sweep / glow), so
+ * a single answer covered the page in several colors moving in several ways at once. Now every
+ * cited span gets the same accent (getRandomHighlightStyle in content/functions/highlight.js) and
+ * the same treatment: a soft tint that fades in once and then holds still. No glow, no outline,
+ * no sweep, nothing that repeats.
+ *
+ * The legacy effect class names are kept as aliases of the calm style so a stale class string
+ * left anywhere can never bring the motion back.
+ */
+.pageguide-highlight,
+.pageguide-highlight-soft,
+.pageguide-highlight-pulse,
+.pageguide-highlight-spotlight,
+.pageguide-highlight-shimmer,
+.pageguide-highlight-shimmer-block,
 .pageguide-highlight-glow {
-  outline: 3px solid var(--pageguide-color, #ffd93d);
-  outline-offset: 3px;
-  box-shadow: 
-    0 0 10px var(--pageguide-color, #ffd93d),
-    0 0 20px var(--pageguide-color, #ffd93d),
-    inset 0 0 10px color-mix(in srgb, var(--pageguide-color, #ffd93d) 20%, transparent);
-  animation: pageguide-glow 2s ease-in-out infinite;
-}
-
-@keyframes pageguide-glow {
-  0%, 100% { 
-    box-shadow: 
-      0 0 10px var(--pageguide-color, #ffd93d),
-      0 0 20px var(--pageguide-color, #ffd93d);
-  }
-  50% { 
-    box-shadow: 
-      0 0 20px var(--pageguide-color, #ffd93d),
-      0 0 40px var(--pageguide-color, #ffd93d),
-      0 0 60px var(--pageguide-color, #ffd93d);
-  }
-}
-
-/* Base highlight style - always applied */
-.pageguide-highlight {
+  background-color: color-mix(in srgb, var(--pageguide-color, #7857ff) 16%, transparent);
   border-radius: 3px;
   padding: 1px 3px;
   margin: 0 1px;
-  transition:
-    background-color 0.15s ease,
-    box-shadow 0.15s ease,
-    outline-color 0.15s ease;
+  box-shadow: none;
+  outline: none;
+  animation: pageguide-highlight-in 180ms ease-out 1;
+}
+
+/* Whole-element highlights sit *behind* cited phrases, so they stay lighter — otherwise the
+   paragraph tint and the phrase tint read as the same block of color. */
+.pageguide-highlight-block {
+  background-color: color-mix(in srgb, var(--pageguide-color, #7857ff) 8%, transparent);
+  padding: 2px 4px;
+  margin: 0;
+}
+
+@keyframes pageguide-highlight-in {
+  from { background-color: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pageguide-highlight,
+  .pageguide-highlight-soft,
+  .pageguide-highlight-pulse,
+  .pageguide-highlight-spotlight,
+  .pageguide-highlight-shimmer,
+  .pageguide-highlight-shimmer-block,
+  .pageguide-highlight-glow {
+    animation: none;
+  }
 }
 
 [data-pageguide-styled] {

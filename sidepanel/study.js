@@ -23,6 +23,20 @@ const STUDY_TASK_DESCRIPTIONS = {
   guide: 'Complete the task described below on the website.',
 };
 const STUDY_RESULTS_STORAGE_KEY = 'pageguide_study_results';
+// This find/guide study always runs with the extension available (no control condition here), so
+// every row is logged under a single condition label. Change this if you add other conditions.
+const STUDY_CONDITION = 'extension';
+// The exact column list on the Supabase `study_task_results` table. persistResult() posts only
+// these keys so the insert matches the table even though the local/CSV record carries extra
+// convenience fields (tool, task_id, url, total_tasks, completed_at).
+const SUPABASE_TASK_COLUMNS = [
+  'session_id', 'participant_id', 'block_index', 'task_index', 'question_index', 'task_type',
+  'condition', 'time_ms', 'answer', 'answer_correct', 'question_or_task', 'confidence',
+  'helpfulness', 'chat_turn_count', 'chat_transcript', 'hidden_count', 'hide_recall',
+  'user_hidden_selectors', 'guide_screenshot', 'scroll_user_count', 'scroll_agent_count',
+  'ctrl_f_count', 'text_select_count', 'click_count', 'mouse_move_px', 'agent_think_ms',
+  'page_visit_count', 'page_visit_urls', 'task_data',
+];
 
 function _formatStudyTime(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -67,7 +81,8 @@ function _shuffleStudyOptions(arr, rng = Math.random) {
  */
 function _buildStudyResultRecord(ctx) {
   const {
-    participantId, taskIndex, totalTasks, taskType, task, elapsedMs, answer,
+    participantId, sessionId, taskIndex, blockIndex, questionIndex, totalTasks,
+    taskType, task, condition, elapsedMs, answer,
     confidence, helpfulness, chatSnapshot, behaviorData,
   } = ctx;
 
@@ -77,37 +92,54 @@ function _buildStudyResultRecord(ctx) {
   const snap = chatSnapshot || { chat_turn_count: 0, chat_transcript: [] };
 
   return {
+    // ── Convenience fields: kept in local storage + CSV, stripped before the Supabase insert
+    //    (the table has no column for these). task_id/url are also preserved inside task_data. ──
     tool:              'pageguide',
-    participant_id:    participantId,
-    task_index:        taskIndex,
-    total_tasks:       totalTasks,
     task_id:           task.id,
+    url:               task.url,
+    total_tasks:       totalTasks,
+    completed_at:      new Date().toISOString(),
+
+    // ── Supabase study_task_results columns ──
+    session_id:        sessionId ?? null,
+    participant_id:    participantId,
+    block_index:       blockIndex ?? 0,
+    task_index:        taskIndex,
+    question_index:    questionIndex ?? 0,
     task_type:         taskType,
-    question_or_task:  questionOrTask,
-    url:               taskType === 'find' ? task.url : task.url,
+    condition:         condition || STUDY_CONDITION,
     time_ms:           elapsedMs,
     answer:            answer,
     answer_correct:    answerCorrect,
+    question_or_task:  questionOrTask,
     confidence:        confidence || null,
     helpfulness:       helpfulness || null,
     chat_turn_count:   snap.chat_turn_count || 0,
     chat_transcript:   snap.chat_transcript || [],
-    scroll_count:      beh.scroll || 0,
-    ctrl_f_count:      beh.ctrlF || 0,
-    text_select_count: beh.textSelect || 0,
-    click_count:       beh.click || 0,
-    mouse_move_px:     beh.mouseMove || 0,
-    page_visit_count:  (beh.pages || []).length,
-    page_visit_urls:   (beh.pages || []).map(p => p.url),
-    completed_at:      new Date().toISOString(),
+    // Recall ("hide") task is not part of this find/guide study — these stay empty.
+    hidden_count:          0,
+    hide_recall:           null,
+    user_hidden_selectors: null,
+    guide_screenshot:  null,
+    scroll_user_count:  beh.scroll_user_count  || 0,
+    scroll_agent_count: beh.scroll_agent_count || 0,
+    ctrl_f_count:       beh.ctrl_f_count       || 0,
+    text_select_count:  beh.text_select_count  || 0,
+    click_count:        beh.click_count        || 0,
+    mouse_move_px:      beh.mouse_move_px      || 0,
+    agent_think_ms:     beh.agent_think_ms     || [],
+    page_visit_count:   beh.page_visit_count   || 0,
+    page_visit_urls:    beh.page_visit_urls    || [],
+    task_data:          task,
   };
 }
 
 const STUDY_CSV_COLUMNS = [
-  'tool', 'participant_id', 'task_index', 'total_tasks', 'task_id', 'task_type',
-  'question_or_task', 'url', 'time_ms', 'answer', 'answer_correct', 'confidence', 'helpfulness',
-  'chat_turn_count', 'scroll_count', 'ctrl_f_count', 'text_select_count', 'click_count',
-  'mouse_move_px', 'page_visit_count', 'page_visit_urls', 'completed_at',
+  'tool', 'participant_id', 'session_id', 'condition', 'block_index', 'task_index',
+  'question_index', 'task_id', 'task_type', 'question_or_task', 'url', 'time_ms', 'answer',
+  'answer_correct', 'confidence', 'helpfulness', 'chat_turn_count', 'hidden_count', 'hide_recall',
+  'scroll_user_count', 'scroll_agent_count', 'ctrl_f_count', 'text_select_count', 'click_count',
+  'mouse_move_px', 'agent_think_ms', 'page_visit_count', 'page_visit_urls', 'completed_at',
 ];
 
 function _escapeStudyCSVValue(v) {
@@ -146,6 +178,7 @@ if (typeof window !== 'undefined') {
 
   const s = {
     participantId: '',
+    sessionId: null, // study_sessions.id once the session row is created (null if Supabase off)
     queue: [],       // ordered [{taskType, task}, ...]
     idx: 0,          // current position in queue
     results: [],
@@ -220,17 +253,31 @@ if (typeof window !== 'undefined') {
     } catch (e) {}
   }
 
+  // Returns behavior counts already shaped to the study_task_results column names.
   async function stopBehaviorTracking() {
-    let data = { scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
+    const out = {
+      scroll_user_count: 0, scroll_agent_count: 0, ctrl_f_count: 0, text_select_count: 0,
+      click_count: 0, mouse_move_px: 0, agent_think_ms: [], page_visit_count: 0, page_visit_urls: [],
+    };
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tabs[0]) await chrome.tabs.sendMessage(tabs[0].id, { action: 'studyTracker_stop' }).catch(() => {});
-      const swData = await chrome.runtime.sendMessage({ action: 'studyTracker_getData' });
-      if (swData) data = swData;
+      const d = await chrome.runtime.sendMessage({ action: 'studyTracker_getData' });
+      if (d) {
+        out.scroll_user_count  = d.scrollUser  || 0;
+        out.scroll_agent_count = d.scrollAgent || 0;
+        out.ctrl_f_count       = d.ctrlF       || 0;
+        out.text_select_count  = d.textSelect  || 0;
+        out.click_count        = d.click       || 0;
+        out.mouse_move_px      = d.mouseMove   || 0;
+        out.agent_think_ms     = d.agentThinkMs || [];
+        out.page_visit_count   = (d.pages || []).length;
+        out.page_visit_urls    = (d.pages || []).map(p => p.url);
+      }
     } catch (e) {
       console.error('[Study] stopBehaviorTracking:', e);
     }
-    return data;
+    return out;
   }
 
   function snapshotChat() {
@@ -267,6 +314,62 @@ if (typeof window !== 'undefined') {
     } catch (e) { return null; }
   }
 
+  // sidepanel/supabase_config.js defines these globals (gitignored, not present by default).
+  function _supabaseConfigured() {
+    return typeof SUPABASE_URL !== 'undefined' && SUPABASE_URL && !SUPABASE_URL.includes('YOUR_PROJECT');
+  }
+
+  function _supabaseHeaders(prefer) {
+    return {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': prefer,
+    };
+  }
+
+  // Best-effort insert into a Supabase table. Returns the created row when the anon role can read
+  // it back (needs a SELECT policy), else null. No-ops when Supabase isn't configured.
+  async function supabaseInsert(table, data) {
+    if (!_supabaseConfigured()) return null;
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+        method: 'POST',
+        headers: _supabaseHeaders('return=representation'),
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const json = await res.json().catch(() => null);
+        return (Array.isArray(json) && json[0]) || null;
+      }
+      // return=representation adds a RETURNING clause that RLS blocks when there's no anon SELECT
+      // policy, rejecting the whole insert. Retry without RETURNING so the row is still created
+      // (we just can't capture its id). A genuine INSERT-policy violation will fail again — fine.
+      if (res.status === 401 || res.status === 403) {
+        await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+          method: 'POST',
+          headers: _supabaseHeaders('return=minimal'),
+          body: JSON.stringify(data),
+        }).catch(() => {});
+      } else {
+        console.error(`[Study] Supabase ${res.status} on ${table}:`, await res.text().catch(() => ''));
+      }
+    } catch (e) {
+      console.warn(`[Study] Supabase insert into ${table} failed:`, e);
+    }
+    return null;
+  }
+
+  // Create the parent study_sessions row at study start so task rows can reference session_id.
+  async function startSession(participantId) {
+    s.sessionId = null;
+    const row = await supabaseInsert('study_sessions', {
+      participant_id: participantId,
+      condition_order: STUDY_CONDITION,
+    });
+    if (row && row.id) s.sessionId = row.id;
+  }
+
   // ── Persistence: chrome.storage.local (always) + Supabase (best-effort, if configured) ──
   async function persistResult(result) {
     try {
@@ -278,18 +381,15 @@ if (typeof window !== 'undefined') {
       console.error('[Study] Failed to save result to chrome.storage.local:', e);
     }
 
-    // sidepanel/supabase_config.js defines these globals; gitignored, not present by default.
+    // Post only the actual table columns; the local record also carries convenience fields.
     try {
-      if (typeof SUPABASE_URL !== 'undefined' && SUPABASE_URL && !SUPABASE_URL.includes('YOUR_PROJECT')) {
+      if (_supabaseConfigured()) {
+        const supaData = {};
+        SUPABASE_TASK_COLUMNS.forEach(col => { if (result[col] !== undefined) supaData[col] = result[col]; });
         await fetch(`${SUPABASE_URL}/rest/v1/study_task_results`, {
           method: 'POST',
-          headers: {
-            'apikey': SUPABASE_ANON_KEY,
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal',
-          },
-          body: JSON.stringify(result),
+          headers: _supabaseHeaders('return=minimal'),
+          body: JSON.stringify(supaData),
         });
       }
     } catch (e) {
@@ -338,6 +438,7 @@ if (typeof window !== 'undefined') {
       s.participantId = ($('study-pid-input')?.value || '').trim() || 'anon';
       s.idx = 0;
       s.results = [];
+      await startSession(s.participantId);
       renderTaskSetup();
     };
   }
@@ -519,12 +620,19 @@ if (typeof window !== 'undefined') {
       const helpSel = overlay.querySelector('input[name="study-help"]:checked');
       if (!confSel || !helpSel) { $('study-post-error').style.display = ''; return; }
 
+      // question_index = 0-based position of this task within its own type (find/guide); there is
+      // a single block in this study, so block_index stays 0.
+      const questionIndex = s.queue.slice(0, s.idx).filter(e => e.taskType === taskType).length;
       const result = _buildStudyResultRecord({
         participantId: s.participantId,
+        sessionId: s.sessionId,
         taskIndex: s.idx,
+        blockIndex: 0,
+        questionIndex,
         totalTasks: s.queue.length,
         taskType,
         task,
+        condition: STUDY_CONDITION,
         elapsedMs: elapsed,
         answer,
         confidence: confSel.value,

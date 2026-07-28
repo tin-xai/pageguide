@@ -3,29 +3,30 @@
 // while a study task is running. Batches events and sends them to the background service worker,
 // which aggregates across page navigations so data isn't lost when the participant navigates.
 //
-// Note: unlike an earlier version of this tracker, this build has no reliable signal for
-// "did the guide just scroll the page programmatically" (that required a global flag the current
-// guide implementation doesn't set), so `scroll` here counts every scroll gesture, whether
-// triggered by the participant or by PageGuide's own auto-scrolling during a Guide task.
+// Scroll gestures are split into participant (`scrollUser`) vs agent (`scrollAgent`): guidev2's
+// scroll-into-view helper raises window._xwaAgentScrolling around its programmatic scrolls, and a
+// gesture that lands while that flag is up is attributed to the agent.
 (function () {
   'use strict';
 
   let active = false;
   let scrollTimer = null;
-  const batch = { scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0 };
+  const batch = { scrollUser: 0, scrollAgent: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0 };
 
   function flush() {
     if (!active) return;
-    if (batch.scroll === 0 && batch.ctrlF === 0 && batch.textSelect === 0 && batch.click === 0 && batch.mouseMove === 0) return;
+    if (batch.scrollUser === 0 && batch.scrollAgent === 0 && batch.ctrlF === 0 && batch.textSelect === 0 && batch.click === 0 && batch.mouseMove === 0) return;
     chrome.runtime.sendMessage({
       action: 'studyTracker_batch',
-      scroll: batch.scroll,
+      scrollUser: batch.scrollUser,
+      scrollAgent: batch.scrollAgent,
       ctrlF: batch.ctrlF,
       textSelect: batch.textSelect,
       click: batch.click,
       mouseMove: batch.mouseMove,
     }).catch(() => {});
-    batch.scroll = 0;
+    batch.scrollUser = 0;
+    batch.scrollAgent = 0;
     batch.ctrlF = 0;
     batch.textSelect = 0;
     batch.click = 0;
@@ -36,11 +37,16 @@
   setInterval(flush, 2000);
   window.addEventListener('beforeunload', flush);
 
-  // Scroll: debounce 300 ms so one continuous gesture counts once.
+  // Scroll: debounce 300 ms so one continuous gesture counts once. Attribute the gesture to the
+  // agent when PageGuide's programmatic scroll flag (window._xwaAgentScrolling, set by guidev2's
+  // scroll-into-view helper) is up at the moment the debounce fires; otherwise to the participant.
   window.addEventListener('scroll', () => {
     if (!active) return;
     clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => { batch.scroll++; }, 300);
+    scrollTimer = setTimeout(() => {
+      if (window._xwaAgentScrolling) batch.scrollAgent++;
+      else batch.scrollUser++;
+    }, 300);
   }, { passive: true, capture: true });
 
   // Ctrl/Cmd+F

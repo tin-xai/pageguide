@@ -3449,13 +3449,14 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
     // index and highlights the cited passages"), which asserts highlighting DOES happen by
     // default — this proves the only thing that changed is the stored toggle, not the routing
     // or LLM call. The citation marker itself is also stripped from the displayed answer (not
-    // just left unhighlighted), so no clickable chip survives into the chat.
+    // just left unhighlighted), so no clickable chip survives into the chat — but the cited
+    // span stays in the prose, since it is part of the sentence the model wrote.
     window.chrome.storage.local.get = jest.fn(async () => ({ pageguideNonGrounding: 'on' }));
 
     const result = await window.gv2ProcessResponse(findStep());
 
     expect(window.applyHighlightsFromCitations).not.toHaveBeenCalled();
-    expect(result.answer).toBe('Contact the depot of travel.'); // citation marker removed, prose intact
+    expect(result.answer).toBe('Contact the depot within 30 days of travel.'); // link gone, full text kept
     expect(result.answer).not.toMatch(/\[\d+/); // no citation bracket syntax left at all
     expect(result.highlightCount).toBe(0);
     expect(result.hasHighlights).toBe(false);
@@ -3572,6 +3573,54 @@ describe('_shouldResetOnTabSwitch (sidepanel/panel.js) — per-tab session vs. g
   });
 });
 
+describe('_shouldRetryGuideActionOnActiveTab (sidepanel/panel.js) — recover from a stale guideTabId', () => {
+  // Pause→Resume regression: resume routes strictly to the panel's tracked guideTabId. If that id
+  // went stale (the guide opened/moved tabs), the message hits a tab with no live session and
+  // returns "Guide not active". We then retry on the tab actually in front before failing.
+  test('retries on the active tab when the tracked tab reports no active guide', () => {
+    const res = { success: false, error: 'Guide not active' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, 9)).toBe(true);
+  });
+
+  test('does not retry when the active tab IS the tab we already tried', () => {
+    const res = { success: false, error: 'Guide not active' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, 7)).toBe(false);
+  });
+
+  test('does not retry on unrelated failures (only the not-active case)', () => {
+    const res = { success: false, error: 'Could not generate the next step' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, 9)).toBe(false);
+  });
+
+  test('does not retry when the action succeeded', () => {
+    expect(window._shouldRetryGuideActionOnActiveTab({ success: true }, 7, 9)).toBe(false);
+  });
+
+  test('does not retry when there is no active tab id to fall back to', () => {
+    const res = { success: false, error: 'Guide not active' };
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, null)).toBe(false);
+    expect(window._shouldRetryGuideActionOnActiveTab(res, 7, undefined)).toBe(false);
+  });
+
+  test('a null response (messaging dropped, no error text) does not trigger the not-active retry', () => {
+    expect(window._shouldRetryGuideActionOnActiveTab(null, 7, 9)).toBe(false);
+  });
+
+  // REGRESSION: a guide that re-pauses while resume is still awaiting must stay marked paused.
+  describe('_shouldApplyResumeSuccess — a pause landing mid-resume wins', () => {
+    test('clean resume (no pause arrived while awaiting) marks the guide running again', () => {
+      expect(window._shouldApplyResumeSuccess(3, 3)).toBe(true);
+    });
+
+    test('REGRESSION: a guidePaused message during the resume await is not clobbered', () => {
+      // resume awaits the whole next-step generation; if that step re-trips the loop /
+      // low-confidence guard, guidePaused arrives first and bumps the counter. Clearing
+      // guidePaused afterwards left the button on "Pause", so the user could never resume.
+      expect(window._shouldApplyResumeSuccess(3, 4)).toBe(false);
+    });
+  });
+});
+
 describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)', () => {
   beforeAll(() => {
     // Minimal chrome mock covering every top-level chrome.*.addListener call service-worker.js
@@ -3587,10 +3636,17 @@ describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)',
       tabs: {
         onCreated: { addListener: jest.fn() },
         onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() },
         get: jest.fn(),
         query: jest.fn(),
         captureVisibleTab: jest.fn(),
         sendMessage: jest.fn()
+      },
+      debugger: {
+        attach: jest.fn().mockResolvedValue(undefined),
+        detach: jest.fn().mockResolvedValue(undefined),
+        sendCommand: jest.fn(),
+        onDetach: { addListener: jest.fn() }
       },
       storage: {
         sync: { get: jest.fn().mockResolvedValue({}) },
@@ -3605,23 +3661,41 @@ describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)',
     jest.clearAllMocks();
   });
 
-  test('REGRESSION: refuses to capture a tab that has lost focus instead of silently grabbing whatever tab is now visible', async () => {
-    // chrome.tabs.captureVisibleTab only ever captures the currently-active tab of a window —
-    // it can't target tabId directly. If tabId is no longer that window's active tab (the user
-    // switched away), capturing would silently return a screenshot of the WRONG tab.
+  test('captures a backgrounded tab via chrome.debugger instead of grabbing whatever tab is now visible', async () => {
+    // chrome.tabs.captureVisibleTab only ever captures the currently-active tab of a window — it
+    // can't target tabId directly. When tabId is no longer that window's active tab (the user
+    // switched away to work in another tab), we screenshot the agent's real tab through the
+    // debugger (CDP Page.captureScreenshot) rather than grabbing the WRONG, now-visible tab.
     window.chrome.tabs.get.mockResolvedValue({ id: 7, windowId: 1, active: false });
+    window.chrome.debugger.sendCommand.mockResolvedValue({ data: 'BBBB' });
     const result = await window._doCaptureScreenshot(7, 1);
-    expect(result.error).toMatch(/not active/i);
+    expect(result.success).toBe(true);
+    expect(result.imageBase64).toBe('BBBB');
+    expect(window.chrome.debugger.attach).toHaveBeenCalledWith({ tabId: 7 }, '1.3');
+    expect(window.chrome.debugger.sendCommand).toHaveBeenCalledWith({ tabId: 7 }, 'Page.captureScreenshot', { format: 'jpeg', quality: 80 });
+    // Never fell back to grabbing the visible (wrong) tab.
     expect(window.chrome.tabs.captureVisibleTab).not.toHaveBeenCalled();
   });
 
-  test('captures normally when the target tab is still the active/visible tab', async () => {
+  test('REGRESSION: surfaces an error (for the cached/placeholder fallback) when the debugger cannot attach to the background tab', async () => {
+    // e.g. DevTools is already open on that tab, or it's a restricted page. We must NOT silently
+    // grab the visible tab — return an error so the vision pipeline falls back to a cached shot.
+    window.chrome.tabs.get.mockResolvedValue({ id: 9, windowId: 1, active: false });
+    window.chrome.debugger.attach.mockRejectedValue(new Error('Another debugger is already attached'));
+    const result = await window._doCaptureScreenshot(9, 1);
+    expect(result.error).toBeTruthy();
+    expect(window.chrome.tabs.captureVisibleTab).not.toHaveBeenCalled();
+  });
+
+  test('captures normally via captureVisibleTab (no debugger) when the target tab is still the active/visible tab', async () => {
     window.chrome.tabs.get.mockResolvedValue({ id: 7, windowId: 1, active: true });
     window.chrome.tabs.captureVisibleTab.mockResolvedValue('data:image/jpeg;base64,AAAA');
     const result = await window._doCaptureScreenshot(7, 1);
     expect(result.success).toBe(true);
     expect(result.imageBase64).toBe('AAAA');
     expect(window.chrome.tabs.captureVisibleTab).toHaveBeenCalledWith(1, { format: 'jpeg', quality: 80 });
+    // Front tab → no debugger attach, so no "…is debugging this browser" banner.
+    expect(window.chrome.debugger.attach).not.toHaveBeenCalled();
   });
 
   test('still attempts capture (and surfaces captureVisibleTab\'s own error) when chrome.tabs.get fails, e.g. the tab was closed', async () => {
@@ -3775,41 +3849,65 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
     test('grades a find task and fills in interaction/chat counts', () => {
       const record = window._buildStudyResultRecord({
         participantId: 'P07',
+        sessionId: 42,
         taskIndex: 0,
+        blockIndex: 0,
+        questionIndex: 0,
         totalTasks: 6,
         taskType: 'find',
         task: { id: 'find-1', question: 'When?', answer: '1936', url: 'https://example.com' },
+        condition: 'extension',
         elapsedMs: 45000,
         answer: '1936',
         confidence: 'very',
         helpfulness: 'very',
         chatSnapshot: { chat_turn_count: 2, chat_transcript: [{ role: 'user', content: 'hi' }] },
-        behaviorData: { scroll: 3, ctrlF: 1, textSelect: 0, click: 5, mouseMove: 120, pages: [{ url: 'https://example.com' }] },
+        behaviorData: {
+          scroll_user_count: 3, scroll_agent_count: 2, ctrl_f_count: 1, text_select_count: 0,
+          click_count: 5, mouse_move_px: 120, agent_think_ms: [800, 1200],
+          page_visit_count: 1, page_visit_urls: ['https://example.com'],
+        },
       });
       expect(record).toMatchObject({
         tool: 'pageguide',
+        session_id: 42,
         participant_id: 'P07',
         task_id: 'find-1',
         task_type: 'find',
+        condition: 'extension',
+        block_index: 0,
+        task_index: 0,
+        question_index: 0,
         answer: '1936',
         answer_correct: true,
         chat_turn_count: 2,
-        scroll_count: 3,
+        scroll_user_count: 3,
+        scroll_agent_count: 2,
         ctrl_f_count: 1,
         click_count: 5,
         mouse_move_px: 120,
+        agent_think_ms: [800, 1200],
         page_visit_count: 1,
         page_visit_urls: ['https://example.com'],
+        // Recall columns stay empty in the Find/Guide study.
+        hidden_count: 0,
+        hide_recall: null,
       });
+      // task_data preserves the original task (including id/url, which have no dedicated column).
+      expect(record.task_data).toMatchObject({ id: 'find-1', url: 'https://example.com' });
     });
 
     test('REGRESSION: guide tasks are never graded right/wrong (self-reported completion only)', () => {
       const record = window._buildStudyResultRecord({
         participantId: 'P07',
+        sessionId: null,
         taskIndex: 2,
+        blockIndex: 0,
+        questionIndex: 0,
         totalTasks: 6,
         taskType: 'guide',
         task: { id: 'guide-1', task: 'Do the thing', url: 'https://example.com' },
+        condition: 'extension',
         elapsedMs: 90000,
         answer: 'completed',
         confidence: 'somewhat',
@@ -3820,7 +3918,11 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       expect(record.answer_correct).toBeNull();
       expect(record.answer).toBe('completed');
       expect(record.chat_turn_count).toBe(0);
-      expect(record.scroll_count).toBe(0);
+      // Missing behavior data defaults every count to 0 / empty, never undefined (NOT NULL columns).
+      expect(record.scroll_user_count).toBe(0);
+      expect(record.scroll_agent_count).toBe(0);
+      expect(record.agent_think_ms).toEqual([]);
+      expect(record.session_id).toBeNull();
     });
   });
 
@@ -3831,7 +3933,7 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       ]);
       const lines = csv.split('\n');
       expect(lines[0]).toBe(
-        'tool,participant_id,task_index,total_tasks,task_id,task_type,question_or_task,url,time_ms,answer,answer_correct,confidence,helpfulness,chat_turn_count,scroll_count,ctrl_f_count,text_select_count,click_count,mouse_move_px,page_visit_count,page_visit_urls,completed_at'
+        'tool,participant_id,session_id,condition,block_index,task_index,question_index,task_id,task_type,question_or_task,url,time_ms,answer,answer_correct,confidence,helpfulness,chat_turn_count,hidden_count,hide_recall,scroll_user_count,scroll_agent_count,ctrl_f_count,text_select_count,click_count,mouse_move_px,agent_think_ms,page_visit_count,page_visit_urls,completed_at'
       );
       expect(lines[1]).toContain('"a, b"');
       // page_visit_urls is an array — JSON-stringified, then CSV-quoted since that JSON contains
@@ -3880,29 +3982,58 @@ describe('stripCitationMarkers (content/tasks/ask.js)', () => {
     loadScript('content/tasks/ask.js');
   });
 
-  test('removes a double-quoted citation and cleans up the leftover space', () => {
+  // REGRESSION: the cited span is part of the sentence — grounding mode renders it inline as
+  // <span class="citation-text">. Deleting it in Non-grounding mode left the baseline answer with
+  // holes ("Contact the depot of travel."). Non-grounding shows the model's full text; only the
+  // link (the brackets + index) is dropped.
+  test('keeps a double-quoted cited span and drops only the marker', () => {
     expect(window.stripCitationMarkers('Contact the depot [12:"within 30 days"] of travel.'))
-      .toBe('Contact the depot of travel.');
+      .toBe('Contact the depot within 30 days of travel.');
   });
 
-  test('removes a single-quoted citation', () => {
+  test('keeps a single-quoted cited span', () => {
     expect(window.stripCitationMarkers("The fee is $5 [3:'per item'] at checkout."))
-      .toBe('The fee is $5 at checkout.');
+      .toBe('The fee is $5 per item at checkout.');
   });
 
-  test('removes an unquoted citation', () => {
+  test('keeps an unquoted cited span', () => {
     expect(window.stripCitationMarkers('Open on weekdays [4:9am-5pm] only.'))
-      .toBe('Open on weekdays only.');
+      .toBe('Open on weekdays 9am-5pm only.');
   });
 
-  test('removes a bare index-only citation', () => {
+  test('removes a bare index-only citation (no span to keep)', () => {
     expect(window.stripCitationMarkers('The office closes early on Fridays [7].'))
       .toBe('The office closes early on Fridays.');
   });
 
-  test('removes multiple citations in the same answer', () => {
+  test('keeps every cited span when one answer has several citations', () => {
     expect(window.stripCitationMarkers('Returns [1:"within 30 days"] are free [2:"for members"] only.'))
-      .toBe('Returns are free only.');
+      .toBe('Returns within 30 days are free for members only.');
+  });
+
+  test('keeps the span of a multi-index citation', () => {
+    expect(window.stripCitationMarkers('Bags are held [517, 519:"for 30 days"] at the depot.'))
+      .toBe('Bags are held for 30 days at the depot.');
+  });
+
+  test('removes a multi-index citation that carries no span', () => {
+    expect(window.stripCitationMarkers('Bags are held at the depot [517, 519].'))
+      .toBe('Bags are held at the depot.');
+  });
+
+  test('keeps the quote of a PDF page citation and drops the marker', () => {
+    expect(window.stripCitationMarkers('The policy says [Page 4: "refunds take 5 days"] after approval.'))
+      .toBe('The policy says refunds take 5 days after approval.');
+  });
+
+  test('removes a PDF element-range marker (no span to keep)', () => {
+    expect(window.stripCitationMarkers('See the refund table [idx:38-42] for details.'))
+      .toBe('See the refund table for details.');
+  });
+
+  test('normalizes curly quotes before unwrapping the span', () => {
+    expect(window.stripCitationMarkers('Contact the depot [12:“within 30 days”] of travel.'))
+      .toBe('Contact the depot within 30 days of travel.');
   });
 
   test('leaves plain text with no citations untouched', () => {
@@ -4504,10 +4635,17 @@ describe('Per-tab guide session isolation (background/service-worker.js)', () =>
       tabs: {
         onCreated: { addListener: jest.fn() },
         onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() },
         get: jest.fn(),
         query: jest.fn(),
         captureVisibleTab: jest.fn(),
         sendMessage: jest.fn()
+      },
+      debugger: {
+        attach: jest.fn().mockResolvedValue(undefined),
+        detach: jest.fn().mockResolvedValue(undefined),
+        sendCommand: jest.fn(),
+        onDetach: { addListener: jest.fn() }
       },
       storage: {
         sync: { get: jest.fn().mockResolvedValue({}) },
@@ -4609,5 +4747,133 @@ describe('Per-tab guide session isolation (background/service-worker.js)', () =>
     onCreated({ id: 8 }); // no openerTabId
     expect(send('guidanceV2_isOwner', {}, { tab: { id: 7 } })).toEqual({ isOwner: false });
     expect(send('guidanceV2_isOwner', {}, { tab: { id: 8 } })).toEqual({ isOwner: true });
+  });
+});
+
+describe('_gv2ResetPauseGuards (content/tasks/guidev2.js) — Resume must clear the stop guards', () => {
+  beforeAll(() => {
+    if (!window.gv2LoopScore) loadScript('content/utils.js');
+    window.chrome = window.chrome || {
+      runtime: {
+        connect: jest.fn(() => ({
+          onMessage: { addListener: jest.fn() },
+          onDisconnect: { addListener: jest.fn() }
+        })),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) },
+        local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) }
+      }
+    };
+    if (!window._gv2ResetPauseGuards) loadScript('content/tasks/guidev2.js');
+  });
+
+  test('clears the low-confidence streak', () => {
+    const g = { active: true, lowConfidenceCount: 3 };
+    window._gv2ResetPauseGuards(g);
+    expect(g.lowConfidenceCount).toBe(0);
+  });
+
+  // REGRESSION: the loop guard is cumulative (score = matches/10 over every element key the guide
+  // has targeted, stop at >= 0.3). Resume used to clear only lowConfidenceCount, so the same three
+  // matches were still in _mechElementTexts and the guide re-paused on the very next step —
+  // forever, since each re-pause appended another match. Resume now starts both guards over.
+  test('clears the loop-detection history so the loop score drops back under the stop threshold', () => {
+    const key = 'submit';
+    const g = { active: true, lowConfidenceCount: 3, _mechElementTexts: [key, key, key], _mechKeys: [key] };
+
+    expect(window.gv2LoopScore(g._mechElementTexts, key)).toBeGreaterThanOrEqual(0.3); // was stopping
+
+    window._gv2ResetPauseGuards(g);
+
+    expect(g._mechElementTexts).toEqual([]);
+    expect(g._mechKeys).toEqual([]);
+    expect(window.gv2LoopScore(g._mechElementTexts, key)).toBe(0);
+  });
+
+  test('is a no-op on a missing guide state', () => {
+    expect(window._gv2ResetPauseGuards(null)).toBe(null);
+  });
+});
+
+describe('Highlight styling (content/functions/highlight.js) — one effect, one colour', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {
+      storage: { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } },
+      runtime: { sendMessage: jest.fn() }
+    };
+    loadScript('content/functions/highlight.js');
+  });
+
+  afterEach(() => {
+    if (Math.random.mockRestore) Math.random.mockRestore();
+  });
+
+  // REGRESSION: getRandomHighlightStyle used to pick a random colour out of three and a random
+  // animation out of four (pulse / spotlight / left-to-right shimmer / glow) per citation, so one
+  // answer lit the page up in several colours moving in several ways at once.
+  test('returns the same colour and effect no matter what Math.random does', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    const first = window.getRandomHighlightStyle(false);
+    Math.random.mockReturnValue(0.99);
+    const second = window.getRandomHighlightStyle(false);
+
+    expect(first).toEqual(second);
+    expect(first.animation).toBe('soft');
+  });
+
+  test('never returns one of the old motion effects', () => {
+    const motion = ['pulse', 'spotlight', 'shimmer', 'glow'];
+    for (const isDark of [true, false]) {
+      expect(motion).not.toContain(window.getRandomHighlightStyle(isDark).animation);
+    }
+  });
+
+  test('varies only by page background, so every span on a page matches', () => {
+    const light = window.getRandomHighlightStyle(false);
+    const dark = window.getRandomHighlightStyle(true);
+
+    expect(light.color).not.toBe(dark.color);
+    expect(light.animation).toBe(dark.animation);
+    expect(window.getRandomHighlightStyle(false).color).toBe(light.color);
+  });
+
+  test('block tint is lighter than span tint, in the same accent colour', () => {
+    const span = window.pageguideHighlightTint('#7857ff');
+    const block = window.pageguideHighlightTint('#7857ff', true);
+    const pct = (v) => Number(v.match(/(\d+)%/)[1]);
+
+    expect(pct(block)).toBeLessThan(pct(span));
+    expect(span).toContain('#7857ff');
+    expect(block).toContain('#7857ff');
+  });
+
+  describe('applyAnimatedHighlight', () => {
+    const highlight = (opts) => {
+      const el = document.createElement('p');
+      document.body.appendChild(el);
+      window.applyAnimatedHighlight(el, '#7857ff', 'soft', opts);
+      return el;
+    };
+
+    test('marks the element with the accent colour and the base class', () => {
+      const el = highlight();
+      expect(el.style.getPropertyValue('--pageguide-color')).toBe('#7857ff');
+      expect(el.classList.contains('pageguide-highlight')).toBe(true);
+      expect(el.getAttribute('data-pageguide-styled')).toBe('true');
+    });
+
+    // REGRESSION: block elements used to be swapped onto the shimmer-block class, which ran an
+    // infinite left-to-right gradient sweep across the whole paragraph.
+    test('never applies the left-to-right sweep class', () => {
+      const el = highlight();
+      expect(el.classList.contains('pageguide-highlight-shimmer-block')).toBe(false);
+    });
+
+    test('whole-element highlights are tagged as blocks so they tint lighter', () => {
+      expect(highlight({ block: true }).classList.contains('pageguide-highlight-block')).toBe(true);
+      expect(highlight().classList.contains('pageguide-highlight-block')).toBe(false);
+    });
   });
 });

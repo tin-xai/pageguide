@@ -201,13 +201,14 @@ chrome.tabs.onCreated.addListener((tab) => {
   _gv2Sessions.delete(sourceTabId);
   _gv2Sessions.set(tab.id, { ...session, pendingResume: true });
   _gv2PreClickTsByTab.delete(sourceTabId); // consume the flag — one transfer per click
+  detachDebugger(sourceTabId); // the old tab is no longer the agent's — drop its debugger session
 });
 
 // ===== User Study Behavior Tracker =====
 // Accumulates per-task behavioral events (from content/study_tracker.js) across page
 // navigations, since a single task can span multiple pages. Reset by studyTracker_start,
 // read + cleared by studyTracker_getData (called once the participant hits "Done").
-let _studyTracker = null; // { active, scroll, ctrlF, textSelect, click, mouseMove, pages: [{url, ts}] }
+let _studyTracker = null; // { active, scrollUser, scrollAgent, ctrlF, textSelect, click, mouseMove, agentThinkMs: [], pages: [{url, ts}] }
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (_studyTracker && _studyTracker.active && changeInfo.url) {
@@ -312,25 +313,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'studyTracker_start') {
-    _studyTracker = { active: true, scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
+    _studyTracker = { active: true, scrollUser: 0, scrollAgent: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, agentThinkMs: [], pages: [] };
     sendResponse({ success: true });
     return true;
   }
   if (request.action === 'studyTracker_batch') {
     if (_studyTracker && _studyTracker.active) {
-      _studyTracker.scroll     += request.scroll     || 0;
-      _studyTracker.ctrlF      += request.ctrlF      || 0;
-      _studyTracker.textSelect += request.textSelect || 0;
-      _studyTracker.click      += request.click      || 0;
-      _studyTracker.mouseMove  += request.mouseMove  || 0;
+      _studyTracker.scrollUser  += request.scrollUser  || 0;
+      _studyTracker.scrollAgent += request.scrollAgent || 0;
+      _studyTracker.ctrlF       += request.ctrlF       || 0;
+      _studyTracker.textSelect  += request.textSelect  || 0;
+      _studyTracker.click       += request.click       || 0;
+      _studyTracker.mouseMove   += request.mouseMove   || 0;
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === 'studyTracker_agentThink') {
+    // One entry per agent LLM "thinking" turn (ms), emitted from safeSendMessage.
+    if (_studyTracker && _studyTracker.active) {
+      _studyTracker.agentThinkMs.push(request.durationMs || 0);
     }
     sendResponse({ success: true });
     return true;
   }
   if (request.action === 'studyTracker_getData') {
     const data = _studyTracker
-      ? { scroll: _studyTracker.scroll, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, click: _studyTracker.click, mouseMove: _studyTracker.mouseMove, pages: [..._studyTracker.pages] }
-      : { scroll: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, pages: [] };
+      ? { scrollUser: _studyTracker.scrollUser, scrollAgent: _studyTracker.scrollAgent, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, click: _studyTracker.click, mouseMove: _studyTracker.mouseMove, agentThinkMs: [..._studyTracker.agentThinkMs], pages: [..._studyTracker.pages] }
+      : { scrollUser: 0, scrollAgent: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, agentThinkMs: [], pages: [] };
     _studyTracker = null;
     sendResponse(data);
     return true;
@@ -391,7 +401,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // messages from the side panel (no sender.tab) must pass one explicitly — see panel.js's
     // stopGuide/stopPausedGuideWithRecap/resetChat, which all target guideTabId/currentTabId.
     const targetTabId = request.tabId ?? sender.tab?.id;
-    if (targetTabId != null) _gv2Sessions.delete(targetTabId);
+    if (targetTabId != null) {
+      _gv2Sessions.delete(targetTabId);
+      detachDebugger(targetTabId); // release any background-capture debugger session for this tab
+    }
     chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
     sendResponse({ success: true });
     return false;
@@ -485,6 +498,57 @@ function captureScreenshot(tabId, windowId) {
   return run;
 }
 
+// ===== Background-tab screenshots via chrome.debugger (CDP) =====
+// chrome.tabs.captureVisibleTab can only grab the *front* tab of a window. When the agent's tab is
+// backgrounded — the user switched to another tab in the same window to do their own thing — we
+// attach the debugger to the agent's tab and use Page.captureScreenshot, so the guide keeps seeing
+// its own page without stealing the user's focus. Attach is lazy (first background capture only),
+// so if the user never switches away, no debugger and no "…is debugging this browser" banner.
+const _debuggerAttached = new Set(); // tabIds we currently hold a debugger session on
+const _DEBUGGER_PROTOCOL = '1.3';
+
+async function _ensureDebuggerAttached(tabId) {
+  if (_debuggerAttached.has(tabId)) return true;
+  try {
+    await chrome.debugger.attach({ tabId }, _DEBUGGER_PROTOCOL);
+    _debuggerAttached.add(tabId);
+    return true;
+  } catch (e) {
+    // "Another debugger is already attached" → something else (e.g. open DevTools) owns the tab; we
+    // can't drive it. Any other failure (restricted page, tab gone) is also non-recoverable here.
+    console.warn('[SW capture] debugger attach failed:', e?.message || e);
+    return false;
+  }
+}
+
+async function detachDebugger(tabId) {
+  if (tabId == null || !_debuggerAttached.has(tabId)) return;
+  _debuggerAttached.delete(tabId);
+  try { await chrome.debugger.detach({ tabId }); } catch (e) { /* tab may already be gone */ }
+}
+
+async function _captureViaDebugger(tabId) {
+  const ok = await _ensureDebuggerAttached(tabId);
+  if (!ok) return { error: 'Could not attach debugger to capture background tab' };
+  try {
+    const res = await chrome.debugger.sendCommand({ tabId }, 'Page.captureScreenshot', { format: 'jpeg', quality: 80 });
+    if (res && res.data) return { success: true, imageBase64: res.data, format: 'jpeg' };
+    return { error: 'Debugger capture returned no data' };
+  } catch (e) {
+    return { error: `Debugger capture failed: ${e?.message || e}` };
+  }
+}
+
+// If the user dismisses the debugging banner (or the tab closes), drop our bookkeeping so we
+// re-attach cleanly next time rather than assuming a stale session is still live.
+if (chrome.debugger?.onDetach) {
+  chrome.debugger.onDetach.addListener((source) => {
+    if (source?.tabId != null) _debuggerAttached.delete(source.tabId);
+  });
+}
+// Detach if the agent's tab is closed while we hold a debugger session on it.
+chrome.tabs.onRemoved.addListener((tabId) => { detachDebugger(tabId); });
+
 async function _doCaptureScreenshot(tabId, windowId) {
   try {
     if (!tabId) {
@@ -495,22 +559,30 @@ async function _doCaptureScreenshot(tabId, windowId) {
     if (!tabId) return { error: 'No active tab found' };
 
     // chrome.tabs.captureVisibleTab takes a windowId, NOT a tabId — it always grabs whichever tab
-    // is currently the active/visible one in that window. If the tab we actually want a shot of
-    // (tabId, e.g. the tab a guide run is working on) has lost focus — the user switched to a
-    // different tab in the same window — a capture right now would silently return pixels from
-    // that OTHER tab instead. Detect that and fail loudly rather than handing the vision pipeline
-    // a screenshot of the wrong page; callers already fall back to a cached screenshot/placeholder
-    // when capture fails (see gv2CaptureStepRecord in content/tasks/guidev2.js).
+    // is currently the active/visible one in that window. When the tab we actually want a shot of
+    // (tabId, the tab the guide is working on) is NOT the front tab — the user switched to another
+    // tab in the same window to do their own thing — captureVisibleTab would grab that OTHER tab.
+    // In that case we screenshot the agent's real tab directly via the debugger (CDP) instead, so
+    // the guide keeps working on the right page without pulling the user's focus.
+    let targetIsActive = true;
     try {
       const targetTab = await chrome.tabs.get(tabId);
-      if (targetTab && targetTab.active === false) {
-        return { error: 'Tab is not active/visible — cannot capture a background tab' };
-      }
+      targetIsActive = targetTab?.active !== false;
       if (!windowId) windowId = targetTab?.windowId;
     } catch (e) {
-      // Tab may have been closed since; let captureVisibleTab below surface its own error.
+      // Tab may have been closed since; let the capture calls below surface their own error.
     }
 
+    if (!targetIsActive) {
+      const dbg = await _captureViaDebugger(tabId);
+      _lastCaptureTs = Date.now();
+      if (dbg.success) {
+        console.log('📸 Background-tab screenshot via debugger, size:', Math.round(dbg.imageBase64.length / 1024), 'KB');
+      }
+      return dbg; // success, or an error the caller falls back on (cached/placeholder)
+    }
+
+    // Front tab → fast path, no debugger attach (and no banner).
     // Throttle: ensure at least _CAPTURE_MIN_GAP_MS since the previous capture.
     const since = Date.now() - _lastCaptureTs;
     if (since < _CAPTURE_MIN_GAP_MS) {

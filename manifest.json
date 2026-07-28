@@ -10,7 +10,8 @@
     "scripting",
     "tabs",
     "sidePanel",
-    "offscreen"
+    "offscreen",
+    "debugger"
   ],
   "side_panel": {
     "default_path": "sidepanel/panel.html"
