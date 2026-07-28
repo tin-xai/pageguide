@@ -652,51 +652,48 @@ body.light-mode .pageguide-history-load-btn:hover {
   animation: waiting-pulse 2s ease-in-out infinite;
 }
 
-/* Clickable message */
+/* Clickable message (a grounded answer — its citations toggle).
+   Deliberately identical to a plain assistant message: it used to carry a cyan border and fill on
+   hover, which made grounded answers a different colour from non-grounded ones for no reason the
+   reader could act on. The citation chips are the grounding affordance; the bubble stays neutral. */
 .pageguide-message.pageguide-clickable {
   cursor: pointer;
   position: relative;
-  transition: all 0.2s ease;
-  border: 1px solid rgba(0, 217, 255, 0.3);
 }
 
-.pageguide-message.pageguide-clickable:hover {
-  background: rgba(0, 217, 255, 0.15);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 217, 255, 0.2);
-}
-
-/* Clickable citations in answers */
+/* Clickable citations in answers. Accent purple, like every other evidence affordance (the
+   on-page highlight, the evidence chips, the marker overlays) — these used to be cyan/green,
+   which read as a separate feature from the evidence they point at. */
 .pageguide-citation {
   display: inline;
-  background: linear-gradient(135deg, rgba(0, 217, 255, 0.15), rgba(0, 255, 136, 0.1));
-  color: #00d9ff;
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 14%, transparent);
+  color: var(--pg-som, #7857ff);
   padding: 2px 4px;
   border-radius: 3px;
   cursor: pointer;
-  transition: all 0.2s ease;
-  border-bottom: 1px dashed rgba(0, 217, 255, 0.5);
+  transition: background-color 0.2s ease, color 0.2s ease, border-bottom-color 0.2s ease;
+  border-bottom: 1px dashed color-mix(in srgb, var(--pg-som, #7857ff) 50%, transparent);
 }
 
 .pageguide-citation:hover {
-  background: linear-gradient(135deg, rgba(0, 217, 255, 0.3), rgba(0, 255, 136, 0.2));
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 26%, transparent);
   color: #fff;
-  border-bottom-color: #00d9ff;
+  border-bottom-color: var(--pg-som, #7857ff);
 }
 
 /* Citation with toggleable text (web citations) */
 .pageguide-citation-idx {
   display: inline;
-  color: #00d9ff;
+  color: var(--pg-som, #7857ff);
   cursor: pointer;
   padding: 1px 4px;
   border-radius: 3px;
-  background: rgba(0, 217, 255, 0.1);
-  transition: all 0.2s ease;
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 10%, transparent);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .pageguide-citation-idx:hover {
-  background: rgba(0, 217, 255, 0.25);
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 24%, transparent);
   color: #fff;
 }
 
@@ -742,14 +739,14 @@ body.light-mode .pageguide-history-load-btn:hover {
   padding: 0;
   border: none;
   border-bottom: none;
-  color: #00d9ff;
+  color: var(--pg-som, #7857ff);
   font-size: 10px;
   vertical-align: super;
 }
 
 .pageguide-citation-sup:hover {
   background: none;
-  color: #00ff88;
+  color: color-mix(in srgb, var(--pg-som, #7857ff) 70%, #fff);
 }
 
 /* PDF Page Citations - Index style [1], [2], [3] */
@@ -1806,14 +1803,8 @@ body.light-mode .pageguide-next-hint {
   color: #777;
 }
 
-body.light-mode .pageguide-message.pageguide-clickable {
-  border: 1px solid rgba(0, 140, 200, 0.3);
-}
-
-body.light-mode .pageguide-message.pageguide-clickable:hover {
-  background: rgba(0, 140, 200, 0.1);
-  box-shadow: 0 4px 12px rgba(0, 140, 200, 0.15);
-}
+/* Light mode: nothing to override — a grounded answer looks exactly like any other assistant
+   answer (the cyan border and hover fill that used to live here are gone). */
 
 body.light-mode .pageguide-clickable::after {
   color: rgba(0, 0, 0, 0.3);
@@ -1823,14 +1814,16 @@ body.light-mode .pageguide-clickable:hover::after {
   color: rgba(0, 0, 0, 0.5);
 }
 
+/* Light mode keeps the same accent; only the hover text colour differs (dark text on a light
+   tint reads better than white). */
 body.light-mode .pageguide-citation {
-  background: linear-gradient(135deg, rgba(0, 140, 200, 0.12), rgba(0, 200, 100, 0.08));
-  color: #0077aa;
-  border-bottom: 1px dashed rgba(0, 140, 200, 0.5);
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 12%, transparent);
+  color: var(--pg-som, #7857ff);
+  border-bottom: 1px dashed color-mix(in srgb, var(--pg-som, #7857ff) 50%, transparent);
 }
 
 body.light-mode .pageguide-citation:hover {
-  background: linear-gradient(135deg, rgba(0, 140, 200, 0.25), rgba(0, 200, 100, 0.15));
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 24%, transparent);
   color: #1a1a2e;
 }
 
@@ -1846,17 +1839,17 @@ body.light-mode .pageguide-markdown-link:hover {
 }
 
 body.light-mode .pageguide-citation-idx {
-  color: #0077aa;
-  background: rgba(0, 140, 200, 0.1);
+  color: var(--pg-som, #7857ff);
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 10%, transparent);
 }
 
 body.light-mode .pageguide-citation-idx:hover {
-  background: rgba(0, 140, 200, 0.2);
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 22%, transparent);
   color: #1a1a2e;
 }
 
 body.light-mode .pageguide-citation-sup {
-  color: #0077aa;
+  color: var(--pg-som, #7857ff);
 }
 
 body.light-mode .pageguide-pdf-citation {
@@ -5862,6 +5855,91 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   font-size: 12px;
   line-height: 1.35;
   font-weight: 600;
+}
+
+/* Find × Visual evidence: numbered chips that stay collapsed until clicked, so the answer is not
+   buried under screenshots. The numbers match the [N] citations in the answer text; clicking
+   either opens the crop in the Guide's evidence card (openFindEvidenceView). */
+.pageguide-find-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 16px 14px;
+  background: var(--pg-bg);
+}
+
+.pageguide-find-evidence-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pageguide-find-evidence-hint {
+  color: var(--pg-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+
+.pageguide-find-evidence-chip {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--pg-som, #7857ff) 34%, transparent);
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 10%, transparent);
+  color: var(--pg-som, #7857ff);
+  font: 800 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  cursor: pointer;
+}
+
+.pageguide-find-evidence-chip:hover {
+  background: color-mix(in srgb, var(--pg-som, #7857ff) 20%, transparent);
+}
+
+/* The crops live here until one is opened in the evidence card, so they never render in the chat. */
+.pageguide-find-evidence-panel {
+  display: none;
+}
+
+/* Text evidence mode: what a step touched, in words, where a screenshot would otherwise sit.
+   Monospace because a selector is code and reads as such. */
+.pageguide-textual-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--pg-som) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pg-som) 24%, transparent);
+  font: 400 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+
+.pageguide-textual-evidence-title {
+  font: 800 11px/1.3 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--pg-som);
+  margin-bottom: 2px;
+}
+
+.pageguide-textual-evidence-row {
+  display: flex;
+  gap: 8px;
+}
+
+.pageguide-textual-evidence-label {
+  flex: 0 0 74px;
+  color: var(--pg-muted);
+  font-weight: 700;
+}
+
+.pageguide-textual-evidence-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--pg-text);
 }
 
 .pageguide-answer-evidence-links {

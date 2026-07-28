@@ -66,6 +66,9 @@ async function handleMessage(request) {
       }
       return { success: false, error: 'Scroll function not loaded' };
     }
+
+    case 'getStudyParagraphOptions':
+      return getStudyParagraphOptions();
     
     case 'navigateToPdfPage':
       if (typeof navigateToPdfPage === 'function') {
@@ -190,6 +193,51 @@ async function handleMessage(request) {
     default:
       return { error: 'Unknown action' };
   }
+}
+
+function getStudyParagraphOptions() {
+  if (typeof createPageIndex !== 'function') {
+    return { success: false, error: 'Page index function not loaded', options: [] };
+  }
+
+  const textRoles = new Set([
+    'paragraph', 'article', 'heading', 'listitem', 'row', 'cell', 'gridcell',
+  ]);
+  const textTags = new Set(['P', 'LI', 'BLOCKQUOTE', 'TD', 'TH', 'DD', 'DT', 'FIGCAPTION']);
+  const options = [];
+  const seenText = new Set();
+
+  const pageIndex = createPageIndex(5000, false);
+  Object.entries(pageIndex.indexMap || {}).some(([rawIndex, el]) => {
+    if (!el || !el.textContent) return false;
+    const role = typeof getAccessibleRole === 'function' ? getAccessibleRole(el) : null;
+    const tagName = el.tagName || '';
+    if (!textRoles.has(role) && !textTags.has(tagName)) return false;
+
+    const text = el.textContent.replace(/\s+/g, ' ').trim();
+    if (text.length < 8 || text.length > 1800) return false;
+    const dedupeKey = text.toLowerCase();
+    if (seenText.has(dedupeKey)) return false;
+    seenText.add(dedupeKey);
+
+    const index = parseInt(rawIndex, 10);
+    if (!Number.isFinite(index)) return false;
+    const shortText = text.length > 180 ? `${text.slice(0, 180)}...` : text;
+    options.push({
+      index,
+      role: role || tagName.toLowerCase() || 'text',
+      label: `[${index}] ${shortText}`,
+      text,
+      url: window.location.href,
+    });
+    return options.length >= 250;
+  });
+
+  return {
+    success: true,
+    url: window.location.href,
+    options,
+  };
 }
 
 // When Chrome restores this page from bfcache, clean up any stale guide state

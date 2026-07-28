@@ -164,15 +164,31 @@
             </div>
           </div>
 
-          <!-- Visual input mode (debug-only): send a screenshot for the same 5000-element Guide index. -->
+          <!-- Send Image (debug-only): send a screenshot to the LLM alongside the same
+               5000-element Guide index. Not to be confused with Evidence: Visual/Text below —
+               this one is about the model's INPUT, that one about what the user is SHOWN. -->
           <div class="pageguide-mode-wrap pageguide-visualinput-wrap" style="display:none;">
-            <button class="pageguide-mode-btn" id="pageguide-visualinput-toggle" title="Send a marked screenshot with Guide step prompts"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Visual: Off ▾</button>
+            <button class="pageguide-mode-btn" id="pageguide-visualinput-toggle" title="Send a marked screenshot with Guide step prompts"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Send Image: Off ▾</button>
             <div class="pageguide-mode-menu" id="pageguide-visualinput-menu" style="display:none;">
               <button class="pageguide-mode-option" data-visualinput="on">
-                <span class="pageguide-mode-opt-text"><b>Visual On</b><small>Send the Guide LLM a screenshot with up to 5000 numbered SoM markers.</small></span>
+                <span class="pageguide-mode-opt-text"><b>Send Image On</b><small>Send the Guide LLM a screenshot with up to 5000 numbered SoM markers.</small></span>
               </button>
               <button class="pageguide-mode-option" data-visualinput="off">
-                <span class="pageguide-mode-opt-text"><b>Visual Off</b><small>Use the same 5000-element PAGE INDEX without a screenshot.</small></span>
+                <span class="pageguide-mode-opt-text"><b>Send Image Off</b><small>Use the same 5000-element PAGE INDEX without a screenshot.</small></span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Evidence mode: the user-study A/B axis for how evidence is SHOWN back to the user.
+               Independent of Grounding above — all four combinations are valid. -->
+          <div class="pageguide-mode-wrap pageguide-evidencemode-wrap">
+            <button class="pageguide-mode-btn" id="pageguide-evidencemode-toggle" title="Show evidence as screenshots (Visual) or as text (Text)"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>Evidence: Visual ▾</button>
+            <div class="pageguide-mode-menu" id="pageguide-evidencemode-menu" style="display:none;">
+              <button class="pageguide-mode-option" data-evidencemode="visual">
+                <span class="pageguide-mode-opt-text"><b>Visual</b><small>Default. Find crops a screenshot of each cited span into the answer; Guide evidence pops up screenshots.</small></span>
+              </button>
+              <button class="pageguide-mode-option" data-evidencemode="text">
+                <span class="pageguide-mode-opt-text"><b>Text</b><small>No screenshots anywhere. Find keeps its citation links; Guide evidence is node text, aria-label, selector and page URL.</small></span>
               </button>
             </div>
           </div>

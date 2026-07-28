@@ -1,45 +1,137 @@
 {
   "find": [
     {
-      "id": "find-1",
-      "url": "https://en.wikipedia.org/wiki/Alan_Turing",
-      "question": "In what year did Alan Turing publish his paper 'On Computable Numbers'?",
-      "answer": "1936",
-      "distractors": ["1943", "1950", "1928"]
+      "id": "MAGIC-A",
+      "url": "https://publicdomainreview.org/essay/magic-by-return-of-post/",
+      "question": "The publisher pursued by postal inspectors in 1904 over a fraudulent investment scheme had earlier written a guide for aspiring entrepreneurs. Which tactic did that guide promote?",
+      "answer": "Making one small operation look like several large firms by inventing extra company names and departments.",
+      "distractors": [
+        "Advertising only in the newspapers with the biggest circulation.",
+        "Offering a full refund to anyone who was not satisfied.",
+        "Sending travelling salesmen to call on customers at home."
+      ]
     },
     {
-      "id": "find-2",
-      "url": "https://en.wikipedia.org/wiki/Great_Barrier_Reef",
-      "question": "Approximately how long is the Great Barrier Reef, in kilometers?",
-      "answer": "2,300 km",
-      "distractors": ["500 km", "1,000 km", "5,000 km"]
+      "id": "MAGIC-B",
+      "url": "https://publicdomainreview.org/essay/magic-by-return-of-post/",
+      "question": "A still-active order was founded in 1915 by a man who had worked in advertising. A Florida group that later broke away from it circulated a mailer in 1933 — what authority did that mailer invoke?",
+      "answer": "A hidden council of ascended teachers, an idea taken from Theosophy.",
+      "distractors": [
+        "Sacred writings said to have been recovered from an Egyptian tomb.",
+        "A charter signed by a European monarch.",
+        "A vision received by the group's own founder."
+      ]
     },
     {
-      "id": "find-3",
-      "url": "https://en.wikipedia.org/wiki/Python_(programming_language)",
-      "question": "Who created the Python programming language?",
-      "answer": "Guido van Rossum",
-      "distractors": ["Dennis Ritchie", "James Gosling", "Brendan Eich"]
+      "id": "PEDANT-A",
+      "url": "https://publicdomainreview.org/essay/parodies-of-pedantry/",
+      "question": "The playwright who published the first comedy with a pedant in the leading role also showed that pedant's methods of discipline. What did the technique his pupils complain of involve?",
+      "answer": "Beating a boy on the backside while another pupil carried him on his back.",
+      "distractors": [
+        "Making a boy recite Latin aloud for hours on end.",
+        "Locking a pupil alone in a dark room.",
+        "Making a boy copy out a whole grammar book overnight."
+      ]
+    },
+    {
+      "id": "PEDANT-B",
+      "url": "https://publicdomainreview.org/essay/parodies-of-pedantry/",
+      "question": "One schoolmaster character explains that his title means ‘three times really great’. What becomes of him by the end of the play in which he appears?",
+      "answer": "He is tricked, robbed, and then beaten in the same way he had beaten his own pupils.",
+      "distractors": [
+        "He is promoted and put in charge of the whole school.",
+        "He dies of shame once his mistakes are exposed.",
+        "He leaves the city quietly with his reputation intact."
+      ]
+    },
+    {
+      "id": "SVSF-A",
+      "url": "https://aeon.co/essays/silicon-valley-has-a-science-fiction-problem",
+      "question": "One firm takes its name from objects that appear in Tolkien. In a 2025 book, its chief executive and his legal counsel defended the firm's government work on what grounds?",
+      "answer": "That it answers a deep human wish to belong to something like a warrior brotherhood.",
+      "distractors": [
+        "That the work is simply required by contracts the firm had already signed.",
+        "That a rival company would take the same contracts if they refused.",
+        "That the money earned pays for the firm's non-military research."
+      ]
+    },
+    {
+      "id": "SVSF-B",
+      "url": "https://aeon.co/essays/silicon-valley-has-a-science-fiction-problem",
+      "question": "A company rebranded in 2021 using a term borrowed from a 1992 novel. Near its close, the essay argues that novel's political arrangement has now been realised — in what form?",
+      "answer": "The state hollowed out and replaced by corporate enclaves and privately owned digital territory.",
+      "distractors": [
+        "A worldwide ban on private ownership of virtual land.",
+        "Governments taking direct ownership of the major technology platforms.",
+        "Physical money disappearing in favour of a single digital token."
+      ]
+    },
+    {
+      "id": "MUFC-A",
+      "url": "https://en.wikipedia.org/wiki/Manchester_United_F.C.",
+      "question": "The club secretary who obtained the Clayton ground in 1893, after the club was evicted from its first home, held that post across which span?",
+      "answer": "1892 to 1900.",
+      "distractors": [
+        "1888 to 1896.",
+        "1891 to 1912.",
+        "1893 to 1903."
+      ]
+    },
+    {
+      "id": "MUFC-B",
+      "url": "https://en.wikipedia.org/wiki/Manchester_United_F.C.",
+      "question": "Supporters opposed to the 2005 takeover founded a breakaway club. From whom did the man behind that takeover buy his controlling stake?",
+      "answer": "Two Irish horse-racing businessmen who had become the club's largest shareholders.",
+      "distractors": [
+        "A group of investors from the Middle East.",
+        "The club's former manager and his family.",
+        "A satellite television broadcaster."
+      ]
+    },
+    {
+      "id": "TREE-A",
+      "url": "https://aeon.co/essays/how-to-decode-the-archive-inside-ancient-tree-rings",
+      "question": "The team named their oldest Bosnian pine after a Greek god. To reconstruct past summer temperatures from that tree rather than past drought, which property of the wood did they turn to?",
+      "answer": "The density of the wood, since warm summers let the tree build thicker cell walls.",
+      "distractors": [
+        "The amount of resin sealed into each ring.",
+        "The chemistry of the carbon stored in each ring.",
+        "The angle at which the cells lean inside each ring."
+      ]
+    },
+    {
+      "id": "TREE-B",
+      "url": "https://aeon.co/essays/how-to-decode-the-archive-inside-ancient-tree-rings",
+      "question": "One bristlecone pine is named after a famously long-lived biblical figure. How far back does the chronology assembled from bristlecone wood reach, compared with that tree's own first ring?",
+      "answer": "About four thousand years earlier.",
+      "distractors": [
+        "About fifty years earlier.",
+        "About two hundred years later.",
+        "About the same year."
+      ]
+    },
+    {
+      "id": "TESLA-A",
+      "url": "https://en.wikipedia.org/wiki/Nikola_Tesla",
+      "question": "Two businessmen agreed in 1887 to fund Tesla and manage his patents. What terms did they obtain from Westinghouse the following year?",
+      "answer": "A lump sum in cash and stock, plus a royalty on every unit of motor power sold.",
+      "distractors": [
+        "An outright purchase of the patents, with nothing paid afterwards.",
+        "A seat on the Westinghouse board in place of any payment.",
+        "Funding for a laboratory in exchange for all of Tesla's future inventions."
+      ]
+    },
+    {
+      "id": "TESLA-B",
+      "url": "https://en.wikipedia.org/wiki/Nikola_Tesla",
+      "question": "US officials feared Tesla's papers might pass to an exiled Yugoslav politician who was his nephew. What did that man's later pressure bring about?",
+      "answer": "The whole estate was crated up and shipped to Belgrade.",
+      "distractors": [
+        "The papers were sealed by court order for fifty years.",
+        "The FBI printed a full list of the seized material in the newspapers.",
+        "The estate was sold at public auction to pay off unpaid hotel bills."
+      ]
     }
   ],
-  "guide": [
-    {
-      "id": "guide-1",
-      "name": "Wikipedia",
-      "url": "https://en.wikipedia.org/wiki/Special:Search",
-      "task": "Search for 'World Wide Web' and open the article's 'History' section."
-    },
-    {
-      "id": "guide-2",
-      "name": "Wikipedia",
-      "url": "https://en.wikipedia.org",
-      "task": "Switch the site's language to Spanish (Español) using the language list on the main page."
-    },
-    {
-      "id": "guide-3",
-      "name": "MDN Web Docs",
-      "url": "https://developer.mozilla.org/en-US/",
-      "task": "Find the documentation page for the JavaScript Array.prototype.map() method."
-    }
-  ]
+  "guide": []
 }

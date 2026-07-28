@@ -254,6 +254,11 @@ async function handleAskWithVision(query) {
         : parsed.answer;
       cleanupSom();
 
+      // Visual evidence mode only: a crop per cited span (empty array in Text mode).
+      const findEvidenceShots = typeof gv2CaptureFindEvidenceShots === 'function'
+        ? await gv2CaptureFindEvidenceShots(highlightCount > 0)
+        : [];
+
       return {
         success: true,
         answer: answerOut,
@@ -261,7 +266,8 @@ async function handleAskWithVision(query) {
         visionSteps: step,
         visionActions: previousActions,
         highlightCount: highlightCount,
-        hasHighlights: highlightCount > 0
+        hasHighlights: highlightCount > 0,
+        findEvidenceShots
       };
     }
     
@@ -432,11 +438,18 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
     ? stripCitationMarkers(answer)
     : answer;
 
+  // Visual evidence mode: crop each cited span into the answer. Returns [] in Text mode, where the
+  // citation chips linking to the page are the whole story. Same helper the Guide find path uses.
+  const findEvidenceShots = typeof gv2CaptureFindEvidenceShots === 'function'
+    ? await gv2CaptureFindEvidenceShots(highlightCount > 0)
+    : [];
+
   return {
     success: true,
     answer: answerOut,
     highlightCount: highlightCount,
-    hasHighlights: highlightCount > 0
+    hasHighlights: highlightCount > 0,
+    findEvidenceShots
   };
 }
 
@@ -481,6 +494,25 @@ function applyHighlightsFromCitations(answer) {
   console.log('🤖 Found', matchesWithText.length, 'citations with text,', matchesSimple.length, 'simple citations');
   console.log('🤖 Available indices in _pageguideIndex:', Object.keys(window._pageguideIndex || {}).length);
   
+  // Citation ordinals, so a highlighted span knows which [N] chip in the answer it belongs to.
+  // The side panel numbers citations by their position in the answer text (parseCitations), while
+  // this function processes them grouped by quote style — without this map the crop labelled "3"
+  // could belong to the first citation in the sentence.
+  const markerPositions = [...normalizedAnswer.matchAll(/\[(\d+)(?::[^\]]*)?\]/g)]
+    .map(m => m.index)
+    .sort((a, b) => a - b);
+  const citationNumberAt = (pos) => {
+    const rank = markerPositions.indexOf(pos);
+    return rank >= 0 ? rank + 1 : null;
+  };
+  // Parallel to window._pageguideHighlights: the citation number each highlighted element serves.
+  window._pageguideHighlightNumbers = [];
+  const tagHighlightsSince = (startLen, citationNumber) => {
+    for (let i = startLen; i < window._pageguideHighlights.length; i++) {
+      window._pageguideHighlightNumbers[i] = citationNumber;
+    }
+  };
+
   const pageBg = getPageBackground();
   // highlightedElements tracks WHOLE-element highlights (simple citations / Strategy-3
   // fallbacks). Used to prevent simple citations from re-highlighting an element whose
@@ -495,7 +527,11 @@ function applyHighlightsFromCitations(answer) {
   const failedIndices = [];
   let count = 0;
 
-  // Process citations with text first (higher priority)
+  // Process citations with text first (higher priority), in the order they appear in the answer —
+  // the three quote-style patterns above are collected pattern-by-pattern, which would otherwise
+  // highlight (and number) a later single-quoted citation before an earlier double-quoted one.
+  matchesWithText.sort((a, b) => a.index - b.index);
+
   for (const match of matchesWithText) {
     const index = parseInt(match[1], 10);
     const textToHighlight = match[2];
@@ -531,7 +567,9 @@ function applyHighlightsFromCitations(answer) {
 
     // Apply highlight with specific text
     const style = getRandomHighlightStyle(pageBg.isDark);
+    const beforeLen = window._pageguideHighlights.length;
     const highlighted = applyIndexedHighlight(index, textToHighlight, style);
+    tagHighlightsSince(beforeLen, citationNumberAt(match.index));
 
     if (highlighted > 0) {
       // Do NOT add element to highlightedElements here — other phrases inside the
@@ -573,15 +611,18 @@ function applyHighlightsFromCitations(answer) {
       continue;
     }
     
-    // Apply highlight to entire element (no specific text)
+    // Apply highlight to entire element (no specific text). Tagged as a block highlight: it can be
+    // a whole paragraph or card, which is why evidence capture skips these — a crop of one is a
+    // wall of tint that shows nothing.
     const style = getRandomHighlightStyle(pageBg.isDark);
-    applyAnimatedHighlight(element, style.color, style.animation);
-    
+    applyAnimatedHighlight(element, style.color, style.animation, { block: true });
+
     // Force inline styles as backup (in case CSS classes don't work)
-    element.style.outline = `3px solid ${style.color}`;
-    element.style.outlineOffset = '2px';
-    element.style.backgroundColor = `${style.color}22`;
-    
+    element.style.backgroundColor = typeof pageguideHighlightTint === 'function'
+      ? pageguideHighlightTint(style.color, true)
+      : `${style.color}22`;
+
+    window._pageguideHighlightNumbers[window._pageguideHighlights.length] = citationNumberAt(match.index);
     window._pageguideHighlights.push(element);
     highlightedElements.add(element);
     count++;
@@ -604,23 +645,89 @@ function applyHighlightsFromCitations(answer) {
   return count;
 }
 
+/** Fold a fragment to comparable text: no markdown emphasis, no quotes, no case, single spaces. */
+function _citationCompareText(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[*_`"']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Content words of a fragment: punctuation dropped, so "world," and "world" are the same word. */
+function _citationTokens(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(t => t.length > 2);
+}
+
 /**
- * Unwrap citation markers in an answer: keep the quoted span the model cited, drop only the
- * bracket + index that turns it into a page link. Used by Non-grounding baseline mode
- * (isNonGroundingModeOn) so the displayed answer has no clickable citation chips at all — not
- * just no on-page highlight — since parseCitations() in the side panel would otherwise turn any
- * leftover markers into clickable spans regardless of whether applyHighlightsFromCitations()
- * ever ran on the page.
+ * Does the prose around the marker already say what the cited span says? Exact containment is not
+ * enough — models paraphrase and then cite the page's near-identical wording, which inlines as an
+ * obvious stutter. Two signals catch the real cases:
  *
- * The cited span is part of the sentence, not decoration: grounding mode renders it inline
- * (`<span class="citation-text">` in parseCitations), so deleting it here left the baseline
- * answer with gaps — "Contact the depot [12:"within 30 days"] of travel." came out as
- * "Contact the depot of travel." Non-grounding must show the LLM's full text; only the link
- * goes away. Markers that carry no text of their own ([N], [N, M], [idx:1-2]) are still removed
- * outright — there is nothing to keep.
+ *   seam  — the prose right before the marker ends with the span's opening words, or the prose
+ *           right after starts with its closing words:
+ *           "…featured the Rose Cross lamen [10:"featured the Rose Cross lamen of this famous …"]
+ *            of this famous society."
+ *   ratio — most of the span's content words are already in the surrounding sentence:
+ *           "…in the Theosophical Society [7:"Theosophical Society's hierarchy of ascended …"]"
+ *
+ * Spans under three content words are judged by exact containment only: a two-word overlap says
+ * nothing, and dropping "within 30 days" would put a hole back in the sentence.
+ *
+ * @param {string} before - normalized prose preceding the marker
+ * @param {string} after - normalized prose following the marker
+ * @param {string} span - normalized cited text
+ * @returns {boolean}
+ */
+function _citationEchoesProse(before, after, span) {
+  const spanTokens = _citationTokens(span);
+  if (!spanTokens.length) return true;
+  const beforeStr = _citationTokens(before).join(' ');
+  const afterStr = _citationTokens(after).join(' ');
+  const spanStr = spanTokens.join(' ');
+
+  if (beforeStr.endsWith(spanStr) || afterStr.startsWith(spanStr)) return true;
+  if (spanTokens.length < 3) return false;
+
+  // Try progressively shorter openings/closings (down to 3 words): the prose repeats "featured
+  // the rose cross lamen" — five words — so a fixed-length probe misses it.
+  for (let k = Math.min(8, spanTokens.length); k >= 3; k--) {
+    if (beforeStr.endsWith(spanTokens.slice(0, k).join(' '))) return true;
+    if (afterStr.startsWith(spanTokens.slice(-k).join(' '))) return true;
+  }
+
+  // Substring rather than exact token match, so "pathways" counts as "pathway".
+  const windowStr = `${beforeStr} ${afterStr}`;
+  const hits = spanTokens.filter(t => windowStr.includes(t)).length;
+  return hits / spanTokens.length >= 0.7;
+}
+
+/**
+ * Strip citation markers from an answer, keeping the model's prose intact and complete. Used by
+ * Non-grounding baseline mode (isNonGroundingModeOn) so the displayed answer has no clickable
+ * citation chips at all — not just no on-page highlight — since parseCitations() in the side panel
+ * would otherwise turn any leftover marker into a clickable span regardless of whether
+ * applyHighlightsFromCitations() ever ran on the page.
+ *
+ * A cited span plays one of two roles, and they need opposite treatment:
+ *
+ *   1. It repeats prose that is already there — `**Peter Thiel** [12:"Peter Thiel"] wrote…`.
+ *      Grounding mode collapses the marker to a chip so the repeat is invisible; inlining it
+ *      printed the phrase twice ("Peter Thiel Peter Thiel"). The marker is dropped.
+ *   2. It carries words the sentence needs — `Contact the depot [12:"within 30 days"] of travel.`
+ *      Deleting it left a gap ("Contact the depot of travel."). The span is kept.
+ *
+ * So each marker is compared against the prose right before and after it: a duplicate is removed,
+ * anything else is unwrapped in place. Markers with no text of their own ([N], [N, M], [idx:1-2])
+ * are always removed — there is nothing to keep.
  *
  * @param {string} answer - Answer text with citation markers
- * @returns {string} The same text with every citation marker replaced by its cited span
+ * @returns {string} The same text, marker-free, with no gaps and no repeats
  */
 function stripCitationMarkers(answer) {
   if (!answer) return answer;
@@ -629,18 +736,37 @@ function stripCitationMarkers(answer) {
   const normalized = String(answer)
     .replace(/[“”„‟"]/g, '"')
     .replace(/[‘’‚‛']/g, "'");
+
+  // One pass over every marker shape, so each match can see the text around it. The index part
+  // allows comma-separated lists ([517, 519:"text"]) the same way parseCitations does. The quoted
+  // alternatives take everything up to the LAST quote before the closing bracket, because cited
+  // page text frequently contains quotes of its own:
+  //   [94:"claimed sanction from the "Great White Lodge""]
+  // A [^"]+ capture stops at the inner quote, fails to reach the bracket, and leaves the whole
+  // marker sitting in the answer as raw text.
+  const MARKER = /\[(?:Page\s*)?[\d,\s]+:\s*(?:"([^\]]*)"|'([^\]]*)'|([^\]"']+))\s*\]|\[idx:[^\]]+\]|\[[\d,\s]+\](?!:)/gi;
+
   return normalized
-    // Markers carrying a cited span → keep the span, drop the brackets/index. The index part
-    // allows comma-separated lists ([517, 519:"text"]) the same way parseCitations does.
-    .replace(/\[Page\s*\d+:\s*"([^"]+)"\]/gi, '$1')     // [Page N:"text"] (PDF)
-    .replace(/\[Page\s*\d+:\s*'([^']+)'\]/gi, '$1')     // [Page N:'text'] (PDF)
-    .replace(/\[[\d,\s]+:\s*"([^"]+)"\]/g, '$1')        // [N:"text"]
-    .replace(/\[[\d,\s]+:\s*'([^']+)'\]/g, '$1')        // [N:'text']
-    .replace(/\[[\d,\s]+:\s*([^\]"']+)\]/g, '$1')       // [N:text]
-    // Markers with no text of their own → nothing to keep.
-    .replace(/\[idx:[^\]]+\]/gi, '')                    // [idx:1-2] (PDF element ranges)
-    .replace(/\[[\d,\s]+\](?!:)/g, '')                  // [N] / [N, M]
-    .replace(/\s+([.,;:!?])/g, '$1')                    // drop stray space a removed marker left before punctuation
+    .replace(MARKER, (match, dq, sq, uq, offset, whole) => {
+      const span = dq || sq || uq;
+      if (!span) return ''; // [N] / [N, M] / [idx:1-2] — no text of its own
+      const spanCmp = _citationCompareText(span);
+      if (!spanCmp) return '';
+
+      // Look at the sentence on both sides of the marker. The windows are generous because the
+      // repeat is often split across the marker (prose ends with the span's opening words, then
+      // continues with its closing ones).
+      const beforeRaw = whole.slice(Math.max(0, offset - spanCmp.length - 120), offset);
+      const afterRaw = whole.slice(offset + match.length, offset + match.length + spanCmp.length + 120);
+      if (_citationEchoesProse(beforeRaw, afterRaw, spanCmp)) return '';
+
+      return span;
+    })
+    // Safety net: anything still bracket-shaped is a marker whose form we failed to parse, and a
+    // raw "[94:...]" in the baseline answer is worse than a dropped quote — the prose around it
+    // already carries the claim. Nothing DOM- or index-shaped reaches the user.
+    .replace(/\[\s*(?:idx\s*:|Page\s*\d|\d)[^\][]*\]/gi, '')
+    .replace(/\s+([.,;:!?])/g, '$1')  // drop stray space a removed marker left before punctuation
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }

@@ -2515,3 +2515,143 @@ function gv2StateChanged(prevSig, curSig) {
 
 if (typeof window !== 'undefined') window.gv2StateChanged = gv2StateChanged;
 if (typeof module !== 'undefined' && module.exports) module.exports.gv2StateChanged = gv2StateChanged;
+
+// ===== EVIDENCE MODE (user-study axis: how evidence is shown to the user) =====
+// visual (default) — Find crops a screenshot of each cited span into the answer, Guide evidence
+//                    pops up screenshots. What the system has always done.
+// text             — no captures at all. Find keeps its citation links; Guide evidence is node
+//                    text, aria-label, selector and page URL.
+// Independent of the Non-grounding baseline (isNonGroundingModeOn), which controls on-page
+// highlighting. All four combinations are valid study conditions.
+const PAGEGUIDE_EVIDENCE_MODE_KEY = 'pageguideEvidenceMode';
+
+/** Coerce any stored value to a known mode. Pure. */
+function normalizeEvidenceMode(v) {
+  return v === 'text' ? 'text' : 'visual';
+}
+
+/**
+ * Read the current evidence mode. Callers read this fresh per step/answer (like
+ * isNonGroundingModeOn) so flipping the toggle mid-session takes effect on the next step.
+ * @returns {Promise<'visual'|'text'>}
+ */
+async function getEvidenceMode() {
+  try {
+    const r = await chrome.storage.local.get([PAGEGUIDE_EVIDENCE_MODE_KEY]);
+    return normalizeEvidenceMode(r[PAGEGUIDE_EVIDENCE_MODE_KEY]);
+  } catch (e) {
+    return 'visual';
+  }
+}
+
+/** Convenience: true when evidence must be textual. */
+async function isTextEvidenceModeOn() {
+  return (await getEvidenceMode()) === 'text';
+}
+
+/**
+ * Single source of truth for "may this mode take screenshots?". Text mode takes none at all —
+ * no evidence crops AND no per-step screenshots — so the two study arms differ in what is
+ * captured, not just in what is rendered. Pure.
+ * @param {string} mode - evidence mode (any value; normalized here)
+ * @returns {boolean}
+ */
+function gv2ShouldCaptureScreenshots(mode) {
+  return normalizeEvidenceMode(mode) !== 'text';
+}
+
+/**
+ * A short, human-readable CSS selector for an element — the "selector" line of textual evidence.
+ * Prefers stable hooks (test ids, id) over structure, and caps the ancestor chain so the string
+ * stays readable in a popup. Returns '' for a missing element. Pure apart from reading the DOM.
+ *
+ * @param {Element|null} el
+ * @param {number} maxDepth - how many ancestors to walk before giving up
+ * @returns {string}
+ */
+function gv2ElementSelector(el, maxDepth = 4) {
+  if (!el || el.nodeType !== 1) return '';
+  try {
+    const esc = (v) => String(v).replace(/(["\\])/g, '\\$1');
+    const own = (node) => {
+      const tag = (node.tagName || '').toLowerCase();
+      for (const attr of ['data-testid', 'data-test-id', 'data-cy']) {
+        const v = node.getAttribute && node.getAttribute(attr);
+        if (v) return `${tag}[${attr}="${esc(v)}"]`;
+      }
+      if (node.id) return `#${esc(node.id)}`;
+      const name = node.getAttribute && node.getAttribute('name');
+      if (name) return `${tag}[name="${esc(name)}"]`;
+      // href is what makes links identifiable, and it is what a reader recognises.
+      if (tag === 'a') {
+        const href = node.getAttribute('href');
+        if (href) return `a[href="${esc(href)}"]`;
+      }
+      const aria = node.getAttribute && node.getAttribute('aria-label');
+      if (aria) return `${tag}[aria-label="${esc(aria)}"]`;
+      const role = node.getAttribute && node.getAttribute('role');
+      if (role) return `${tag}[role="${esc(role)}"]`;
+      return tag;
+    };
+
+    // A hook-based selector identifies the element on its own — no ancestor chain needed.
+    const first = own(el);
+    if (/[#\[]/.test(first)) return first;
+
+    const parts = [];
+    let node = el;
+    let depth = 0;
+    while (node && node.nodeType === 1 && depth < maxDepth) {
+      let part = own(node);
+      if (!/[#\[]/.test(part)) {
+        const parent = node.parentElement;
+        if (parent) {
+          const sameTag = Array.from(parent.children).filter(c => c.tagName === node.tagName);
+          if (sameTag.length > 1) part += `:nth-of-type(${sameTag.indexOf(node) + 1})`;
+        }
+      }
+      parts.unshift(part);
+      if (/[#\[]/.test(part)) break;
+      node = node.parentElement;
+      depth++;
+      if (node && (node.tagName === 'BODY' || node.tagName === 'HTML')) break;
+    }
+    return parts.join(' > ');
+  } catch (e) {
+    return (el.tagName || '').toLowerCase();
+  }
+}
+
+/**
+ * The textual evidence block for an element: what a [evidence] popup shows in Text mode, in place
+ * of a screenshot. Fields are omitted by the renderer when empty (a button with no text still has
+ * an aria-label; a link has text but usually no aria-label).
+ *
+ * @param {Element|null} el
+ * @param {string} url - page URL to record alongside the element
+ * @returns {{text: string, ariaLabel: string, selector: string, url: string}}
+ */
+function gv2TextualEvidence(el, url = '') {
+  const clean = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+  return {
+    text: clean(el && el.textContent),
+    ariaLabel: clean(el && el.getAttribute && el.getAttribute('aria-label')),
+    selector: gv2ElementSelector(el),
+    url: clean(url)
+  };
+}
+
+if (typeof window !== 'undefined') {
+  window.normalizeEvidenceMode = normalizeEvidenceMode;
+  window.getEvidenceMode = getEvidenceMode;
+  window.isTextEvidenceModeOn = isTextEvidenceModeOn;
+  window.gv2ShouldCaptureScreenshots = gv2ShouldCaptureScreenshots;
+  window.gv2ElementSelector = gv2ElementSelector;
+  window.gv2TextualEvidence = gv2TextualEvidence;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.normalizeEvidenceMode = normalizeEvidenceMode;
+  module.exports.gv2ShouldCaptureScreenshots = gv2ShouldCaptureScreenshots;
+  module.exports.gv2ElementSelector = gv2ElementSelector;
+  module.exports.gv2TextualEvidence = gv2TextualEvidence;
+}

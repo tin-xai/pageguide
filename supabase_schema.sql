@@ -7,9 +7,9 @@
 --
 -- Every task is done WITH the extension available (there is no without-extension control condition
 -- in this study), so `condition` is a single constant label — see STUDY_CONDITION in study.js.
--- Recall ("hide") columns and agent columns exist so this table stays compatible with the richer
--- userstudy protocol; in the Find/Guide study hidden_count/hide_recall/user_hidden_selectors are
--- left empty, while scroll_agent_count and agent_think_ms are populated from the guide agent.
+-- Recall ("hide") and agent columns exist so this table stays compatible with the richer
+-- userstudy protocol; in the Find/Guide study user_hidden_selectors is left empty, while
+-- scroll_agent_count and agent_think_ms are populated from the guide agent.
 -- ============================================================
 
 -- ---------- Parent table: one row per participant/session ----------
@@ -31,6 +31,9 @@ create table if not exists public.study_task_results (
   task_type             text        not null,            -- 'find' | 'guide'
   condition             text        not null,            -- constant label (see STUDY_CONDITION)
   time_ms               integer     not null,
+  notes_time_ms         integer,                         -- time from task start until Done/notes saved
+  answer_time_ms        integer,                         -- time from Answer screen render until Submit
+  evidence_responses    jsonb,                           -- two-hop supporting paragraphs selected on the Answer screen
   answer                text,
   answer_correct        boolean,                          -- null for guide tasks (self-reported)
   question_or_task      text,                             -- the question/instruction shown
@@ -39,9 +42,7 @@ create table if not exists public.study_task_results (
   chat_turn_count       integer     not null default 0,
   chat_transcript       jsonb,
 
-  -- Recall ("hide") task fields — unused by the Find/Guide study (kept for schema compatibility)
-  hidden_count          integer     not null default 0,
-  hide_recall           real,
+  -- Recall ("hide") task field — unused by the Find/Guide study (kept for schema compatibility)
   user_hidden_selectors jsonb,
 
   guide_screenshot      text,                             -- optional base64 capture for guide tasks

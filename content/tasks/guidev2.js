@@ -1530,6 +1530,23 @@ const _GV2_VISUAL_INPUT_KEY = 'guideVisualInput';
 const GV2_GUIDE_INDEX_MAX_ITEMS = 5000;
 const GV2_VISUAL_INPUT_MAX_MARKS = GV2_GUIDE_INDEX_MAX_ITEMS;
 
+/**
+ * Text evidence mode takes no screenshots for anything the user is later shown — step records,
+ * the initial state, after-action shots, evidence crops, the visual recap. Model-input captures
+ * (the SoM screenshot behind "Send Image", the terminal verify pass) are a different axis and
+ * keep their own toggles.
+ */
+async function _gv2CaptureShotsAllowed() {
+  try {
+    if (typeof getEvidenceMode !== 'function') return true;
+    return typeof gv2ShouldCaptureScreenshots === 'function'
+      ? gv2ShouldCaptureScreenshots(await getEvidenceMode())
+      : true;
+  } catch (e) {
+    return true;
+  }
+}
+
 async function _gv2IsVisualInputOn() {
   try {
     const r = await chrome.storage.local.get(_GV2_VISUAL_INPUT_KEY);
@@ -1544,6 +1561,9 @@ const _GV2_END_SUMMARY_KEY = 'guideEndSummaryAgent';
 
 async function _gv2IsVisualRecapOn() {
   try {
+    // A *visual* recap is by definition screenshot evidence, so Text evidence mode turns it off
+    // regardless of its own toggle — otherwise the text arm would still end on a wall of images.
+    if (!(await _gv2CaptureShotsAllowed())) return false;
     const r = await chrome.storage.local.get(_GV2_VISUAL_RECAP_KEY);
     return r[_GV2_VISUAL_RECAP_KEY] !== 'off'; // default on
   } catch (e) {
@@ -2315,7 +2335,9 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     // For saved evidence, force a real DOM overlay before capture so text spans / DOM targets are
     // visibly highlighted in the screenshot pixels. Recap-only evidence keeps the older Vision-on
     // overlay behavior and otherwise falls back to canvas baking after capture.
-    const useDomMarker = !!(options.forceDomMarker || (window._guidev2 && window._guidev2._lastVisualInputOn)) && typeof gv2DrawDomMarker === 'function';
+    const useDomMarker = !options.noMarker
+      && !!(options.forceDomMarker || (window._guidev2 && window._guidev2._lastVisualInputOn))
+      && typeof gv2DrawDomMarker === 'function';
     let markerNode = null;
     if (useDomMarker) {
       markerNode = gv2DrawDomMarker(markerTarget, markerNumber, GV2_EVIDENCE_MARKER_COLOR);
@@ -2345,7 +2367,7 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     // DOM overlays are already captured in pixels. For screenshot-region evidence, annotations are
     // the visual overlay; region_bbox is just the crop/hint. Only draw the plain region box when
     // there are no annotations to show.
-    const bakeMarker = !markerNode && !hasAnnotations;
+    const bakeMarker = !options.noMarker && !markerNode && !hasAnnotations;
     console.log('[DEBUG] crop screenshot starting...');
     const marked = options.fullViewport
       ? await _gv2MarkFullScreenshot(
@@ -2738,6 +2760,10 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       cap = await gv2CaptureEvidenceRegion(item.evidenceEl, item.evidenceIndex, item.evidenceRect, {
         scrollIntoView: !!item.scrollIntoView,
         forceDomMarker: !!item.forceDomMarker,
+        // Some targets are already visibly marked on the page (Find citation spans carry the
+        // highlight tint), so an extra box would be redundant — and any drift between the rect we
+        // measured and the pixels we captured shows up as a box in the wrong place.
+        noMarker: !!item.noMarker,
         fullViewport: !!item.fullViewportCapture,
         annotations: Array.isArray(item.annotations) ? item.annotations : [],
         screenshotBase64: (!item.evidenceEl && annotationShot) ? annotationShot : null
@@ -2855,6 +2881,15 @@ async function gv2CaptureStepRecord(data) {
 
   const startedAt = g._stepStartedAt || Date.now();
 
+  // Text evidence mode takes NO captures: no per-step screenshot, no region crop, no evidence
+  // crops, no annotation agent. The step is still recorded — the journey, the timeline and the
+  // [evidence] popups render data.targetEvidence (node text / aria-label / selector / page)
+  // instead of an image. Everything screenshot-shaped below is guarded on this flag, including
+  // the "void step (no screenshot) → skip" rule, which would otherwise drop every text-mode step.
+  const captureShots = typeof gv2ShouldCaptureScreenshots === 'function'
+    ? gv2ShouldCaptureScreenshots(data.evidenceMode)
+    : true;
+
   // BEFORE-action screenshot = the PREVIOUS step's AFTER-shot (carried forward). The page hasn't
   // changed between step N-1's after-capture and step N's before, so this is the same image — and
   // reusing it avoids a second back-to-back captureVisibleTab that Chrome rate-limits (the cause
@@ -2862,12 +2897,13 @@ async function gv2CaptureStepRecord(data) {
   // yet (the first step, or right after a navigation-resume).
   const stepNum = Number(data.step);
   let beforeShot = (Number.isFinite(stepNum) && g._lastAfterShotStep === stepNum - 1) ? g._lastAfterShot : null;
-  if (!beforeShot) {
+  if (!beforeShot && captureShots) {
     try { if (typeof captureScreenshot === 'function') beforeShot = await captureScreenshot(); }
     catch (e) { /* best-effort */ }
   }
+  if (!captureShots) beforeShot = null;
 
-  if (!beforeShot) {
+  if (!beforeShot && captureShots) {
     // Fallback: search for the latest screenshot from previous steps in this session
     try {
       if (typeof rewindGetIndex === 'function') {
@@ -2892,16 +2928,17 @@ async function gv2CaptureStepRecord(data) {
     }
   }
 
-  if (!beforeShot) {
+  if (!beforeShot && captureShots) {
     // If still no screenshot, use a 1x1 transparent placeholder so the step is not void,
     // ensuring the record is stored and shown in the timeline/Inspector.
     beforeShot = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
     console.log(`📸 No screenshot could be captured/found for step ${stepNum}. Using placeholder.`);
   }
 
-  // VERIFICATION: a step with no screenshot is void — skip it entirely (don't announce a dot,
-  // don't store a record), so the timeline and the stored journey only contain valid steps.
-  if (!beforeShot) {
+  // VERIFICATION: in Visual mode a step with no screenshot is void — skip it entirely (don't
+  // announce a dot, don't store a record), so the timeline and the stored journey only contain
+  // valid steps. In Text mode there is never a screenshot and the step is still valid.
+  if (!beforeShot && captureShots) {
     console.warn('[guidev2] skipping void step (no screenshot available):', data.step);
     return;
   }
@@ -2953,7 +2990,9 @@ async function gv2CaptureStepRecord(data) {
         llmStep: data.llmStep != null ? data.llmStep : null,
         expectedStep: data.expectedStep != null ? data.expectedStep : null,
         stepNumberCorrected: !!data.stepNumberCorrected,
-        hasShot: true,
+        hasShot: captureShots,
+        evidenceMode: captureShots ? 'visual' : 'text',
+        targetEvidence: data.targetEvidence || null,
         g_goal_relevance_score: goalRelevance
       }
     });
@@ -2973,15 +3012,18 @@ async function gv2CaptureStepRecord(data) {
     // Region around the highlighted target. Auto mode always uses aligned capture (scroll target
     // into view, fresh screenshot, crop) so regionShot reflects the page BEFORE the action runs.
     let region = { targetRect: null, regionShot: null, regionDom: '', regionCaptureMode: 'legacy' };
-    const alignedRegion = await _gv2ShouldUseAlignedRegionCapture(g);
-    try { region = await gv2CaptureRegion(beforeShot, { aligned: alignedRegion, markerNumber: data.resolvedIndex }); } catch (e) { /* best-effort */ }
+    let alignedRegion = false;
+    if (captureShots) {
+      alignedRegion = await _gv2ShouldUseAlignedRegionCapture(g);
+      try { region = await gv2CaptureRegion(beforeShot, { aligned: alignedRegion, markerNumber: data.resolvedIndex }); } catch (e) { /* best-effort */ }
+    }
 
     // Separate visual-evidence region: the on-page proof that justifies this step (distinct SoM
     // element resolved in gv2ProcessResponse). Only captured when the model supplied one (recap on).
     // Skip for visual_highlight: that action already cropped this exact region as its answer image
     // (gv2ProcessResponse), so re-capturing here would just double-hit the screenshot rate limit.
     let evidenceItems = [];
-    if (data.action !== 'visual_highlight') {
+    if (captureShots && data.action !== 'visual_highlight') {
       const rawEvidenceItems = Array.isArray(data.visualEvidenceItems)
         ? data.visualEvidenceItems
         : ((data.evidenceEl || data.evidenceRect) ? [{
@@ -2994,19 +3036,23 @@ async function gv2CaptureStepRecord(data) {
       evidenceItems = await gv2CaptureEvidenceItems(rawEvidenceItems, { restoreScroll: true });
     }
     const savedEvidenceItems = Array.isArray(data.savedEvidenceItems) ? data.savedEvidenceItems : [];
-    const savedEvidenceCapturesRaw = savedEvidenceItems.length
+    // Text mode: no crops and no annotation agent — carry the entries through as text only, keeping
+    // the same {key, note} shape every reader already understands, plus the textual target.
+    const savedEvidenceCapturesRaw = (savedEvidenceItems.length && captureShots)
       ? await gv2CaptureEvidenceItems(savedEvidenceItems, { restoreScroll: true })
-      : [];
+      : savedEvidenceItems;
     const savedEvidenceCaptures = savedEvidenceCapturesRaw.map(item => ({
       key: item.key || null,
       note: item.note || null,
+      textualEvidence: item.textualEvidence || null,
       shot: item.visualEvidenceShot || null,
       originalShot: item.visualEvidenceOriginalShot || null,
       marker: item.visualEvidenceMarker || null,
-      region_bbox: item.region_bbox || item.visualEvidenceNormRect || null,
-      annotations: Array.isArray(item.annotations) ? item.annotations : [],
-      need_annotation: !!item.need_annotation,
-      annotation_prompt: item.annotation_prompt || null,
+      region_bbox: captureShots ? (item.region_bbox || item.visualEvidenceNormRect || null) : null,
+      // Text mode never runs the annotator, so nothing downstream should advertise annotations.
+      annotations: captureShots && Array.isArray(item.annotations) ? item.annotations : [],
+      need_annotation: captureShots && !!item.need_annotation,
+      annotation_prompt: captureShots ? (item.annotation_prompt || null) : null,
       annotationSystemPrompt: item.annotationSystemPrompt || '',
       annotationUserPrompt: item.annotationUserPrompt || '',
       annotationScreenshot: item.annotationScreenshot || null,
@@ -3067,6 +3113,10 @@ async function gv2CaptureStepRecord(data) {
       llmStep: data.llmStep != null ? data.llmStep : null,
       expectedStep: data.expectedStep != null ? data.expectedStep : null,
       stepNumberCorrected: !!data.stepNumberCorrected,
+      // Study axis: 'visual' (screenshots) or 'text' (no captures — readers fall back to
+      // targetEvidence: node text, aria-label, selector, page URL).
+      evidenceMode: captureShots ? 'visual' : 'text',
+      targetEvidence: data.targetEvidence || null,
       durationMs: Date.now() - startedAt,
       // BEFORE-action screenshot (carried from the previous step's after-shot). The timeline shows
       // this. `screenshot` mirrors it for back-compat. The AFTER-action shot is added later by
@@ -3151,9 +3201,12 @@ async function gv2RecaptureAfterAction(stepNumber) {
   if (!g || !g.captureEnabled || !g.sessionId || !stepNumber) return;
   if (typeof rewindPatchRecord !== 'function') return;
   try {
+    const captureShots = await _gv2CaptureShotsAllowed();
     let screenshot = null;
-    try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
-    catch (e) { /* best-effort */ }
+    if (captureShots) {
+      try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
+      catch (e) { /* best-effort */ }
+    }
 
     // Carry this AFTER-shot forward: it becomes the NEXT step's before-shot (same page until the
     // next action), so we never take a second back-to-back capture for the next step.
@@ -3172,7 +3225,7 @@ async function gv2RecaptureAfterAction(stepNumber) {
     const patch = {
       url: window.location.href,
       title: document.title || '',
-      afterCaptureStatus: screenshot ? 'captured' : 'missing'
+      afterCaptureStatus: screenshot ? 'captured' : (captureShots ? 'missing' : 'text-mode')
     };
     if (screenshot) patch.screenshotAfter = screenshot;
     if (domSnapshot) patch.domSnapshotAfter = domSnapshot;
@@ -3196,9 +3249,12 @@ async function gv2CaptureInitialState() {
   if (!g || !g.captureEnabled || !g.sessionId) return;
   if (typeof rewindPutRecord !== 'function') return;
   try {
+    const captureShots = await _gv2CaptureShotsAllowed();
     let screenshot = null;
-    try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
-    catch (e) { /* best-effort */ }
+    if (captureShots) {
+      try { if (typeof captureScreenshot === 'function') screenshot = await captureScreenshot(); }
+      catch (e) { /* best-effort */ }
+    }
     // Carry forward so step 1's before-shot is this initial-state screenshot.
     if (screenshot) {
       g._lastAfterShot = screenshot;
@@ -3217,6 +3273,11 @@ async function gv2CaptureInitialState() {
       instruction: 'Initial state', action: null, isInitial: true,
       isLastStep: false, target: null, confidence: null, durationMs: 0,
       screenshot: screenshot || null, screenshotBefore: screenshot || null,
+      evidenceMode: captureShots ? 'visual' : 'text',
+      // The initial state has no target element — the page itself is the evidence.
+      targetEvidence: captureShots
+        ? null
+        : { text: document.title || '', ariaLabel: '', selector: '', url: window.location.href },
       domSnapshot, restore, rawLlmJson: '', systemPrompt: '', userPrompt: ''
     };
     await rewindPutRecord(record);
@@ -3613,10 +3674,16 @@ ${g.previousSteps.length > 0 ? g.previousSteps.join('\n') : 'None — this is th
   const attachmentSection = g.attachmentContext
     ? `\n=== ATTACHED BY USER ===\n${g.attachmentContext}${attachAsImage ? '\n(The attached image is also included below as an image.)' : ''}\n`
     : '';
+  // Text evidence mode records no screenshots, so screenshot-shaped evidence (need_annotation /
+  // region_bbox) has nothing to attach to — steer the model to DOM/SoM evidence it can name.
+  const textEvidenceMode = !(await _gv2CaptureShotsAllowed());
+  const evidenceModeSection = textEvidenceMode
+    ? '\nEVIDENCE MODE: TEXT. No screenshots are taken this session. Every evidence item must point at an indexed element via som_id; never set need_annotation=true and never return region_bbox. Evidence that is not an indexed element must be described in the note instead.\n'
+    : '';
   const userPrompt = `PAGE BACKGROUND: ${pageBg.isDark ? 'DARK' : 'LIGHT'}
 CURRENT URL: ${window.location.href}
-VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}
-ON FINISH: always return a non-null "answer", and return "confirmationEvidence" as up to 5 items confirming the answer on THIS page. Each item may include "name" (lowercase citation key like "spanish_language"), and needs reason plus either a SoM index, current-viewport rect/text, or need_annotation=true with annotation_prompt. Cite confirmation evidence in answer as [ev:name], or [ev:index] when using a SoM index without a name. On non-finish steps set "confirmationEvidence" to null.
+VISUAL SCREENSHOT PROVIDED: ${visualInputShot ? `yes — it contains up to ${GV2_VISUAL_INPUT_MAX_MARKS} numbered SoM markers matching the PAGE INDEX` : 'no'}${evidenceModeSection}
+ON FINISH: always return a non-null "answer", and return "confirmationEvidence" as up to 5 items confirming the answer on THIS page. Each item may include "name" (lowercase citation key like "spanish_language"), and needs reason plus either a SoM index, current-viewport rect/text${textEvidenceMode ? '' : ', or need_annotation=true with annotation_prompt'}. Cite confirmation evidence in answer as [ev:name], or [ev:index] when using a SoM index without a name. On non-finish steps set "confirmationEvidence" to null.
 
 === PAGE INDEX ===
 ${pageIndex.indexText}
@@ -4001,6 +4068,11 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
           evidenceRect: somEl ? null : (entry.region_bbox || null),
           text: entry.note,
           reason: entry.note,
+          // Textual stand-in for the crop (Text evidence mode). Resolved unconditionally — it is
+          // cheap, DOM-only, and the mode is read a few lines further down.
+          textualEvidence: typeof gv2TextualEvidence === 'function'
+            ? gv2TextualEvidence(somEl, window.location.href)
+            : null,
           scrollIntoView: !!somEl,
           forceDomMarker: !!somEl,
           fullViewportCapture: !somEl
@@ -4048,6 +4120,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // mechanics are unaffected, since g.currentTargetEl is set unconditionally regardless of
     // whether a highlight was actually drawn (see the hasTarget block just below).
     const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+
+    // Evidence mode (independent study axis, read fresh for the same reason): 'text' takes no
+    // captures at all and records what the step touched as text instead — node text, aria-label,
+    // selector, page URL. See gv2ShouldCaptureScreenshots / gv2TextualEvidence in content/utils.js.
+    const evidenceMode = typeof getEvidenceMode === 'function' ? await getEvidenceMode() : 'visual';
+    const textEvidence = evidenceMode === 'text';
 
     // Clear previous highlights
     if (typeof clearHighlights === 'function') clearHighlights();
@@ -4153,8 +4231,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     let visualHighlightResult = null;
     if (isVisualHighlight) {
       const caption = (visualEvidence?.reason || step.instruction || '').trim();
-      if (nonGrounding) {
-        // Baseline mode: keep the plain-text caption, skip the marked-up evidence screenshot.
+      if (nonGrounding || textEvidence) {
+        // Baseline / Text evidence: keep the plain-text caption, skip the marked-up screenshot.
         visualHighlightResult = { image: null, caption };
       } else {
         _gv2ShowIndicator('Capturing…');
@@ -4306,6 +4384,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       domElementText,
       llmElementText,
       resolvedIndex: idxToUse,
+      evidenceMode,
+      // Text mode's stand-in for the screenshot: what this step actually touched, in words.
+      // Resolved here while the element is still live — the record is read back long after.
+      targetEvidence: textEvidence && typeof gv2TextualEvidence === 'function'
+        ? gv2TextualEvidence(resolvedEl || g.currentTargetEl || null, window.location.href)
+        : null,
       evidenceEl,
       evidenceIndex,
       evidenceRect,
@@ -4507,6 +4591,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       isFind,
       findAnswer: isFind ? (findResult?.answer || '') : null,
       findNotOnPage: isFind ? !!findResult?.notOnPage : false,
+      // Visual evidence mode only: one crop per cited span, in citation order. Empty in Text mode.
+      findEvidenceShots: isFind ? (findResult?.findEvidenceShots || []) : [],
+      evidenceMode,
       isWatchVideo,
       watchVideoAnswer: isWatchVideo ? (watchVideoResult?.answer || '') : null,
       watchVideoUrl: isWatchVideo ? (watchVideoResult?.videoUrl || step.videoUrl || step.url || null) : null,
@@ -5270,17 +5357,129 @@ async function gv2RunFind(findQuery) {
   const answerOut = nonGrounding && typeof stripCitationMarkers === 'function'
     ? stripCitationMarkers(answer)
     : answer;
+
+  // Visual evidence mode: crop each cited span into the answer, so the evidence travels with the
+  // text instead of only living on the page. Text mode keeps the citation links and nothing else.
+  const findEvidenceShots = await gv2CaptureFindEvidenceShots(highlightCount > 0);
+
   return {
     answer: answerOut,
     notOnPage,
     highlightCount,
     hasHighlights: highlightCount > 0,
+    findEvidenceShots,
     systemPrompt,
     userPrompt: question,
     rawResponse: response?.content || ''
   };
 }
 if (typeof window !== 'undefined') window.gv2RunFind = gv2RunFind;
+
+// How many cited spans a Find answer illustrates. Each crop costs a scroll + captureVisibleTab
+// (Chrome rate-limits those), and a wall of images stops being evidence and becomes noise.
+// Upper bound on evidence crops per answer. Each one costs a scroll + captureVisibleTab (Chrome
+// rate-limits those), so a citation-heavy answer would otherwise spend many seconds capturing.
+// Truncation is logged, never silent.
+const GV2_FIND_EVIDENCE_MAX_SHOTS = 20;
+
+/** Class marking the single span that is highlighted during its own evidence capture. */
+const GV2_ACTIVE_HIGHLIGHT_CLASS = 'pageguide-highlight-active';
+/** Set on <html> for the duration; see the capture-mode rules in content/content.css. */
+const GV2_EVIDENCE_CAPTURE_CLASS = 'pageguide-evidence-capture';
+
+/**
+ * The cited spans worth capturing, paired with the citation number they belong to.
+ *
+ * Includes both precise text-span highlights and whole-element block highlights. Block highlights
+ * are less precise, but in Visual+Find they are still the user's only visual evidence for bare
+ * citations such as [10]. Numbers come from window._pageguideHighlightNumbers (set by
+ * applyHighlightsFromCitations) so chip [3] is the answer's third citation, not the third capture
+ * that happened to succeed.
+ */
+function gv2FindEvidenceTargets() {
+  const els = Array.isArray(window._pageguideHighlights) ? window._pageguideHighlights : [];
+  const numbers = Array.isArray(window._pageguideHighlightNumbers) ? window._pageguideHighlightNumbers : [];
+  const out = [];
+  els.forEach((el, i) => {
+    if (!el || !el.getBoundingClientRect || !document.contains(el)) return;
+    out.push({ el, number: numbers[i] != null ? numbers[i] : out.length + 1 });
+  });
+  return out;
+}
+if (typeof window !== 'undefined') window.gv2FindEvidenceTargets = gv2FindEvidenceTargets;
+
+/**
+ * Visual evidence mode: one crop per cited span, so every [N] in the answer has a picture of the
+ * text it came from. Returns [] when there is nothing to show or the study arm is Text — callers
+ * render the array unconditionally.
+ *
+ * Captures one span at a time: mute every other highlight, light up this one, scroll it to the
+ * middle of the viewport, let the page settle, screenshot, then restore. Highlighting them all at
+ * once produced crops where nothing identified WHICH tinted phrase was the evidence, and cropping
+ * without settling first caught whatever sticky banner happened to be over those coordinates.
+ *
+ * @param {boolean} hasHighlights - false when the answer highlighted nothing (skip the work)
+ * @returns {Promise<Array<{shot: string, note: string, index: number}>>}
+ */
+async function gv2CaptureFindEvidenceShots(hasHighlights) {
+  if (!hasHighlights) return [];
+  if (typeof gv2CaptureEvidenceRegion !== 'function') return [];
+  if (!(await _gv2CaptureShotsAllowed())) return [];
+
+  const targets = gv2FindEvidenceTargets();
+  if (!targets.length) return [];
+  if (targets.length > GV2_FIND_EVIDENCE_MAX_SHOTS) {
+    console.log(`[guidev2] find evidence: capturing ${GV2_FIND_EVIDENCE_MAX_SHOTS} of ${targets.length} cited spans`);
+  }
+  const capped = targets.slice(0, GV2_FIND_EVIDENCE_MAX_SHOTS);
+
+  const startX = window.scrollX || 0;
+  const startY = window.scrollY || 0;
+  const root = document.documentElement;
+  const out = [];
+
+  root.classList.add(GV2_EVIDENCE_CAPTURE_CLASS);
+  try {
+    for (const target of capped) {
+      target.el.classList.add(GV2_ACTIVE_HIGHLIGHT_CLASS);
+      try {
+        let cap = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          // scrollIntoView centers the span; the settle wait lets sticky headers/banners finish
+          // moving so the pixels under our rect are the ones we measured.
+          await _gv2ScrollRegionTargetIntoView(target.el);
+          await _gv2WaitForLayoutSettle();
+          cap = await gv2CaptureEvidenceRegion(target.el, null, null, { noMarker: true });
+          if (cap?.visualEvidenceShot) break;
+          if (attempt >= 2) break;
+          // Chrome rate-limits captureVisibleTab, and these captures run back to back. A short
+          // pause plus a fresh scroll/measure pass also recovers transient offscreen/empty rects
+          // caused by layout shifts after the first scroll.
+          await new Promise(r => setTimeout(r, attempt === 0 ? 350 : 700));
+        }
+        if (cap?.visualEvidenceShot) {
+          out.push({
+            shot: cap.visualEvidenceShot,
+            note: (target.el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+            index: target.number
+          });
+        } else if (cap?.captureError) {
+          console.log(`[guidev2] find evidence ${target.number}: ${cap.captureError}`);
+        }
+      } catch (e) {
+        console.warn('[guidev2] find evidence capture failed:', e);
+      } finally {
+        target.el.classList.remove(GV2_ACTIVE_HIGHLIGHT_CLASS);
+      }
+    }
+  } finally {
+    // Always put the page back the way the user left it, even if a capture threw.
+    root.classList.remove(GV2_EVIDENCE_CAPTURE_CLASS);
+    try { window.scrollTo(startX, startY); } catch (e) { /* best-effort */ }
+  }
+  return out;
+}
+if (typeof window !== 'undefined') window.gv2CaptureFindEvidenceShots = gv2CaptureFindEvidenceShots;
 
 async function gv2RunWatchVideo(step) {
   const currentUrl = String(window.location.href || '').trim();

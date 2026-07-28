@@ -81,6 +81,13 @@ let guideConfidenceThreshold = 0.7;
 let panelNonGrounding = false;
 function _isPanelNonGrounding() { return panelNonGrounding; }
 
+// Same synchronous mirror for the evidence mode (Visual/Text): the click delegate has to decide
+// what a citation does without awaiting storage. Seeded at init, kept fresh by the toggle and the
+// storage.onChanged listener.
+let panelEvidenceMode = 'visual';
+function _isPanelVisualEvidence() { return panelEvidenceMode !== 'text'; }
+window._isPanelVisualEvidence = _isPanelVisualEvidence;
+
 function _normalizeConfidenceThreshold(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.7;
@@ -122,6 +129,58 @@ function _truncateText(text, max = 72) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
+
+/**
+ * True when a step record was captured in Text evidence mode. Records written before this mode
+ * existed have no `evidenceMode` and always carried a screenshot, so the absence of the field
+ * means Visual — never guess from a missing shot alone.
+ */
+function _isTextEvidenceRecord(rec) {
+  return String(rec?.evidenceMode || '') === 'text';
+}
+window._isTextEvidenceRecord = _isTextEvidenceRecord;
+
+/**
+ * Void step: one that produced no screenshot and therefore nothing to show — dropped from the
+ * timeline and the journey. Text evidence mode never has a screenshot BY DESIGN, so those steps
+ * are perfectly valid and must survive this filter; otherwise the whole text arm renders empty.
+ * The initial-state node (step 0) is never void either.
+ */
+function _isVoidStepMeta(meta) {
+  if (!meta) return false;
+  if (meta.isInitial || Number(meta.step) === 0) return false;
+  if (_isTextEvidenceRecord(meta)) return false;
+  return meta.hasShot === false;
+}
+window._isVoidStepMeta = _isVoidStepMeta;
+
+/**
+ * The Text-mode replacement for an evidence screenshot: what the step touched, in words. Fields
+ * that don't apply are dropped rather than shown empty — a button usually has an aria-label and no
+ * text, a link the other way round.
+ *
+ * @param {object|null} textual - {text, ariaLabel, selector, url} from gv2TextualEvidence
+ * @param {object|null} rec - step record, used to fill in the page URL when textual has none
+ * @param {string} title - heading for the block
+ */
+function _textualEvidenceHtml(textual, rec, title = 'Target') {
+  const t = textual || {};
+  const rows = [
+    ['node text', t.text],
+    ['aria-label', t.ariaLabel],
+    ['selector', t.selector],
+    ['page', t.url || rec?.url]
+  ].filter(([, v]) => String(v || '').trim());
+  if (!rows.length) return '<div class="pageguide-recap-pop-empty">No target recorded for this step</div>';
+  const body = rows.map(([label, value]) =>
+    `<div class="pageguide-textual-evidence-row"><span class="pageguide-textual-evidence-label">${escapeHtml(label)}</span><span class="pageguide-textual-evidence-value">${escapeHtml(_truncateText(value, 160))}</span></div>`
+  ).join('');
+  return `<div class="pageguide-textual-evidence">
+    <div class="pageguide-textual-evidence-title">${escapeHtml(title)}</div>
+    ${body}
+  </div>`;
+}
+window._textualEvidenceHtml = _textualEvidenceHtml;
 
 function _savedEvidencePreviewEntries(meta, rec) {
   const out = [];
@@ -437,6 +496,18 @@ function _recapVisualEvidenceItems(rec) {
   }];
 }
 
+/**
+ * Text evidence mode counterpart of _recapSavedEvidenceCapture: the textual target stored for a
+ * saved-evidence key, falling back to the step's own target when the key isn't found.
+ */
+function _recapSavedEvidenceTextual(rec, key) {
+  const needle = String(key || '').trim().toLowerCase();
+  if (!rec) return null;
+  const cap = (Array.isArray(rec.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+    .find(item => item && needle && String(item.key || '').trim().toLowerCase() === needle);
+  return cap?.textualEvidence || rec.targetEvidence || null;
+}
+
 function _recapSavedEvidenceCapture(rec, key) {
   const needle = String(key || '').trim().toLowerCase();
   if (!rec || !needle) return null;
@@ -530,9 +601,16 @@ async function _showRecapEvidencePopover(anchor, sessionId, step) {
   pop.className = 'pageguide-recap-evidence-pop' + (isVisual ? ' is-visual' : '');
   const beforeFig = ev
     ? `<figure class="pageguide-recap-pop-fig"><figcaption>${caption}</figcaption>${_recapFigureHtml(ev.src, ev.marker, number, caption.toLowerCase())}</figure>` : '';
+  // Text evidence mode: this step has no screenshot by design — the popup shows the target in
+  // words (node text / aria-label / selector / page), which IS the evidence in that condition.
+  if (_isTextEvidenceRecord(rec)) {
+    const textual = (isScratchpad ? _recapSavedEvidenceTextual(rec, anchor?.dataset?.key) : null) || rec?.targetEvidence;
+    pop.innerHTML = `${_textualEvidenceHtml(textual, rec, `Step ${step} — ${isScratchpad ? 'saved evidence' : 'target'}`)}${detail}<div class="pageguide-recap-pop-cap">Step ${escapeHtml(String(step))} · click to inspect</div>`;
+  } else {
   pop.innerHTML = (ev || (isVisual && visualItems.length))
     ? `${beforeFig}${detail}<div class="pageguide-recap-pop-cap">Step ${escapeHtml(String(step))} · click to inspect</div>`
     : `<div class="pageguide-recap-pop-empty">No screenshot for step ${escapeHtml(String(step))}</div>`;
+  }
   pop.addEventListener('mouseenter', _cancelRecapEvidenceHide);
   pop.addEventListener('mouseleave', _scheduleRecapEvidenceHide);
   document.body.appendChild(pop);
@@ -820,11 +898,134 @@ function renderVisualHighlightAnswer(result) {
   _recordAssistantMessage(caption);
 }
 
+let _findEvidenceGroupSeq = 0;
+
+/**
+ * Visual evidence mode: the crops of the cited spans a Find answer carries with it
+ * (result.findEvidenceShots, produced by gv2CaptureFindEvidenceShots). Empty string in Text mode,
+ * where the citation chips linking to the page are the whole story.
+ *
+ * Rendered collapsed: a row of numbered chips. Showing the screenshots inline buried the answer
+ * under images the reader had not asked for. The numbers match the [N] citations in the answer,
+ * and clicking either a chip or a citation opens the crop in the same lightbox card the Guide
+ * uses for its visual evidence (openFindEvidenceView).
+ *
+ * The <figure> elements below stay hidden — they are where the crops live until one is opened, so
+ * the dialog can read an image out of the DOM instead of us keeping a second copy of the base64.
+ */
+function _findEvidenceShotsHtml(result) {
+  const shots = (Array.isArray(result?.findEvidenceShots) ? result.findEvidenceShots : [])
+    .filter(item => item && item.shot);
+  if (!shots.length) return '';
+  const gid = `fev-${++_findEvidenceGroupSeq}`;
+  const chips = shots.map((item, i) => {
+    const num = item.index || i + 1;
+    const caption = item.note || `Evidence ${num}`;
+    return `<button type="button" class="pageguide-find-evidence-chip" data-evidence-num="${num}" title="${escapeHtml(caption)}">${escapeHtml(String(num))}</button>`;
+  }).join('');
+  const panels = shots.map((item, i) => {
+    const num = item.index || i + 1;
+    const caption = item.note || `Evidence ${num}`;
+    return `<figure class="pageguide-find-evidence-panel" data-evidence-num="${num}" hidden>
+      ${_recapFigureHtml(`data:image/jpeg;base64,${item.shot}`, null, null, caption)}
+      ${caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : ''}
+    </figure>`;
+  }).join('');
+  return `<div class="pageguide-find-evidence" data-evidence-group="${gid}">
+    <div class="pageguide-find-evidence-chips">
+      <span class="pageguide-find-evidence-hint">Evidence</span>${chips}
+    </div>
+    ${panels}
+  </div>`;
+}
+
+/**
+ * The evidence group a citation chip belongs to: the one inside its own message (the Find card
+ * renders answer + evidence together) or, failing that, the one in the message right after it
+ * (the Ask route posts the crops as a follow-up bubble). Returns null when there is none — which
+ * is the normal case in Text mode.
+ */
+function _findEvidenceGroupFor(el) {
+  const msg = el?.closest?.('.pageguide-message');
+  if (!msg) return null;
+  const own = msg.querySelector('.pageguide-find-evidence');
+  if (own) return own;
+  let next = msg.nextElementSibling;
+  for (let i = 0; i < 2 && next; i++, next = next.nextElementSibling) {
+    const found = next.querySelector?.('.pageguide-find-evidence');
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Open evidence `num` from `group` in the same lightbox card the Guide uses for its visual
+ * evidence (openScratchpadEvidenceView) — one dialog, the image sized to the viewport, a caption
+ * underneath. Reached from the numbered chips and from clicking [N] in the answer text.
+ *
+ * The crops live in the hidden panels inside `group`; this reads the image out of the matching one
+ * rather than carrying another copy of the base64 around.
+ */
+function openFindEvidenceView(group, num) {
+  if (!group) return;
+  const panel = group.querySelector(`.pageguide-find-evidence-panel[data-evidence-num="${num}"]`);
+  const img = panel?.querySelector('img');
+  if (!img) return;
+  const note = panel.querySelector('figcaption')?.textContent || '';
+
+  closeMemoryShotLightbox();
+  hideRecapEvidencePopover();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Evidence ${escapeHtml(String(num))}">
+      <div class="pageguide-memory-shot-head">
+        <span>Evidence ${escapeHtml(String(num))} — on the page</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body">
+        ${_recapFigureHtml(img.src, null, null, note || `evidence ${num}`)}
+        ${note ? `<div class="pageguide-recap-detail-text">
+          <div class="pageguide-recap-detail-evidence"><b>Cited text:</b> ${escapeHtml(note)}</div>
+        </div>` : ''}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
+}
+window.openFindEvidenceView = openFindEvidenceView;
+
+/**
+ * Post the cited-span crops as their own assistant bubble, for answer paths that render plain
+ * chat messages (the Ask route) rather than the recap-styled Find card. No-op when there are no
+ * shots — i.e. always, in Text evidence mode.
+ */
+function renderFindEvidenceShotsMessage(result) {
+  const html = _findEvidenceShotsHtml(result);
+  if (!html) return;
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `<div class="pageguide-recap pageguide-find-answer" style="border: 2px solid var(--pg-som);">
+      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
+        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Evidence on the page</div>
+      </div>
+      ${html}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
 // Render a find answer as a persistent assistant bubble using the recap styling.
 function renderFindAnswer(result) {
   const container = document.getElementById('pageguide-messages');
   if (!container || !result || !result.findAnswer) return;
   const answerText = parseCitations(parseMarkdown(result.findAnswer));
+  const evidenceShots = _findEvidenceShotsHtml(result);
   const msg = document.createElement('div');
   msg.className = 'pageguide-message assistant pageguide-recap-message';
   msg.innerHTML = `
@@ -835,6 +1036,7 @@ function renderFindAnswer(result) {
       <div style="font-size: 14px; line-height: 1.5; color: var(--pg-text); padding: 16px; background: var(--pg-bg); font-weight: 500;">
         ${answerText}
       </div>
+      ${evidenceShots}
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
@@ -879,10 +1081,10 @@ function _compactAnswerMarkdown(text) {
 }
 
 function _buildAnswerEvidenceModel(answer, scratchpad, answerEvidence) {
-  // Non-grounding baseline: no evidence citations at all. Strip the [ev:key] markers so the
-  // answer reads as plain prose, and return an empty evidence list so the "Evidence: 📷 …" tail
-  // and the numbered chips never get built.
-  if (_isPanelNonGrounding()) {
+  // Non-grounding baseline and Text evidence mode: no final-answer evidence chips. Strip the
+  // [ev:key] markers so the Guide final answer reads as plain prose. Text mode may still show
+  // textual evidence in the reasoning trail/journey, but the final answer itself is not linked.
+  if (_isPanelNonGrounding() || !_isPanelVisualEvidence()) {
     const plain = _compactAnswerMarkdown(_stripEvidenceRefs(answer));
     return { answerHtml: parseMarkdown(plain), evidence: [] };
   }
@@ -1146,6 +1348,18 @@ async function _answerEvidenceFigureHtml(item, sessionId) {
   const bboxData = bbox ? JSON.stringify(bbox) : '';
   const marker = dedicatedShot ? null : bbox;
   const markerNumber = dedicatedShot ? null : (confirmationCapture?.visualEvidenceIndex ?? savedCapture?.som_id ?? null);
+  // Text evidence mode: there is no screenshot by design, so show what the step actually touched
+  // — node text, aria-label, selector, page — instead of an empty-screenshot placeholder.
+  if (_isTextEvidenceRecord(rec)) {
+    const textual = savedCapture?.textualEvidence || rec?.targetEvidence || null;
+    return `<section class="pageguide-answer-evidence-item">
+      ${_textualEvidenceHtml(textual, rec, `Checkpoint ${step || ''}`)}
+      <div class="pageguide-answer-evidence-caption">${escapeHtml(note)}</div>
+      <div class="pageguide-answer-evidence-links">
+        <span>Captured at checkpoint ${escapeHtml(String(step || ''))}</span>
+      </div>
+    </section>`;
+  }
   const figure = shot
     ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, marker, markerNumber, note)
     : '<div class="pageguide-recap-pop-empty">No screenshot for this evidence</div>';
@@ -1169,8 +1383,18 @@ async function _fallbackActionEvidenceHtml(result, sessionId) {
     const shot = _recapPickShot(rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot);
     return shot ? { src: `data:image/jpeg;base64,${shot}`, marker: null } : null;
   })();
-  if (!ev) return '';
   const caption = rec?.instruction || 'Final task evidence';
+  // Text evidence mode: no screenshot exists, but the step's target still grounds the answer.
+  if (_isTextEvidenceRecord(rec)) {
+    return `<section class="pageguide-answer-evidence-item">
+      ${_textualEvidenceHtml(rec?.targetEvidence, rec, `Step ${finalStep} — target`)}
+      <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+      <div class="pageguide-answer-evidence-links">
+        <span>Captured at checkpoint ${escapeHtml(String(finalStep))}</span>
+      </div>
+    </section>`;
+  }
+  if (!ev) return '';
   return `<section class="pageguide-answer-evidence-item">
     <div class="pageguide-answer-evidence-shot">${_recapFigureHtml(ev.src, ev.marker, rec?.target?.resolvedIndex ?? rec?.resolvedIndex, caption)}</div>
     <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
@@ -1194,6 +1418,16 @@ async function _answerActionGroundingHtml(step, note, sessionId) {
     return shot ? { src: `data:image/jpeg;base64,${shot}`, marker: null } : null;
   })();
   const caption = note || rec?.instruction || 'Final task evidence';
+  // Text evidence mode: the step never had a screenshot — show the target in words instead.
+  if (_isTextEvidenceRecord(rec)) {
+    return `<section class="pageguide-answer-evidence-item">
+      ${_textualEvidenceHtml(rec?.targetEvidence, rec, `Step ${stepNum} — target`)}
+      <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+      <div class="pageguide-answer-evidence-links">
+        <span>Captured at checkpoint ${escapeHtml(String(stepNum))}</span>
+      </div>
+    </section>`;
+  }
   const figure = ev
     ? _recapFigureHtml(ev.src, ev.marker, rec?.target?.resolvedIndex ?? rec?.resolvedIndex, caption)
     : '<div class="pageguide-recap-pop-empty">No screenshot for this step</div>';
@@ -2301,6 +2535,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initEndSummaryToggle();
   initVisualRecapToggle();
   initNonGroundingToggle();
+  initEvidenceModeToggle();
   initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -2511,6 +2746,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // other than this panel's own toggle (another panel instance, or storage edited directly).
     if (namespace === 'local' && changes[GUIDE_NON_GROUNDING_KEY]) {
       panelNonGrounding = _normalizeNonGrounding(changes[GUIDE_NON_GROUNDING_KEY].newValue) === 'on';
+    }
+    if (namespace === 'local' && changes[GUIDE_EVIDENCE_MODE_KEY]) {
+      panelEvidenceMode = _normalizeEvidenceMode(changes[GUIDE_EVIDENCE_MODE_KEY].newValue);
     }
   });
 });
@@ -2871,10 +3109,26 @@ function _setupMessageContainerDelegate(container) {
       return;
     }
 
-    // 2. Web citation → scroll to index
+    // 2a. Evidence chip (Visual mode) → open that crop in the Guide's evidence card.
+    const evChip = e.target.closest('.pageguide-find-evidence-chip');
+    if (evChip) {
+      e.stopPropagation();
+      openFindEvidenceView(evChip.closest('.pageguide-find-evidence'), evChip.dataset.evidenceNum);
+      return;
+    }
+
+    // 2b. Web citation. In Visual evidence mode the answer does not link into the page at all —
+    // clicking [N] opens the crop of that span instead, which IS the evidence in that condition.
+    // In Text mode it keeps its original job: scroll the page to the cited element.
     const webCit = e.target.closest('.pageguide-citation');
     if (webCit) {
       e.stopPropagation();
+      const citationNum = webCit.dataset.citation;
+      const group = _isPanelVisualEvidence() ? _findEvidenceGroupFor(webCit) : null;
+      if (group && citationNum) {
+        openFindEvidenceView(group, citationNum);
+        return;
+      }
       const index = parseInt(webCit.dataset.index, 10);
       sendToContentScript({ action: 'scrollToIndex', index });
       return;
@@ -3313,7 +3567,7 @@ async function loadSessionSteps(sessionId) {
   if (!steps || !steps.length) return;
 
   const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
-  const voidSteps = withSid.filter(m => m.hasShot === false && !(m.isInitial || Number(m.step) === 0));
+  const voidSteps = withSid.filter(_isVoidStepMeta);
   const valid = withSid.filter(m => !voidSteps.includes(m));
   currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
   currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
@@ -3353,7 +3607,7 @@ async function showStoredJourney(sessionId) {
   // Attach sessionId to each meta so the dot preview can resolve its record. Split out the
   // initial-state node (step 0) so it doesn't inflate the step/dot count.
   const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
-  const voidSteps = withSid.filter(m => m.hasShot === false && !(m.isInitial || Number(m.step) === 0));
+  const voidSteps = withSid.filter(_isVoidStepMeta);
   const valid = withSid.filter(m => !voidSteps.includes(m));
   currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
   currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
@@ -4180,8 +4434,9 @@ function initPassHistoryToggle() {
 const GUIDE_VISUAL_RECAP_KEY = 'guideVisualRecap';
 const GUIDE_END_SUMMARY_KEY = 'guideEndSummaryAgent';
 
-// Visual input mode (debug-only): both modes use the same 5000-element Guide index; Visual On
-// also sends a screenshot with matching numbered SoM markers. Default OFF.
+// Send Image (debug-only): both modes use the same 5000-element Guide index; Send Image On also
+// sends a screenshot with matching numbered SoM markers. Default OFF. This is about what the MODEL
+// receives — the separate Evidence: Visual/Text toggle below is about what the USER is shown.
 const GUIDE_VISUAL_INPUT_KEY = 'guideVisualInput';
 
 function _normalizeVisualInput(v) {
@@ -4190,7 +4445,7 @@ function _normalizeVisualInput(v) {
 
 function _renderVisualInput(btn, val) {
   val = _normalizeVisualInput(val);
-  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Visual: ${val === 'on' ? 'On' : 'Off'} ▾`;
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Send Image: ${val === 'on' ? 'On' : 'Off'} ▾`;
   btn.title = val === 'on'
     ? 'Guide prompts include a screenshot with up to 5000 numbered SoM markers.'
     : 'Guide prompts are text-only with the same 5000-element PAGE INDEX.';
@@ -4310,6 +4565,61 @@ function initNonGroundingToggle() {
     const val = _normalizeNonGrounding(option.dataset.nongrounding);
     try { await chrome.storage.local.set({ [GUIDE_NON_GROUNDING_KEY]: val }); } catch (err) {}
     _renderNonGrounding(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+// Evidence mode: the user-study axis for how evidence is SHOWN back to the user. Independent of
+// the Grounding baseline above — all four combinations are valid conditions.
+//   visual (default): Find crops a screenshot of each cited span into the answer; Guide evidence
+//                     pops up screenshots. This is what the system has always done.
+//   text:             no captures at all. Find keeps its citation links (unchanged); Guide evidence
+//                     is node text, aria-label, selector and page URL, with final-answer evidence
+//                     links stripped.
+const GUIDE_EVIDENCE_MODE_KEY = 'pageguideEvidenceMode';
+
+function _normalizeEvidenceMode(v) {
+  return v === 'text' ? 'text' : 'visual'; // visual is default
+}
+window._normalizeEvidenceMode = _normalizeEvidenceMode;
+
+function _renderEvidenceMode(btn, val) {
+  val = _normalizeEvidenceMode(val);
+  panelEvidenceMode = val; // keep the synchronous click-path mirror in sync
+  const icon = '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>';
+  btn.innerHTML = `${icon}Evidence: ${val === 'text' ? 'Text' : 'Visual'} ▾`;
+  btn.title = val === 'text'
+    ? 'Text evidence: no screenshots anywhere. Find keeps its citation links; Guide evidence is node text, aria-label, selector and page URL. Guide final answers are plain text.'
+    : 'Visual evidence (default): Find crops a screenshot of each cited span into the answer; Guide evidence pops up screenshots.';
+  // Same amber "active" reminder the Non-grounding baseline uses, so a non-default study arm is
+  // never left flipped between sessions unnoticed.
+  btn.classList.toggle('pageguide-quick-btn--active', val === 'text');
+  document.querySelectorAll('#pageguide-evidencemode-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.evidencemode === val);
+  });
+}
+window._renderEvidenceMode = _renderEvidenceMode;
+
+function initEvidenceModeToggle() {
+  const btn = document.getElementById('pageguide-evidencemode-toggle');
+  const menu = document.getElementById('pageguide-evidencemode-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_EVIDENCE_MODE_KEY)
+    .then(r => _renderEvidenceMode(btn, _normalizeEvidenceMode(r[GUIDE_EVIDENCE_MODE_KEY])))
+    .catch(() => _renderEvidenceMode(btn, 'visual'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeEvidenceMode(option.dataset.evidencemode);
+    try { await chrome.storage.local.set({ [GUIDE_EVIDENCE_MODE_KEY]: val }); } catch (err) {}
+    _renderEvidenceMode(btn, val);
     menu.style.display = 'none';
   });
 }
@@ -6167,6 +6477,9 @@ Previous steps: None`;
           result.answer?.includes('[idx:')
         );
         addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
+        // Visual evidence mode: follow the answer with a crop of each cited span. No-op in Text
+        // mode, where findEvidenceShots is empty and the citation chips carry the grounding.
+        renderFindEvidenceShotsMessage(result);
       }
     } else {
       const errText = result?.error || 'Unknown error';
@@ -6952,8 +7265,9 @@ function handleContentMessage(message, sender, sendResponse) {
         const j0 = _journeysBySession[sid0] || (_journeysBySession[sid0] = { title: '', steps: [] });
         if (!j0.steps.some(s => Number(s.step) === 0)) j0.steps.unshift(message.meta);
       }
-    } else if (message.meta && message.meta.hasShot === false) {
-      // Void step (no screenshot) — don't add it to the timeline or the journey.
+    } else if (_isVoidStepMeta(message.meta)) {
+      // Void step (no screenshot in Visual mode) — don't add it to the timeline or the journey.
+      // Text-mode steps never have a screenshot and are NOT void; see _isVoidStepMeta.
     } else if (message.meta) {
       const handleRecord = async () => {
         const liveSessionId = message.meta.sessionId;
@@ -7021,6 +7335,7 @@ function handleContentMessage(message, sender, sendResponse) {
         answerText += ` ✨ (${message.result.highlightCount} highlighted)`;
       }
       addMessage(answerText, 'assistant', hasHighlights);
+      renderFindEvidenceShotsMessage(message.result);
     }
   } else if (message.action === 'showTyping') {
     showTyping();

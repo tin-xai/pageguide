@@ -339,6 +339,11 @@ body.light-mode .study-mini-copy-btn {
 }
 
 /* Timer */
+.study-answer-timers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .study-timer-display {
   display: flex;
   align-items: center;
@@ -365,6 +370,13 @@ body.light-mode .study-mini-copy-btn {
 }
 .study-timer-stopped {
   color: #9b84ff;
+}
+.study-answer-timer-display {
+  background: rgba(155, 132, 255, 0.07);
+  border: 1px solid rgba(155, 132, 255, 0.18);
+}
+.study-answer-timer {
+  color: #c8b8ff;
 }
 
 /* Radio group */
@@ -515,6 +527,118 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   white-space: pre-wrap;
 }
 
+.study-llm-answers {
+  background: rgba(155, 132, 255, 0.07);
+  border: 1px solid rgba(155, 132, 255, 0.24);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.study-llm-answers-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: #b89cff;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+.study-llm-answers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+.study-llm-answer-message {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.84);
+  white-space: pre-wrap;
+}
+.study-llm-answer-message.pageguide-message {
+  margin: 0;
+  max-width: none;
+}
+.study-llm-answer-plain {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.study-evidence-section {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(155, 132, 255, 0.18);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 4px;
+}
+.study-evidence-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: #b89cff;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+.study-evidence-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.study-evidence-item:first-of-type {
+  margin-top: 0;
+}
+.study-evidence-label {
+  font-size: 12px;
+  font-weight: 650;
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1.35;
+}
+.study-evidence-select-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.study-evidence-select,
+.study-evidence-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-family: system-ui, sans-serif;
+  outline: none;
+}
+.study-evidence-select {
+  min-width: 0;
+  padding: 8px 10px;
+}
+.study-evidence-textarea {
+  padding: 8px 10px;
+  resize: vertical;
+}
+.study-evidence-select:focus,
+.study-evidence-textarea:focus {
+  border-color: rgba(155, 132, 255, 0.58);
+}
+.study-evidence-jump {
+  flex: 0 0 auto;
+  background: rgba(155, 132, 255, 0.14);
+  border: 1px solid rgba(155, 132, 255, 0.32);
+  border-radius: 8px;
+  color: #d9ceff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px;
+}
+.study-evidence-jump:hover {
+  background: rgba(155, 132, 255, 0.22);
+}
+
 body.light-mode .study-notes-textarea,
 body.light-mode .study-mini-notes {
   background: rgba(0,0,0,0.04);
@@ -527,6 +651,30 @@ body.light-mode .study-notes-display {
 }
 body.light-mode .study-notes-display-label { color: rgba(120, 90, 0, 0.8); }
 body.light-mode .study-notes-display-text  { color: rgba(0,0,0,0.75); }
+body.light-mode .study-llm-answers {
+  background: rgba(120, 87, 255, 0.06);
+  border-color: rgba(120, 87, 255, 0.22);
+}
+body.light-mode .study-llm-answers-title { color: #7857ff; }
+body.light-mode .study-llm-answer-message { color: rgba(0,0,0,0.78); }
+body.light-mode .study-llm-answer-plain { background: rgba(0,0,0,0.035); }
+body.light-mode .study-evidence-section {
+  background: rgba(120, 87, 255, 0.045);
+  border-color: rgba(120, 87, 255, 0.18);
+}
+body.light-mode .study-evidence-title { color: #7857ff; }
+body.light-mode .study-evidence-label { color: rgba(0,0,0,0.72); }
+body.light-mode .study-evidence-select,
+body.light-mode .study-evidence-textarea {
+  background: rgba(0,0,0,0.035);
+  border-color: rgba(0,0,0,0.14);
+  color: rgba(0,0,0,0.8);
+}
+body.light-mode .study-evidence-jump {
+  background: rgba(120, 87, 255, 0.1);
+  border-color: rgba(120, 87, 255, 0.24);
+  color: #6645e8;
+}
 
 /* Results table */
 .study-results-table {

@@ -23,16 +23,32 @@ const STUDY_TASK_DESCRIPTIONS = {
   guide: 'Complete the task described below on the website.',
 };
 const STUDY_RESULTS_STORAGE_KEY = 'pageguide_study_results';
-// This find/guide study always runs with the extension available (no control condition here), so
-// every row is logged under a single condition label. Change this if you add other conditions.
+// This find/guide study always runs with the extension available (no without-extension control),
+// so the base label is constant. The arm that DOES vary is the evidence mode toggle
+// (pageguideEvidenceMode — Visual vs Text), so it is appended at log time and rows come out as
+// `extension-visual` / `extension-text`. Read per row: a session is not pinned to one arm.
 const STUDY_CONDITION = 'extension';
+
+/**
+ * The condition label for a row: the base label plus the evidence-mode arm currently selected.
+ * Falls back to the base label alone if storage is unavailable.
+ * @returns {Promise<string>}
+ */
+async function studyConditionLabel() {
+  try {
+    const r = await chrome.storage.local.get('pageguideEvidenceMode');
+    return `${STUDY_CONDITION}-${r.pageguideEvidenceMode === 'text' ? 'text' : 'visual'}`;
+  } catch (e) {
+    return STUDY_CONDITION;
+  }
+}
 // The exact column list on the Supabase `study_task_results` table. persistResult() posts only
 // these keys so the insert matches the table even though the local/CSV record carries extra
 // convenience fields (tool, task_id, url, total_tasks, completed_at).
 const SUPABASE_TASK_COLUMNS = [
   'session_id', 'participant_id', 'block_index', 'task_index', 'question_index', 'task_type',
-  'condition', 'time_ms', 'answer', 'answer_correct', 'question_or_task', 'confidence',
-  'helpfulness', 'chat_turn_count', 'chat_transcript', 'hidden_count', 'hide_recall',
+  'condition', 'time_ms', 'notes_time_ms', 'answer_time_ms', 'evidence_responses', 'answer', 'answer_correct', 'question_or_task', 'confidence',
+  'helpfulness', 'chat_turn_count', 'chat_transcript',
   'user_hidden_selectors', 'guide_screenshot', 'scroll_user_count', 'scroll_agent_count',
   'ctrl_f_count', 'text_select_count', 'click_count', 'mouse_move_px', 'agent_think_ms',
   'page_visit_count', 'page_visit_urls', 'task_data',
@@ -75,6 +91,19 @@ function _shuffleStudyOptions(arr, rng = Math.random) {
   return a;
 }
 
+const STUDY_EVIDENCE_PROMPTS = [
+  'Which paragraph supports the first part of the question?',
+  'Which paragraph supports the final answer?',
+];
+
+function _studyEvidencePrompts(task) {
+  const custom = Array.isArray(task?.evidence_questions)
+    ? task.evidence_questions.map(q => String(q || '').trim()).filter(Boolean)
+    : [];
+  const prompts = custom.length >= 2 ? custom.slice(0, 2) : STUDY_EVIDENCE_PROMPTS;
+  return prompts.map((prompt, i) => ({ hop: i + 1, prompt }));
+}
+
 /**
  * Assemble the persisted record for one completed task. Pure function of its inputs so the
  * shape (and the answer_correct grading) can be unit tested without any DOM/chrome mocking.
@@ -83,7 +112,7 @@ function _buildStudyResultRecord(ctx) {
   const {
     participantId, sessionId, taskIndex, blockIndex, questionIndex, totalTasks,
     taskType, task, condition, elapsedMs, answer,
-    confidence, helpfulness, chatSnapshot, behaviorData,
+    notesElapsedMs, answerElapsedMs, evidenceResponses, confidence, helpfulness, chatSnapshot, behaviorData,
   } = ctx;
 
   const questionOrTask = taskType === 'find' ? task.question : task.task;
@@ -109,6 +138,9 @@ function _buildStudyResultRecord(ctx) {
     task_type:         taskType,
     condition:         condition || STUDY_CONDITION,
     time_ms:           elapsedMs,
+    notes_time_ms:     notesElapsedMs ?? null,
+    answer_time_ms:    answerElapsedMs ?? null,
+    evidence_responses: Array.isArray(evidenceResponses) ? evidenceResponses : [],
     answer:            answer,
     answer_correct:    answerCorrect,
     question_or_task:  questionOrTask,
@@ -116,9 +148,7 @@ function _buildStudyResultRecord(ctx) {
     helpfulness:       helpfulness || null,
     chat_turn_count:   snap.chat_turn_count || 0,
     chat_transcript:   snap.chat_transcript || [],
-    // Recall ("hide") task is not part of this find/guide study — these stay empty.
-    hidden_count:          0,
-    hide_recall:           null,
+    // Recall ("hide") task is not part of this find/guide study.
     user_hidden_selectors: null,
     guide_screenshot:  null,
     scroll_user_count:  beh.scroll_user_count  || 0,
@@ -136,8 +166,9 @@ function _buildStudyResultRecord(ctx) {
 
 const STUDY_CSV_COLUMNS = [
   'tool', 'participant_id', 'session_id', 'condition', 'block_index', 'task_index',
-  'question_index', 'task_id', 'task_type', 'question_or_task', 'url', 'time_ms', 'answer',
-  'answer_correct', 'confidence', 'helpfulness', 'chat_turn_count', 'hidden_count', 'hide_recall',
+  'question_index', 'task_id', 'task_type', 'question_or_task', 'url', 'time_ms',
+  'notes_time_ms', 'answer_time_ms', 'evidence_responses', 'answer',
+  'answer_correct', 'confidence', 'helpfulness', 'chat_turn_count',
   'scroll_user_count', 'scroll_agent_count', 'ctrl_f_count', 'text_select_count', 'click_count',
   'mouse_move_px', 'agent_think_ms', 'page_visit_count', 'page_visit_urls', 'completed_at',
 ];
@@ -165,6 +196,7 @@ if (typeof window !== 'undefined') {
   window._buildTaskQueue = _buildTaskQueue;
   window._gradeFindAnswer = _gradeFindAnswer;
   window._shuffleStudyOptions = _shuffleStudyOptions;
+  window._studyEvidencePrompts = _studyEvidencePrompts;
   window._buildStudyResultRecord = _buildStudyResultRecord;
   window._buildStudyResultsCSV = _buildStudyResultsCSV;
 }
@@ -186,6 +218,7 @@ if (typeof window !== 'undefined') {
     timerStart: null,
     currentNotes: '',
     guideScreenshot: null,
+    llmAnswersSnapshot: null,
     open: false,
   };
 
@@ -288,6 +321,211 @@ if (typeof window !== 'undefined') {
     };
   }
 
+  function isNonGroundingStudySnapshot() {
+    try {
+      return typeof _isPanelNonGrounding === 'function' && _isPanelNonGrounding();
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function snapshotLlmAnswers() {
+    const container = document.getElementById('pageguide-messages');
+    const groundingEnabled = !isNonGroundingStudySnapshot();
+    const nodes = container
+      ? Array.from(container.querySelectorAll('.pageguide-message.assistant'))
+      : [];
+    const answers = nodes
+      .map(node => {
+        const text = (node.textContent || '').trim();
+        if (!text) return null;
+        return groundingEnabled
+          ? { html: node.innerHTML, text, className: node.className }
+          : { text };
+      })
+      .filter(Boolean);
+    return { groundingEnabled, answers };
+  }
+
+  function renderLlmAnswers(snapshot) {
+    const answers = snapshot?.answers || [];
+    if (!answers.length) return '';
+    const groundingEnabled = !!snapshot.groundingEnabled;
+    const rows = answers.map(answer => {
+      if (groundingEnabled && answer.html) {
+        const cls = answer.className || 'pageguide-message assistant';
+        return `<div class="study-llm-answer-message ${escapeAttr(cls)}">${answer.html}</div>`;
+      }
+      return `<div class="study-llm-answer-message study-llm-answer-plain">${escapeHTML(answer.text)}</div>`;
+    }).join('');
+    return `
+      <div class="study-llm-answers" id="study-llm-answers">
+        <div class="study-llm-answers-title">LLM answers</div>
+        <div class="study-llm-answers-list">${rows}</div>
+      </div>`;
+  }
+
+  function bindStudyLlmAnswerLinks(snapshot) {
+    const box = $('study-llm-answers');
+    if (!box || !snapshot?.groundingEnabled) return;
+    box.addEventListener('click', async (e) => {
+      const evChip = e.target.closest('.pageguide-find-evidence-chip');
+      if (evChip) {
+        e.stopPropagation();
+        if (typeof openFindEvidenceView === 'function') {
+          openFindEvidenceView(evChip.closest('.pageguide-find-evidence'), evChip.dataset.evidenceNum);
+        }
+        return;
+      }
+
+      const pdfCit = e.target.closest('.pageguide-pdf-citation');
+      if (pdfCit) {
+        e.stopPropagation();
+        const rangesJson = pdfCit.dataset.ranges;
+        const pageNum = pdfCit.dataset.page ? parseInt(pdfCit.dataset.page, 10) : null;
+        const searchText = pdfCit.dataset.text;
+        let message = null;
+        if (rangesJson) {
+          try {
+            const ranges = JSON.parse(rangesJson);
+            message = { action: 'highlightByRanges', ranges };
+          } catch (err) {}
+        } else if (pageNum && searchText) {
+          message = { action: 'navigateToPdfPage', page: pageNum, searchText };
+        }
+        if (message) {
+          try {
+            const tabs = await chrome.tabs.query({});
+            const pdfViewerTab = tabs.find(t => t.url?.includes('pdf-viewer/viewer.html'));
+            if (pdfViewerTab) {
+              chrome.tabs.sendMessage(pdfViewerTab.id, message);
+              chrome.tabs.update(pdfViewerTab.id, { active: true });
+            } else if (typeof sendToContentScript === 'function') {
+              sendToContentScript(message);
+            }
+          } catch (err) {
+            if (typeof sendToContentScript === 'function') sendToContentScript(message);
+          }
+        }
+        return;
+      }
+
+      const webCit = e.target.closest('.pageguide-citation');
+      if (webCit) {
+        e.stopPropagation();
+        const index = parseInt(webCit.dataset.index, 10);
+        if (typeof sendToContentScript === 'function' && Number.isFinite(index)) {
+          sendToContentScript({ action: 'scrollToIndex', index });
+        }
+        return;
+      }
+
+      const msg = e.target.closest('.pageguide-message.pageguide-clickable');
+      if (msg && !e.target.closest('button')) msg.classList.toggle('citations-expanded');
+    });
+  }
+
+  async function loadStudyParagraphOptions() {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tabs[0]) return { success: false, options: [] };
+      const resp = await chrome.tabs.sendMessage(tabs[0].id, { action: 'getStudyParagraphOptions' });
+      return {
+        success: !!resp?.success,
+        options: Array.isArray(resp?.options) ? resp.options : [],
+        url: resp?.url || tabs[0].url || null,
+      };
+    } catch (e) {
+      return { success: false, options: [] };
+    }
+  }
+
+  function renderStudyEvidenceControls(task, paragraphOptions) {
+    const prompts = _studyEvidencePrompts(task);
+    const options = Array.isArray(paragraphOptions?.options) ? paragraphOptions.options : [];
+    const hasOptions = options.length > 0;
+    const optionHTML = options.map(opt =>
+      `<option value="${escapeAttr(String(opt.index))}">${escapeHTML(opt.label || `[${opt.index}] ${opt.text || ''}`)}</option>`
+    ).join('');
+
+    return `
+      <div class="study-evidence-section" id="study-evidence-section">
+        <div class="study-evidence-title">Supporting evidence</div>
+        ${prompts.map(({ hop, prompt }) => `
+          <div class="study-evidence-item">
+            <label class="study-evidence-label" for="study-evidence-hop-${hop}">${escapeHTML(prompt)}</label>
+            ${hasOptions ? `
+              <div class="study-evidence-select-row">
+                <select class="study-evidence-select" id="study-evidence-hop-${hop}" data-hop="${hop}">
+                  <option value="">Select a paragraph on the page...</option>
+                  ${optionHTML}
+                </select>
+                <button type="button" class="study-evidence-jump" data-study-evidence-jump="${hop}" title="Jump to selected paragraph">Jump</button>
+              </div>
+            ` : `
+              <textarea class="study-evidence-textarea" id="study-evidence-hop-${hop}" data-hop="${hop}" rows="3" placeholder="Paste or describe the supporting paragraph."></textarea>
+            `}
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function bindStudyEvidenceControls() {
+    overlay.querySelectorAll('[data-study-evidence-jump]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const hop = btn.dataset.studyEvidenceJump;
+        const select = $(`study-evidence-hop-${hop}`);
+        const index = parseInt(select?.value, 10);
+        if (typeof sendToContentScript === 'function' && Number.isFinite(index)) {
+          sendToContentScript({ action: 'scrollToIndex', index });
+        }
+      });
+    });
+  }
+
+  function collectStudyEvidenceResponses(taskType, task, paragraphOptions) {
+    if (taskType !== 'find') return { valid: true, responses: [] };
+
+    const prompts = _studyEvidencePrompts(task);
+    const options = Array.isArray(paragraphOptions?.options) ? paragraphOptions.options : [];
+    const byIndex = new Map(options.map(opt => [String(opt.index), opt]));
+    const responses = [];
+
+    for (const { hop, prompt } of prompts) {
+      const field = $(`study-evidence-hop-${hop}`);
+      if (!field) return { valid: false, responses: [] };
+
+      if (options.length) {
+        const value = String(field.value || '');
+        if (!value) return { valid: false, responses: [] };
+        const opt = byIndex.get(value);
+        if (!opt) return { valid: false, responses: [] };
+        responses.push({
+          hop,
+          prompt,
+          index: opt.index,
+          role: opt.role || null,
+          text: opt.text || '',
+          url: opt.url || paragraphOptions?.url || task?.url || null,
+        });
+      } else {
+        const text = String(field.value || '').trim();
+        if (!text) return { valid: false, responses: [] };
+        responses.push({
+          hop,
+          prompt,
+          index: null,
+          role: 'manual',
+          text,
+          url: paragraphOptions?.url || task?.url || null,
+        });
+      }
+    }
+
+    return { valid: true, responses };
+  }
+
   // Best-effort screenshot for guide-task completion; participant can decline.
   async function captureGuideScreenshot() {
     const allowed = await new Promise(resolve => {
@@ -365,7 +603,7 @@ if (typeof window !== 'undefined') {
     s.sessionId = null;
     const row = await supabaseInsert('study_sessions', {
       participant_id: participantId,
-      condition_order: STUDY_CONDITION,
+      condition_order: await studyConditionLabel(),
     });
     if (row && row.id) s.sessionId = row.id;
   }
@@ -534,20 +772,25 @@ if (typeof window !== 'undefined') {
     $('study-mini-done').onclick = async () => {
       const btn = $('study-mini-done');
       if (btn) { btn.disabled = true; btn.textContent = '⏳ Processing…'; }
-      const elapsed = stopTimer();
+      const notesElapsed = stopTimer();
       const behaviorData = await stopBehaviorTracking();
       s.currentNotes = ($('study-mini-notes') || {}).value || '';
       s.guideScreenshot = taskType === 'guide' ? await captureGuideScreenshot() : null;
       const chatSnapshot = snapshotChat();
+      s.llmAnswersSnapshot = snapshotLlmAnswers();
+      const paragraphOptions = taskType === 'find' ? await loadStudyParagraphOptions() : null;
       miniBar.style.display = 'none';
       overlay.style.display = 'flex';
-      renderTaskAnswer(taskType, task, elapsed, behaviorData, chatSnapshot);
+      renderTaskAnswer(taskType, task, notesElapsed, behaviorData, chatSnapshot, s.llmAnswersSnapshot, paragraphOptions);
     };
   }
 
-  function renderTaskAnswer(taskType, task, elapsed, behaviorData, chatSnapshot) {
+  function renderTaskAnswer(taskType, task, notesElapsed, behaviorData, chatSnapshot, llmAnswersSnapshot, paragraphOptions) {
+    const answerStartedAt = Date.now();
+    let answerTimerInterval = null;
     const taskQuestion = taskType === 'find' ? task.question : task.task;
     const questionCard = `<div class="study-task-card study-task-card-running" style="margin-bottom:10px;"><div class="study-task-question">${escapeHTML(taskQuestion)}</div></div>`;
+    const llmAnswersHTML = renderLlmAnswers(llmAnswersSnapshot);
 
     let answerHTML = '';
     if (taskType === 'find') {
@@ -555,12 +798,15 @@ if (typeof window !== 'undefined') {
       const notesBlock = s.currentNotes ? `<div class="study-notes-display"><span class="study-notes-display-label">📝 Your notes</span><p class="study-notes-display-text">${escapeHTML(s.currentNotes)}</p></div>` : '';
       answerHTML = `
         ${notesBlock}
+        ${llmAnswersHTML}
         <p class="study-question-text">Select the answer you found:</p>
         <div class="study-radio-group" id="study-answer-group">
           ${options.map(opt => `<label class="study-radio-btn"><input type="radio" name="study-answer" value="${escapeAttr(opt)}"><span>${escapeHTML(opt)}</span></label>`).join('')}
-        </div>`;
+        </div>
+        ${renderStudyEvidenceControls(task, paragraphOptions)}`;
     } else {
       answerHTML = `
+        ${llmAnswersHTML}
         <p class="study-question-text">Did you complete the task?</p>
         <div class="study-radio-group" id="study-answer-group">
           <label class="study-radio-btn"><input type="radio" name="study-answer" value="completed"><span>✅ Yes, completed successfully</span></label>
@@ -575,22 +821,52 @@ if (typeof window !== 'undefined') {
         <div class="study-progress">Task ${s.idx + 1}/${s.queue.length} · ${STUDY_TASK_LABELS[taskType]}</div>
         <div class="study-body">
           ${questionCard}
-          <div class="study-timer-display"><span class="study-timer-label">⏱ Time used</span><span class="study-timer study-timer-stopped">${_formatStudyTime(elapsed)}</span></div>
+          <div class="study-answer-timers">
+            <div class="study-timer-display"><span class="study-timer-label">⏱ Time used</span><span class="study-timer study-timer-stopped">${_formatStudyTime(notesElapsed)}</span></div>
+            <div class="study-timer-display study-answer-timer-display"><span class="study-timer-label">Answer time</span><span class="study-timer study-answer-timer" id="study-answer-timer">00:00</span></div>
+          </div>
           ${answerHTML}
           <div id="study-answer-error" class="study-error" style="display:none;">Please select an answer.</div>
           <button class="study-btn study-btn-primary" id="study-submit-btn">Submit →</button>
         </div>
       </div>
     `);
-    $('study-close').onclick = closeStudyPanel;
+    answerTimerInterval = setInterval(() => {
+      const el = $('study-answer-timer');
+      if (el) el.textContent = _formatStudyTime(Date.now() - answerStartedAt);
+    }, 1000);
+    $('study-close').onclick = () => {
+      if (answerTimerInterval) clearInterval(answerTimerInterval);
+      closeStudyPanel();
+    };
+    bindStudyLlmAnswerLinks(llmAnswersSnapshot);
+    bindStudyEvidenceControls();
     $('study-submit-btn').onclick = () => {
       const sel = overlay.querySelector('input[name="study-answer"]:checked');
-      if (!sel) { $('study-answer-error').style.display = ''; return; }
-      renderTaskPost(taskType, task, elapsed, sel.value, behaviorData, chatSnapshot);
+      const errorEl = $('study-answer-error');
+      if (!sel) {
+        errorEl.textContent = 'Please select an answer.';
+        errorEl.style.display = '';
+        return;
+      }
+      const evidence = collectStudyEvidenceResponses(taskType, task, paragraphOptions);
+      if (!evidence.valid) {
+        errorEl.textContent = 'Please select both supporting paragraphs.';
+        errorEl.style.display = '';
+        return;
+      }
+      const answerElapsed = Math.max(0, Date.now() - answerStartedAt);
+      if (answerTimerInterval) clearInterval(answerTimerInterval);
+      renderTaskPost(taskType, task, {
+        notesElapsed,
+        answerElapsed,
+        totalElapsed: notesElapsed + answerElapsed,
+        evidenceResponses: evidence.responses,
+      }, sel.value, behaviorData, chatSnapshot);
     };
   }
 
-  function renderTaskPost(taskType, task, elapsed, answer, behaviorData, chatSnapshot) {
+  function renderTaskPost(taskType, task, timings, answer, behaviorData, chatSnapshot) {
     setHTML(`
       <div class="study-screen">
         <div class="study-header"><span class="study-title">Quick Questions</span><button class="study-close-btn" id="study-close">✕</button></div>
@@ -632,8 +908,11 @@ if (typeof window !== 'undefined') {
         totalTasks: s.queue.length,
         taskType,
         task,
-        condition: STUDY_CONDITION,
-        elapsedMs: elapsed,
+        condition: await studyConditionLabel(),
+        elapsedMs: timings.totalElapsed,
+        notesElapsedMs: timings.notesElapsed,
+        answerElapsedMs: timings.answerElapsed,
+        evidenceResponses: timings.evidenceResponses || [],
         answer,
         confidence: confSel.value,
         helpfulness: helpSel.value,
@@ -643,6 +922,7 @@ if (typeof window !== 'undefined') {
       if (s.guideScreenshot) result.guide_screenshot = s.guideScreenshot;
       s.guideScreenshot = null;
       s.currentNotes = '';
+      s.llmAnswersSnapshot = null;
 
       s.results.push(result);
       await persistResult(result);

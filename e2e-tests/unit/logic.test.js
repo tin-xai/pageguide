@@ -3845,6 +3845,24 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
     });
   });
 
+  describe('_studyEvidencePrompts', () => {
+    test('uses two default two-hop evidence prompts', () => {
+      expect(window._studyEvidencePrompts({})).toEqual([
+        { hop: 1, prompt: 'Which paragraph supports the first part of the question?' },
+        { hop: 2, prompt: 'Which paragraph supports the final answer?' },
+      ]);
+    });
+
+    test('uses two task-specific prompts when provided', () => {
+      expect(window._studyEvidencePrompts({
+        evidence_questions: ['Evidence for hop one?', 'Evidence for hop two?', 'ignored'],
+      })).toEqual([
+        { hop: 1, prompt: 'Evidence for hop one?' },
+        { hop: 2, prompt: 'Evidence for hop two?' },
+      ]);
+    });
+  });
+
   describe('_buildStudyResultRecord', () => {
     test('grades a find task and fills in interaction/chat counts', () => {
       const record = window._buildStudyResultRecord({
@@ -3858,6 +3876,12 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
         task: { id: 'find-1', question: 'When?', answer: '1936', url: 'https://example.com' },
         condition: 'extension',
         elapsedMs: 45000,
+        notesElapsedMs: 32000,
+        answerElapsedMs: 13000,
+        evidenceResponses: [
+          { hop: 1, prompt: 'Which paragraph supports the first part of the question?', index: 4, role: 'paragraph', text: 'A first-hop paragraph.', url: 'https://example.com' },
+          { hop: 2, prompt: 'Which paragraph supports the final answer?', index: 9, role: 'paragraph', text: 'A final-answer paragraph.', url: 'https://example.com' },
+        ],
         answer: '1936',
         confidence: 'very',
         helpfulness: 'very',
@@ -3875,6 +3899,13 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
         task_id: 'find-1',
         task_type: 'find',
         condition: 'extension',
+        time_ms: 45000,
+        notes_time_ms: 32000,
+        answer_time_ms: 13000,
+        evidence_responses: [
+          { hop: 1, prompt: 'Which paragraph supports the first part of the question?', index: 4, role: 'paragraph', text: 'A first-hop paragraph.', url: 'https://example.com' },
+          { hop: 2, prompt: 'Which paragraph supports the final answer?', index: 9, role: 'paragraph', text: 'A final-answer paragraph.', url: 'https://example.com' },
+        ],
         block_index: 0,
         task_index: 0,
         question_index: 0,
@@ -3889,9 +3920,6 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
         agent_think_ms: [800, 1200],
         page_visit_count: 1,
         page_visit_urls: ['https://example.com'],
-        // Recall columns stay empty in the Find/Guide study.
-        hidden_count: 0,
-        hide_recall: null,
       });
       // task_data preserves the original task (including id/url, which have no dedicated column).
       expect(record.task_data).toMatchObject({ id: 'find-1', url: 'https://example.com' });
@@ -3909,6 +3937,8 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
         task: { id: 'guide-1', task: 'Do the thing', url: 'https://example.com' },
         condition: 'extension',
         elapsedMs: 90000,
+        notesElapsedMs: 70000,
+        answerElapsedMs: 20000,
         answer: 'completed',
         confidence: 'somewhat',
         helpfulness: 'somewhat',
@@ -3917,12 +3947,16 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       });
       expect(record.answer_correct).toBeNull();
       expect(record.answer).toBe('completed');
+      expect(record.evidence_responses).toEqual([]);
       expect(record.chat_turn_count).toBe(0);
       // Missing behavior data defaults every count to 0 / empty, never undefined (NOT NULL columns).
       expect(record.scroll_user_count).toBe(0);
       expect(record.scroll_agent_count).toBe(0);
       expect(record.agent_think_ms).toEqual([]);
       expect(record.session_id).toBeNull();
+      expect(record.time_ms).toBe(90000);
+      expect(record.notes_time_ms).toBe(70000);
+      expect(record.answer_time_ms).toBe(20000);
     });
   });
 
@@ -3933,7 +3967,7 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       ]);
       const lines = csv.split('\n');
       expect(lines[0]).toBe(
-        'tool,participant_id,session_id,condition,block_index,task_index,question_index,task_id,task_type,question_or_task,url,time_ms,answer,answer_correct,confidence,helpfulness,chat_turn_count,hidden_count,hide_recall,scroll_user_count,scroll_agent_count,ctrl_f_count,text_select_count,click_count,mouse_move_px,agent_think_ms,page_visit_count,page_visit_urls,completed_at'
+        'tool,participant_id,session_id,condition,block_index,task_index,question_index,task_id,task_type,question_or_task,url,time_ms,notes_time_ms,answer_time_ms,evidence_responses,answer,answer_correct,confidence,helpfulness,chat_turn_count,scroll_user_count,scroll_agent_count,ctrl_f_count,text_select_count,click_count,mouse_move_px,agent_think_ms,page_visit_count,page_visit_urls,completed_at'
       );
       expect(lines[1]).toContain('"a, b"');
       // page_visit_urls is an array — JSON-stringified, then CSV-quoted since that JSON contains
@@ -4189,6 +4223,13 @@ describe('Non-grounding removes every Guide-mode grounding affordance (sidepanel
     window._renderNonGrounding(btn, on ? 'on' : 'off');
   }
 
+  function setEvidenceMode(mode) {
+    const btn = document.getElementById('pageguide-evidencemode-toggle') || document.createElement('button');
+    btn.id = 'pageguide-evidencemode-toggle';
+    if (!btn.parentNode) document.body.appendChild(btn);
+    window._renderEvidenceMode(btn, mode);
+  }
+
   beforeAll(() => {
     window.chrome = {
       runtime: {
@@ -4210,7 +4251,10 @@ describe('Non-grounding removes every Guide-mode grounding affordance (sidepanel
     loadScript('sidepanel/panel.js');
   });
 
-  afterAll(() => setNonGrounding(false)); // don't leak the flag into later describe blocks
+  afterAll(() => {
+    setNonGrounding(false);
+    setEvidenceMode('visual');
+  }); // don't leak flags into later describe blocks
 
   test('REQ 1: View Journey step rows get no hover/click screenshot preview', () => {
     setNonGrounding(true);
@@ -4242,6 +4286,7 @@ describe('Non-grounding removes every Guide-mode grounding affordance (sidepanel
 
   test('REQ 2 CONTRAST: with grounding on, the same answer DOES build evidence chips', () => {
     setNonGrounding(false);
+    setEvidenceMode('visual');
     const model = window._buildAnswerEvidenceModel(
       'Found two articles [ev:shot_a] on the homepage.',
       [{ key: 'shot_a', ref_step_id: 1, note: 'First article' }],
@@ -4249,6 +4294,24 @@ describe('Non-grounding removes every Guide-mode grounding affordance (sidepanel
     );
     expect(model.evidence.length).toBe(1);
     expect(model.answerHtml).toContain('pageguide-answer-citation-chip');
+  });
+
+  test('REGRESSION: Text evidence mode strips final-answer evidence links', () => {
+    setNonGrounding(false);
+    setEvidenceMode('text');
+    const model = window._buildAnswerEvidenceModel(
+      'I found two articles [ev:shot_a] and [ev:shot_b].',
+      [{ key: 'shot_a', ref_step_id: 1, note: 'First article' },
+       { key: 'shot_b', ref_step_id: 2, note: 'Second article' }],
+      [{ key: 'shot_a', step: 1, note: 'First article', source: 'cited' }]
+    );
+
+    expect(model.evidence).toEqual([]);
+    expect(model.answerHtml).not.toContain('pageguide-answer-citation-chip');
+    expect(model.answerHtml).not.toContain('pageguide-answer-evidence-tail');
+    expect(model.answerHtml).not.toContain('[ev:');
+    expect(model.answerHtml).toContain('I found two articles');
+    setEvidenceMode('visual');
   });
 
   test('REQ 3: the Reasoning Trail rows carry no recap-link / screenshot chips', () => {
@@ -4936,5 +4999,631 @@ describe('Scroll-to-citation feedback (content/functions/scroll.js) — no flash
 
     expect(el.className).toBe('');
     expect(el.getAttribute('data-pageguide-styled')).toBeNull();
+  });
+});
+
+describe('Evidence mode: Visual vs Text (content/utils.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2ElementSelector) loadScript('content/utils.js');
+  });
+
+  describe('normalizeEvidenceMode', () => {
+    test('visual is the default for anything unrecognised', () => {
+      expect(window.normalizeEvidenceMode('text')).toBe('text');
+      expect(window.normalizeEvidenceMode('visual')).toBe('visual');
+      expect(window.normalizeEvidenceMode('')).toBe('visual');
+      expect(window.normalizeEvidenceMode(undefined)).toBe('visual');
+      expect(window.normalizeEvidenceMode('TEXT')).toBe('visual'); // exact value only
+    });
+  });
+
+  describe('gv2ShouldCaptureScreenshots', () => {
+    // The whole point of the Text arm: it takes no screenshots at all, not merely different
+    // rendering — so this predicate is the single gate every capture path checks.
+    test('text mode captures nothing; every other value captures', () => {
+      expect(window.gv2ShouldCaptureScreenshots('text')).toBe(false);
+      expect(window.gv2ShouldCaptureScreenshots('visual')).toBe(true);
+      expect(window.gv2ShouldCaptureScreenshots(undefined)).toBe(true); // legacy records
+    });
+  });
+
+  describe('gv2ElementSelector', () => {
+    beforeEach(() => { document.body.innerHTML = ''; });
+
+    test('prefers a test id over structure', () => {
+      document.body.innerHTML = '<div><button data-testid="search-button" aria-label="Search BBC"></button></div>';
+      expect(window.gv2ElementSelector(document.querySelector('button')))
+        .toBe('button[data-testid="search-button"]');
+    });
+
+    test('uses the id when there is no test id', () => {
+      document.body.innerHTML = '<div><input id="q" name="query"></div>';
+      expect(window.gv2ElementSelector(document.getElementById('q'))).toBe('#q');
+    });
+
+    test('identifies a link by its href', () => {
+      document.body.innerHTML = '<nav><a href="/sport/football/world-cup">World Cup</a></nav>';
+      expect(window.gv2ElementSelector(document.querySelector('a')))
+        .toBe('a[href="/sport/football/world-cup"]');
+    });
+
+    test('falls back to an nth-of-type chain when the element has no hooks', () => {
+      document.body.innerHTML = '<section><p>one</p><p>two</p></section>';
+      const sel = window.gv2ElementSelector(document.querySelectorAll('p')[1]);
+      expect(sel).toContain('p:nth-of-type(2)');
+    });
+
+    test('returns an empty string for a missing element instead of throwing', () => {
+      expect(window.gv2ElementSelector(null)).toBe('');
+    });
+  });
+
+  describe('gv2TextualEvidence', () => {
+    test('collects the four fields a Text-mode evidence popup shows', () => {
+      document.body.innerHTML = '<button data-testid="search-button" aria-label="Search BBC"></button>';
+      const ev = window.gv2TextualEvidence(document.querySelector('button'), 'https://bbc.com/news');
+
+      expect(ev).toEqual({
+        text: '',
+        ariaLabel: 'Search BBC',
+        selector: 'button[data-testid="search-button"]',
+        url: 'https://bbc.com/news'
+      });
+    });
+
+    test('collapses whitespace in node text', () => {
+      document.body.innerHTML = '<a href="/x">  World\n  Cup  </a>';
+      expect(window.gv2TextualEvidence(document.querySelector('a'), '').text).toBe('World Cup');
+    });
+  });
+});
+
+describe('Evidence mode rendering (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ disconnect: jest.fn() })),
+        sendMessage: jest.fn(),
+        onMessage: { addListener: jest.fn() }
+      },
+      tabs: {
+        onActivated: { addListener: jest.fn() },
+        onUpdated: { addListener: jest.fn() },
+        onRemoved: { addListener: jest.fn() }
+      },
+      storage: {
+        onChanged: { addListener: jest.fn() },
+        local: { get: jest.fn().mockResolvedValue({}), set: jest.fn().mockResolvedValue(undefined) }
+      }
+    };
+    document.body.innerHTML = '<div id="pageguide-goal-dots"></div>';
+    loadScript('sidepanel/panel.js');
+  });
+
+  describe('_normalizeEvidenceMode (toggle)', () => {
+    test('defaults to visual', () => {
+      expect(window._normalizeEvidenceMode('text')).toBe('text');
+      expect(window._normalizeEvidenceMode('nonsense')).toBe('visual');
+      expect(window._normalizeEvidenceMode(undefined)).toBe('visual');
+    });
+  });
+
+  describe('_isTextEvidenceRecord', () => {
+    test('only an explicit text stamp counts', () => {
+      expect(window._isTextEvidenceRecord({ evidenceMode: 'text' })).toBe(true);
+      expect(window._isTextEvidenceRecord({ evidenceMode: 'visual' })).toBe(false);
+    });
+
+    // REGRESSION: records written before this mode existed have no evidenceMode but always had a
+    // screenshot. Treating "no shot" as text mode would silently reclassify old sessions.
+    test('a legacy record with no evidenceMode is NOT text mode', () => {
+      expect(window._isTextEvidenceRecord({ screenshot: null })).toBe(false);
+      expect(window._isTextEvidenceRecord(null)).toBe(false);
+    });
+  });
+
+  describe('_textualEvidenceHtml', () => {
+    test('renders the four fields and no image', () => {
+      const html = window._textualEvidenceHtml({
+        text: 'World Cup',
+        ariaLabel: '',
+        selector: 'a[href="/sport/football/world-cup"]',
+        url: 'https://bbc.co.uk/search?q=World+Cup'
+      }, null, 'Step 4 — target');
+
+      expect(html).toContain('Step 4 — target');
+      expect(html).toContain('node text');
+      expect(html).toContain('World Cup');
+      expect(html).toContain('selector');
+      expect(html).toContain('a[href="/sport/football/world-cup"]');
+      expect(html).toContain('page');
+      expect(html).not.toContain('<img');
+      expect(html).not.toContain('aria-label'); // empty fields are dropped, not shown blank
+    });
+
+    test('falls back to the record URL when the evidence carries none', () => {
+      const html = window._textualEvidenceHtml({ text: 'Latest' }, { url: 'https://bbc.com/news' });
+      expect(html).toContain('https://bbc.com/news');
+    });
+
+    test('says so plainly when there is nothing to show', () => {
+      expect(window._textualEvidenceHtml(null, null)).toContain('No target recorded');
+    });
+  });
+
+  describe('_findEvidenceShotsHtml', () => {
+    test('renders one collapsed chip and one hidden panel per cited span', () => {
+      const html = window._findEvidenceShotsHtml({
+        findEvidenceShots: [
+          { shot: 'AAAA', note: 'first span', index: 1 },
+          { shot: 'BBBB', note: 'second span', index: 2 }
+        ]
+      });
+      expect((html.match(/class="pageguide-find-evidence-chip"/g) || []).length).toBe(2);
+      expect((html.match(/<figure/g) || []).length).toBe(2);
+      // REGRESSION: the crops used to render expanded, burying the answer under screenshots.
+      expect((html.match(/hidden/g) || []).length).toBe(2);
+      expect(html).toContain('first span');
+      expect(html).toContain('second span');
+    });
+
+    test('numbers the chips to match the [N] citations in the answer', () => {
+      const html = window._findEvidenceShotsHtml({
+        findEvidenceShots: [{ shot: 'AAAA', note: 'a', index: 1 }, { shot: 'BBBB', note: 'b', index: 2 }]
+      });
+      expect(html).toContain('data-evidence-num="1"');
+      expect(html).toContain('data-evidence-num="2"');
+    });
+
+    // Text mode returns no shots at all, so the answer stays exactly as it is today.
+    test('renders nothing without shots', () => {
+      expect(window._findEvidenceShotsHtml({ findEvidenceShots: [] })).toBe('');
+      expect(window._findEvidenceShotsHtml({})).toBe('');
+      expect(window._findEvidenceShotsHtml({ findEvidenceShots: [{ shot: null, note: 'x' }] })).toBe('');
+    });
+  });
+});
+
+describe('Text evidence mode escapes markup in a selector (sidepanel/panel.js)', () => {
+  // The selector and node text come from the page, so they are untrusted input.
+  test('page-supplied text cannot inject markup', () => {
+    const html = window._textualEvidenceHtml({
+      text: '<img src=x onerror=alert(1)>',
+      selector: 'div[title="<script>"]'
+    }, null);
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;img');
+  });
+});
+
+describe('_isVoidStepMeta (sidepanel/panel.js) — Text-mode steps are not void', () => {
+  // REGRESSION: void steps (no screenshot) are dropped from the timeline and the journey. Text
+  // evidence mode never produces a screenshot, so without the mode check the entire text arm
+  // rendered an empty journey.
+  test('a text-mode step with no shot survives', () => {
+    expect(window._isVoidStepMeta({ step: 3, hasShot: false, evidenceMode: 'text' })).toBe(false);
+  });
+
+  test('a visual-mode step with no shot is still void', () => {
+    expect(window._isVoidStepMeta({ step: 3, hasShot: false, evidenceMode: 'visual' })).toBe(true);
+    expect(window._isVoidStepMeta({ step: 3, hasShot: false })).toBe(true); // legacy record
+  });
+
+  test('steps that have a shot are never void', () => {
+    expect(window._isVoidStepMeta({ step: 3, hasShot: true })).toBe(false);
+    expect(window._isVoidStepMeta({ step: 3 })).toBe(false); // hasShot absent ≠ false
+  });
+
+  test('the initial-state node is never void', () => {
+    expect(window._isVoidStepMeta({ step: 0, hasShot: false })).toBe(false);
+    expect(window._isVoidStepMeta({ step: 5, isInitial: true, hasShot: false })).toBe(false);
+  });
+});
+
+describe('gv2CaptureFindEvidenceShots (content/tasks/guidev2.js) — Find × Visual only', () => {
+  beforeAll(() => {
+    if (!window.gv2LoopScore) loadScript('content/utils.js');
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ onMessage: { addListener: jest.fn() }, onDisconnect: { addListener: jest.fn() } })),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) },
+        local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) }
+      }
+    };
+    window.safeSendMessage = jest.fn(async () => ({}));
+    if (!window.gv2CaptureFindEvidenceShots) loadScript('content/tasks/guidev2.js');
+    Element.prototype.scrollIntoView = jest.fn();
+  });
+
+  const visualMode = () => {
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'visual' }));
+  };
+
+  beforeEach(() => {
+    document.documentElement.className = '';
+    document.body.innerHTML = `
+      <p><span id="a" class="pageguide-highlight">one</span>
+         <span id="b" class="pageguide-highlight">two</span>
+         <span id="c" class="pageguide-highlight">three</span></p>`;
+    window._pageguideHighlights = ['a', 'b', 'c'].map(id => document.getElementById(id));
+    window._pageguideHighlightNumbers = [1, 2, 3];
+    // Record what the page looked like at the moment of each capture.
+    window.gv2CaptureEvidenceRegion = jest.fn(async (el) => ({
+      visualEvidenceShot: `SHOT-${el.id}`,
+      _rootClass: document.documentElement.className,
+      _activeIds: Array.from(document.querySelectorAll('.pageguide-highlight-active')).map(n => n.id)
+    }));
+  });
+
+  test('captures one crop per cited span, numbered by its citation', async () => {
+    visualMode();
+
+    const shots = await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(shots).toHaveLength(3);
+    expect(shots.map(s => s.index)).toEqual([1, 2, 3]);
+    expect(shots.map(s => s.shot)).toEqual(['SHOT-a', 'SHOT-b', 'SHOT-c']);
+    expect(shots[0].note).toBe('one');
+  });
+
+  // REGRESSION: the index used to be the position in the results array, so if the first two
+  // captures failed the surviving crop was labelled "3" while the answer's only chip said [1].
+  test('keeps the citation number even when earlier captures fail', async () => {
+    visualMode();
+    window.gv2CaptureEvidenceRegion = jest.fn(async (el) =>
+      el.id === 'c' ? { visualEvidenceShot: 'SHOT-c' } : { visualEvidenceShot: null, captureError: 'dom-target-offscreen' });
+
+    const shots = await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(shots).toHaveLength(1);
+    expect(shots[0].index).toBe(3); // the third citation, not "the third capture"
+  });
+
+  test('retries transient capture failures before dropping a chip', async () => {
+    visualMode();
+    const attempts = {};
+    window.gv2CaptureEvidenceRegion = jest.fn(async (el) => {
+      attempts[el.id] = (attempts[el.id] || 0) + 1;
+      if (el.id === 'b' && attempts[el.id] === 1) {
+        return { visualEvidenceShot: null, captureError: 'dom-target-offscreen' };
+      }
+      return { visualEvidenceShot: `SHOT-${el.id}` };
+    });
+
+    const shots = await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(shots.map(s => s.index)).toEqual([1, 2, 3]);
+    expect(shots.map(s => s.shot)).toEqual(['SHOT-a', 'SHOT-b', 'SHOT-c']);
+    expect(attempts.b).toBe(2);
+  });
+
+  // The user-visible point of capturing one at a time: each crop shows exactly which phrase is
+  // the evidence, instead of a page where every cited span carries the same tint.
+  test('lights up exactly one span at a time, in capture mode', async () => {
+    visualMode();
+
+    await window.gv2CaptureFindEvidenceShots(true);
+
+    const calls = window.gv2CaptureEvidenceRegion.mock.results.map(r => r.value);
+    const states = await Promise.all(calls);
+    expect(states.map(s => s._activeIds)).toEqual([['a'], ['b'], ['c']]);
+    expect(states.every(s => s._rootClass.includes('pageguide-evidence-capture'))).toBe(true);
+  });
+
+  test('restores the page afterwards', async () => {
+    visualMode();
+
+    await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(document.documentElement.className).not.toContain('pageguide-evidence-capture');
+    expect(document.querySelectorAll('.pageguide-highlight-active')).toHaveLength(0);
+  });
+
+  test('restores the page even when a capture throws', async () => {
+    visualMode();
+    window.gv2CaptureEvidenceRegion = jest.fn(async () => { throw new Error('boom'); });
+
+    await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(document.documentElement.className).not.toContain('pageguide-evidence-capture');
+    expect(document.querySelectorAll('.pageguide-highlight-active')).toHaveLength(0);
+  });
+
+  test('captures whole-element (block) highlights so bare citations still have visual evidence', async () => {
+    visualMode();
+    document.getElementById('b').classList.add('pageguide-highlight-block');
+
+    const shots = await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(shots.map(s => s.shot)).toEqual(['SHOT-a', 'SHOT-b', 'SHOT-c']);
+    expect(shots.map(s => s.index)).toEqual([1, 2, 3]);
+  });
+
+  test('captures more than the old eight-chip limit', async () => {
+    visualMode();
+    document.body.innerHTML = '<p>' + Array.from({ length: 12 }, (_, i) =>
+      `<span id="h${i + 1}" class="pageguide-highlight">${i + 1}</span>`
+    ).join(' ') + '</p>';
+    window._pageguideHighlights = Array.from({ length: 12 }, (_, i) => document.getElementById(`h${i + 1}`));
+    window._pageguideHighlightNumbers = Array.from({ length: 12 }, (_, i) => i + 1);
+    window.gv2CaptureEvidenceRegion = jest.fn(async (el) => ({ visualEvidenceShot: `SHOT-${el.id}` }));
+
+    const shots = await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(shots).toHaveLength(12);
+    expect(shots.map(s => s.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  });
+
+  // The Text arm must not reach captureVisibleTab at all — that is the difference between the
+  // two study conditions, not just what gets rendered.
+  test('captures nothing in Text evidence mode', async () => {
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'text' }));
+
+    expect(await window.gv2CaptureFindEvidenceShots(true)).toEqual([]);
+    expect(window.gv2CaptureEvidenceRegion).not.toHaveBeenCalled();
+    expect(document.documentElement.className).not.toContain('pageguide-evidence-capture');
+  });
+
+  test('skips the work when the answer highlighted nothing', async () => {
+    visualMode();
+
+    expect(await window.gv2CaptureFindEvidenceShots(false)).toEqual([]);
+    expect(window.gv2CaptureEvidenceRegion).not.toHaveBeenCalled();
+  });
+
+  test('asks for no marker box — the active highlight is already in the pixels', async () => {
+    visualMode();
+
+    await window.gv2CaptureFindEvidenceShots(true);
+
+    expect(window.gv2CaptureEvidenceRegion.mock.calls[0][3]).toEqual({ noMarker: true });
+  });
+});
+
+describe('Find × Visual evidence chips (sidepanel/panel.js)', () => {
+  const groupHtml = () => window._findEvidenceShotsHtml({
+    findEvidenceShots: [
+      { shot: 'AAAA', note: 'first span', index: 1 },
+      { shot: 'BBBB', note: 'second span', index: 2 }
+    ]
+  });
+
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  describe('openFindEvidenceView', () => {
+    const mount = () => {
+      document.body.innerHTML = `<div class="pageguide-message">${groupHtml()}</div>`;
+      return document.querySelector('.pageguide-find-evidence');
+    };
+
+    afterEach(() => { document.getElementById('pageguide-memory-shot-lightbox')?.remove(); });
+
+    // Same lightbox shell the Guide uses for its saved evidence, so both routes look identical.
+    test('opens the evidence card for the clicked number', () => {
+      const group = mount();
+      window.openFindEvidenceView(group, '2');
+
+      const dialog = document.getElementById('pageguide-memory-shot-lightbox');
+      expect(dialog).not.toBeNull();
+      expect(dialog.querySelector('.pageguide-memory-shot-dialog.pageguide-recap-detail')).not.toBeNull();
+      expect(dialog.textContent).toContain('Evidence 2');
+      expect(dialog.textContent).toContain('second span');
+      expect(dialog.querySelector('img').src).toContain('BBBB');
+    });
+
+    test('opening another number replaces the open card instead of stacking', () => {
+      const group = mount();
+      window.openFindEvidenceView(group, '1');
+      window.openFindEvidenceView(group, '2');
+
+      expect(document.querySelectorAll('#pageguide-memory-shot-lightbox')).toHaveLength(1);
+      expect(document.getElementById('pageguide-memory-shot-lightbox').textContent).toContain('Evidence 2');
+    });
+
+    test('the crops stay collapsed in the chat — the card is the only place they show', () => {
+      const group = mount();
+      window.openFindEvidenceView(group, '1');
+
+      expect(group.querySelector('.pageguide-find-evidence-panel[data-evidence-num="1"]').hidden).toBe(true);
+    });
+
+    test('an unknown number opens nothing instead of throwing', () => {
+      const group = mount();
+      expect(() => window.openFindEvidenceView(group, '9')).not.toThrow();
+      expect(() => window.openFindEvidenceView(null, '1')).not.toThrow();
+      expect(document.getElementById('pageguide-memory-shot-lightbox')).toBeNull();
+    });
+  });
+
+  describe('_findEvidenceGroupFor', () => {
+    test('finds the group inside the citation’s own message (Find card)', () => {
+      document.body.innerHTML = `<div class="pageguide-message"><span class="pageguide-citation" data-citation="1"></span>${groupHtml()}</div>`;
+      const cit = document.querySelector('.pageguide-citation');
+      expect(window._findEvidenceGroupFor(cit)).not.toBeNull();
+    });
+
+    // The Ask route posts the answer and the crops as two separate bubbles.
+    test('falls forward to the following message (Ask route)', () => {
+      document.body.innerHTML = `
+        <div class="pageguide-message"><span class="pageguide-citation" data-citation="1"></span></div>
+        <div class="pageguide-message">${groupHtml()}</div>`;
+      const cit = document.querySelector('.pageguide-citation');
+      expect(window._findEvidenceGroupFor(cit)).not.toBeNull();
+    });
+
+    test('returns null when there is no evidence anywhere (Text mode)', () => {
+      document.body.innerHTML = '<div class="pageguide-message"><span class="pageguide-citation" data-citation="1"></span></div>';
+      expect(window._findEvidenceGroupFor(document.querySelector('.pageguide-citation'))).toBeNull();
+    });
+
+    test('does not reach across an unrelated run of messages', () => {
+      document.body.innerHTML = `
+        <div class="pageguide-message"><span class="pageguide-citation" data-citation="1"></span></div>
+        <div class="pageguide-message">one</div>
+        <div class="pageguide-message">two</div>
+        <div class="pageguide-message">${groupHtml()}</div>`;
+      expect(window._findEvidenceGroupFor(document.querySelector('.pageguide-citation'))).toBeNull();
+    });
+  });
+});
+
+
+describe('Citation numbering for evidence crops (content/tasks/ask.js)', () => {
+  // REGRESSION: applyHighlightsFromCitations collects citations pattern-by-pattern (all
+  // double-quoted, then single-quoted, then unquoted), so a later single-quoted citation was
+  // highlighted — and numbered — before an earlier double-quoted one. The side panel numbers
+  // citations by their position in the answer, so the crop labelled [2] could show citation 1's
+  // text. Sorting by position is what keeps the chip and the crop talking about the same span.
+  test('citation markers are ranked by position in the answer, not by quote style', () => {
+    const answer = 'First [1:"alpha"] then [2:\'beta\'] then [3:gamma].';
+    const positions = [...answer.matchAll(/\[(\d+)(?::[^\]]*)?\]/g)].map(m => m.index);
+
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(positions.indexOf(answer.indexOf('[1:')) + 1).toBe(1);
+    expect(positions.indexOf(answer.indexOf("[2:")) + 1).toBe(2);
+    expect(positions.indexOf(answer.indexOf('[3:')) + 1).toBe(3);
+  });
+});
+
+describe('stripCitationMarkers duplicate handling (content/tasks/ask.js)', () => {
+  beforeAll(() => {
+    if (!window.stripCitationMarkers) {
+      window.chrome = window.chrome || { storage: { local: { get: jest.fn().mockResolvedValue({}) } } };
+      loadScript('content/tasks/ask.js');
+    }
+  });
+
+  // REGRESSION: models normally write the phrase and then cite it with the same words. Grounding
+  // mode collapses the marker to a chip so the repeat is invisible; unwrapping it printed the
+  // phrase twice ("Peter Thiel Peter Thiel") in the non-grounding baseline.
+  test('drops a citation that just repeats the words before it', () => {
+    expect(window.stripCitationMarkers('The essay identifies **Peter Thiel** [12:"Peter Thiel"] as the figure.'))
+      .toBe('The essay identifies **Peter Thiel** as the figure.');
+  });
+
+  test('ignores quotes and case when spotting the repeat', () => {
+    expect(window.stripCitationMarkers('rendered the concept of "capitalist democracy" [4:"Capitalist Democracy"] into an oxymoron.'))
+      .toBe('rendered the concept of "capitalist democracy" into an oxymoron.');
+  });
+
+  test('ignores punctuation sitting between the prose and the marker', () => {
+    expect(window.stripCitationMarkers('the extension of the franchise to women, [3:"extension of the franchise to women"] which he opposed.'))
+      .toBe('the extension of the franchise to women, which he opposed.');
+  });
+
+  test('drops a citation that repeats the words after it', () => {
+    expect(window.stripCitationMarkers('He founded [7:"The Yogi"] The Yogi while jailed.'))
+      .toBe('He founded The Yogi while jailed.');
+  });
+
+  // The other half of the contract: a span the sentence actually needs is still kept, or the
+  // baseline answer comes out with holes in it.
+  test('still keeps a span the sentence needs', () => {
+    expect(window.stripCitationMarkers('Contact the depot [12:"within 30 days"] of travel.'))
+      .toBe('Contact the depot within 30 days of travel.');
+  });
+
+  test('handles a repeat and a needed span in the same answer', () => {
+    expect(window.stripCitationMarkers('**Sydney Flower** [1:"Sydney Flower"] founded it [2:"in 1910"] while jailed.'))
+      .toBe('**Sydney Flower** founded it in 1910 while jailed.');
+  });
+
+  test('leaves no bracket syntax behind in any case', () => {
+    const out = window.stripCitationMarkers('A **Peter Thiel** [12:"Peter Thiel"] b [3] c [idx:1-2] d [4:"new words"].');
+    expect(out).not.toMatch(/\[/);
+    expect(out).toContain('new words');
+  });
+});
+
+describe('stripCitationMarkers: markers that used to leak or stutter (content/tasks/ask.js)', () => {
+  beforeAll(() => {
+    if (!window.stripCitationMarkers) {
+      window.chrome = window.chrome || { storage: { local: { get: jest.fn().mockResolvedValue({}) } } };
+      loadScript('content/tasks/ask.js');
+    }
+  });
+
+  // REGRESSION: cited page text often contains quotes of its own. A [^"]+ capture stopped at the
+  // inner quote, never reached the closing bracket, and left the whole marker in the answer as
+  // raw text: [94:"claimed sanction from the "Great White Lodge""].
+  test('parses a citation whose quoted text contains quotes', () => {
+    const out = window.stripCitationMarkers(
+      '**The "Great White Lodge"**: The booklet explicitly claimed sanction from this group [94:"claimed sanction from the "Great White Lodge""], which refers to the hierarchy.'
+    );
+    expect(out).not.toMatch(/\[94/);
+    expect(out).toBe('**The "Great White Lodge"**: The booklet explicitly claimed sanction from this group, which refers to the hierarchy.');
+  });
+
+  // REGRESSION: the model paraphrases, then cites the page's near-identical wording. Exact-match
+  // detection missed it and inlined an obvious stutter.
+  test('drops a citation that echoes the prose without matching it word for word', () => {
+    expect(window.stripCitationMarkers(
+      'which refers to the hierarchy of ascended masters in the Theosophical Society [7:"Theosophical Society\'s hierarchy of ascended masters"].'
+    )).toBe('which refers to the hierarchy of ascended masters in the Theosophical Society.');
+  });
+
+  test('drops a citation that repeats a quoted phrase from the prose', () => {
+    expect(window.stripCitationMarkers(
+      'The text stated that the school was "submissive alone to the Illuminated Government" [8:"submissive alone to the Illuminated Government"].'
+    )).toBe('The text stated that the school was "submissive alone to the Illuminated Government".');
+  });
+
+  // The safety net: anything still bracket-shaped after parsing is a marker we failed to read, and
+  // raw "[94:...]" in the baseline answer is worse than a dropped quote.
+  test('never leaves a DOM/index-shaped marker in the answer', () => {
+    const out = window.stripCitationMarkers('a [94:unclosed "quote] b [idx:1-2] c [Page 3: "x"] d [12] e.');
+    expect(out).not.toMatch(/\[\s*(idx|Page|\d)/i);
+  });
+
+  test('a short span the sentence needs is still kept', () => {
+    expect(window.stripCitationMarkers('Contact the depot [12:"within 30 days"] of travel.'))
+      .toBe('Contact the depot within 30 days of travel.');
+  });
+});
+
+describe('stripCitationMarkers: stutters from real non-grounding answers (content/tasks/ask.js)', () => {
+  beforeAll(() => {
+    if (!window.stripCitationMarkers) {
+      window.chrome = window.chrome || { storage: { local: { get: jest.fn().mockResolvedValue({}) } } };
+      loadScript('content/tasks/ask.js');
+    }
+  });
+
+  const clean = (s) => window.stripCitationMarkers(s);
+
+  // Each of these shipped a visible stutter in the baseline condition. The repeat is not always a
+  // word-for-word match of the prose, which is why exact containment alone was not enough.
+  test('exact repeat right before the marker', () => {
+    expect(clean('the Mystic Brotherhood University [3:"Mystic Brotherhood University"], invoked authority'))
+      .toBe('the Mystic Brotherhood University, invoked authority');
+  });
+
+  test('repeat of a quoted phrase', () => {
+    expect(clean('the school was "submissive alone to the Illuminated Government" [8:"submissive alone to the Illuminated Government"].'))
+      .toBe('the school was "submissive alone to the Illuminated Government".');
+  });
+
+  test('reworded repeat — caught by content-word overlap', () => {
+    expect(clean('**A "group of Sages"**: The mailer claimed that these sages periodically revealed pathways to the "outer World" [9:"this group of Sages have revealed to the outer World, a pathway"].'))
+      .toBe('**A "group of Sages"**: The mailer claimed that these sages periodically revealed pathways to the "outer World".');
+  });
+
+  // Here the repeat straddles the marker: the prose ends with the span's opening words and picks
+  // up again with its closing ones.
+  test('repeat split across the marker — caught at the seam', () => {
+    expect(clean('The cover of the mailer featured the Rose Cross lamen [10:"featured the Rose Cross lamen of this famous nineteenth-century British occult society"] of this famous society.'))
+      .toBe('The cover of the mailer featured the Rose Cross lamen of this famous society.');
+  });
+
+  // The opposite failure mode: a span the sentence depends on must survive all of the above.
+  test('a needed span is still kept', () => {
+    expect(clean('Contact the depot [12:"within 30 days"] of travel.'))
+      .toBe('Contact the depot within 30 days of travel.');
+    expect(clean('The fee is [3:"$5 per item"] at checkout.'))
+      .toBe('The fee is $5 per item at checkout.');
   });
 });

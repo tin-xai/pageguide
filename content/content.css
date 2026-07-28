@@ -38,6 +38,22 @@
   margin: 0;
 }
 
+/* ===== EVIDENCE CAPTURE MODE =====
+   While a Find answer's evidence crops are being taken, exactly ONE span is highlighted: the one
+   being captured. Every other highlight is muted for the duration, so each crop answers "which
+   text is this evidence?" on its own instead of showing a page full of identical tints. The page
+   is restored the moment the last capture finishes (gv2CaptureFindEvidenceShots).
+   !important because the highlight background is also set inline per span. */
+html.pageguide-evidence-capture .pageguide-highlight {
+  background-color: transparent !important;
+}
+
+html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active {
+  background-color: color-mix(in srgb, var(--pageguide-color, #7857ff) 38%, transparent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pageguide-color, #7857ff) 55%, transparent) !important;
+  border-radius: 3px;
+}
+
 [data-pageguide-styled] {
   position: relative;
 }

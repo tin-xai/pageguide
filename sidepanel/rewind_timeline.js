@@ -74,6 +74,9 @@
 .rw-hovercard img{width:100%;border-radius:6px;display:block;margin-bottom:6px;background:#0003}
 .rw-hovercard .rw-hc-instr{font-weight:600;margin-bottom:3px}
 .rw-hovercard .rw-hc-evidence{margin-top:7px;padding:6px 7px;border-radius:7px;background:rgba(120,87,255,.14);border:1px solid rgba(120,87,255,.28);color:#c7bbff;font-weight:650}
+/* Text evidence mode: the words that stand in for the thumbnail. */
+.rw-hovercard .rw-hc-textual{margin-bottom:6px;padding:6px 7px;border-radius:7px;background:rgba(120,87,255,.10);border:1px solid rgba(120,87,255,.24);font:400 10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}
+.rw-hovercard .rw-hc-textual b{display:inline-block;min-width:62px;opacity:.7;font-weight:700}
 .rw-hovercard .rw-hc-meta{opacity:.65;font-size:10px}
 
 #${INSPECTOR_ID}{position:fixed;inset:0;z-index:2147483647;background:var(--pg-bg,#1e1e28);color:var(--pg-text,#eee);display:flex;flex-direction:column}
@@ -126,6 +129,24 @@
     if (typeof global.rewindResolveScreenshot === 'function') return global.rewindResolveScreenshot(rec);
     return rec ? (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter || null) : null;
   }
+  /** True for records captured in Text evidence mode, which never have a screenshot. */
+  function _isTextEvidenceRecord(rec) {
+    return String(rec && rec.evidenceMode || '') === 'text';
+  }
+  /** The thumbnail stand-in for a Text-mode record: what the step touched, in words. */
+  function _textualEvidenceCardHtml(rec) {
+    const t = (rec && rec.targetEvidence) || {};
+    const rows = [
+      ['node text', t.text],
+      ['aria-label', t.ariaLabel],
+      ['selector', t.selector],
+      ['page', t.url || (rec && rec.url)]
+    ].filter(([, v]) => String(v || '').trim());
+    if (!rows.length) return '';
+    return `<div class="rw-hc-textual">${rows
+      .map(([label, value]) => `<div><b>${_escape(label)}</b> ${_escape(String(value).slice(0, 140))}</div>`)
+      .join('')}</div>`;
+  }
   function _evidenceEntries(meta, rec) {
     const out = [];
     const push = (item) => {
@@ -177,6 +198,9 @@
       let rec = null;
       try { rec = await rewindGetRecord(meta.sessionId, meta.step); } catch (e) {}
       if (rec && _recordShot(rec)) return rec;
+      // Text evidence mode records carry no screenshot by design — they are still valid steps and
+      // must not be dropped from the timeline by the "no shot ⇒ void step" rule below.
+      if (rec && _isTextEvidenceRecord(rec)) return rec;
       if (rec && (rec.isInitial || Number(rec.step) === 0) && rec.domSnapshot) return rec;
       if (i < attempts - 1) await new Promise(r => setTimeout(r, 350));
     }
@@ -204,7 +228,10 @@
     const card = document.createElement('div');
     card.className = 'rw-hovercard';
     const shot = _recordShot(rec);
-    const img = shot ? `<img src="data:image/jpeg;base64,${shot}" alt="">` : '';
+    // Text evidence mode: the target in words stands in for the thumbnail.
+    const img = shot
+      ? `<img src="data:image/jpeg;base64,${shot}" alt="">`
+      : (_isTextEvidenceRecord(rec) ? _textualEvidenceCardHtml(rec) : '');
     const bits = [];
     if (meta.confidence != null && meta.confidence < _confidenceThreshold) bits.push('Low confidence');
     if (meta.durationMs != null) bits.push(_fmtDuration(meta.durationMs));
