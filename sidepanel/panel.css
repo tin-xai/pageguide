@@ -5857,6 +5857,33 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   font-weight: 600;
 }
 
+/* Per-answer debug chip. Debug mode only — _debugAnswerChipHtml returns nothing otherwise, so
+   participants never see it. */
+.pageguide-debug-answer-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 16px 10px;
+}
+
+.pageguide-message .pageguide-debug-answer-row {
+  padding: 6px 0 0;
+}
+
+.pageguide-debug-answer-chip {
+  border: 1px solid var(--pg-border);
+  background: transparent;
+  color: var(--pg-muted);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font: 700 11px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  cursor: pointer;
+}
+
+.pageguide-debug-answer-chip:hover {
+  color: var(--pg-text);
+  border-color: var(--pg-muted);
+}
+
 /* Find × Visual evidence: numbered chips that stay collapsed until clicked, so the answer is not
    buried under screenshots. The numbers match the [N] citations in the answer text; clicking
    either opens the crop in the Guide's evidence card (openFindEvidenceView). */

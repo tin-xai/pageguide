@@ -254,9 +254,10 @@ async function handleAskWithVision(query) {
         : parsed.answer;
       cleanupSom();
 
-      // Visual evidence mode only: a crop per cited span (empty array in Text mode).
-      const findEvidenceShots = typeof gv2CaptureFindEvidenceShots === 'function'
-        ? await gv2CaptureFindEvidenceShots(highlightCount > 0)
+      // Visual evidence mode only: a crop per cited span plus annotated page evidence for what
+      // the DOM cannot say (empty array in Text mode). Same helper the Guide find path uses.
+      const findEvidenceShots = typeof gv2BuildFindEvidence === 'function'
+        ? await gv2BuildFindEvidence(highlightCount > 0, query)
         : [];
 
       return {
@@ -326,7 +327,29 @@ async function handleAskWithVision(query) {
  */
 async function handleAsk(query, history = []) {
   console.log('🤖 handleAsk:', query);
-  
+
+  // Evidence: Visual already sends a screenshot with the answer call (FIND_ANSWER_VISUAL), so the
+  // vision router and its scroll loop have nothing to add — skipping them saves a call and keeps
+  // one prompt responsible for the answer. Evidence: Text keeps the router exactly as it was.
+  const visualEvidenceMode = typeof getEvidenceMode === 'function' && (await getEvidenceMode()) === 'visual';
+  if (visualEvidenceMode) {
+    const pageContent = getVisibleText(50000);
+    const pageIndex = createPageIndex(5000);
+    try {
+      const result = await handleAskWithHighlight(query, pageContent, pageIndex, history);
+      cleanupSom();
+      if (result && result.success && result.answer) {
+        result.visionDecision = { needsVision: false, confidence: 1, reason: 'Visual evidence mode: the answer call carries the screenshot' };
+        return result;
+      }
+      return result || { success: false, error: 'Failed to process query' };
+    } catch (error) {
+      cleanupSom();
+      console.log('🤖 Error:', error);
+      return { success: false, error: error.message || 'Failed to process query' };
+    }
+  }
+
   // First, check if vision is needed
   const visionRoute = await routeVisionQuery(query);
   console.log('👁️ Vision decision:', visionRoute.needsVision ? 'YES' : 'NO', 
@@ -393,10 +416,15 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
     };
   }
   
+  // Evidence: Visual takes a different prompt and a different call — the answer sees a screenshot
+  // and returns its own evidence. Evidence: Text falls through to the lines below, unchanged.
+  const visualMode = typeof getEvidenceMode === 'function' && (await getEvidenceMode()) === 'visual';
+
   // Build system prompt with page content (fresh context each time)
-  const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+  const systemPrompt = (visualMode ? (PROMPTS.FIND_ANSWER_VISUAL || PROMPTS.ANSWER_AND_HIGHLIGHT) : PROMPTS.ANSWER_AND_HIGHLIGHT)
     .replace('{pageContent}', pageContent || '(No text content found)')
-    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)');
+    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)')
+    .replace('{maxItems}', String(typeof GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS !== 'undefined' ? GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS : 3));
   
   // Build messages with history (history contains only Q&A, not page context)
   const messages = [
@@ -405,27 +433,85 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
   ];
   
   console.log('🤖 Chat history length:', history.length);
-  
-  // LLM call with history
-  const response = await safeSendMessage({
-    action: 'callLLM',
-    systemPrompt: systemPrompt,
-    messages: messages,
-    metadata: {
-      mode: 'ask_chat',
-      url: window.location.href
+
+  // Visual mode: one call carrying the page text, the index AND the viewport screenshot.
+  let answerShot = null;
+  if (visualMode) {
+    try {
+      if (typeof showSetOfMarks === 'function') showSetOfMarks(pageIndex);
+      await new Promise(r => setTimeout(r, 120));
+      if (typeof captureScreenshot === 'function') answerShot = await captureScreenshot();
+    } catch (e) {
+      answerShot = null;
+    } finally {
+      try { if (typeof cleanupSom === 'function') cleanupSom(); } catch (e) {}
     }
+  }
+
+  // Viewport + crops of the pictures this question is about (gv2BuildFindAnswerImages), so the
+  // agent can see the portrait/chart/product it is being asked about instead of guessing.
+  const answerImages = (answerShot && typeof gv2BuildFindAnswerImages === 'function')
+    ? await gv2BuildFindAnswerImages(query, answerShot)
+    : (answerShot ? [{ base64: answerShot, label: 'Page screenshot with SoM markers' }] : []);
+
+  const askVisual = (images, msgs) => safeSendMessage({
+    action: 'callLLMWithImages',
+    systemPrompt: systemPrompt,
+    messages: msgs,
+    images,
+    metadata: { mode: 'ask_chat_visual', url: window.location.href }
   });
+
+  // LLM call with history
+  let response = answerShot
+    ? await askVisual(answerImages, messages)
+    : await safeSendMessage({
+        action: 'callLLM',
+        systemPrompt: systemPrompt,
+        messages: messages,
+        metadata: {
+          mode: 'ask_chat',
+          url: window.location.href
+        }
+      });
   
   if (response?.error) {
     return { success: false, error: response.error, answer: "Could not answer the question with highlighting" };
   }
   
-  const answer = response?.content?.trim();
-  if (!answer) {
+  let rawAnswer = response?.content?.trim();
+  if (!rawAnswer) {
     return { success: false, error: 'No answer from AI', answer: "Could not answer the question with highlighting" };
   }
-  
+
+  // Visual mode replies with {answer, evidence}; text mode replies with prose. gv2ParseFindAnswer
+  // degrades to prose-only if the envelope is missing, so a malformed reply still shows an answer.
+  let parsedAnswer = (visualMode && answerShot && typeof gv2ParseFindAnswer === 'function')
+    ? gv2ParseFindAnswer(rawAnswer)
+    : { answer: rawAnswer, evidence: [], needMoreView: null };
+
+  // One escalation round only: the model may ask to see below/above/an element/the whole page, and
+  // we re-ask with those views attached. A second request is ignored — see gv2RunFind.
+  if (parsedAnswer.needMoreView && answerShot && typeof gv2CaptureMoreViews === 'function') {
+    const extra = await gv2CaptureMoreViews(parsedAnswer.needMoreView);
+    if (extra.length) {
+      const images = answerImages.concat(extra).slice(0, (typeof GV2_FIND_MAX_IMAGES !== 'undefined' ? GV2_FIND_MAX_IMAGES : 8));
+      const followUp = messages.concat([{
+        role: 'user',
+        content: `(The extra views you asked for are attached: ${extra.map(e => e.label).join(', ')}. Answer now — no further views are available.)`
+      }]);
+      const second = await askVisual(images, followUp);
+      const secondRaw = second?.content?.trim();
+      if (secondRaw) {
+        rawAnswer = secondRaw;
+        parsedAnswer = gv2ParseFindAnswer(secondRaw);
+      }
+    }
+  }
+
+  const answer = parsedAnswer.answer || rawAnswer;
+  const modelEvidence = parsedAnswer.evidence || [];
+
   console.log('🤖 Answer with citations:', answer);
 
   // Extract citations and apply highlights — skipped entirely in Non-grounding baseline mode,
@@ -438,10 +524,11 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
     ? stripCitationMarkers(answer)
     : answer;
 
-  // Visual evidence mode: crop each cited span into the answer. Returns [] in Text mode, where the
-  // citation chips linking to the page are the whole story. Same helper the Guide find path uses.
-  const findEvidenceShots = typeof gv2CaptureFindEvidenceShots === 'function'
-    ? await gv2CaptureFindEvidenceShots(highlightCount > 0)
+  // Visual evidence mode: a crop per cited span plus annotated page evidence for what the DOM
+  // cannot say. Returns [] in Text mode, where the citation chips are the whole story. Same helper
+  // the Guide find path uses.
+  const findEvidenceShots = typeof gv2BuildFindEvidence === 'function'
+    ? await gv2BuildFindEvidence(highlightCount > 0, query, modelEvidence)
     : [];
 
   return {
@@ -555,13 +642,21 @@ function applyHighlightsFromCitations(answer) {
     // For text citations: only skip if a PARENT element is already whole-highlighted.
     // Siblings or children being highlighted is fine — we want every cited phrase lit up.
     let parentAlreadyHighlighted = false;
+    let highlightedParent = null;
     let parent = element.parentElement;
     while (parent) {
-      if (highlightedElements.has(parent)) { parentAlreadyHighlighted = true; break; }
+      if (highlightedElements.has(parent)) { parentAlreadyHighlighted = true; highlightedParent = parent; break; }
       parent = parent.parentElement;
     }
     if (parentAlreadyHighlighted) {
       console.log('🤖 Skipping', index, '- parent element already highlighted');
+      // The citation is still real — it is just already covered by an enclosing highlight. Point
+      // its number at that parent so the evidence strip has a chip for it; otherwise the numbers
+      // skip and the answer shows a [3] with no 3 to open.
+      const parentPos = window._pageguideHighlights.indexOf(highlightedParent);
+      if (parentPos >= 0 && window._pageguideHighlightNumbers[parentPos] == null) {
+        window._pageguideHighlightNumbers[parentPos] = citationNumberAt(match.index);
+      }
       continue;
     }
 

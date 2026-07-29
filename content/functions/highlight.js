@@ -111,6 +111,9 @@ function resetCustomStyles() {
 function clearHighlights() {
   // Clear highlights array
   window._pageguideHighlights = [];
+
+  // On-page evidence marks belong to the answer that drew them; a new answer replaces them.
+  if (typeof pageguideClearEvidenceAnnotations === 'function') pageguideClearEvidenceAnnotations();
   
   // Remove ALL pageguide highlight-related classes
   document.querySelectorAll('[class*="pageguide-highlight"], [class*="pageguide-guide"]').forEach(el => {
@@ -665,9 +668,265 @@ function gv2RemoveDomMarker(container) {
   try { if (container && typeof container.remove === 'function') container.remove(); } catch (e) { /* noop */ }
 }
 
+// ===== EVIDENCE ANNOTATIONS ON THE LIVE PAGE =====
+// The annotator draws boxes/arrows/labels onto a screenshot (see _gv2DrawEvidenceAnnotationsOnCanvas
+// in guidev2.js). Those marks also belong on the real page: a participant can check evidence
+// against the page itself instead of trusting a picture of it. Same shapes, same colours, placed in
+// DOCUMENT space so they stay put while the page scrolls.
+
+const PAGEGUIDE_EVIDENCE_OVERLAY_ID = 'pageguide-evidence-overlay';
+const PAGEGUIDE_EVIDENCE_COLOR = '#ff2d78';
+
+/**
+ * Convert a screenshot-normalized box to document coordinates.
+ *
+ * Annotation coordinates are fractions of the capture screenshot, i.e. of the viewport as it stood
+ * when the shot was taken. `geometry` is that moment ({x,y} scroll, {w,h} viewport), recorded by
+ * gv2CaptureEvidenceItems. Pure.
+ *
+ * @param {{x:number,y:number,w:number,h:number}} bbox - fractions 0..1
+ * @param {{x:number,y:number,w:number,h:number}} geometry - scroll + viewport at capture
+ * @returns {{left:number,top:number,width:number,height:number}|null} null when unusable
+ */
+function gv2EvidenceDocRect(bbox, geometry) {
+  if (!bbox || !geometry) return null;
+  const vw = Number(geometry.w);
+  const vh = Number(geometry.h);
+  if (!(vw > 0) || !(vh > 0)) return null;
+  const x = Number(bbox.x), y = Number(bbox.y), w = Number(bbox.w), h = Number(bbox.h);
+  if (![x, y, w, h].every(Number.isFinite)) return null;
+  if (!(w > 0) || !(h > 0)) return null;
+  return {
+    left: x * vw + (Number(geometry.x) || 0),
+    top: y * vh + (Number(geometry.y) || 0),
+    width: w * vw,
+    height: h * vh
+  };
+}
+
+/** Document-space rect of a live element (getBoundingClientRect is viewport-space). */
+function gv2ElementDocRect(el) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+  const r = el.getBoundingClientRect();
+  if (!(r.width > 0) || !(r.height > 0)) return null;
+  return {
+    left: r.left + (window.scrollX || 0),
+    top: r.top + (window.scrollY || 0),
+    width: r.width,
+    height: r.height
+  };
+}
+
+/**
+ * The anchor for one evidence item: the live element it points at, if we can still find one.
+ * Preferred over stored coordinates — an element survives reflow, a fraction of a viewport does not.
+ */
+function gv2ResolveEvidenceElement(item) {
+  if (!item) return null;
+  const idx = item.visualEvidenceIndex != null ? item.visualEvidenceIndex : item.evidenceIndex;
+  if (idx != null && window._pageguideIndex && window._pageguideIndex[idx]) return window._pageguideIndex[idx];
+  const selector = item.selector || item.targetSelector || null;
+  if (selector) {
+    try { return document.querySelector(selector); } catch (e) { /* stored selector may be invalid */ }
+  }
+  return null;
+}
+
+/** Remove the on-page evidence marks. */
+function pageguideClearEvidenceAnnotations() {
+  document.getElementById(PAGEGUIDE_EVIDENCE_OVERLAY_ID)?.remove();
+  if (window._pageguideEvidenceKeyHandler) {
+    document.removeEventListener('keydown', window._pageguideEvidenceKeyHandler, true);
+    window._pageguideEvidenceKeyHandler = null;
+  }
+}
+
+/**
+ * Draw evidence marks over the live page.
+ *
+ * Each item is anchored to its element when one still resolves, otherwise placed from the geometry
+ * recorded at capture time. Items with annotations get those shapes; an item with only a region
+ * gets that region outlined, so bounding-box evidence is visible too.
+ *
+ * Deliberately motionless — no pulse, no fade — matching the on-page highlight.
+ *
+ * @param {Array<object>} items - captured evidence items (gv2CaptureEvidenceItems shape)
+ * @returns {number} how many marks were drawn
+ */
+function pageguideShowEvidenceAnnotations(items) {
+  pageguideClearEvidenceAnnotations();
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return 0;
+
+  const container = document.createElement('div');
+  container.id = PAGEGUIDE_EVIDENCE_OVERLAY_ID;
+  container.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483645;';
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', String(Math.max(document.documentElement.scrollWidth, window.innerWidth)));
+  svg.setAttribute('height', String(Math.max(document.documentElement.scrollHeight, window.innerHeight)));
+  svg.style.cssText = 'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
+
+  let drawn = 0;
+  let firstRect = null;
+
+  const addBox = (rect, color, label, shape) => {
+    if (!rect) return;
+    const box = document.createElement('div');
+    const radius = shape === 'ellipse' ? '50%' : '4px';
+    box.style.cssText = `position:absolute;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;` +
+      `border:3px solid ${color};border-radius:${radius};background:${color}1f;box-sizing:border-box;pointer-events:none;`;
+    container.appendChild(box);
+    if (label) {
+      const tag = document.createElement('div');
+      tag.textContent = label;
+      tag.style.cssText = `position:absolute;left:${rect.left}px;top:${Math.max(0, rect.top - 22)}px;` +
+        `background:${color};color:#fff;font:700 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;` +
+        'padding:1px 7px;border-radius:4px;white-space:nowrap;pointer-events:none;';
+      container.appendChild(tag);
+    }
+    drawn++;
+    if (!firstRect) firstRect = rect;
+  };
+
+  /** A label chip at document coordinates. */
+  const addLabel = (label, x, y, color, transform = '') => {
+    if (!label) return;
+    const tag = document.createElement('div');
+    tag.textContent = label;
+    tag.style.cssText = `position:absolute;left:${x}px;top:${y}px;` +
+      `background:${color};color:#fff;font:700 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;` +
+      `padding:1px 7px;border-radius:4px;white-space:nowrap;pointer-events:none;${transform ? `transform:${transform};` : ''}`;
+    container.appendChild(tag);
+  };
+
+  /** Triangular arrowhead at `to`, angled along the segment from `from`. */
+  const addArrowHead = (from, to, color) => {
+    const angle = Math.atan2(to.y - from.y, to.x - from.x);
+    const head = 14;
+    const p = (a) => `${to.x - head * Math.cos(angle - a)},${to.y - head * Math.sin(angle - a)}`;
+    const tri = document.createElementNS(svgNS, 'polygon');
+    tri.setAttribute('points', `${to.x},${to.y} ${p(Math.PI / 7)} ${p(-Math.PI / 7)}`);
+    tri.setAttribute('fill', color);
+    svg.appendChild(tri);
+  };
+
+  // Free-form stroke, mirroring _gv2DrawEvidenceAnnotationsOnCanvas: the same annotation must look
+  // the same in the crop and on the page.
+  const addPath = (ann, color, geometry) => {
+    const pts = (Array.isArray(ann?.points) ? ann.points : [])
+      .map(pt => gv2EvidenceDocRect({ ...(pt || {}), w: 0.001, h: 0.001 }, geometry))
+      .filter(Boolean)
+      .map(r => ({ x: r.left, y: r.top }));
+    if (pts.length < 2) return;
+    const path = document.createElementNS(svgNS, 'path');
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    if (ann.curved === false || pts.length === 2) {
+      for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
+    } else {
+      for (let i = 1; i < pts.length - 1; i++) {
+        const mx = (pts[i].x + pts[i + 1].x) / 2;
+        const my = (pts[i].y + pts[i + 1].y) / 2;
+        d += ` Q ${pts[i].x} ${pts[i].y} ${mx} ${my}`;
+      }
+      d += ` L ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
+    }
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', '4');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    drawn++;
+    if (!firstRect) firstRect = { left: pts[0].x - 20, top: pts[0].y - 20, width: 40, height: 40 };
+    if (ann.arrow === true) {
+      const last = pts[pts.length - 1];
+      const prev = pts[pts.length - 2];
+      addArrowHead(prev, last, color);
+    }
+    addLabel(ann.label, pts[0].x, pts[0].y, color, 'translate(0,-140%)');
+  };
+
+  const addArrow = (from, to, color, label, withHead = true) => {
+    if (!from || !to) return;
+    const line = document.createElementNS(svgNS, 'line');
+    line.setAttribute('x1', String(from.x)); line.setAttribute('y1', String(from.y));
+    line.setAttribute('x2', String(to.x)); line.setAttribute('y2', String(to.y));
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '4');
+    line.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(line);
+    if (withHead) addArrowHead(from, to, color); // 'line' is a plain connector, 'arrow' points
+    drawn++;
+    if (!firstRect) firstRect = { left: to.x - 20, top: to.y - 20, width: 40, height: 40 };
+    addLabel(label, (from.x + to.x) / 2, (from.y + to.y) / 2, color, 'translate(-50%,-140%)');
+  };
+
+  list.forEach((item) => {
+    const geometry = item?.captureGeometry || null;
+    const el = gv2ResolveEvidenceElement(item);
+    const annotations = Array.isArray(item?.annotations) ? item.annotations.slice(0, 5) : [];
+
+    if (annotations.length) {
+      // Annotation coordinates are relative to the capture viewport, so they need geometry — an
+      // element anchor cannot place a box that sits beside the element (an arrow, a nearby label).
+      annotations.forEach((ann) => {
+        const color = String(ann?.color || '').trim() || PAGEGUIDE_EVIDENCE_COLOR;
+        const type = ann?.type || 'box';
+        if (type === 'path') {
+          addPath(ann, color, geometry);
+        } else if (type === 'arrow' || type === 'line') {
+          const from = gv2EvidenceDocRect({ ...(ann.from || {}), w: 0.001, h: 0.001 }, geometry);
+          const to = gv2EvidenceDocRect({ ...(ann.to || {}), w: 0.001, h: 0.001 }, geometry);
+          addArrow(from && { x: from.left, y: from.top }, to && { x: to.left, y: to.top }, color, ann.label, type === 'arrow');
+        } else {
+          addBox(gv2EvidenceDocRect(ann?.bbox, geometry), color, ann?.label, type);
+        }
+      });
+      return;
+    }
+
+    // No annotations: outline the region itself, so bounding-box evidence is checkable too.
+    const rect = gv2ElementDocRect(el) || gv2EvidenceDocRect(item?.region_bbox || item?.visualEvidenceNormRect, geometry);
+    addBox(rect, PAGEGUIDE_EVIDENCE_COLOR, item?.note || item?.key || '', 'box');
+  });
+
+  if (!drawn) return 0;
+
+  if (svg.childNodes.length) container.appendChild(svg);
+
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.textContent = '× Clear evidence marks';
+  dismiss.style.cssText = 'position:fixed;right:16px;bottom:16px;pointer-events:auto;background:rgba(32,26,55,.96);' +
+    'color:#fff;border:1px solid rgba(155,132,255,.4);border-radius:999px;padding:8px 14px;' +
+    'font:700 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;z-index:2147483646;';
+  dismiss.addEventListener('click', (e) => { e.stopPropagation(); pageguideClearEvidenceAnnotations(); });
+  container.appendChild(dismiss);
+
+  document.body.appendChild(container);
+
+  const onKey = (e) => { if (e.key === 'Escape') pageguideClearEvidenceAnnotations(); };
+  window._pageguideEvidenceKeyHandler = onKey;
+  document.addEventListener('keydown', onKey, true);
+
+  if (firstRect) {
+    const y = Math.max(0, firstRect.top - (window.innerHeight || 600) / 3);
+    try { window.scrollTo({ top: y, behavior: 'smooth' }); } catch (e) { /* best-effort */ }
+  }
+  return drawn;
+}
+
 if (typeof window !== 'undefined') {
   window.gv2DrawDomMarker = gv2DrawDomMarker;
   window.gv2RemoveDomMarker = gv2RemoveDomMarker;
+  window.gv2EvidenceDocRect = gv2EvidenceDocRect;
+  window.gv2ElementDocRect = gv2ElementDocRect;
+  window.gv2ResolveEvidenceElement = gv2ResolveEvidenceElement;
+  window.pageguideShowEvidenceAnnotations = pageguideShowEvidenceAnnotations;
+  window.pageguideClearEvidenceAnnotations = pageguideClearEvidenceAnnotations;
 }
 
 console.log('🎨 highlight.js loaded');

@@ -891,12 +891,40 @@ function renderVisualHighlightAnswer(result) {
       <div style="padding: 16px; background: var(--pg-bg); display: flex; flex-direction: column; gap: 8px;">
         <figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig" style="margin: 0;">${_recapFigureHtml(src, null, null, caption || 'visual answer')}</figure>
         ${caption ? `<div style="font-size: 13px; line-height: 1.4; color: var(--pg-text); font-weight: 500;"><b>Why:</b> ${escapeHtml(caption)}</div>` : ''}
+        ${_debugAnswerChipRow()}
       </div>
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
   _recordAssistantMessage(caption);
 }
+
+/**
+ * Turn the answer's [ev:key] citations into chips that open the matching evidence card.
+ *
+ * In Visual mode the model cites what it SAW as [ev:key] (FIND_ANSWER_VISUAL), alongside the usual
+ * [N:"text"] citations for what it READ. Keys only mean something to the model, so they are mapped
+ * to the chip numbers assigned during capture; a key with no captured evidence has its marker
+ * dropped rather than shown as raw text.
+ *
+ * @param {string} html - answer HTML (already through parseMarkdown/parseCitations)
+ * @param {Array<object>} shots - captured evidence, each {key, index}
+ * @returns {string}
+ */
+function _expandEvidenceKeyCitations(html, shots) {
+  const text = String(html || '');
+  if (!text.includes('[ev:')) return text;
+  const byKey = new Map();
+  (Array.isArray(shots) ? shots : []).forEach((s) => {
+    if (s && s.key) byKey.set(String(s.key).trim().toLowerCase(), s.index);
+  });
+  return text.replace(/\[ev:\s*([^\]]+)\]/gi, (match, rawKey) => {
+    const num = byKey.get(String(rawKey).trim().toLowerCase());
+    if (num == null) return ''; // cited evidence never made it past capture — don't show the marker
+    return `<span class="pageguide-citation pageguide-citation-idx pageguide-evidence-citation" data-evidence-num="${num}" title="Show this evidence"><sup class="citation-index">[${num}]</sup></span>`;
+  });
+}
+window._expandEvidenceKeyCitations = _expandEvidenceKeyCitations;
 
 let _findEvidenceGroupSeq = 0;
 
@@ -1024,7 +1052,10 @@ function renderFindEvidenceShotsMessage(result) {
 function renderFindAnswer(result) {
   const container = document.getElementById('pageguide-messages');
   if (!container || !result || !result.findAnswer) return;
-  const answerText = parseCitations(parseMarkdown(result.findAnswer));
+  const answerText = _expandEvidenceKeyCitations(
+    parseCitations(parseMarkdown(result.findAnswer)),
+    result.findEvidenceShots
+  );
   const evidenceShots = _findEvidenceShotsHtml(result);
   const msg = document.createElement('div');
   msg.className = 'pageguide-message assistant pageguide-recap-message';
@@ -1037,6 +1068,7 @@ function renderFindAnswer(result) {
         ${answerText}
       </div>
       ${evidenceShots}
+      ${_debugAnswerChipRow()}
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
@@ -3109,6 +3141,23 @@ function _setupMessageContainerDelegate(container) {
       return;
     }
 
+    // 2. Per-answer debug chip (debug mode only) → the prompts, screenshots and raw response for
+    // the calls that produced this answer.
+    const debugChip = e.target.closest('.pageguide-debug-answer-chip');
+    if (debugChip) {
+      e.stopPropagation();
+      openAnswerDebugView(debugChip.dataset.debugFrom);
+      return;
+    }
+
+    // 2a. [ev:key] citation inside the answer → open that evidence card.
+    const evCit = e.target.closest('.pageguide-evidence-citation');
+    if (evCit) {
+      e.stopPropagation();
+      openFindEvidenceView(_findEvidenceGroupFor(evCit), evCit.dataset.evidenceNum);
+      return;
+    }
+
     // 2a. Evidence chip (Visual mode) → open that crop in the Guide's evidence card.
     const evChip = e.target.closest('.pageguide-find-evidence-chip');
     if (evChip) {
@@ -3243,12 +3292,16 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
     const markdownParsed = parseMarkdown(content);
     // Parse citations to make them clickable (handles both web and PDF citations)
     const parsedContent = parseCitations(markdownParsed);
-    innerHTML += parsedContent;
+    // [ev:key] citations point at visual evidence captured for this answer (Visual mode only).
+    innerHTML += _expandEvidenceKeyCitations(parsedContent, _lastAnswerEvidenceShots);
   } else {
     // Apply markdown parsing for non-clickable messages too
     innerHTML += parseMarkdown(content);
   }
   
+  // Debug mode only: a chip linking this answer to the calls that produced it.
+  if (type === 'assistant') innerHTML += _debugAnswerChipRow();
+
   msg.innerHTML = innerHTML;
   // Click handlers for citations and message toggle are handled by the
   // delegated listener on the container (_setupMessageContainerDelegate).
@@ -5024,6 +5077,9 @@ function addGuideStep(result) {
   if (result.isVisualHighlight && result.visualHighlightImage && _lastVisualHighlightStep !== result.step) {
     _lastVisualHighlightStep = result.step;
     renderVisualHighlightAnswer(result);
+    // A find that fell back to visual_highlight still captured its span crops before the fallback
+    // flipped the action — the evidence belongs to the answer, not to the action name.
+    if (!result.isFind) renderFindEvidenceShotsMessage(result);
   }
 
   if (result.isWatchVideo && (result.watchVideoAnswer || result.watchVideoError) && _lastWatchVideoMessageStep !== result.step) {
@@ -5899,6 +5955,10 @@ async function sendMessage() {
   guideStopped = false; // a fresh send re-arms the panel for running-state messages
   _currentAskId += 1; // a genuinely new user ask — see resetLiveGuideTimelineForSession
 
+  // Mark where this ask starts in the debug log, so an answer's 🐞 chip can show exactly the calls
+  // that produced it (the reader pass, the visual-evidence pass, the annotator) and nothing older.
+  _markDebugAnswerStart();
+
   // Track if a specific routing is forced by the user
   // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
   // A slash command in this message overrides it below.
@@ -6476,7 +6536,9 @@ Previous steps: None`;
           result.answer?.includes('[Page ') || 
           result.answer?.includes('[idx:')
         );
+        _lastAnswerEvidenceShots = Array.isArray(result.findEvidenceShots) ? result.findEvidenceShots : [];
         addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
+        _lastAnswerEvidenceShots = [];
         // Visual evidence mode: follow the answer with a crop of each cited span. No-op in Text
         // mode, where findEvidenceShots is empty and the citation chips carry the grounding.
         renderFindEvidenceShotsMessage(result);
@@ -7334,7 +7396,9 @@ function handleContentMessage(message, sender, sendResponse) {
       if (message.result.highlightCount > 0) {
         answerText += ` ✨ (${message.result.highlightCount} highlighted)`;
       }
+      _lastAnswerEvidenceShots = Array.isArray(message.result.findEvidenceShots) ? message.result.findEvidenceShots : [];
       addMessage(answerText, 'assistant', hasHighlights);
+      _lastAnswerEvidenceShots = [];
       renderFindEvidenceShotsMessage(message.result);
     }
   } else if (message.action === 'showTyping') {
@@ -7405,7 +7469,120 @@ function closeDebugPromptLightbox() {
   document.getElementById('pageguide-debug-prompt-lightbox')?.remove();
 }
 
-function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
+/** A row holding the per-answer 🐞 chip. Empty string outside debug mode. */
+function _debugAnswerChipRow() {
+  const chip = _debugAnswerChipHtml(_debugAnswerStart);
+  return chip ? `<div class="pageguide-debug-answer-row">${chip}</div>` : '';
+}
+
+// Evidence captured for the answer currently being rendered. addMessage() runs before the caller
+// can hand it the result object, so the Ask route parks the shots here for [ev:key] expansion.
+let _lastAnswerEvidenceShots = [];
+
+// Index into chrome.storage.local.debugPrompts at the moment the current ask was dispatched.
+// Everything logged after it belongs to the answer being produced.
+let _debugAnswerStart = 0;
+function _markDebugAnswerStart() {
+  if (!window.__pgDebugEnabled) return;
+  chrome.storage.local.get('debugPrompts')
+    .then(local => { _debugAnswerStart = Array.isArray(local.debugPrompts) ? local.debugPrompts.length : 0; })
+    .catch(() => { _debugAnswerStart = 0; });
+}
+
+/**
+ * The "Raw model response" block for a debug entry. Rendering it as its own section (rather than
+ * folding it into the metadata grid) keeps prompts and answer side by side, which is the whole
+ * point of opening this dialog from an answer.
+ *
+ * @param {object} p - debug entry (service worker shape)
+ * @returns {string} HTML
+ */
+function _debugRawResponseHtml(p) {
+  const hasResponse = p && p.rawResponse != null && String(p.rawResponse).length > 0;
+  const failed = p && p.ok === false;
+  const body = hasResponse
+    ? escapeHtml(String(p.rawResponse))
+    : '(pending… the call had not returned when this entry was written)';
+  const timing = p && p.durationMs != null ? ` · ${Math.round(p.durationMs)}ms` : '';
+  const label = failed ? 'Raw model response — ERROR' : 'Raw model response';
+  return `
+    <details open style="margin-top: 0; display: block; border: 1px solid ${failed ? '#d32f2f' : 'var(--pg-border)'}; border-radius: 8px; padding: 8px; background: var(--pg-card);">
+      <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: ${failed ? '#d32f2f' : 'var(--pg-accent)'}; outline: none;">${label}${timing}</summary>
+      <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin-top: 6px; border: 1px solid var(--pg-border); max-height: 30vh; overflow-y: auto; color: var(--pg-text);">${body}</pre>
+    </details>
+  `;
+}
+window._debugRawResponseHtml = _debugRawResponseHtml;
+
+function _debugImageIdForAttachment(img, fallback = '') {
+  const explicit = String(img?.id || img?.image_id || img?.source_image_id || '').trim();
+  if (explicit) return explicit;
+  const label = String(img?.label || '');
+  const match = label.match(/\[image_id=([^\]\s]+)\]/i);
+  if (match) return match[1];
+  return fallback;
+}
+window._debugImageIdForAttachment = _debugImageIdForAttachment;
+
+/**
+ * The debug entries that produced one answer: everything logged between dispatching the query and
+ * rendering the answer. The panel records that window on the answer element, so a Find answer's
+ * chip covers the reader call, the Find × Visual evidence call and the annotator calls together.
+ *
+ * Defensive because `debugPrompts` is capped at 50 in the service worker: an old range can point
+ * past the end, or at entries that have since rolled off.
+ *
+ * @param {number} from - entry count when the query was sent
+ * @param {number} to - entry count when the answer rendered
+ * @param {Array<object>} entries - current debugPrompts
+ * @returns {Array<object>}
+ */
+function _debugRangeForAnswer(from, to, entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const start = Number(from);
+  const end = Number(to);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  const lo = Math.max(0, Math.min(start, list.length));
+  const hi = Math.max(lo, Math.min(end, list.length));
+  return list.slice(lo, hi);
+}
+window._debugRangeForAnswer = _debugRangeForAnswer;
+
+/**
+ * The per-answer 🐞 chip. Only exists in debug mode (window.__pgDebugEnabled, published by
+ * updateDebugButtonVisibility), so participants never see it.
+ *
+ * @param {number} from - debugPrompts length when the query went out
+ * @returns {string} HTML, or '' when debug mode is off
+ */
+function _debugAnswerChipHtml(from) {
+  if (!window.__pgDebugEnabled) return '';
+  const start = Number.isFinite(Number(from)) ? Number(from) : 0;
+  return `<button type="button" class="pageguide-debug-answer-chip" data-debug-from="${start}" title="Prompts, screenshots and raw response for this answer">🐞 Debug</button>`;
+}
+window._debugAnswerChipHtml = _debugAnswerChipHtml;
+
+/** Open the debug dialog scoped to one answer's calls. */
+async function openAnswerDebugView(from) {
+  let entries = [];
+  try {
+    const local = await chrome.storage.local.get('debugPrompts');
+    entries = Array.isArray(local.debugPrompts) ? local.debugPrompts : [];
+  } catch (e) { entries = []; }
+  // `to` is "now": everything logged since the query went out belongs to this answer.
+  const slice = _debugRangeForAnswer(from, entries.length, entries);
+  if (!slice.length) {
+    alert('No prompts were recorded for this answer (debug history may have rolled over).');
+    return;
+  }
+  openDebugPromptLightbox(slice, [], null, { answerOnly: true });
+}
+window.openAnswerDebugView = openAnswerDebugView;
+
+function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId, opts = {}) {
+  // answerOnly: opened from an answer's 🐞 chip, so it shows just that answer's calls — no session
+  // picker to get lost in.
+  const answerOnly = !!opts.answerOnly;
   closeDebugPromptLightbox();
   const overlay = document.createElement('div');
   overlay.id = 'pageguide-debug-prompt-lightbox';
@@ -7414,17 +7591,17 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
   overlay.innerHTML = `
     <div class="pageguide-memory-shot-dialog" role="dialog" aria-modal="true" style="padding: 16px; overflow: auto; display: flex; flex-direction: column; height: 85vh; width: 90vw; max-width: 680px; box-sizing: border-box;">
       <div class="pageguide-memory-shot-head" style="margin-bottom: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;">
-        <span style="font-size: 15px; font-weight: 800; color: var(--pg-text);">🐞 Debug Agent Prompt History</span>
+        <span style="font-size: 15px; font-weight: 800; color: var(--pg-text);">${answerOnly ? '🐞 Debug this answer' : '🐞 Debug Agent Prompt History'}</span>
         <button type="button" class="pageguide-memory-shot-close" id="pageguide-debug-prompt-close" aria-label="Close prompt viewer" style="font-size: 20px; border: 0; background: transparent; cursor: pointer; color: var(--pg-muted);">×</button>
       </div>
       <div style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;">
-        <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: ${answerOnly ? 'none' : 'flex'}; align-items: center; gap: 8px;">
           <label for="pageguide-debug-session-select" style="font-size: 12px; font-weight: bold; color: var(--pg-text); white-space: nowrap; width: 85px;">Select Session:</label>
           <select id="pageguide-debug-session-select" style="flex: 1; padding: 6px; border-radius: 6px; background: var(--pg-bg); color: var(--pg-text); border: 1px solid var(--pg-border); outline: none; font-size: 11px; font-family: sans-serif;">
           </select>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <label for="pageguide-debug-step-select" style="font-size: 12px; font-weight: bold; color: var(--pg-text); white-space: nowrap; width: 85px;">Select Step:</label>
+          <label for="pageguide-debug-step-select" style="font-size: 12px; font-weight: bold; color: var(--pg-text); white-space: nowrap; width: 85px;">${answerOnly ? 'LLM call:' : 'Select Step:'}</label>
           <select id="pageguide-debug-step-select" style="flex: 1; padding: 6px; border-radius: 6px; background: var(--pg-bg); color: var(--pg-text); border: 1px solid var(--pg-border); outline: none; font-size: 11px; font-family: sans-serif;">
           </select>
         </div>
@@ -7657,6 +7834,11 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
       </div>
     `;
 
+    // Raw model response. The entry is written before the call runs (appendDebugPrompt in the
+    // service worker), so this is patched in when the call settles — an entry with no response yet
+    // is either still in flight or was rolled off the 50-entry cap mid-call.
+    html += _debugRawResponseHtml(p);
+
     // System Prompt Block
     html += `
       <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
@@ -7692,13 +7874,17 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
     if (p.imageBase64) {
       const isPlaceholder = p.imageBase64 === 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
       if (!isPlaceholder) {
-        imagesList.push({ base64: p.imageBase64, label: 'Single viewport screenshot' });
+        imagesList.push({ id: 'viewport', base64: p.imageBase64, label: 'Single viewport screenshot' });
       }
     }
     if (Array.isArray(p.images)) {
-      p.images.forEach(img => {
+      p.images.forEach((img, idx) => {
         if (img.base64) {
-          imagesList.push({ base64: img.base64, label: img.label || 'Image attachment' });
+          imagesList.push({
+            id: _debugImageIdForAttachment(img, `image_${idx + 1}`),
+            base64: img.base64,
+            label: img.label || 'Image attachment'
+          });
         }
       });
     }
@@ -7707,9 +7893,10 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId) {
       let imgHtml = '';
       imagesList.forEach(img => {
         const src = img.base64.startsWith('data:') ? img.base64 : `data:image/jpeg;base64,${img.base64}`;
+        const imageId = _debugImageIdForAttachment(img);
         imgHtml += `
           <div style="border: 1px solid var(--pg-border); border-radius: 6px; padding: 6px; background: var(--pg-bg); display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
-            <span style="font-weight: bold; color: var(--pg-text); margin-bottom: 2px;">${escapeHtml(img.label)}</span>
+            <span style="font-weight: bold; color: var(--pg-text); margin-bottom: 2px;">${imageId ? `<code style="font-size: 11px; padding: 1px 4px; border-radius: 4px; background: var(--pg-card); border: 1px solid var(--pg-border); color: var(--pg-accent);">${escapeHtml(imageId)}</code> ` : ''}${escapeHtml(img.label)}</span>
             <img src="${src}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${src}')" title="Click to view full size" />
           </div>
         `;

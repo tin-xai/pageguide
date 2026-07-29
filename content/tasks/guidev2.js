@@ -1963,7 +1963,13 @@ function _gv2ShouldAutoExecute(step) {
  * after the element is gone). `screenshotBase64` is the just-taken viewport screenshot, reused
  * so we don't capture twice.
  */
-async function _gv2ScrollRegionTargetIntoView(el) {
+/**
+ * @param {Element} el - element to bring on screen
+ * @param {{exact?: boolean}} opts - exact: scroll THIS element, not its nearest interactive
+ *   ancestor. Evidence crops need the exact span centered; centering an ancestor link or <nav>
+ *   instead can leave the span itself off screen, and the capture then fails as offscreen.
+ */
+async function _gv2ScrollRegionTargetIntoView(el, opts = {}) {
   if (typeof window !== 'undefined' && window.IS_TEST_ENV) return;
   if (!el || typeof el.scrollIntoView !== 'function') return;
   let evalMode = false;
@@ -1972,7 +1978,9 @@ async function _gv2ScrollRegionTargetIntoView(el) {
     evalMode = r.guideEvalMode === true;
   } catch (e) { /* best-effort */ }
   const instant = evalMode || window._guidev2?.autoMode === true;
-  const scrollEl = el.closest('a, button, [role="button"], [role="link"], [role="menuitem"], li, summary, nav') || el;
+  const scrollEl = opts.exact
+    ? el
+    : (el.closest('a, button, [role="button"], [role="link"], [role="menuitem"], li, summary, nav') || el);
   // Flag this scroll as agent-driven so the study tracker attributes the resulting gesture to the
   // agent, not the participant. Cleared after the scroll settles + the tracker's 300 ms debounce.
   if (typeof window !== 'undefined') window._xwaAgentScrolling = true;
@@ -2196,6 +2204,43 @@ function _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr
           ctx.fill();
         }
         drawLabel(ann.label, (from.x + to.x) / 2, (from.y + to.y) / 2, color);
+      } else if (ann.type === 'path') {
+        // Free-form stroke: routes, borders, irregular outlines. Quadratic midpoint smoothing when
+        // `curved`, straight segments otherwise; optional arrowhead on the final point.
+        const pts = (Array.isArray(ann.points) ? ann.points : []).map(pointInCrop);
+        if (pts.length < 2) return;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        const trace = () => {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          if (ann.curved === false || pts.length === 2) {
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          } else {
+            for (let i = 1; i < pts.length - 1; i++) {
+              const mid = { x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 };
+              ctx.quadraticCurveTo(pts[i].x, pts[i].y, mid.x, mid.y);
+            }
+            ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+          }
+          ctx.stroke();
+        };
+        ctx.lineWidth = lw + 2; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; trace();
+        ctx.lineWidth = lw; ctx.strokeStyle = color; trace();
+        if (ann.arrow === true) {
+          const last = pts[pts.length - 1];
+          const prev = pts[pts.length - 2];
+          const a = Math.atan2(last.y - prev.y, last.x - prev.x);
+          const head = Math.max(10, Math.round(W * 0.025));
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(last.x, last.y);
+          ctx.lineTo(last.x - head * Math.cos(a - Math.PI / 6), last.y - head * Math.sin(a - Math.PI / 6));
+          ctx.lineTo(last.x - head * Math.cos(a + Math.PI / 6), last.y - head * Math.sin(a + Math.PI / 6));
+          ctx.closePath();
+          ctx.fill();
+        }
+        drawLabel(ann.label, pts[0].x, pts[0].y, color);
       }
     });
   } catch (e) { /* best-effort */ }
@@ -2237,7 +2282,7 @@ function _gv2MarkFullScreenshot(base64, rect, markerNumber, color = GV2_ACTION_M
  * (box + optional number badge) over the target so the "region of action" is visible in the pixels
  * themselves (no dependency on render-time geometry). Resolves { base64, marker } — base64 is the
  * crop (or null), marker is the target's normalized rect within the crop (or null). */
-function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = []) {
+function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = [], maxWidth = 0) {
   if (typeof window !== 'undefined' && window.IS_TEST_ENV) {
     return Promise.resolve({ base64: 'MOCK_CROP', marker: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
   }
@@ -2259,10 +2304,15 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
           if (!crop) return finish(null);
           crop.imageWidth = img.naturalWidth;
           crop.imageHeight = img.naturalHeight;
+          // Downscale wide crops: a retina crop of a large image costs several times the tokens
+          // for detail no model uses. The marker/annotation maths below is normalized, so it
+          // follows the scale automatically.
+          const scale = (maxWidth > 0 && crop.sw > maxWidth) ? (maxWidth / crop.sw) : 1;
           const canvas = document.createElement('canvas');
-          canvas.width = crop.sw; canvas.height = crop.sh;
+          canvas.width = Math.max(1, Math.round(crop.sw * scale));
+          canvas.height = Math.max(1, Math.round(crop.sh * scale));
           const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.sw, crop.sh);
+          ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height);
           const marker = (typeof gv2RegionMarkerRect === 'function') ? gv2RegionMarkerRect(rect, crop, dpr) : null;
           // Skip canvas baking when the marker is already drawn as a DOM overlay (captured in the
           // pixels), so we don't stack two markers on the same region.
@@ -2284,7 +2334,7 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
 // scroll a DOM/SoM target into view before capture; bbox-only evidence remains current-viewport only.
 // Best-effort — never throws.
 async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = null, options = {}) {
-  const out = { visualEvidenceShot: null, visualEvidenceOriginalShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureMode: null, captureError: null };
+  const out = { visualEvidenceShot: null, visualEvidenceOriginalShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureGeometry: null, captureMode: null, captureError: null };
   try {
     // Resolve a CSS-px viewport rect from either the live element or a normalized {x,y,w,h} box,
     // plus the marker target (the element when we have one, else the normalized rect).
@@ -2330,13 +2380,23 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     if (typeof gv2TargetNormRect === 'function') {
       out.visualEvidenceNormRect = gv2TargetNormRect(rect, window.innerWidth, window.innerHeight);
     }
+    out.captureGeometry = {
+      x: window.scrollX || 0,
+      y: window.scrollY || 0,
+      w: window.innerWidth || 0,
+      h: window.innerHeight || 0
+    };
     console.log('[DEBUG] gv2CaptureEvidenceRegion starting options:', JSON.stringify(options));
 
     // For saved evidence, force a real DOM overlay before capture so text spans / DOM targets are
     // visibly highlighted in the screenshot pixels. Recap-only evidence keeps the older Vision-on
     // overlay behavior and otherwise falls back to canvas baking after capture.
+    //
+    // The Vision-on default is passed in by the caller (gv2CaptureEvidenceItems) rather than read
+    // from window._guidev2 here: reading Guide state made an unrelated toggle — Send Image — change
+    // what a Find capture produced, which is exactly the coupling this path must not have.
     const useDomMarker = !options.noMarker
-      && !!(options.forceDomMarker || (window._guidev2 && window._guidev2._lastVisualInputOn))
+      && !!(options.forceDomMarker || options.visionMarkerDefault)
       && typeof gv2DrawDomMarker === 'function';
     let markerNode = null;
     if (useDomMarker) {
@@ -2386,7 +2446,8 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
           GV2_EVIDENCE_MARKER_COLOR,
           GV2_EVIDENCE_MARKER_FILL,
           bakeMarker,
-          options.annotations || []
+          options.annotations || [],
+          Number(options.maxWidth) || 0
         );
     out.visualEvidenceShot = marked?.base64 || null;
     out.visualEvidenceMarker = marked?.marker || null;
@@ -2638,6 +2699,9 @@ function _gv2PreprocessGridCoordinates(raw) {
       } else if (type === 'arrow' || type === 'line') {
         collectPoint(ann.from);
         collectPoint(ann.to);
+      } else if (type === 'path' || type === 'polyline' || type === 'curve' || type === 'freehand' || type === 'scribble') {
+        const pts = Array.isArray(ann.points) ? ann.points : (Array.isArray(ann.path) ? ann.path : []);
+        pts.forEach(collectPoint);
       }
     }
   }
@@ -2684,6 +2748,10 @@ function _gv2CoerceAnnotatorResult(raw, imageSize) {
         const to = _gv2CoerceAnnotatorPoint(next.to, imageSize);
         if (from) next.from = from;
         if (to) next.to = to;
+      } else if (type === 'path' || type === 'polyline' || type === 'curve' || type === 'freehand' || type === 'scribble') {
+        const pts = Array.isArray(next.points) ? next.points : (Array.isArray(next.path) ? next.path : []);
+        const coerced = pts.map(pt => _gv2CoerceAnnotatorPoint(pt, imageSize)).filter(Boolean);
+        if (coerced.length) next.points = coerced;
       }
       return next;
     });
@@ -2708,10 +2776,60 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
   const startY = window.scrollY || 0;
   const shouldRestore = options.restoreScroll === true;
   let annotationShot = null;
+  // Where the page was standing when annotationShot was taken. Annotation coordinates are
+  // fractions of THAT screenshot, so this is what converts them back to document coordinates when
+  // the marks are replayed on the live page (pageguideShowEvidenceAnnotations).
+  let annotationGeometry = null;
   for (const item of input) {
     if (item && !item.evidenceEl && !item.som_id && (item.need_annotation || item.needAnnotation || !Array.isArray(item.annotations) || !item.annotations.length)) {
-      try { if (!annotationShot && typeof captureScreenshot === 'function') annotationShot = await captureScreenshot(); } catch (e) {}
-      const annotated = await _gv2AnnotateEvidenceItem(item, annotationShot);
+      let itemAnnotationShot = null;
+      let itemAnnotationGeometry = null;
+      try {
+        if (item.annotationSourceEl && document.contains(item.annotationSourceEl)) {
+          await _gv2ScrollRegionTargetIntoView(item.annotationSourceEl, { exact: true });
+          await _gv2WaitForLayoutSettle();
+          if (!item.evidenceRect && typeof gv2TargetNormRect === 'function') {
+            const r = item.annotationSourceEl.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              item.evidenceRect = gv2TargetNormRect({ left: r.left, top: r.top, width: r.width, height: r.height },
+                window.innerWidth, window.innerHeight);
+              item.region_bbox = item.region_bbox || item.evidenceRect;
+            }
+          }
+          itemAnnotationShot = typeof captureScreenshot === 'function' ? await captureScreenshot() : null;
+          itemAnnotationGeometry = {
+            x: window.scrollX || 0,
+            y: window.scrollY || 0,
+            w: window.innerWidth || 0,
+            h: window.innerHeight || 0
+          };
+        } else if (item.annotationSourceGeometry) {
+          const g = item.annotationSourceGeometry;
+          try { window.scrollTo({ top: Number(g.y) || 0, left: Number(g.x) || 0, behavior: 'instant' in window ? 'instant' : 'auto' }); } catch (e) {}
+          await _gv2WaitForLayoutSettle();
+          item.evidenceRect = item.evidenceRect || item.region_bbox || item.annotationSourceRect || { x: 0, y: 0, w: 1, h: 1 };
+          item.region_bbox = item.region_bbox || item.evidenceRect;
+          itemAnnotationShot = typeof captureScreenshot === 'function' ? await captureScreenshot() : null;
+          itemAnnotationGeometry = {
+            x: window.scrollX || 0,
+            y: window.scrollY || 0,
+            w: window.innerWidth || 0,
+            h: window.innerHeight || 0
+          };
+        } else if (!annotationShot && typeof captureScreenshot === 'function') {
+          annotationShot = await captureScreenshot();
+          annotationGeometry = {
+            x: window.scrollX || 0,
+            y: window.scrollY || 0,
+            w: window.innerWidth || 0,
+            h: window.innerHeight || 0
+          };
+        }
+      } catch (e) {}
+      const shotForItem = itemAnnotationShot || annotationShot;
+      const geometryForItem = itemAnnotationGeometry || annotationGeometry;
+      item.captureGeometry = geometryForItem;
+      const annotated = await _gv2AnnotateEvidenceItem(item, shotForItem);
       if (annotated.region_bbox) {
         item.region_bbox = annotated.region_bbox;
         item.evidenceRect = annotated.region_bbox;
@@ -2719,7 +2837,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       item.annotations = Array.isArray(annotated.annotations) ? annotated.annotations : [];
       item.annotationSystemPrompt = annotated.systemPrompt || '';
       item.annotationUserPrompt = annotated.userPrompt || '';
-      item.annotationScreenshot = annotated.screenshotBase64 || annotationShot || null;
+      item.annotationScreenshot = annotated.screenshotBase64 || shotForItem || null;
       item.annotationRawResponse = annotated.rawResponse || '';
       item.annotationError = annotated.error || null;
       item.annotationCoordinateDebug = annotated.annotationCoordinateDebug || null;
@@ -2732,6 +2850,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       out.push({
         key: item?.key || null,
         note: item?.note || null,
+        source_image_id: item?.source_image_id || null,
         som_id: item?.som_id || null,
         region_bbox: item?.region_bbox || item?.evidenceRect || null,
         annotations: Array.isArray(item?.annotations) ? item.annotations : [],
@@ -2742,6 +2861,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
         annotationScreenshot: item?.annotationScreenshot || null,
         annotationRawResponse: item?.annotationRawResponse || '',
         annotationCoordinateDebug: item?.annotationCoordinateDebug || null,
+        captureGeometry: item?.captureGeometry || null,
         annotationError: item?.annotationError || (item?.evidenceRect ? null : 'missing-target'),
         visualEvidenceShot: null,
         visualEvidenceOriginalShot: null,
@@ -2760,18 +2880,22 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       cap = await gv2CaptureEvidenceRegion(item.evidenceEl, item.evidenceIndex, item.evidenceRect, {
         scrollIntoView: !!item.scrollIntoView,
         forceDomMarker: !!item.forceDomMarker,
+        // Guide's historical behaviour: with Vision on, mark the target with a DOM overlay so it
+        // is visible in the captured pixels. Only the Guide's own evidence opts into this.
+        visionMarkerDefault: !!(window._guidev2 && window._guidev2._lastVisualInputOn),
         // Some targets are already visibly marked on the page (Find citation spans carry the
         // highlight tint), so an extra box would be redundant — and any drift between the rect we
         // measured and the pixels we captured shows up as a box in the wrong place.
         noMarker: !!item.noMarker,
         fullViewport: !!item.fullViewportCapture,
         annotations: Array.isArray(item.annotations) ? item.annotations : [],
-        screenshotBase64: (!item.evidenceEl && annotationShot) ? annotationShot : null
+        screenshotBase64: (!item.evidenceEl && (item.annotationScreenshot || annotationShot)) ? (item.annotationScreenshot || annotationShot) : null
       });
     } catch (e) { cap.captureError = e?.message || 'capture-failed'; }
     out.push({
       key: item.key || null,
       note: item.note || null,
+      source_image_id: item.source_image_id || null,
       som_id: item.som_id || null,
       region_bbox: item.region_bbox || item.evidenceRect || null,
       annotations: Array.isArray(item.annotations) ? item.annotations : [],
@@ -2783,6 +2907,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       annotationRawResponse: item.annotationRawResponse || '',
       annotationCoordinateDebug: item.annotationCoordinateDebug || null,
       annotationError: item.annotationError || null,
+      captureGeometry: item.captureGeometry || cap.captureGeometry || null,
       visualEvidenceShot: cap.visualEvidenceShot || null,
       visualEvidenceOriginalShot: cap.visualEvidenceOriginalShot || null,
       visualEvidenceNormRect: cap.visualEvidenceNormRect || item.evidenceRect || null,
@@ -4592,7 +4717,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       findAnswer: isFind ? (findResult?.answer || '') : null,
       findNotOnPage: isFind ? !!findResult?.notOnPage : false,
       // Visual evidence mode only: one crop per cited span, in citation order. Empty in Text mode.
-      findEvidenceShots: isFind ? (findResult?.findEvidenceShots || []) : [],
+      // NOT gated on isFind: gv2RunFind captures these before the notOnPage branch above flips the
+      // step to visual_highlight, and crops belong to the answer rather than to the action name.
+      findEvidenceShots: findResult?.findEvidenceShots || [],
       evidenceMode,
       isWatchVideo,
       watchVideoAnswer: isWatchVideo ? (watchVideoResult?.answer || '') : null,
@@ -5313,16 +5440,47 @@ async function gv2RunFind(findQuery) {
   // highlights are cleared by that step anyway).
   const pageIndex = createPageIndex(5000, false);
 
-  const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+  // Evidence: Visual answers from the page text AND a screenshot, and returns its own evidence in
+  // the same reply. Evidence: Text runs the original text-only call below, untouched.
+  const visualMode = typeof getEvidenceMode === 'function' && (await getEvidenceMode()) === 'visual';
+  const systemPrompt = (visualMode ? (PROMPTS.FIND_ANSWER_VISUAL || PROMPTS.ANSWER_AND_HIGHLIGHT) : PROMPTS.ANSWER_AND_HIGHLIGHT)
     .replace('{pageContent}', pageContent || '(No text content found)')
-    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)');
+    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)')
+    .replace('{maxItems}', String(GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS));
 
-  const response = await safeSendMessage({
-    action: 'callLLM',
+  let answerShot = null;
+  if (visualMode && (await _gv2CaptureShotsAllowed())) {
+    try {
+      if (typeof showSetOfMarks === 'function') showSetOfMarks(pageIndex);
+      await new Promise(r => setTimeout(r, 120));
+      if (typeof captureScreenshot === 'function') answerShot = await captureScreenshot();
+    } catch (e) {
+      answerShot = null;
+    } finally {
+      try { if (typeof cleanupSom === 'function') cleanupSom(); } catch (e) {}
+    }
+  }
+
+  // Viewport + crops of the pictures this question is about, so the agent can actually see (and
+  // then annotate) the thing it is asked about.
+  const answerImages = answerShot ? await gv2BuildFindAnswerImages(question, answerShot) : [];
+
+  const askVisual = (images, userContent) => safeSendMessage({
+    action: 'callLLMWithImages',
     systemPrompt,
-    messages: [{ role: 'user', content: question }],
-    metadata: { mode: 'guide_find', url: window.location.href }
+    messages: [{ role: 'user', content: userContent }],
+    images,
+    metadata: { mode: 'guide_find_visual', url: window.location.href }
   });
+
+  let response = answerShot
+    ? await askVisual(answerImages, question)
+    : await safeSendMessage({
+        action: 'callLLM',
+        systemPrompt,
+        messages: [{ role: 'user', content: question }],
+        metadata: { mode: 'guide_find', url: window.location.href }
+      });
 
   if (response?.error) {
     console.warn('[guidev2] find: LLM error', response.error);
@@ -5337,7 +5495,32 @@ async function gv2RunFind(findQuery) {
     };
   }
 
-  const answer = response?.content?.trim() || '';
+  let rawAnswer = response?.content?.trim() || '';
+  // Visual mode replies with {answer, evidence}; a malformed envelope degrades to prose-only.
+  let parsedAnswer = (visualMode && answerShot && typeof gv2ParseFindAnswer === 'function')
+    ? gv2ParseFindAnswer(rawAnswer)
+    : { answer: rawAnswer, evidence: [], needMoreView: null };
+
+  // One escalation round, and only one: the model can ask to see further down/up, a specific
+  // element, or top/middle/bottom, and we re-ask with those extra views attached. A second request
+  // is ignored — an unbounded "show me more" loop is how a Find turns into a page crawl.
+  if (parsedAnswer.needMoreView && answerShot && answerImages.length < GV2_FIND_MAX_IMAGES) {
+    console.log('[guidev2] find: model asked for more view —', parsedAnswer.needMoreView.want, parsedAnswer.needMoreView.reason);
+    const extra = await gv2CaptureMoreViews(parsedAnswer.needMoreView);
+    if (extra.length) {
+      const images = answerImages.concat(extra).slice(0, GV2_FIND_MAX_IMAGES);
+      const followUp = `${question}\n\n(The extra views you asked for are attached: ${extra.map(e => e.label).join(', ')}. Answer now — no further views are available.)`;
+      const second = await askVisual(images, followUp);
+      const secondRaw = second?.content?.trim() || '';
+      if (secondRaw) {
+        rawAnswer = secondRaw;
+        parsedAnswer = gv2ParseFindAnswer(secondRaw);
+      }
+    }
+  }
+
+  const answer = parsedAnswer.answer || rawAnswer;
+  const modelEvidence = parsedAnswer.evidence || [];
   const { notOnPage } = gv2ParseFindResponse(answer);
 
   let highlightCount = 0;
@@ -5358,9 +5541,10 @@ async function gv2RunFind(findQuery) {
     ? stripCitationMarkers(answer)
     : answer;
 
-  // Visual evidence mode: crop each cited span into the answer, so the evidence travels with the
-  // text instead of only living on the page. Text mode keeps the citation links and nothing else.
-  const findEvidenceShots = await gv2CaptureFindEvidenceShots(highlightCount > 0);
+  // Visual evidence mode: a crop per cited span plus annotated evidence of what the PAGE shows, so
+  // the evidence travels with the answer instead of only living on the page — and so a question the
+  // DOM cannot answer still gets proof. Text mode keeps the citation links and nothing else.
+  const findEvidenceShots = await gv2BuildFindEvidence(highlightCount > 0, question, modelEvidence);
 
   return {
     answer: answerOut,
@@ -5408,6 +5592,42 @@ function gv2FindEvidenceTargets() {
 }
 if (typeof window !== 'undefined') window.gv2FindEvidenceTargets = gv2FindEvidenceTargets;
 
+/** Block-level ancestors worth cropping when a span itself cannot be captured. */
+const GV2_FIND_EVIDENCE_BLOCK_SELECTOR = 'p, li, td, th, blockquote, figure, h1, h2, h3, h4, section, article, div';
+
+/**
+ * Capture one cited span, with two escalating fallbacks. Order matters: the tight crop on the span
+ * is the best evidence, so it gets three tries (Chrome rate-limits back-to-back captures, and a
+ * re-scroll recovers rects invalidated by layout shift). Only then do we widen to the containing
+ * block — a picture of the paragraph beats no picture at all, which is what a reader got before
+ * when a span sat inside a scroll container or measured zero-height.
+ *
+ * @param {Element} el - the highlighted span
+ * @returns {Promise<object|null>} the gv2CaptureEvidenceRegion result (may hold captureError)
+ */
+async function _gv2CaptureFindSpan(el) {
+  let cap = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // exact:true centers the span itself — centering its nearest link/nav ancestor instead can
+    // leave the span off screen, and the capture then bails as 'dom-target-offscreen'.
+    await _gv2ScrollRegionTargetIntoView(el, { exact: true });
+    await _gv2WaitForLayoutSettle();
+    cap = await gv2CaptureEvidenceRegion(el, null, null, { noMarker: true });
+    if (cap?.visualEvidenceShot) return cap;
+    if (attempt < 2) await new Promise(r => setTimeout(r, attempt === 0 ? 350 : 700));
+  }
+
+  const block = el.closest && el.closest(GV2_FIND_EVIDENCE_BLOCK_SELECTOR);
+  if (block && block !== el) {
+    await _gv2ScrollRegionTargetIntoView(block, { exact: true });
+    await _gv2WaitForLayoutSettle();
+    const blockCap = await gv2CaptureEvidenceRegion(block, null, null, { noMarker: true });
+    if (blockCap?.visualEvidenceShot) return blockCap;
+    return blockCap || cap;
+  }
+  return cap;
+}
+
 /**
  * Visual evidence mode: one crop per cited span, so every [N] in the answer has a picture of the
  * text it came from. Returns [] when there is nothing to show or the study arm is Text — callers
@@ -5433,40 +5653,34 @@ async function gv2CaptureFindEvidenceShots(hasHighlights) {
   }
   const capped = targets.slice(0, GV2_FIND_EVIDENCE_MAX_SHOTS);
 
+  // Set-of-Marks is an independent setting (somEnabled) and its numbered overlays sit on top of the
+  // page — they would be captured inside every crop. Take them down first; the next guide step
+  // redraws them.
+  try { if (typeof cleanupSom === 'function') cleanupSom(); } catch (e) { /* best-effort */ }
+
   const startX = window.scrollX || 0;
   const startY = window.scrollY || 0;
   const root = document.documentElement;
   const out = [];
+  const misses = [];
 
   root.classList.add(GV2_EVIDENCE_CAPTURE_CLASS);
   try {
     for (const target of capped) {
       target.el.classList.add(GV2_ACTIVE_HIGHLIGHT_CLASS);
       try {
-        let cap = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          // scrollIntoView centers the span; the settle wait lets sticky headers/banners finish
-          // moving so the pixels under our rect are the ones we measured.
-          await _gv2ScrollRegionTargetIntoView(target.el);
-          await _gv2WaitForLayoutSettle();
-          cap = await gv2CaptureEvidenceRegion(target.el, null, null, { noMarker: true });
-          if (cap?.visualEvidenceShot) break;
-          if (attempt >= 2) break;
-          // Chrome rate-limits captureVisibleTab, and these captures run back to back. A short
-          // pause plus a fresh scroll/measure pass also recovers transient offscreen/empty rects
-          // caused by layout shifts after the first scroll.
-          await new Promise(r => setTimeout(r, attempt === 0 ? 350 : 700));
-        }
+        const cap = await _gv2CaptureFindSpan(target.el);
         if (cap?.visualEvidenceShot) {
           out.push({
             shot: cap.visualEvidenceShot,
             note: (target.el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160),
             index: target.number
           });
-        } else if (cap?.captureError) {
-          console.log(`[guidev2] find evidence ${target.number}: ${cap.captureError}`);
+        } else {
+          misses.push(`${target.number}:${cap?.captureError || 'no-shot'}`);
         }
       } catch (e) {
+        misses.push(`${target.number}:threw`);
         console.warn('[guidev2] find evidence capture failed:', e);
       } finally {
         target.el.classList.remove(GV2_ACTIVE_HIGHLIGHT_CLASS);
@@ -5477,9 +5691,516 @@ async function gv2CaptureFindEvidenceShots(hasHighlights) {
     root.classList.remove(GV2_EVIDENCE_CAPTURE_CLASS);
     try { window.scrollTo(startX, startY); } catch (e) { /* best-effort */ }
   }
+  // One line that explains a thin evidence strip without a debugging session.
+  console.log(`[guidev2] find evidence: ${out.length}/${capped.length} captured${misses.length ? ` — misses ${misses.join(', ')}` : ''}`);
   return out;
 }
 if (typeof window !== 'undefined') window.gv2CaptureFindEvidenceShots = gv2CaptureFindEvidenceShots;
+
+// How many annotated page-evidence items one Find may produce. Each costs an annotator call on top
+// of the single vision call, so this is the knob that bounds Find × Visual's added latency.
+const GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS = 3;
+
+/**
+ * Parse the FIND_ANSWER_VISUAL reply: one JSON envelope carrying the prose answer and the model's
+ * own evidence list. Pure and defensive — a model that ignores the format still produces a readable
+ * answer, because the fallback treats the whole reply as the answer with no evidence. That matters:
+ * a broken envelope must degrade to today's text-only behaviour, never to an empty answer.
+ *
+ * @param {string} raw - model reply
+ * @param {number} maxItems - cap on evidence items
+ * @returns {{answer: string, evidence: Array<object>}}
+ */
+/**
+ * Validate the model's request for more of the page. Only the four documented shapes are honoured —
+ * anything else is dropped rather than triggering a capture we cannot aim.
+ *
+ * @param {any} raw - the need_more_view field
+ * @returns {{want: string, reason: string}|null}
+ */
+function gv2ParseNeedMoreView(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const want = String(raw.want || raw.view || '').trim().toLowerCase();
+  if (!want) return null;
+  const ok = want === 'below' || want === 'above' || want === 'whole_page' || want === 'page' || /^element:\d+$/.test(want);
+  if (!ok) return null;
+  return { want, reason: String(raw.reason || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+}
+if (typeof window !== 'undefined') window.gv2ParseNeedMoreView = gv2ParseNeedMoreView;
+
+function gv2ParseFindAnswer(raw, maxItems = GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS) {
+  const text = String(raw || '').trim();
+  if (!text) return { answer: '', evidence: [], needMoreView: null };
+  const cleaned = text.replace(/```json|```/g, '').trim();
+  try {
+    const parsed = typeof gv2ExtractJsonObject === 'function'
+      ? (gv2ExtractJsonObject(cleaned) || JSON.parse(cleaned))
+      : JSON.parse(cleaned);
+    if (parsed && typeof parsed.answer === 'string') {
+      return {
+        answer: parsed.answer,
+        evidence: gv2ParseFindVisualEvidence(JSON.stringify({ items: parsed.evidence || [] }), maxItems),
+        needMoreView: gv2ParseNeedMoreView(parsed.need_more_view)
+      };
+    }
+  } catch (e) { /* fall through to prose */ }
+  // Not the envelope we asked for — treat the reply as the answer, which is what it almost always
+  // is when a model drops the JSON.
+  return { answer: text, evidence: [], needMoreView: null };
+}
+if (typeof window !== 'undefined') window.gv2ParseFindAnswer = gv2ParseFindAnswer;
+
+/**
+ * Parse the FIND_VISUAL_EVIDENCE reply into evidence items. Pure and defensive: a model that
+ * returns prose, fenced JSON, a bare array, or nonsense yields [] rather than throwing, because an
+ * empty list is a legitimate answer here (ordinary text questions have no visual evidence).
+ *
+ * @param {string} raw - model reply
+ * @param {number} maxItems
+ * @returns {Array<object>} items in Guide's saved-evidence shape
+ */
+function gv2ParseFindVisualEvidence(raw, maxItems = GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS) {
+  try {
+    const text = String(raw || '').replace(/```json|```/g, '').trim();
+    if (!text) return [];
+    // A bare array is already valid JSON; gv2ExtractJsonObject hunts for {...} and would pull out
+    // the first ITEM instead of the list.
+    const parsed = text.startsWith('[')
+      ? JSON.parse(text)
+      : (typeof gv2ExtractJsonObject === 'function' ? (gv2ExtractJsonObject(text) || JSON.parse(text)) : JSON.parse(text));
+    const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.items) ? parsed.items : []);
+    return items
+      .filter(it => it && (it.som_id || it.region_bbox || it.need_annotation))
+      .slice(0, Math.max(0, maxItems))
+      .map((it, i) => ({
+        key: String(it.key || `visual_evidence_${i + 1}`).trim(),
+        note: String(it.note || '').replace(/\s+/g, ' ').trim(),
+        som_id: it.som_id != null ? String(it.som_id) : null,
+        region_bbox: it.region_bbox || null,
+        source_image_id: String(it.source_image_id || it.image_id || 'viewport').trim() || 'viewport',
+        need_annotation: !!it.need_annotation,
+        annotation_prompt: it.annotation_prompt || it.note || null
+      }));
+  } catch (e) {
+    return [];
+  }
+}
+if (typeof window !== 'undefined') window.gv2ParseFindVisualEvidence = gv2ParseFindVisualEvidence;
+
+/**
+ * Find × Visual, second pass: ask a vision model what the PAGE shows that bears on the question,
+ * then crop and annotate those regions through the Guide's existing evidence pipeline.
+ *
+ * This is what lets Find answer questions the DOM cannot support — "does the person in the portrait
+ * have a beard?", "what colour is the shirt?" — where there is no text to cite. The model returns
+ * Guide's saved-evidence shape, so gv2CaptureEvidenceItems does the rest unchanged: it routes
+ * need_annotation items to the annotator (PROMPTS.GUIDE_EVIDENCE_ANNOTATOR) and returns crops with
+ * the boxes/labels already drawn in.
+ *
+ * Runs on every Find in Visual mode; the model returns an empty list for ordinary text questions,
+ * so the cost is one vision call, not one annotation pass.
+ *
+ * @param {string} question
+ * @param {number} startNumber - first free chip number (span crops take 1..N)
+ * @returns {Promise<Array<{shot: string, note: string, index: number}>>}
+ */
+async function gv2RunFindVisualEvidence(question, startNumber = 1) {
+  const q = String(question || window._guidev2?.question || '').trim();
+  if (!q) return [];
+  if (typeof gv2CaptureEvidenceItems !== 'function') return [];
+  if (!(await _gv2CaptureShotsAllowed())) return [];
+
+  // A screenshot WITH SoM markers, so the model can point at indexed elements by number.
+  let shot = null;
+  let pageIndex = null;
+  try {
+    pageIndex = createPageIndex(GV2_GUIDE_INDEX_MAX_ITEMS, true);
+    if (typeof showSetOfMarks === 'function') showSetOfMarks(pageIndex);
+    await new Promise(r => setTimeout(r, 120));
+    if (typeof captureScreenshot === 'function') shot = await captureScreenshot();
+  } catch (e) {
+    shot = null;
+  } finally {
+    try { if (typeof cleanupSom === 'function') cleanupSom(); } catch (e) { /* best-effort */ }
+  }
+  if (!shot) return [];
+
+  const systemPrompt = String(PROMPTS?.FIND_VISUAL_EVIDENCE || '')
+    .replace('{maxItems}', String(GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS));
+  if (!systemPrompt) return [];
+
+  let items = [];
+  try {
+    const response = await safeSendMessage({
+      action: 'callLLMWithImages',
+      systemPrompt,
+      messages: [{ role: 'user', content: `QUESTION: ${q}\n\nReturn the JSON object.` }],
+      images: [{ id: 'viewport', base64: shot, label: '[image_id=viewport] Page screenshot with SoM markers' }],
+      metadata: { mode: 'find_visual_evidence', url: window.location.href }
+    });
+    items = gv2ParseFindVisualEvidence(response?.content);
+  } catch (e) {
+    console.warn('[guidev2] find visual evidence call failed:', e);
+    return [];
+  }
+  if (!items.length) {
+    console.log('[guidev2] find visual evidence: none (text answer is sufficient)');
+    return [];
+  }
+
+  return gv2CaptureFindEvidenceItems(items, startNumber);
+}
+if (typeof window !== 'undefined') window.gv2RunFindVisualEvidence = gv2RunFindVisualEvidence;
+
+/**
+ * Crop and annotate a list of evidence items into numbered chips. The items come from the model —
+ * either from the answer call (FIND_ANSWER_VISUAL, the normal path) or from the standalone visual
+ * pass — and are in Guide's saved-evidence shape, so gv2CaptureEvidenceItems does the work:
+ * resolving SoM targets, cropping, and routing need_annotation items to the annotator.
+ *
+ * @param {Array<object>} items - evidence items in Guide's shape
+ * @param {number} startNumber - first free chip number (span crops take 1..N)
+ * @returns {Promise<Array<{shot: string, note: string, index: number, marks: object}>>}
+ */
+async function gv2CaptureFindEvidenceItems(items, startNumber = 1) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return [];
+  if (typeof gv2CaptureEvidenceItems !== 'function') return [];
+  if (!(await _gv2CaptureShotsAllowed())) return [];
+
+  // Resolve SoM ids to live elements, then hand the whole list to the Guide's capture+annotate
+  // pipeline. Items with neither element nor bbox become full-viewport annotations there.
+  const resolved = list.map(item => {
+    const somIndex = typeof _gv2SomIdToIndex === 'function' ? _gv2SomIdToIndex(item.som_id) : null;
+    const somEl = somIndex != null ? (window._pageguideIndex?.[somIndex] || null) : null;
+    const sourceImageId = item.source_image_id || 'viewport';
+    const source = typeof gv2FindAnswerImageSource === 'function' ? gv2FindAnswerImageSource(sourceImageId) : null;
+    const sourceEl = sourceImageId !== 'viewport' ? _gv2LiveElementForFindImageSource(source) : null;
+
+    // When the model asks for an annotation, honour it EVEN IF the evidence resolved to an
+    // element. Guide's pipeline skips the annotator for any item carrying an element or som_id
+    // (_gv2AnnotateEvidenceItem returns early), which is right for a button — a box around it says
+    // everything — but wrong here: "box the man's beard" means marking something INSIDE the
+    // element. So the element is dropped and its rect is handed over as the region hint, which is
+    // what the annotator needs to aim inside it.
+    const annotateInside = !!(somEl && item.need_annotation);
+    let insideRect = null;
+    if (annotateInside && typeof gv2TargetNormRect === 'function') {
+      try {
+        const r = somEl.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          insideRect = gv2TargetNormRect({ left: r.left, top: r.top, width: r.width, height: r.height },
+            window.innerWidth, window.innerHeight);
+        }
+      } catch (e) { insideRect = null; }
+    }
+    const useEl = somEl && !annotateInside ? somEl : null;
+
+    return {
+      key: item.key,
+      note: item.note,
+      source_image_id: sourceImageId,
+      som_id: annotateInside ? null : item.som_id,
+      region_bbox: insideRect || item.region_bbox,
+      need_annotation: !!item.need_annotation,
+      annotation_prompt: item.annotation_prompt,
+      annotationSourceEl: sourceEl || null,
+      annotationSourceGeometry: !sourceEl && sourceImageId !== 'viewport' ? (source?.captureGeometry || null) : null,
+      annotationSourceRect: !sourceEl && sourceImageId !== 'viewport' ? (source?.targetRect || null) : null,
+      annotations: [],
+      evidenceEl: useEl,
+      evidenceIndex: useEl && somIndex != null ? somIndex : null,
+      evidenceRect: useEl ? null : (insideRect || item.region_bbox || null),
+      text: item.note,
+      reason: item.note,
+      scrollIntoView: !!useEl,
+      forceDomMarker: !!useEl,
+      fullViewportCapture: !useEl && !insideRect && !item.region_bbox
+    };
+  });
+
+  try {
+    const caps = await gv2CaptureEvidenceItems(resolved, {
+      restoreScroll: true,
+      maxItems: GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS
+    });
+    const out = (Array.isArray(caps) ? caps : [])
+      .map((cap, i) => ({
+        shot: cap?.visualEvidenceShot || null,
+        note: cap?.note || cap?.visualEvidenceReason || resolved[i]?.note || '',
+        index: startNumber + i,
+        // The model cites visual evidence in the answer as [ev:key]; the panel needs the key to
+        // turn those into chips that open this crop.
+        key: cap?.key || resolved[i]?.key || null,
+        source_image_id: cap?.source_image_id || resolved[i]?.source_image_id || 'viewport',
+        // Everything the on-page renderer needs to redraw these marks over the live page, and
+        // nothing else — deliberately not the screenshots, which would bloat every panel message.
+        marks: {
+          annotations: Array.isArray(cap?.annotations) ? cap.annotations : [],
+          region_bbox: cap?.region_bbox || cap?.visualEvidenceNormRect || null,
+          captureGeometry: cap?.captureGeometry || null,
+          visualEvidenceIndex: cap?.visualEvidenceIndex != null ? cap.visualEvidenceIndex : null,
+          source_image_id: cap?.source_image_id || resolved[i]?.source_image_id || 'viewport',
+          note: cap?.note || resolved[i]?.note || ''
+        }
+      }))
+      .filter(item => !!item.shot);
+    console.log(`[guidev2] find visual evidence: ${out.length}/${resolved.length} captured`);
+    return out;
+  } catch (e) {
+    console.warn('[guidev2] find visual evidence capture failed:', e);
+    return [];
+  }
+}
+if (typeof window !== 'undefined') window.gv2CaptureFindEvidenceItems = gv2CaptureFindEvidenceItems;
+
+// ===== IMAGES FOR THE FIND ANSWER CALL =====
+// The viewport alone is a narrow window: the picture a question is about is often half out of
+// frame, or below the fold. Rather than tiling the page on every question, send the viewport plus
+// crops of the pictures the DOM says the question is about (gv2FindMediaCandidates), and let the
+// model ask for more when that is not enough.
+
+/** Media crops attached to the answer call, on top of the viewport shot. */
+const GV2_FIND_MEDIA_CROPS = 2;
+/** Hard ceiling across both rounds, so an escalation cannot run away. */
+const GV2_FIND_MAX_IMAGES = 8;
+/** Crops are downscaled to this width: a retina crop of a painting costs several times the tokens
+ *  for no extra detail. */
+const GV2_FIND_CROP_MAX_WIDTH = 1024;
+
+// Crop cache for the session: the same page answers several questions in a study task, and the
+// pictures do not move. Keyed by page identity + element, cleared when the page changes.
+const _gv2FindCropCache = new Map();
+const _gv2FindAnswerImageSources = new Map();
+/** Cap so a long session cannot accumulate crops for every page visited. */
+const GV2_FIND_CROP_CACHE_MAX = 20;
+/** Drop the cached crops (navigation, or a test that wants a cold start). */
+function gv2ClearFindCropCache() { _gv2FindCropCache.clear(); _gv2FindAnswerImageSources.clear(); }
+if (typeof window !== 'undefined') window.gv2ClearFindCropCache = gv2ClearFindCropCache;
+
+function gv2RememberFindAnswerImageSource(meta) {
+  const id = String(meta?.id || '').trim();
+  if (!id) return null;
+  const source = Object.assign({}, meta, { id });
+  _gv2FindAnswerImageSources.set(id, source);
+  return source;
+}
+if (typeof window !== 'undefined') window.gv2RememberFindAnswerImageSource = gv2RememberFindAnswerImageSource;
+
+function gv2FindAnswerImageSource(id) {
+  const key = String(id || '').trim();
+  return key ? (_gv2FindAnswerImageSources.get(key) || null) : null;
+}
+if (typeof window !== 'undefined') window.gv2FindAnswerImageSource = gv2FindAnswerImageSource;
+
+function _gv2LiveElementForFindImageSource(source) {
+  if (!source) return null;
+  if (source.el && document.contains(source.el)) return source.el;
+  if (source.selector) {
+    try {
+      const el = document.querySelector(source.selector);
+      if (el) return el;
+    } catch (e) { /* stale/invalid selector */ }
+  }
+  return null;
+}
+
+function _gv2FindCropCacheKey(el) {
+  const sig = `${window.location.href}|${document.documentElement.scrollHeight}|${window.devicePixelRatio || 1}`;
+  const sel = typeof gv2ElementSelector === 'function' ? gv2ElementSelector(el) : (el?.tagName || '');
+  return `${sig}|${sel}`;
+}
+
+/**
+ * The images that go with a Find answer call: the viewport, then a crop per ranked media candidate.
+ *
+ * @param {string} question
+ * @param {string} viewportShot - the SoM-marked viewport screenshot (may be null)
+ * @param {number} maxCrops
+ * @returns {Promise<Array<{id: string, base64: string, label: string}>>}
+ */
+async function gv2BuildFindAnswerImages(question, viewportShot, maxCrops = GV2_FIND_MEDIA_CROPS) {
+  _gv2FindAnswerImageSources.clear();
+  const images = [];
+  const startX = window.scrollX || 0;
+  const startY = window.scrollY || 0;
+  if (viewportShot) {
+    gv2RememberFindAnswerImageSource({
+      id: 'viewport',
+      kind: 'viewport',
+      captureGeometry: { x: startX, y: startY, w: window.innerWidth || 0, h: window.innerHeight || 0 }
+    });
+    images.push({ id: 'viewport', base64: viewportShot, label: '[image_id=viewport] Page screenshot with SoM markers' });
+  }
+  if (maxCrops <= 0 || typeof gv2FindMediaCandidates !== 'function') return images;
+
+  let candidates = [];
+  try { candidates = gv2FindMediaCandidates(question, { limit: maxCrops }); } catch (e) { candidates = []; }
+  if (!candidates.length) {
+    console.log('[guidev2] find images: no media candidates above threshold');
+    return images;
+  }
+  console.log('[guidev2] find images:', candidates.map(c => `${c.label.slice(0, 40)} (${c.score.toFixed(2)} ${c.why})`).join(' | '));
+
+  let cropNumber = 1;
+  try {
+    for (const cand of candidates) {
+      if (images.length >= GV2_FIND_MAX_IMAGES) break;
+      const key = _gv2FindCropCacheKey(cand.el);
+      let cached = _gv2FindCropCache.get(key) || null;
+      let shot = typeof cached === 'string' ? cached : (cached?.shot || null);
+      let sourceMeta = cached && typeof cached === 'object' ? cached.source : null;
+      if (!shot) {
+        try {
+          const cap = await gv2CaptureEvidenceRegion(cand.el, null, null, {
+            noMarker: true,
+            scrollIntoView: true,
+            maxWidth: GV2_FIND_CROP_MAX_WIDTH
+          });
+          shot = cap?.visualEvidenceShot || null;
+          if (shot) {
+            sourceMeta = {
+              kind: 'page_image',
+              selector: typeof gv2ElementSelector === 'function' ? gv2ElementSelector(cand.el) : '',
+              captureGeometry: cap?.captureGeometry || null,
+              targetRect: cap?.visualEvidenceNormRect || null,
+              label: cand.label
+            };
+            if (_gv2FindCropCache.size >= GV2_FIND_CROP_CACHE_MAX) {
+              _gv2FindCropCache.delete(_gv2FindCropCache.keys().next().value);
+            }
+            _gv2FindCropCache.set(key, { shot, source: sourceMeta });
+          }
+        } catch (e) { shot = null; }
+      }
+      if (shot) {
+        const id = `page_image_${cropNumber++}`;
+        gv2RememberFindAnswerImageSource(Object.assign({}, sourceMeta || {}, {
+          id,
+          kind: 'page_image',
+          el: cand.el,
+          selector: sourceMeta?.selector || (typeof gv2ElementSelector === 'function' ? gv2ElementSelector(cand.el) : ''),
+          label: cand.label
+        }));
+        images.push({ id, base64: shot, label: `[image_id=${id}] Image on page: ${cand.label}` });
+      }
+    }
+  } finally {
+    try { window.scrollTo(startX, startY); } catch (e) { /* best-effort */ }
+  }
+  return images;
+}
+if (typeof window !== 'undefined') window.gv2BuildFindAnswerImages = gv2BuildFindAnswerImages;
+
+/**
+ * Extra views the model asked for, captured once. Bands are viewport-height slices in the requested
+ * direction; whole_page is at most three evenly spaced bands, never the full scroll height.
+ *
+ * @param {{want?: string}} request - the model's need_more_view
+ * @returns {Promise<Array<{id: string, base64: string, label: string}>>}
+ */
+async function gv2CaptureMoreViews(request) {
+  const want = String(request?.want || '').trim().toLowerCase();
+  if (!want) return [];
+  const out = [];
+  const startY = window.scrollY || 0;
+  const vh = window.innerHeight || 800;
+  const maxY = Math.max(0, (document.documentElement.scrollHeight || 0) - vh);
+
+  const shootAt = async (y, label) => {
+    if (out.length >= 3) return;
+    try {
+      window.scrollTo({ top: Math.max(0, Math.min(maxY, y)), behavior: 'instant' in window ? 'instant' : 'auto' });
+      await _gv2WaitForLayoutSettle();
+      const shot = typeof captureScreenshot === 'function' ? await captureScreenshot() : null;
+      if (shot) {
+        const id = `extra_view_${out.length + 1}`;
+        gv2RememberFindAnswerImageSource({
+          id,
+          kind: 'extra_view',
+          captureGeometry: { x: window.scrollX || 0, y: window.scrollY || 0, w: window.innerWidth || 0, h: window.innerHeight || 0 }
+        });
+        out.push({ id, base64: shot, label: `[image_id=${id}] ${label}` });
+      }
+    } catch (e) { /* best-effort */ }
+  };
+
+  try {
+    const elMatch = want.match(/^element:(\d+)$/);
+    if (elMatch) {
+      const el = window._pageguideIndex?.[Number(elMatch[1])];
+      if (el) {
+        const cap = await gv2CaptureEvidenceRegion(el, null, null, {
+          noMarker: true, scrollIntoView: true, maxWidth: GV2_FIND_CROP_MAX_WIDTH
+        });
+        if (cap?.visualEvidenceShot) {
+          const id = `extra_view_${out.length + 1}`;
+          gv2RememberFindAnswerImageSource({
+            id,
+            kind: 'extra_view',
+            selector: typeof gv2ElementSelector === 'function' ? gv2ElementSelector(el) : '',
+            el,
+            captureGeometry: cap?.captureGeometry || null,
+            targetRect: cap?.visualEvidenceNormRect || null
+          });
+          out.push({ id, base64: cap.visualEvidenceShot, label: `[image_id=${id}] Requested element ${elMatch[1]}` });
+        }
+      }
+    } else if (want === 'below') {
+      await shootAt(startY + vh, 'View below the original viewport');
+      await shootAt(startY + vh * 2, 'Further below');
+    } else if (want === 'above') {
+      await shootAt(startY - vh, 'View above the original viewport');
+      await shootAt(startY - vh * 2, 'Further above');
+    } else if (want === 'whole_page' || want === 'page') {
+      await shootAt(0, 'Top of page');
+      await shootAt(maxY / 2, 'Middle of page');
+      await shootAt(maxY, 'Bottom of page');
+    }
+  } finally {
+    try { window.scrollTo(window.scrollX || 0, startY); } catch (e) { /* best-effort */ }
+  }
+  console.log(`[guidev2] find: captured ${out.length} extra view(s) for "${want}"`);
+  return out;
+}
+if (typeof window !== 'undefined') window.gv2CaptureMoreViews = gv2CaptureMoreViews;
+
+/**
+ * The full evidence strip for a Find answer in Visual mode: a crop per cited span, then the
+ * annotated page evidence, in one numbered list. Both call sites (Guide's find action and the Ask
+ * route) use this so the two behave identically.
+ *
+ * @param {boolean} hasHighlights - did the answer highlight anything on the page
+ * @param {string} question - the question, for the visual pass
+ * @returns {Promise<Array<{shot: string, note: string, index: number}>>}
+ */
+async function gv2BuildFindEvidence(hasHighlights, question, modelEvidence = null) {
+  const spans = await gv2CaptureFindEvidenceShots(hasHighlights);
+  const nextNumber = spans.reduce((max, s) => Math.max(max, Number(s.index) || 0), 0) + 1;
+  // The answer call now returns its own evidence (FIND_ANSWER_VISUAL), so there is nothing left to
+  // ask a second model. gv2RunFindVisualEvidence stays as the fallback for callers that have no
+  // model evidence — e.g. a reply whose JSON envelope was malformed.
+  const visual = Array.isArray(modelEvidence) && modelEvidence.length
+    ? await gv2CaptureFindEvidenceItems(modelEvidence, nextNumber)
+    : (modelEvidence ? [] : await gv2RunFindVisualEvidence(question, nextNumber));
+
+  // Put the annotator's marks on the real page, not just in the evidence card: the participant is
+  // being asked to check the answer, and a box drawn over a picture of the page proves less than
+  // the same box drawn over the page. Runs the moment the agent finishes answering.
+  try {
+    const marks = visual
+      .map(item => item.marks)
+      .filter(m => m && ((Array.isArray(m.annotations) && m.annotations.length) || m.region_bbox));
+    if (marks.length && typeof pageguideShowEvidenceAnnotations === 'function') {
+      pageguideShowEvidenceAnnotations(marks);
+    }
+  } catch (e) {
+    console.warn('[guidev2] on-page evidence marks failed:', e);
+  }
+
+  return spans.concat(visual);
+}
+if (typeof window !== 'undefined') window.gv2BuildFindEvidence = gv2BuildFindEvidence;
 
 async function gv2RunWatchVideo(step) {
   const currentUrl = String(window.location.href || '').trim();

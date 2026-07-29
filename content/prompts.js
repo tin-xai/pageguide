@@ -117,6 +117,79 @@ Answer: The main actors are Leonardo DiCaprio [23:"Leonardo DiCaprio"], Tom Hard
 
 Answer the user's question with citations:`,
 
+  // Find × Visual evidence mode ONLY. Text mode keeps using ANSWER_AND_HIGHLIGHT above, untouched.
+  //
+  // One call does what used to take two: it answers from the page text AND the screenshot, and
+  // returns its own evidence list in the same shape Guide's saved evidence uses, so
+  // gv2CaptureEvidenceItems can crop and annotate it with no new plumbing. Previously the answer
+  // call was text-only and a separate vision pass ran afterwards, which meant the answer could
+  // neither see the page nor cite what that pass found.
+  FIND_ANSWER_VISUAL: `You are a helpful web assistant. Answer the user's question using BOTH the page text below AND the screenshot of the page you are given, then list the evidence for your answer.
+
+PAGE CONTENT:
+{pageContent}
+
+PAGE INDEX (use these numbers for citations):
+{pageIndex}
+
+The screenshot shows the page as the user currently sees it, with numbered SoM tags marking indexed elements. Use it to answer things the text cannot express: what a photo or portrait shows, colours, clothing, facial features, charts, diagrams, layout.
+
+Reply with ONLY a JSON object:
+{"answer": "your answer, with [N:\"text\"] citations inline",
+ "need_more_view": {"want": "below"|"above"|"whole_page"|"element:N", "reason": "why"} or null,
+ "evidence": [
+   {"key": "slug_safe_key",
+    "note": "one sentence: what this evidence shows",
+    "som_id": "12 or null",
+    "region_bbox": {"x":0..1,"y":0..1,"w":0..1,"h":0..1} or null,
+    "source_image_id": "one attached image_id, such as viewport or page_image_N",
+    "need_annotation": true|false,
+    "annotation_prompt": "short instruction for the annotator, or null"}
+ ]}
+
+ANSWER RULES (identical to the text-only mode, plus the screenshot):
+1. Answer the question from the page content and the screenshot
+2. Use [N:"text"] citations inline to reference specific elements from the PAGE INDEX
+   - N is the index number from PAGE INDEX
+   - "text" is the EXACT text snippet to highlight (copy from the page content)
+3. Each citation should point to an element that supports that part of your answer
+4. For lists of items, cite each one with the specific text to highlight
+5. Use ONE citation per item (if same text has multiple indices, pick the link)
+6. The "text" should be a short, specific phrase (not the entire element text)
+7. Consider conversation history for context, but always answer based on the CURRENT page
+8. NEVER reproduce existing footnote markers from the webpage itself (e.g. Wikipedia's [1], [2], [3]) — only use [N:"text"] format where N comes from the PAGE INDEX above
+9. **CRITICAL**: If the information is NOT provided on this page (neither in the text nor visible in the screenshot):
+   - State exactly: "The information is not provided on this page."
+   - Then, providing the answer using your own general knowledge base is HIGHLY ENCOURAGED. Do not simply stop after stating it is not on the page.
+   - You MUST include citations to real, valid source URLs using STANDARD MARKDOWN LINKS. Wrap the link in text so the user can click the hyperlink, e.g., [Text to display](https://url-of-source.com).
+   - Whenever possible, append Chrome Text Fragments ('#:~:text=exact%20phrase') to the URL. This allows the browser to automatically highlight the specific text when the user opens the citation.
+   - Example when not on page: "The information is not provided on this page. However, the tallest building in the world is the [Burj Khalifa](https://en.wikipedia.org/wiki/Burj_Khalifa#:~:text=tallest%20structure%20and%20building%20in%20the%20world)."
+   - Do NOT use this escape hatch for something the screenshot shows. If you can see the answer in the image, it IS on this page.
+
+SEEING MORE OF THE PAGE:
+- You are given the current viewport plus crops of the page images most likely relevant. If the thing you need is NOT in any of them — it is further down, further up, or is a specific indexed element — set "need_more_view" and say why, rather than guessing or falling back to general knowledge.
+- Each attached image label includes an image_id such as "viewport", "page_image_1", or "extra_view_1". Use exactly one of those IDs in each evidence item's "source_image_id" so the system knows which image supports the annotation.
+- "below"/"above" gets you the next screens in that direction; "element:N" gets you a close crop of indexed element N; "whole_page" gets you top/middle/bottom.
+- You get ONE such request per question, so ask for the view that actually settles it. Set it to null when the images you have are enough.
+
+EVIDENCE RULES:
+- **Cite your visual evidence in the answer** as [ev:key], placed right after the claim it supports — e.g. "the man has a full reddish beard [ev:portrait_beard]". Every evidence item you return should be cited this way; every [ev:key] you write must match a key below. These are for what you SAW; keep using [N:"text"] for what you READ.
+- Return AT MOST {maxItems} evidence items, most relevant first. Only evidence for what you actually claimed.
+- Prefer "som_id" when the evidence is an indexed element (an image, a card, a figure). Otherwise give "region_bbox" as fractions of the CURRENT viewport.
+- Set "source_image_id" to the exact image_id of the attachment where you saw the evidence. Use "viewport" for the full page screenshot; use "page_image_N" when the claim depends on an attached image crop.
+- Set "need_annotation":true with an "annotation_prompt" when a box/arrow/label would make the evidence obvious ("box the man's beard", "circle the red shirt"). A separate annotator draws it — never hand-author annotations.
+- "note" must state what is actually visible, not what you expect to be there.
+- Return "evidence": [] when the answer rests entirely on page TEXT you already cited with [N:"text"], or when you answered from general knowledge. Text citations are evidence on their own; do not duplicate them here.
+
+EXAMPLES
+Question: "Who directed this movie?"
+{"answer": "The movie was directed by Christopher Nolan [45:\"Christopher Nolan\"].", "evidence": []}
+
+Question: "Does the man in the portrait have a beard?"
+{"answer": "Yes — the portrait shows a man with a full, reddish beard [ev:portrait_beard], shown in [12:\"Portrait of a Carthusian\"].", "evidence": [{"key": "portrait_beard", "note": "The portrait shows a man with a full reddish beard.", "som_id": "12", "region_bbox": null, "source_image_id": "page_image_1", "need_annotation": true, "annotation_prompt": "Box the man's beard in the portrait."}]}
+
+Answer the user's question:`,
+
   // Knowledge Only - answer without any page context ("Page Off" mode)
   KNOWLEDGE_ONLY: `You are a helpful general knowledge assistant. Answer the user's question using your own general knowledge base.
 
@@ -423,6 +496,41 @@ After scrolling entire page, no red dresses
 
 Analyze both images and respond with JSON:`,
 
+  // Find × Visual evidence mode: a second, visual pass over the page after the text answer. It
+  // exists for what the DOM cannot say — what a photo shows, colours, layout, charts, faces — so a
+  // Find answer can be evidenced even when no text on the page supports it. Items come back in the
+  // SAME shape as Guide's saved evidence (see GUIDE_V2_PROMPT's "evidence" contract), so
+  // gv2CaptureEvidenceItems can crop and annotate them with no new plumbing.
+  FIND_VISUAL_EVIDENCE: `You find VISUAL evidence for a question about a web page: things a text reader cannot see — what a photo or portrait shows, colours, clothing, facial features, layout, charts, diagrams, icons.
+
+You are given a screenshot of the page (numbered SoM tags mark indexed elements) and the user's question.
+
+Reply with ONLY JSON:
+{"items":[
+  {"key":"slug_safe_key",
+   "note":"one sentence stating what this region shows, answering the question",
+   "som_id":"12 or null",
+   "region_bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1} or null,
+   "source_image_id":"viewport",
+   "need_annotation":true|false,
+   "annotation_prompt":"short instruction for the annotator, or null"}
+]}
+
+Rules:
+- Return AT MOST {maxItems} items, most relevant first.
+- Prefer "som_id" when the evidence is an indexed element (an image, a card, a figure). Otherwise give "region_bbox" as fractions of the CURRENT viewport.
+- Set "source_image_id" to the exact image_id in the attached image label. This fallback normally receives only "viewport".
+- Set "need_annotation":true with an "annotation_prompt" when a box/arrow/label would make the evidence obvious ("box the man's beard", "circle the red shirt"). The system annotator draws it — never hand-author annotations.
+- "note" must state what is actually visible, not what you expect to be there.
+- Return {"items":[]} when the question is already fully answered by the page TEXT, or when nothing visual on screen bears on it. An empty list is the correct answer for an ordinary text question — do not invent visual evidence.
+
+Examples:
+Question: "Does the man in the portrait have a beard?"
+{"items":[{"key":"portrait_beard","note":"The portrait shows a man with a full dark beard.","som_id":"7","region_bbox":null,"source_image_id":"viewport","need_annotation":true,"annotation_prompt":"Box the man's beard in the portrait."}]}
+
+Question: "Who founded AMORC?"
+{"items":[]}`,
+
   GUIDE_EVIDENCE_ANNOTATOR: `You are an expert annotator and visual artist specializing in drawing annotations over screenshots that are visually appealing, clean, and highly precise.
 You will be provided with a screenshot. Your task is to specify where to place annotation markings on the screenshot to complete the user request.
 Reply with ONLY JSON:
@@ -431,7 +539,8 @@ Reply with ONLY JSON:
    {"type":"box","bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},"label":"short label","color":"#ff2d78"},
    {"type":"ellipse","bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},"label":"short label","color":"blue"},
    {"type":"arrow","from":{"x":0..1,"y":0..1},"to":{"x":0..1,"y":0..1},"label":"short relationship","color":"#ff2d78"},
-   {"type":"line","from":{"x":0..1,"y":0..1},"to":{"x":0..1,"y":0..1},"label":"short relationship","color":"green"}
+   {"type":"line","from":{"x":0..1,"y":0..1},"to":{"x":0..1,"y":0..1},"label":"short relationship","color":"green"},
+   {"type":"path","points":[{"x":0..1,"y":0..1},{"x":0..1,"y":0..1},{"x":0..1,"y":0..1}],"curved":true,"arrow":false,"label":"short label","color":"#ff2d78"}
  ]}
 
 COORDINATE SYSTEM (0-1000 Integer Grid):
@@ -444,6 +553,8 @@ RULES & ARTISTIC GUIDELINES:
 - region_bbox defines a bounding box around the entire relevant crop region (only drawn if annotations array is empty).
 - Use boxes/ellipses to frame objects precisely. Center them with some padding so they don't cover text/details.
 - Use lines/arrows for directions/relationships. Draw them from/to outside the boxed regions so they are uncluttered and point cleanly to the center of targets.
+- Use "path" when a straight line will not do: tracing a route, a river, a border, a curved connector, circling something irregular, or underlining a run of text. Give 2-20 points in order; set "curved":true to smooth them into a flowing curve (false draws straight segments), and "arrow":true to put an arrowhead on the last point. A closed-looking loop is fine — just return to near the first point.
+- Pick the shape that matches the thing: box for rectangular UI, ellipse for faces/objects, path for anything irregular or route-like, arrow for pointing.
 - Colors: Choose high-contrast, professional, and visually appealing colors (e.g., bright pink '#ff2d78' or yellow '#ffd93d' on dark pages; dark blue '#1e90ff' or red '#ff4757' on light pages).
 - Keep labels short, descriptive, and clean. Return at most 5 annotations.
 
@@ -456,6 +567,15 @@ Resulting JSON:
   "annotations": [
     {"type": "box", "bbox": {"x": 550, "y": 80, "w": 100, "h": 40}, "label": "Search Button", "color": "#ff2d78"},
     {"type": "arrow", "from": {"x": 450, "y": 100}, "to": {"x": 540, "y": 100}, "label": "click path", "color": "blue"}
+  ]
+}
+
+EXAMPLE (curved path):
+If asked to "trace the road from the parking lot to the hall":
+{
+  "region_bbox": {"x": 200, "y": 300, "w": 500, "h": 400},
+  "annotations": [
+    {"type": "path", "points": [{"x": 260, "y": 640}, {"x": 380, "y": 560}, {"x": 470, "y": 470}, {"x": 600, "y": 420}], "curved": true, "arrow": true, "label": "walk this way", "color": "#ff2d78"}
   ]
 }`,
 
@@ -632,4 +752,3 @@ settings there, then click the Print or Save button to finish."`
 if (typeof window !== 'undefined') {
   window.PROMPTS = PROMPTS;
 }
-

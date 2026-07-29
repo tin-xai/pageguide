@@ -3386,7 +3386,7 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
   test('sends the findQuery to the reader pass, not the raw instruction', async () => {
     await window.gv2ProcessResponse(findStep());
 
-    const call = window.safeSendMessage.mock.calls.find(c => c[0]?.metadata?.mode === 'guide_find');
+    const call = window.safeSendMessage.mock.calls.find(c => String(c[0]?.metadata?.mode || '').startsWith('guide_find'));
     expect(call).toBeTruthy();
     expect(call[0].messages[0].content).toBe('what to do when I have lost items');
     expect(call[0].systemPrompt).toContain('Lost property. Contact the depot');
@@ -3395,7 +3395,7 @@ describe('gv2ProcessResponse find action (content/tasks/guidev2.js)', () => {
   test('falls back to the user goal when the model omits findQuery', async () => {
     await window.gv2ProcessResponse(findStep({ findQuery: null }));
 
-    const call = window.safeSendMessage.mock.calls.find(c => c[0]?.metadata?.mode === 'guide_find');
+    const call = window.safeSendMessage.mock.calls.find(c => String(c[0]?.metadata?.mode || '').startsWith('guide_find'));
     expect(call[0].messages[0].content).toBe('Find out what to do when I have lost items');
   });
 
@@ -5625,5 +5625,1005 @@ describe('stripCitationMarkers: stutters from real non-grounding answers (conten
       .toBe('Contact the depot within 30 days of travel.');
     expect(clean('The fee is [3:"$5 per item"] at checkout.'))
       .toBe('The fee is $5 per item at checkout.');
+  });
+});
+
+describe('Find × Visual: independence + page evidence (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2LoopScore) loadScript('content/utils.js');
+    window.PROMPTS = window.PROMPTS || {};
+    window.PROMPTS.FIND_VISUAL_EVIDENCE = 'FIND_VISUAL_EVIDENCE {maxItems}';
+    window.chrome = {
+      runtime: {
+        connect: jest.fn(() => ({ onMessage: { addListener: jest.fn() }, onDisconnect: { addListener: jest.fn() } })),
+        sendMessage: jest.fn()
+      },
+      storage: {
+        session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) },
+        local: { get: jest.fn(async () => ({ pageguideEvidenceMode: 'visual' })), set: jest.fn(async () => {}) }
+      }
+    };
+    if (!window.gv2BuildFindEvidence) loadScript('content/tasks/guidev2.js');
+    Element.prototype.scrollIntoView = jest.fn();
+  });
+
+  beforeEach(() => {
+    document.documentElement.className = '';
+    document.body.innerHTML = '<p id="para"><span id="a" class="pageguide-highlight">one</span></p>';
+    window._pageguideHighlights = [document.getElementById('a')];
+    window._pageguideHighlightNumbers = [1];
+    window._pageguideIndex = {};
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'visual' }));
+    window.captureScreenshot = jest.fn(async () => 'PAGESHOT');
+    window.showSetOfMarks = jest.fn();
+    window.cleanupSom = jest.fn();
+    window.createPageIndex = jest.fn(() => ({ count: 3, indexText: '[1] x' }));
+    window.gv2CaptureEvidenceRegion = jest.fn(async () => ({ visualEvidenceShot: 'SPANSHOT' }));
+    window.gv2CaptureEvidenceItems = jest.fn(async (items) =>
+      items.map((it, i) => ({ visualEvidenceShot: `VISUAL${i}`, note: it.note })));
+    window.safeSendMessage = jest.fn(async () => ({ content: '{"items":[]}' }));
+  });
+
+  describe('gv2ParseFindVisualEvidence', () => {
+    test('reads the documented shape', () => {
+      const items = window.gv2ParseFindVisualEvidence(
+        '{"items":[{"key":"portrait_beard","note":"A man with a full beard.","som_id":"7","need_annotation":true,"annotation_prompt":"Box the beard."}]}'
+      );
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        key: 'portrait_beard', som_id: '7', need_annotation: true, annotation_prompt: 'Box the beard.'
+      });
+    });
+
+    test('tolerates fenced JSON and a bare array', () => {
+      expect(window.gv2ParseFindVisualEvidence('```json\n{"items":[{"key":"k","som_id":"1"}]}\n```')).toHaveLength(1);
+      expect(window.gv2ParseFindVisualEvidence('[{"key":"k","region_bbox":{"x":0,"y":0,"w":1,"h":1}}]')).toHaveLength(1);
+    });
+
+    // An empty list is the right answer for an ordinary text question, so bad input must not throw.
+    test('returns [] for prose, empty input, or items with no target', () => {
+      expect(window.gv2ParseFindVisualEvidence('I could not find anything visual.')).toEqual([]);
+      expect(window.gv2ParseFindVisualEvidence('')).toEqual([]);
+      expect(window.gv2ParseFindVisualEvidence('{"items":[{"key":"k"}]}')).toEqual([]);
+    });
+
+    test('caps the item count', () => {
+      const many = { items: Array.from({ length: 9 }, (_, i) => ({ key: `k${i}`, som_id: String(i) })) };
+      expect(window.gv2ParseFindVisualEvidence(JSON.stringify(many))).toHaveLength(3);
+    });
+  });
+
+  describe('gv2RunFindVisualEvidence', () => {
+    test('captures nothing and makes no call in Text evidence mode', async () => {
+      window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'text' }));
+
+      expect(await window.gv2RunFindVisualEvidence('does he have a beard?', 1)).toEqual([]);
+      expect(window.safeSendMessage).not.toHaveBeenCalled();
+      expect(window.captureScreenshot).not.toHaveBeenCalled();
+    });
+
+    test('sends the page screenshot and numbers items from startNumber', async () => {
+      window.safeSendMessage = jest.fn(async () => ({
+        content: '{"items":[{"key":"beard","note":"A full beard.","need_annotation":true,"annotation_prompt":"Box it."}]}'
+      }));
+
+      const out = await window.gv2RunFindVisualEvidence('does he have a beard?', 4);
+
+      const msg = window.safeSendMessage.mock.calls[0][0];
+      expect(msg.action).toBe('callLLMWithImages');
+      expect(msg.images[0].base64).toBe('PAGESHOT');
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ shot: 'VISUAL0', note: 'A full beard.', index: 4 });
+    });
+
+    // need_annotation must survive into gv2CaptureEvidenceItems — that is what routes the item to
+    // the Guide's annotator so the crop comes back with the box drawn on it.
+    test('hands need_annotation items to the capture pipeline intact', async () => {
+      window.safeSendMessage = jest.fn(async () => ({
+        content: '{"items":[{"key":"beard","note":"A full beard.","need_annotation":true,"annotation_prompt":"Box the beard."}]}'
+      }));
+
+      await window.gv2RunFindVisualEvidence('beard?', 1);
+
+      const item = window.gv2CaptureEvidenceItems.mock.calls[0][0][0];
+      expect(item.need_annotation).toBe(true);
+      expect(item.annotation_prompt).toBe('Box the beard.');
+      expect(window.gv2CaptureEvidenceItems.mock.calls[0][1].maxItems).toBe(3);
+    });
+
+    test('cleans up SoM markers even when the capture fails', async () => {
+      window.captureScreenshot = jest.fn(async () => null);
+
+      expect(await window.gv2RunFindVisualEvidence('beard?', 1)).toEqual([]);
+      expect(window.cleanupSom).toHaveBeenCalled();
+    });
+
+    test('an empty model reply costs nothing downstream', async () => {
+      window.safeSendMessage = jest.fn(async () => ({ content: '{"items":[]}' }));
+
+      expect(await window.gv2RunFindVisualEvidence('who founded it?', 1)).toEqual([]);
+      expect(window.gv2CaptureEvidenceItems).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('gv2BuildFindEvidence', () => {
+    test('numbers page evidence after the span crops, in one list', async () => {
+      window.safeSendMessage = jest.fn(async () => ({
+        content: '{"items":[{"key":"beard","note":"A full beard.","som_id":null,"need_annotation":true,"annotation_prompt":"Box it."}]}'
+      }));
+
+      const out = await window.gv2BuildFindEvidence(true, 'beard?');
+
+      expect(out.map(e => e.index)).toEqual([1, 2]);
+      expect(out[0].shot).toBe('SPANSHOT');
+      expect(out[1].shot).toBe('VISUAL0');
+    });
+
+    // The visual pass is the whole point for DOM-less questions: it must run even when the answer
+    // highlighted nothing on the page.
+    test('runs the visual pass even with no highlights', async () => {
+      window.safeSendMessage = jest.fn(async () => ({
+        content: '{"items":[{"key":"shirt","note":"A red shirt.","som_id":null,"need_annotation":true,"annotation_prompt":"Box it."}]}'
+      }));
+
+      const out = await window.gv2BuildFindEvidence(false, 'what colour is the shirt?');
+
+      expect(window.gv2CaptureEvidenceRegion).not.toHaveBeenCalled(); // no spans to crop
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ shot: 'VISUAL0', note: 'A red shirt.', index: 1 });
+    });
+  });
+
+  describe('span capture no longer depends on Guide state', () => {
+    // REGRESSION: the marker mode was read from window._guidev2._lastVisualInputOn, so the Send
+    // Image toggle silently changed what a Find capture produced.
+    test('Send Image state does not reach the find capture', async () => {
+      window._guidev2 = { _lastVisualInputOn: true };
+
+      await window.gv2CaptureFindEvidenceShots(true);
+
+      const opts = window.gv2CaptureEvidenceRegion.mock.calls[0][3];
+      expect(opts).toEqual({ noMarker: true });
+      expect(opts.visionMarkerDefault).toBeUndefined();
+    });
+
+    test('SoM overlays are taken down before any crop', async () => {
+      await window.gv2CaptureFindEvidenceShots(true);
+      expect(window.cleanupSom).toHaveBeenCalled();
+    });
+
+    // REGRESSION: a span inside a scroll container measured offscreen and the citation got no
+    // picture at all. The containing block is a worse crop but a real one.
+    test('falls back to the containing block when the span cannot be captured', async () => {
+      window.gv2CaptureEvidenceRegion = jest.fn(async (el) =>
+        el.id === 'a'
+          ? { visualEvidenceShot: null, captureError: 'dom-target-offscreen' }
+          : { visualEvidenceShot: 'BLOCKSHOT' });
+
+      const out = await window.gv2CaptureFindEvidenceShots(true);
+
+      expect(out).toEqual([{ shot: 'BLOCKSHOT', note: 'one', index: 1 }]);
+      const captured = window.gv2CaptureEvidenceRegion.mock.calls.map(c => c[0].id);
+      expect(captured).toContain('para');
+    });
+  });
+});
+
+describe('Evidence marks on the live page (content/functions/highlight.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {
+      storage: { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } },
+      runtime: { sendMessage: jest.fn() }
+    };
+    if (!window.pageguideShowEvidenceAnnotations) loadScript('content/functions/highlight.js');
+    window.scrollTo = jest.fn();
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    window._pageguideIndex = {};
+    window.pageguideClearEvidenceAnnotations();
+  });
+
+  const GEO = { x: 100, y: 500, w: 1000, h: 800 };
+
+  describe('gv2EvidenceDocRect', () => {
+    // Annotation coordinates are fractions of the capture screenshot, so they only become page
+    // coordinates once the scroll + viewport of that moment are added back.
+    test('converts viewport fractions to document coordinates', () => {
+      expect(window.gv2EvidenceDocRect({ x: 0.5, y: 0.25, w: 0.1, h: 0.2 }, GEO))
+        .toEqual({ left: 600, top: 700, width: 100, height: 160 });
+    });
+
+    test('returns null rather than placing marks at 0,0 on unusable input', () => {
+      expect(window.gv2EvidenceDocRect(null, GEO)).toBeNull();
+      expect(window.gv2EvidenceDocRect({ x: 0, y: 0, w: 0.1, h: 0.1 }, null)).toBeNull();
+      expect(window.gv2EvidenceDocRect({ x: 0, y: 0, w: 0.1, h: 0.1 }, { x: 0, y: 0, w: 0, h: 0 })).toBeNull();
+      expect(window.gv2EvidenceDocRect({ x: 0, y: 0, w: 0, h: 0 }, GEO)).toBeNull();
+    });
+  });
+
+  describe('gv2ResolveEvidenceElement', () => {
+    test('prefers the live element behind the SoM index', () => {
+      const el = document.createElement('div');
+      window._pageguideIndex = { 7: el };
+      expect(window.gv2ResolveEvidenceElement({ visualEvidenceIndex: 7 })).toBe(el);
+    });
+
+    test('falls back to a stored selector, and to null when nothing resolves', () => {
+      document.body.innerHTML = '<a id="x" href="/y">link</a>';
+      expect(window.gv2ResolveEvidenceElement({ selector: '#x' })).toBe(document.getElementById('x'));
+      expect(window.gv2ResolveEvidenceElement({ selector: '#gone' })).toBeNull();
+      expect(window.gv2ResolveEvidenceElement({})).toBeNull();
+      // A malformed stored selector must not throw into the answer flow.
+      expect(window.gv2ResolveEvidenceElement({ selector: '###' })).toBeNull();
+    });
+  });
+
+  describe('pageguideShowEvidenceAnnotations', () => {
+    const overlay = () => document.getElementById('pageguide-evidence-overlay');
+
+    test('draws a box per annotation, with its label', () => {
+      const drawn = window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [
+          { type: 'box', bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.1 }, label: 'Parking Lot', color: '#ff2d78' },
+          { type: 'ellipse', bbox: { x: 0.5, y: 0.5, w: 0.1, h: 0.1 }, label: 'Samford Hall' }
+        ]
+      }]);
+
+      expect(drawn).toBe(2);
+      expect(overlay()).not.toBeNull();
+      expect(overlay().textContent).toContain('Parking Lot');
+      expect(overlay().textContent).toContain('Samford Hall');
+    });
+
+    test('draws arrows into an SVG layer', () => {
+      window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [{ type: 'arrow', from: { x: 0.2, y: 0.2 }, to: { x: 0.6, y: 0.4 }, label: 'to Hall' }]
+      }]);
+
+      expect(overlay().querySelector('svg line')).not.toBeNull();
+      expect(overlay().querySelector('svg polygon')).not.toBeNull(); // arrowhead
+    });
+
+    // The second half of the ask: plain bounding-box evidence should be outlined too.
+    test('outlines a region when there are no annotations', () => {
+      const drawn = window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        region_bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 },
+        note: 'Article card'
+      }]);
+
+      expect(drawn).toBe(1);
+      expect(overlay().textContent).toContain('Article card');
+    });
+
+    test('anchors a region to the live element when one still resolves', () => {
+      const el = document.createElement('div');
+      el.getBoundingClientRect = () => ({ left: 10, top: 20, width: 200, height: 50 });
+      document.body.appendChild(el);
+      window._pageguideIndex = { 3: el };
+
+      window.pageguideShowEvidenceAnnotations([{ visualEvidenceIndex: 3, note: 'card', captureGeometry: GEO }]);
+
+      // Element rect wins over the stored fractions — it survives reflow, they do not.
+      const box = overlay().querySelector('div[style*="border"]');
+      expect(box.style.left).toBe('10px');
+      expect(box.style.width).toBe('200px');
+    });
+
+    test('draws nothing when an item has neither annotations nor a region', () => {
+      expect(window.pageguideShowEvidenceAnnotations([{ note: 'nothing to draw' }])).toBe(0);
+      expect(overlay()).toBeNull();
+      expect(window.pageguideShowEvidenceAnnotations([])).toBe(0);
+    });
+
+    test('a second call replaces the previous marks', () => {
+      window.pageguideShowEvidenceAnnotations([{ captureGeometry: GEO, region_bbox: { x: 0, y: 0, w: 0.2, h: 0.2 }, note: 'first' }]);
+      window.pageguideShowEvidenceAnnotations([{ captureGeometry: GEO, region_bbox: { x: 0, y: 0, w: 0.2, h: 0.2 }, note: 'second' }]);
+
+      expect(document.querySelectorAll('#pageguide-evidence-overlay')).toHaveLength(1);
+      expect(overlay().textContent).toContain('second');
+      expect(overlay().textContent).not.toContain('first');
+    });
+
+    test('clearing removes every node it added', () => {
+      window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [{ type: 'box', bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.1 }, label: 'x' }]
+      }]);
+      window.pageguideClearEvidenceAnnotations();
+
+      expect(overlay()).toBeNull();
+    });
+
+    test('clearHighlights takes the marks down with the highlights', () => {
+      window.pageguideShowEvidenceAnnotations([{ captureGeometry: GEO, region_bbox: { x: 0, y: 0, w: 0.2, h: 0.2 }, note: 'x' }]);
+      window.clearHighlights();
+
+      expect(overlay()).toBeNull();
+    });
+  });
+});
+
+describe('Find × Visual draws its evidence on the page when the answer lands (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2BuildFindEvidence) loadScript('content/tasks/guidev2.js');
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    window._pageguideHighlights = [];
+    window._pageguideHighlightNumbers = [];
+    window._pageguideIndex = {};
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'visual' }));
+    window.captureScreenshot = jest.fn(async () => 'PAGESHOT');
+    window.createPageIndex = jest.fn(() => ({ count: 1, indexText: '[1] x' }));
+    window.showSetOfMarks = jest.fn();
+    window.cleanupSom = jest.fn();
+    window.pageguideShowEvidenceAnnotations = jest.fn(() => 1);
+    window.safeSendMessage = jest.fn(async () => ({
+      content: '{"items":[{"key":"lot","note":"The parking lot next to Samford Hall.","need_annotation":true,"annotation_prompt":"Box the lot."}]}'
+    }));
+    window.gv2CaptureEvidenceItems = jest.fn(async (items) => items.map((it) => ({
+      visualEvidenceShot: 'VISUAL',
+      note: it.note,
+      annotations: [{ type: 'box', bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.1 }, label: 'Parking Lot' }],
+      captureGeometry: { x: 0, y: 400, w: 1000, h: 800 }
+    })));
+  });
+
+  test('hands the annotator marks to the page renderer, with their capture geometry', async () => {
+    await window.gv2BuildFindEvidence(false, 'where do I park for Samford Hall?');
+
+    expect(window.pageguideShowEvidenceAnnotations).toHaveBeenCalledTimes(1);
+    const marks = window.pageguideShowEvidenceAnnotations.mock.calls[0][0];
+    expect(marks[0].annotations[0].label).toBe('Parking Lot');
+    expect(marks[0].captureGeometry).toEqual({ x: 0, y: 400, w: 1000, h: 800 });
+    // The screenshots stay out of the marks payload — it rides along on every panel message.
+    expect(marks[0].annotationScreenshot).toBeUndefined();
+  });
+
+  test('draws nothing when the evidence has no marks to place', async () => {
+    window.gv2CaptureEvidenceItems = jest.fn(async (items) =>
+      items.map((it) => ({ visualEvidenceShot: 'VISUAL', note: it.note, annotations: [], region_bbox: null })));
+
+    await window.gv2BuildFindEvidence(false, 'who founded it?');
+
+    expect(window.pageguideShowEvidenceAnnotations).not.toHaveBeenCalled();
+  });
+
+  // Text mode never captures, so there is nothing to draw either.
+  test('draws nothing in Text evidence mode', async () => {
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'text' }));
+
+    await window.gv2BuildFindEvidence(false, 'where do I park?');
+
+    expect(window.pageguideShowEvidenceAnnotations).not.toHaveBeenCalled();
+    expect(window.safeSendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('Per-answer debug chip (sidepanel/panel.js)', () => {
+  beforeAll(() => {
+    if (!window._debugRangeForAnswer) {
+      window.chrome = window.chrome || {
+        runtime: { connect: jest.fn(() => ({ disconnect: jest.fn() })), sendMessage: jest.fn(), onMessage: { addListener: jest.fn() } },
+        tabs: { onActivated: { addListener: jest.fn() }, onUpdated: { addListener: jest.fn() }, onRemoved: { addListener: jest.fn() } },
+        storage: { onChanged: { addListener: jest.fn() }, local: { get: jest.fn().mockResolvedValue({}), set: jest.fn().mockResolvedValue(undefined) } }
+      };
+      document.body.innerHTML = '<div id="pageguide-goal-dots"></div>';
+      loadScript('sidepanel/panel.js');
+    }
+  });
+
+  afterEach(() => { window.__pgDebugEnabled = false; });
+
+  describe('_debugRangeForAnswer', () => {
+    const entries = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+
+    test('returns exactly the calls made while the answer was being produced', () => {
+      expect(window._debugRangeForAnswer(1, 3, entries).map(e => e.id)).toEqual(['b', 'c']);
+    });
+
+    // debugPrompts is capped at 50 in the service worker, so a range can outlive its entries.
+    test('survives a range that points past the end', () => {
+      expect(window._debugRangeForAnswer(2, 99, entries).map(e => e.id)).toEqual(['c', 'd']);
+      expect(window._debugRangeForAnswer(99, 120, entries)).toEqual([]);
+    });
+
+    test('returns [] rather than throwing on missing input', () => {
+      expect(window._debugRangeForAnswer(undefined, 2, entries)).toEqual([]);
+      expect(window._debugRangeForAnswer(0, 2, null)).toEqual([]);
+      expect(window._debugRangeForAnswer(3, 1, entries)).toEqual([]); // inverted range
+    });
+  });
+
+  describe('_debugAnswerChipHtml', () => {
+    test('renders nothing unless debug mode is on', () => {
+      window.__pgDebugEnabled = false;
+      expect(window._debugAnswerChipHtml(4)).toBe('');
+    });
+
+    test('carries the range start so the click knows which calls to show', () => {
+      window.__pgDebugEnabled = true;
+      const html = window._debugAnswerChipHtml(4);
+      expect(html).toContain('pageguide-debug-answer-chip');
+      expect(html).toContain('data-debug-from="4"');
+    });
+
+    test('defaults a missing start to 0 instead of emitting NaN', () => {
+      window.__pgDebugEnabled = true;
+      expect(window._debugAnswerChipHtml(undefined)).toContain('data-debug-from="0"');
+    });
+  });
+
+  describe('_debugRawResponseHtml', () => {
+    test('shows the raw response returned by the model', () => {
+      const html = window._debugRawResponseHtml({ rawResponse: '{"action":"finish"}', ok: true, durationMs: 1234 });
+      expect(html).toContain('Raw model response');
+      expect(html).toContain('{"action":"finish"}');
+      expect(html).toContain('1234ms');
+    });
+
+    // The entry is written before the call runs, so "no response" is a real state, not a bug.
+    test('says pending when the call had not returned', () => {
+      expect(window._debugRawResponseHtml({ systemPrompt: 'x' })).toContain('pending');
+    });
+
+    test('flags a failed call', () => {
+      const html = window._debugRawResponseHtml({ rawResponse: 'HTTP 429', ok: false });
+      expect(html).toContain('ERROR');
+      expect(html).toContain('HTTP 429');
+    });
+
+    test('escapes the response — it is model output, not markup', () => {
+      const html = window._debugRawResponseHtml({ rawResponse: '<img src=x onerror=alert(1)>' });
+      expect(html).not.toContain('<img');
+      expect(html).toContain('&lt;img');
+    });
+  });
+
+  describe('_debugImageIdForAttachment', () => {
+    test('uses the explicit id on a sent image', () => {
+      expect(window._debugImageIdForAttachment({ id: 'page_image_1', label: 'Image on page' })).toBe('page_image_1');
+    });
+
+    test('falls back to the image_id embedded in the label', () => {
+      expect(window._debugImageIdForAttachment({ label: '[image_id=viewport] Page screenshot' })).toBe('viewport');
+    });
+
+    test('uses a supplied fallback for older debug records', () => {
+      expect(window._debugImageIdForAttachment({ label: 'Image attachment' }, 'image_2')).toBe('image_2');
+    });
+  });
+});
+
+describe('Find × Visual: one multimodal answer call (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2ParseFindAnswer) loadScript('content/tasks/guidev2.js');
+  });
+
+  describe('gv2ParseFindAnswer', () => {
+    test('reads the {answer, evidence} envelope', () => {
+      const out = window.gv2ParseFindAnswer(
+        '{"answer":"Yes — the portrait shows a beard [12:\\"Portrait of a Carthusian\\"].","evidence":[{"key":"beard","note":"A full beard.","som_id":"12","need_annotation":true,"annotation_prompt":"Box it."}]}'
+      );
+      expect(out.answer).toContain('[12:"Portrait of a Carthusian"]');
+      expect(out.evidence).toHaveLength(1);
+      expect(out.evidence[0]).toMatchObject({ key: 'beard', som_id: '12', source_image_id: 'viewport', need_annotation: true });
+    });
+
+    test('tolerates fenced JSON', () => {
+      const out = window.gv2ParseFindAnswer('```json\n{"answer":"Hi","evidence":[]}\n```');
+      expect(out.answer).toBe('Hi');
+      expect(out.evidence).toEqual([]);
+    });
+
+    // A model that ignores the envelope must still produce a readable answer — never an empty one.
+    test('falls back to prose when the envelope is missing', () => {
+      const out = window.gv2ParseFindAnswer('The movie was directed by Christopher Nolan [45:"Christopher Nolan"].');
+      expect(out.answer).toContain('Christopher Nolan');
+      expect(out.evidence).toEqual([]);
+    });
+
+    test('handles empty input without throwing', () => {
+      expect(window.gv2ParseFindAnswer('')).toEqual({ answer: '', evidence: [], needMoreView: null });
+      expect(window.gv2ParseFindAnswer(null)).toEqual({ answer: '', evidence: [], needMoreView: null });
+    });
+
+    test('drops evidence items with no target', () => {
+      const out = window.gv2ParseFindAnswer('{"answer":"x","evidence":[{"key":"k","note":"n"}]}');
+      expect(out.evidence).toEqual([]);
+    });
+
+    test('preserves the source image id for visual evidence items', () => {
+      const out = window.gv2ParseFindAnswer(
+        '{"answer":"Yes [ev:beard].","evidence":[{"key":"beard","note":"A beard.","som_id":"12","source_image_id":"page_image_1","need_annotation":true,"annotation_prompt":"Box it."}]}'
+      );
+      expect(out.evidence[0]).toMatchObject({ key: 'beard', source_image_id: 'page_image_1' });
+    });
+  });
+
+  describe('gv2RunFind arms', () => {
+    beforeEach(() => {
+      document.body.innerHTML = '<p id="para">page text</p>';
+      window._pageguideHighlights = [];
+      window._pageguideHighlightNumbers = [];
+      window._pageguideIndex = {};
+      window.getVisibleText = jest.fn(() => 'Lost property. Contact the depot.');
+      window.createPageIndex = jest.fn(() => ({ count: 2, indexText: '[12] Portrait' }));
+      window.applyHighlightsFromCitations = jest.fn(() => 1);
+      window.scrollToHighlight = jest.fn();
+      window.captureScreenshot = jest.fn(async () => 'PAGESHOT');
+      window.showSetOfMarks = jest.fn();
+      window.cleanupSom = jest.fn();
+      window.gv2CaptureEvidenceRegion = jest.fn(async () => ({ visualEvidenceShot: 'SPAN' }));
+      window.gv2CaptureEvidenceItems = jest.fn(async (items) => items.map(it => ({ visualEvidenceShot: 'VISUAL', note: it.note })));
+      window.pageguideShowEvidenceAnnotations = jest.fn();
+      window.PROMPTS = Object.assign({}, window.PROMPTS, {
+        ANSWER_AND_HIGHLIGHT: 'TEXT_PROMPT {pageContent} {pageIndex}',
+        FIND_ANSWER_VISUAL: 'VISUAL_PROMPT {pageContent} {pageIndex} max={maxItems}'
+      });
+    });
+
+    test('Visual mode sends ONE call with the screenshot and the visual prompt', async () => {
+      window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'visual' }));
+      window.safeSendMessage = jest.fn(async () => ({
+        content: '{"answer":"Yes, a beard [12:\\"Portrait\\"].","evidence":[{"key":"beard","note":"A beard.","som_id":"12","need_annotation":true,"annotation_prompt":"Box it."}]}'
+      }));
+
+      const out = await window.gv2RunFind('does he have a beard?');
+
+      const answerCalls = window.safeSendMessage.mock.calls.filter(c => String(c[0]?.metadata?.mode || '').startsWith('guide_find'));
+      expect(answerCalls).toHaveLength(1);
+      expect(answerCalls[0][0].action).toBe('callLLMWithImages');
+      expect(answerCalls[0][0].images).toHaveLength(1);
+      expect(answerCalls[0][0].images[0]).toMatchObject({ id: 'viewport' });
+      expect(answerCalls[0][0].systemPrompt).toContain('VISUAL_PROMPT');
+      // The envelope is unwrapped: the user sees prose, not JSON.
+      expect(out.answer).toBe('Yes, a beard [12:"Portrait"].');
+      // The model's own evidence went straight to the capture pipeline — no second vision call.
+      expect(window.gv2CaptureEvidenceItems).toHaveBeenCalledTimes(1);
+      expect(window.gv2CaptureEvidenceItems.mock.calls[0][0][0]).toMatchObject({
+        source_image_id: 'viewport', need_annotation: true, annotation_prompt: 'Box it.'
+      });
+    });
+
+    // REGRESSION: the two study arms must differ only in evidence. Text mode keeps the old prompt,
+    // the old call shape, and takes no screenshots at all.
+    test('Text mode still sends a text-only call with the original prompt', async () => {
+      window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'text' }));
+      window.safeSendMessage = jest.fn(async () => ({ content: 'Plain answer [12:"Portrait"].' }));
+
+      const out = await window.gv2RunFind('does he have a beard?');
+
+      const answerCalls = window.safeSendMessage.mock.calls.filter(c => String(c[0]?.metadata?.mode || '').startsWith('guide_find'));
+      expect(answerCalls).toHaveLength(1);
+      expect(answerCalls[0][0].action).toBe('callLLM');
+      expect(answerCalls[0][0].images).toBeUndefined();
+      expect(answerCalls[0][0].systemPrompt).toContain('TEXT_PROMPT');
+      expect(window.captureScreenshot).not.toHaveBeenCalled();
+      expect(window.gv2CaptureEvidenceItems).not.toHaveBeenCalled();
+      expect(out.answer).toBe('Plain answer [12:"Portrait"].');
+      expect(out.findEvidenceShots).toEqual([]);
+    });
+
+    test('a malformed envelope still shows the answer, with no evidence', async () => {
+      window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'visual' }));
+      window.safeSendMessage = jest.fn(async () => ({ content: 'Yes, he has a beard [12:"Portrait"].' }));
+
+      const out = await window.gv2RunFind('beard?');
+
+      expect(out.answer).toBe('Yes, he has a beard [12:"Portrait"].');
+      expect(window.gv2CaptureEvidenceItems).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('Annotations: free-form paths (content/utils.js + highlight.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2NormalizeEvidenceAnnotations) loadScript('content/utils.js');
+    // Reload unconditionally: an earlier block replaces pageguideShowEvidenceAnnotations with a
+    // jest mock, and these tests exercise the real renderer.
+    loadScript('content/functions/highlight.js');
+    window.scrollTo = jest.fn();
+  });
+
+  describe('gv2NormalizeEvidenceAnnotations', () => {
+    // The annotator was limited to box/ellipse/arrow/line; a route, a river or an irregular
+    // outline had no shape that could describe it.
+    test('accepts a path and keeps its points in order', () => {
+      const out = window.gv2NormalizeEvidenceAnnotations([{
+        type: 'path',
+        points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }, { x: 0.5, y: 0.35 }],
+        curved: true, arrow: true, label: 'walk this way', color: '#ff2d78'
+      }]);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ type: 'path', curved: true, arrow: true, label: 'walk this way' });
+      expect(out[0].points).toHaveLength(3);
+      expect(out[0].points[0]).toEqual({ x: 0.1, y: 0.2 });
+    });
+
+    test('accepts the aliases a model is likely to use', () => {
+      ['polyline', 'curve', 'freehand', 'scribble'].forEach(type => {
+        const out = window.gv2NormalizeEvidenceAnnotations([{ type, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }]);
+        expect(out[0].type).toBe('path');
+      });
+    });
+
+    test('defaults curved on, arrow off', () => {
+      const out = window.gv2NormalizeEvidenceAnnotations([{ type: 'path', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }]);
+      expect(out[0]).toMatchObject({ curved: true, arrow: false });
+    });
+
+    test('drops a path that cannot be drawn, and caps very long ones', () => {
+      expect(window.gv2NormalizeEvidenceAnnotations([{ type: 'path', points: [{ x: 0.1, y: 0.1 }] }])).toEqual([]);
+      expect(window.gv2NormalizeEvidenceAnnotations([{ type: 'path' }])).toEqual([]);
+      const many = Array.from({ length: 40 }, (_, i) => ({ x: i / 40, y: 0.5 }));
+      expect(window.gv2NormalizeEvidenceAnnotations([{ type: 'path', points: many }])[0].points).toHaveLength(20);
+    });
+
+    test('still accepts the original shapes', () => {
+      const out = window.gv2NormalizeEvidenceAnnotations([
+        { type: 'box', bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } },
+        { type: 'arrow', from: { x: 0, y: 0 }, to: { x: 1, y: 1 } }
+      ]);
+      expect(out.map(a => a.type)).toEqual(['box', 'arrow']);
+    });
+  });
+
+  describe('pageguideShowEvidenceAnnotations with a path', () => {
+    const GEO = { x: 0, y: 0, w: 1000, h: 800 };
+    const overlay = () => document.getElementById('pageguide-evidence-overlay');
+
+    beforeEach(() => {
+      document.body.innerHTML = '';
+      window.pageguideClearEvidenceAnnotations();
+    });
+
+    test('draws the stroke as an SVG path', () => {
+      const drawn = window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [{ type: 'path', points: [{ x: 0.1, y: 0.1 }, { x: 0.4, y: 0.5 }, { x: 0.8, y: 0.3 }], curved: true, label: 'route' }]
+      }]);
+
+      expect(drawn).toBe(1);
+      const path = overlay().querySelector('svg path');
+      expect(path).not.toBeNull();
+      expect(path.getAttribute('d')).toContain('Q'); // smoothed, not a polyline
+      expect(overlay().textContent).toContain('route');
+    });
+
+    test('straight segments when curved is false, arrowhead when arrow is true', () => {
+      window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [{ type: 'path', points: [{ x: 0.1, y: 0.1 }, { x: 0.4, y: 0.5 }, { x: 0.8, y: 0.3 }], curved: false, arrow: true }]
+      }]);
+
+      const d = overlay().querySelector('svg path').getAttribute('d');
+      expect(d).not.toContain('Q');
+      expect(overlay().querySelector('svg polygon')).not.toBeNull();
+    });
+
+    test('a path with one usable point draws nothing', () => {
+      expect(window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [{ type: 'path', points: [{ x: 0.1, y: 0.1 }] }]
+      }])).toBe(0);
+    });
+
+    // 'line' is a plain connector; only 'arrow' should carry a head.
+    test('line has no arrowhead, arrow does', () => {
+      window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [{ type: 'line', from: { x: 0.1, y: 0.1 }, to: { x: 0.5, y: 0.5 } }]
+      }]);
+      expect(overlay().querySelector('svg polygon')).toBeNull();
+
+      window.pageguideShowEvidenceAnnotations([{
+        captureGeometry: GEO,
+        annotations: [{ type: 'arrow', from: { x: 0.1, y: 0.1 }, to: { x: 0.5, y: 0.5 } }]
+      }]);
+      expect(overlay().querySelector('svg polygon')).not.toBeNull();
+    });
+  });
+});
+
+describe('[ev:key] citations in the answer (sidepanel/panel.js)', () => {
+  const shots = [{ key: 'portrait_beard', index: 3 }, { key: 'red_shirt', index: 4 }];
+
+  test('turns a cited key into a chip carrying its evidence number', () => {
+    const html = window._expandEvidenceKeyCitations('has a full beard [ev:portrait_beard].', shots);
+    expect(html).toContain('pageguide-evidence-citation');
+    expect(html).toContain('data-evidence-num="3"');
+    expect(html).toContain('[3]');
+    expect(html).not.toContain('[ev:');
+  });
+
+  test('is case- and whitespace-insensitive about the key', () => {
+    expect(window._expandEvidenceKeyCitations('x [ev: Portrait_Beard ]', shots)).toContain('data-evidence-num="3"');
+  });
+
+  // A key whose evidence failed to capture would otherwise appear as raw "[ev:foo]" in the prose.
+  test('drops a key with no captured evidence', () => {
+    const html = window._expandEvidenceKeyCitations('x [ev:missing] y', shots);
+    expect(html).not.toContain('[ev:');
+    expect(html).not.toContain('missing');
+  });
+
+  test('leaves text without evidence citations untouched', () => {
+    const plain = 'The movie was directed by Christopher Nolan [45:"Christopher Nolan"].';
+    expect(window._expandEvidenceKeyCitations(plain, shots)).toBe(plain);
+    expect(window._expandEvidenceKeyCitations('x [ev:portrait_beard]', [])).toBe('x ');
+  });
+});
+
+describe('Find × Visual: annotation is honoured for element-backed evidence (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2CaptureFindEvidenceItems) loadScript('content/tasks/guidev2.js');
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '<img id="painting" alt="portrait">';
+    const el = document.getElementById('painting');
+    el.getBoundingClientRect = () => ({ left: 100, top: 50, width: 400, height: 500 });
+    window._pageguideIndex = { 12: el };
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'visual' }));
+    window.gv2CaptureEvidenceItems = jest.fn(async (items) => items.map(it => ({ visualEvidenceShot: 'SHOT', note: it.note, key: it.key })));
+    window.pageguideShowEvidenceAnnotations = jest.fn();
+    if (window.gv2ClearFindCropCache) window.gv2ClearFindCropCache();
+  });
+
+  // REGRESSION: _gv2AnnotateEvidenceItem returns early for anything carrying an element or som_id,
+  // so a model asking to "box the man's beard" on an indexed <img> got no annotator call at all —
+  // just a plain box around the whole painting.
+  test('an element-backed item that needs annotation is sent to the annotator, with the element rect as the hint', async () => {
+    await window.gv2CaptureFindEvidenceItems([{
+      key: 'portrait_beard', note: 'A full beard.', som_id: '12',
+      need_annotation: true, annotation_prompt: "Box the man's beard."
+    }], 1);
+
+    const item = window.gv2CaptureEvidenceItems.mock.calls[0][0][0];
+    expect(item.need_annotation).toBe(true);
+    expect(item.evidenceEl).toBeNull();   // dropped so the annotator gate lets it through
+    expect(item.som_id).toBeNull();
+    expect(item.region_bbox).not.toBeNull(); // the element's rect, so the annotator aims inside it
+    expect(item.annotation_prompt).toBe("Box the man's beard.");
+  });
+
+  // The other half: evidence that just points at an element keeps the cheap DOM-marker path.
+  test('an element-backed item that does NOT need annotation keeps its element', async () => {
+    await window.gv2CaptureFindEvidenceItems([{
+      key: 'portrait', note: 'The portrait.', som_id: '12', need_annotation: false
+    }], 1);
+
+    const item = window.gv2CaptureEvidenceItems.mock.calls[0][0][0];
+    expect(item.evidenceEl).not.toBeNull();
+    expect(item.forceDomMarker).toBe(true);
+    expect(item.need_annotation).toBe(false);
+  });
+
+  test('carries the evidence key through to the chip, for [ev:key] citations', async () => {
+    const out = await window.gv2CaptureFindEvidenceItems([{
+      key: 'portrait_beard', note: 'A full beard.', som_id: '12', source_image_id: 'page_image_1', need_annotation: true, annotation_prompt: 'Box it.'
+    }], 3);
+
+    const item = window.gv2CaptureEvidenceItems.mock.calls[0][0][0];
+    expect(item.source_image_id).toBe('page_image_1');
+    expect(out[0]).toMatchObject({
+      key: 'portrait_beard',
+      source_image_id: 'page_image_1',
+      index: 3,
+      marks: expect.objectContaining({ source_image_id: 'page_image_1' })
+    });
+  });
+
+  test('uses source_image_id provenance as the annotator source when available', async () => {
+    const source = document.getElementById('painting');
+    window.gv2RememberFindAnswerImageSource({
+      id: 'page_image_1',
+      kind: 'page_image',
+      el: source,
+      selector: '#painting',
+      captureGeometry: { x: 0, y: 500, w: 1000, h: 800 }
+    });
+
+    await window.gv2CaptureFindEvidenceItems([{
+      key: 'portrait_beard', note: 'A full beard.', source_image_id: 'page_image_1',
+      need_annotation: true, annotation_prompt: 'Box it.'
+    }], 1);
+
+    const item = window.gv2CaptureEvidenceItems.mock.calls[0][0][0];
+    expect(item.annotationSourceEl).toBe(source);
+    expect(item.source_image_id).toBe('page_image_1');
+  });
+});
+
+describe('Find × Visual: picking which pictures to send (content/utils.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2FindMediaCandidates) loadScript('content/utils.js');
+  });
+
+  const sized = (el, w, h) => {
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: w, height: h, right: w, bottom: h });
+    return el;
+  };
+
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  // The whole point: the question names the picture, and the DOM already says which one it is.
+  test('the image the question names beats a bigger hero banner', () => {
+    document.body.innerHTML = `
+      <header><img id="hero" alt="Aeon essays banner"></header>
+      <main><figure><img id="painting" alt="Portrait of a Carthusian by Petrus Christus">
+        <figcaption>Portrait of a Carthusian (1446)</figcaption></figure></main>`;
+    sized(document.getElementById('hero'), 1200, 400);
+    sized(document.querySelector('figure'), 400, 500);
+    sized(document.getElementById('painting'), 400, 500);
+
+    const out = window.gv2FindMediaCandidates('Does the person in the portrait of a Carthusian have a beard?', { limit: 2 });
+
+    expect(out.length).toBeGreaterThan(0);
+    expect(out[0].label.toLowerCase()).toContain('carthusian');
+  });
+
+  test('drops chrome: logos, icons and images inside nav/header', () => {
+    document.body.innerHTML = `
+      <nav><img id="logo" alt="Site logo"></nav>
+      <main><img id="icon" class="social-icon" alt="share icon"></main>`;
+    sized(document.getElementById('logo'), 300, 300);
+    sized(document.getElementById('icon'), 300, 300);
+
+    const out = window.gv2FindMediaCandidates('does the man have a beard', { limit: 3 });
+    expect(out.map(c => c.el.id)).not.toContain('logo');
+    expect(out.map(c => c.el.id)).not.toContain('icon');
+  });
+
+  test('drops anything below the size floor', () => {
+    document.body.innerHTML = '<main><img id="tiny" alt="beard portrait"></main>';
+    sized(document.getElementById('tiny'), 40, 40);
+    expect(window.gv2FindMediaCandidates('beard portrait', { limit: 2 })).toEqual([]);
+  });
+
+  test('prefers the figure over the img inside it, so the caption travels with the crop', () => {
+    document.body.innerHTML = `
+      <main><figure><img id="inner" alt="a painting"><figcaption>The monk has a beard</figcaption></figure></main>`;
+    sized(document.querySelector('figure'), 400, 400);
+    sized(document.getElementById('inner'), 380, 380);
+
+    const out = window.gv2FindMediaCandidates('does the monk have a beard', { limit: 2 });
+    expect(out).toHaveLength(1);
+    expect(out[0].el.tagName).toBe('FIGURE');
+  });
+
+  test('respects the limit and returns the best first', () => {
+    document.body.innerHTML = `
+      <main>
+        <img id="a" alt="a beard portrait of a monk">
+        <img id="b" alt="a beard">
+        <img id="c" alt="an unrelated chart">
+      </main>`;
+    ['a', 'b', 'c'].forEach(id => sized(document.getElementById(id), 300, 300));
+
+    const out = window.gv2FindMediaCandidates('does the monk have a beard', { limit: 2 });
+    expect(out).toHaveLength(2);
+    expect(out[0].score).toBeGreaterThanOrEqual(out[1].score);
+    expect(out[0].el.id).toBe('a');
+  });
+
+  test('every candidate explains its score, for the ranking log', () => {
+    document.body.innerHTML = '<main><img id="x" alt="beard portrait"></main>';
+    sized(document.getElementById('x'), 300, 300);
+    expect(window.gv2FindMediaCandidates('beard', { limit: 1 })[0].why).toMatch(/overlap=/);
+  });
+
+  test('an empty page yields nothing rather than throwing', () => {
+    expect(window.gv2FindMediaCandidates('anything', { limit: 2 })).toEqual([]);
+    expect(window.gv2FindMediaCandidates('', { limit: 2 })).toEqual([]);
+  });
+});
+
+describe('need_more_view: one bounded escalation (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2ParseNeedMoreView) loadScript('content/tasks/guidev2.js');
+  });
+
+  test('accepts the documented directions', () => {
+    expect(window.gv2ParseNeedMoreView({ want: 'below', reason: 'answer is further down' }))
+      .toEqual({ want: 'below', reason: 'answer is further down' });
+    expect(window.gv2ParseNeedMoreView({ want: 'ABOVE' }).want).toBe('above');
+    expect(window.gv2ParseNeedMoreView({ want: 'whole_page' }).want).toBe('whole_page');
+    expect(window.gv2ParseNeedMoreView({ want: 'element:12' }).want).toBe('element:12');
+  });
+
+  // Anything we cannot aim a capture at is dropped rather than triggering a guess.
+  test('rejects anything else', () => {
+    expect(window.gv2ParseNeedMoreView({ want: 'the picture of the monk' })).toBeNull();
+    expect(window.gv2ParseNeedMoreView({ want: 'element:abc' })).toBeNull();
+    expect(window.gv2ParseNeedMoreView({})).toBeNull();
+    expect(window.gv2ParseNeedMoreView(null)).toBeNull();
+    expect(window.gv2ParseNeedMoreView('below')).toBeNull();
+  });
+
+  test('the answer envelope carries it through', () => {
+    const out = window.gv2ParseFindAnswer('{"answer":"I cannot see it","evidence":[],"need_more_view":{"want":"below","reason":"below the fold"}}');
+    expect(out.needMoreView).toEqual({ want: 'below', reason: 'below the fold' });
+  });
+
+  test('absent or malformed leaves it null', () => {
+    expect(window.gv2ParseFindAnswer('{"answer":"x","evidence":[]}').needMoreView).toBeNull();
+    expect(window.gv2ParseFindAnswer('{"answer":"x","need_more_view":"below"}').needMoreView).toBeNull();
+  });
+});
+
+describe('Find × Visual: the image budget per answer call (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    if (!window.gv2BuildFindAnswerImages) loadScript('content/tasks/guidev2.js');
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <main>
+        <img id="a" alt="a beard portrait of a monk">
+        <img id="b" alt="a monk with a beard, second view">
+        <img id="c" alt="a monk beard study">
+      </main>`;
+    ['a', 'b', 'c'].forEach(id => {
+      document.getElementById(id).getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 300 });
+    });
+    window.chrome.storage.local.get = jest.fn(async () => ({ pageguideEvidenceMode: 'visual' }));
+    window.gv2CaptureEvidenceRegion = jest.fn(async (el) => ({ visualEvidenceShot: `CROP-${el.id}` }));
+    window.gv2ClearFindCropCache(); // each test starts cold; the cache has its own test below
+    window.scrollTo = jest.fn();
+  });
+
+  test('sends the viewport plus two media crops, each labelled', async () => {
+    const images = await window.gv2BuildFindAnswerImages('does the monk have a beard', 'VIEWPORT');
+
+    expect(images).toHaveLength(3);
+    expect(images[0]).toEqual({ id: 'viewport', base64: 'VIEWPORT', label: '[image_id=viewport] Page screenshot with SoM markers' });
+    expect(images[1]).toMatchObject({ id: 'page_image_1' });
+    expect(images[2]).toMatchObject({ id: 'page_image_2' });
+    expect(images[1].label).toContain('[image_id=page_image_1]');
+    expect(images[1].label).toContain('Image on page:');
+    expect(images.slice(1).every(i => i.base64.startsWith('CROP-'))).toBe(true);
+    expect(window.gv2FindAnswerImageSource('viewport')).toMatchObject({ id: 'viewport', kind: 'viewport' });
+    expect(window.gv2FindAnswerImageSource('page_image_1')).toMatchObject({ id: 'page_image_1', kind: 'page_image' });
+    expect(window.gv2FindAnswerImageSource('page_image_1').el.id).toBe('a');
+    expect(window.scrollTo).toHaveBeenCalledWith(0, 0);
+  });
+
+  test('crops are downscaled, not sent at retina size', async () => {
+    await window.gv2BuildFindAnswerImages('does the monk have a beard', 'VIEWPORT');
+    expect(window.gv2CaptureEvidenceRegion.mock.calls[0][3]).toMatchObject({ noMarker: true, maxWidth: 1024 });
+  });
+
+  // A page with no relevant pictures should cost exactly what it did before: one image.
+  test('sends the viewport alone when nothing on the page matches', async () => {
+    document.body.innerHTML = '<main><p>no pictures here</p></main>';
+    const images = await window.gv2BuildFindAnswerImages('who founded the order', 'VIEWPORT');
+
+    expect(images).toEqual([{ id: 'viewport', base64: 'VIEWPORT', label: '[image_id=viewport] Page screenshot with SoM markers' }]);
+    expect(window.gv2CaptureEvidenceRegion).not.toHaveBeenCalled();
+  });
+
+  test('a failed crop is skipped, not sent as an empty image', async () => {
+    window.gv2CaptureEvidenceRegion = jest.fn(async (el) =>
+      el.id === 'a' ? { visualEvidenceShot: null, captureError: 'offscreen' } : { visualEvidenceShot: 'CROP-b' });
+
+    const images = await window.gv2BuildFindAnswerImages('does the monk have a beard', 'VIEWPORT');
+    expect(images.every(i => !!i.base64)).toBe(true);
+  });
+
+  test('the second question on the same page reuses the crops', async () => {
+    await window.gv2BuildFindAnswerImages('does the monk have a beard', 'VIEWPORT');
+    const firstCalls = window.gv2CaptureEvidenceRegion.mock.calls.length;
+
+    await window.gv2BuildFindAnswerImages('does the monk have a beard', 'VIEWPORT2');
+
+    expect(window.gv2CaptureEvidenceRegion.mock.calls.length).toBe(firstCalls); // served from cache
   });
 });

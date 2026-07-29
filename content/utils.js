@@ -1625,6 +1625,20 @@ function gv2NormalizeEvidenceAnnotations(input, maxItems = 5) {
       const to = gv2NormalizeEvidencePoint(item.to);
       if (!from || !to) continue;
       out.push(Object.assign({ type: 'line', from, to, label }, color ? { color } : {}));
+    } else if (type === 'path' || type === 'polyline' || type === 'curve' || type === 'freehand' || type === 'scribble') {
+      // Free-form stroke: routes, borders, irregular outlines, curved connectors — anything a box
+      // or a straight arrow cannot describe. 2-20 ordered points; `curved` smooths them, `arrow`
+      // puts a head on the last one.
+      const rawPoints = Array.isArray(item.points) ? item.points : (Array.isArray(item.path) ? item.path : []);
+      const points = rawPoints
+        .map(p => gv2NormalizeEvidencePoint(p))
+        .filter(Boolean)
+        .slice(0, 20);
+      if (points.length < 2) continue;
+      out.push(Object.assign(
+        { type: 'path', points, curved: item.curved !== false, arrow: item.arrow === true, label },
+        color ? { color } : {}
+      ));
     }
     if (out.length >= cap) break;
   }
@@ -2654,4 +2668,143 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2ShouldCaptureScreenshots = gv2ShouldCaptureScreenshots;
   module.exports.gv2ElementSelector = gv2ElementSelector;
   module.exports.gv2TextualEvidence = gv2TextualEvidence;
+}
+
+// ===== MEDIA CANDIDATES (Find × Visual) =====
+// A Find answer in Visual mode needs to SEE the picture the question is about — a portrait, a
+// chart, a product photo — or it can neither describe nor annotate it. Sending the whole page as
+// tiles is the expensive way to guarantee that; the DOM already knows where the pictures are and
+// what they depict (alt, figcaption, surrounding text), so the right two crops beat five blind
+// tiles on both cost and accuracy.
+
+/** Minimum on-screen size for a candidate. Below this it is an icon, a spacer or a tracking pixel. */
+const GV2_FIND_MEDIA_MIN_PX = 100;
+/** Class/id/alt fragments that mean "chrome", not content. */
+const GV2_FIND_MEDIA_NOISE = /logo|icon|avatar|sprite|badge|thumb|advert|\bads?\b|banner|sponsor|placeholder/i;
+/** Words too common to say anything about which picture is meant. */
+const GV2_FIND_STOPWORDS = new Set([
+  'the', 'and', 'for', 'that', 'this', 'with', 'from', 'have', 'has', 'does', 'did', 'are', 'was',
+  'were', 'what', 'which', 'who', 'whom', 'whose', 'where', 'when', 'why', 'how', 'his', 'her',
+  'its', 'their', 'they', 'you', 'your', 'about', 'into', 'over', 'under', 'there', 'here', 'any',
+  'all', 'can', 'will', 'would', 'should', 'could', 'been', 'being', 'page', 'show', 'shows'
+]);
+
+/** Content words of a phrase: lowercase, punctuation-free, no stopwords, 3+ chars. */
+function gv2MediaTokens(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(t => t.length > 2 && !GV2_FIND_STOPWORDS.has(t));
+}
+
+/**
+ * The text that says what a piece of media depicts, gathered from what the DOM already exposes.
+ * @param {Element} el
+ * @returns {string}
+ */
+function gv2MediaDescribe(el) {
+  if (!el) return '';
+  const parts = [];
+  const push = (v) => { const s = String(v || '').trim(); if (s) parts.push(s); };
+  push(el.getAttribute && el.getAttribute('alt'));
+  push(el.getAttribute && el.getAttribute('title'));
+  push(el.getAttribute && el.getAttribute('aria-label'));
+  const fig = el.closest && el.closest('figure');
+  if (fig) {
+    const cap = fig.querySelector('figcaption');
+    push(cap && cap.textContent);
+  }
+  // Nearest caption-ish sibling text, capped so a whole article body never drowns the signal.
+  const parent = el.parentElement;
+  if (parent && parts.length < 2) {
+    const sib = parent.querySelector('figcaption, .caption, [class*="caption"]');
+    push(sib && sib.textContent);
+  }
+  return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+}
+
+/**
+ * Rank the page's pictures against a question, using DOM signals only — no model call.
+ *
+ * Returns the candidates worth sending to the answer call, best first. `why` explains each score so
+ * a wrong pick is diagnosable from the console instead of a rebuild.
+ *
+ * @param {string} query - the user's question
+ * @param {{limit?: number, minPx?: number, doc?: Document}} opts
+ * @returns {Array<{el: Element, score: number, label: string, why: string}>}
+ */
+function gv2FindMediaCandidates(query, opts = {}) {
+  const doc = opts.doc || (typeof document !== 'undefined' ? document : null);
+  if (!doc) return [];
+  const limit = Number.isFinite(opts.limit) ? opts.limit : 2;
+  const minPx = Number.isFinite(opts.minPx) ? opts.minPx : GV2_FIND_MEDIA_MIN_PX;
+  const queryTokens = gv2MediaTokens(query);
+
+  const out = [];
+  let nodes = [];
+  try {
+    nodes = Array.from(doc.querySelectorAll('img, figure, canvas, svg, video, [style*="background-image"]'));
+  } catch (e) {
+    return [];
+  }
+
+  for (const el of nodes) {
+    if (typeof isPageGuideElement === 'function' && isPageGuideElement(el)) continue;
+    // A <figure> and the <img> inside it are the same picture; keep the figure, which carries the
+    // caption, and skip the child.
+    if (el.tagName !== 'FIGURE' && el.closest && el.closest('figure')) continue;
+
+    let rect = null;
+    try { rect = el.getBoundingClientRect(); } catch (e) { rect = null; }
+    if (!rect || rect.width < minPx || rect.height < minPx) continue;
+
+    const text = gv2MediaDescribe(el);
+    const haystack = `${text} ${el.className || ''} ${el.id || ''}`;
+    const inChrome = !!(el.closest && el.closest('header, footer, nav, aside'));
+    const noisy = GV2_FIND_MEDIA_NOISE.test(haystack);
+
+    const textTokens = gv2MediaTokens(text);
+    const hits = queryTokens.filter(t => textTokens.some(w => w.includes(t) || t.includes(w))).length;
+    const overlap = queryTokens.length ? hits / queryTokens.length : 0;
+
+    // Area matters, but only as a tiebreak — a hero banner should not beat the figure the question
+    // names. log10 of the area in px keeps it to roughly 0..1.
+    const area = rect.width * rect.height;
+    const areaScore = Math.min(1, Math.log10(Math.max(10, area)) / 6);
+
+    const hasCaption = !!(el.closest && el.closest('figure') && el.closest('figure').querySelector('figcaption'));
+    const inMain = !!(el.closest && el.closest('main, article'));
+
+    let score = overlap * 3 + areaScore;
+    if (hasCaption) score += 0.35;
+    if (inMain) score += 0.25;
+    if (inChrome) score -= 0.6;
+    if (noisy) score -= 1.2;
+
+    const why = `overlap=${overlap.toFixed(2)} area=${areaScore.toFixed(2)}` +
+      `${hasCaption ? ' +caption' : ''}${inMain ? ' +main' : ''}${inChrome ? ' -chrome' : ''}${noisy ? ' -noise' : ''}`;
+    if (score <= 0) continue;
+
+    out.push({
+      el,
+      score,
+      label: (text || el.tagName.toLowerCase()).slice(0, 120),
+      why
+    });
+  }
+
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, Math.max(0, limit));
+}
+
+if (typeof window !== 'undefined') {
+  window.gv2MediaTokens = gv2MediaTokens;
+  window.gv2MediaDescribe = gv2MediaDescribe;
+  window.gv2FindMediaCandidates = gv2FindMediaCandidates;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.gv2MediaTokens = gv2MediaTokens;
+  module.exports.gv2FindMediaCandidates = gv2FindMediaCandidates;
 }

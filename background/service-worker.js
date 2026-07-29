@@ -216,22 +216,76 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
 });
 
-// Append a debug prompt history entry, capping at 50 to avoid quota storage issues
+// Append a debug prompt history entry, capping at 50 to avoid quota storage issues.
+// Returns the entry id so the caller can attach the model's response once the call settles.
+let _debugPromptSeq = 0;
 async function appendDebugPrompt(promptData) {
+  const id = `${Date.now()}-${++_debugPromptSeq}`;
+  const entry = { id, ...promptData };
   try {
     const result = await chrome.storage.local.get('debugPrompts');
     const list = Array.isArray(result.debugPrompts) ? result.debugPrompts : [];
-    list.push(promptData);
+    list.push(entry);
     if (list.length > 50) {
       list.shift(); // remove oldest entries
     }
     await chrome.storage.local.set({
       debugPrompts: list,
-      lastDebugPrompt: promptData
+      lastDebugPrompt: entry
     });
   } catch (e) {
     console.error('[SW debug] Failed to append debug prompt:', e);
   }
+  return id;
+}
+
+/**
+ * Attach the model's answer to a debug entry once the call settles. Debugging a wrong answer means
+ * reading the prompts AND what came back; the entry is written before the call, so the response has
+ * to be patched in afterwards.
+ *
+ * @param {Promise<string>|string} idPromise - id from appendDebugPrompt
+ * @param {{rawResponse?: string, ok?: boolean, durationMs?: number}} patch
+ */
+async function updateDebugPrompt(idPromise, patch) {
+  try {
+    const id = await idPromise;
+    if (!id) return;
+    const result = await chrome.storage.local.get(['debugPrompts', 'lastDebugPrompt']);
+    const list = Array.isArray(result.debugPrompts) ? result.debugPrompts : [];
+    const idx = list.findIndex(e => e && e.id === id);
+    if (idx === -1) return; // rolled off the 50-entry cap
+    list[idx] = { ...list[idx], ...patch };
+    const update = { debugPrompts: list };
+    if (result.lastDebugPrompt && result.lastDebugPrompt.id === id) {
+      update.lastDebugPrompt = list[idx];
+    }
+    await chrome.storage.local.set(update);
+  } catch (e) {
+    console.error('[SW debug] Failed to update debug prompt:', e);
+  }
+}
+
+/** Wrap an LLM call so its result (or error) lands on the debug entry. Never changes the result. */
+function _withDebugResponse(idPromise, startedAt, promise) {
+  return promise.then(
+    (res) => {
+      updateDebugPrompt(idPromise, {
+        rawResponse: res?.content != null ? res.content : (res?.error || ''),
+        ok: !res?.error,
+        durationMs: Date.now() - startedAt
+      }).catch(() => {});
+      return res;
+    },
+    (err) => {
+      updateDebugPrompt(idPromise, {
+        rawResponse: err?.message || String(err),
+        ok: false,
+        durationMs: Date.now() - startedAt
+      }).catch(() => {});
+      throw err;
+    }
+  );
 }
 
 // ===== Message Handler =====
@@ -250,7 +304,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.action === 'callLLM') {
     const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
-    appendDebugPrompt({
+    const debugId = appendDebugPrompt({
       timestamp: Date.now(),
       action: 'callLLM',
       systemPrompt: request.systemPrompt || '',
@@ -258,16 +312,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       messages: request.messages || [],
       imageBase64: request.imageBase64 || null,
       metadata: request.metadata || {}
-    }).catch(() => {});
+    }).catch(() => null);
 
-    callLLM(request.messages, request.systemPrompt, request.imageBase64)
+    _withDebugResponse(debugId, Date.now(), callLLM(request.messages, request.systemPrompt, request.imageBase64))
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
   if (request.action === 'callLLMWithImages') {
     const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
-    appendDebugPrompt({
+    const debugId = appendDebugPrompt({
       timestamp: Date.now(),
       action: 'callLLMWithImages',
       systemPrompt: request.systemPrompt || '',
@@ -275,15 +329,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       messages: request.messages || [],
       images: request.images || null,
       metadata: request.metadata || {}
-    }).catch(() => {});
+    }).catch(() => null);
 
-    callLLMWithImages(request.messages, request.systemPrompt, request.images)
+    _withDebugResponse(debugId, Date.now(), callLLMWithImages(request.messages, request.systemPrompt, request.images))
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
   if (request.action === 'watchVideo') {
-    appendDebugPrompt({
+    const debugId = appendDebugPrompt({
       timestamp: Date.now(),
       action: 'watchVideo',
       systemPrompt: '',
@@ -291,9 +345,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       messages: [],
       videoUrl: request.videoUrl || '',
       metadata: request.metadata || {}
-    }).catch(() => {});
+    }).catch(() => null);
 
-    watchVideoWithGemini(request.videoUrl, request.query, request.metadata || {})
+    _withDebugResponse(debugId, Date.now(), watchVideoWithGemini(request.videoUrl, request.query, request.metadata || {}))
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
