@@ -307,6 +307,66 @@ async function _pgInlineInlineStyles(root) {
 }
 
 /**
+ * The furniture a Find task can never be about.
+ *
+ * On a Wikipedia article this is most of the page: the Mars article carries 94 images, of which 51
+ * live in references and navboxes, and the reference apparatus dwarfs the prose. None of it can
+ * hold an answer — a question asks about the article, not about its citation list or the "Solar
+ * System" navbox at the bottom.
+ *
+ * Kept deliberately generic (roles and common class names) rather than tuned to one site, and
+ * nothing here is removed on faith: _pgMarkPrunable refuses to drop anything carrying an anchor.
+ */
+const PG_SNAPSHOT_CHROME = [
+  'nav', 'footer', '[role="navigation"]', '[role="contentinfo"]', '[role="banner"]',
+  '.navbox', '.reflist', '.references', '.mw-references-wrap', '.catlinks',
+  '.sistersitebox', '.metadata', '.mw-footer', '.vector-toc', '.mw-portlet',
+  '.mw-editsection', '.noprint', '[aria-hidden="true"]',
+].join(',');
+
+/**
+ * Mark what can be dropped, on the LIVE page, where the layout is known.
+ *
+ * Two rules, and the second is what makes the first safe:
+ *   • it is chrome, or an image too small to be evidence;
+ *   • AND it carries no anchor, and contains none.
+ *
+ * The anchors are the recorded citations and evidence targets. Anything the agent actually pointed
+ * at survives by definition, however deep in the furniture it sits — so pruning can be aggressive
+ * without ever removing the thing a participant is being asked to check. Pruning by a percentage
+ * of the page could not make that promise: if the answer is in the last 30%, the task breaks and
+ * nothing says so.
+ *
+ * Runs before the images are fetched, so a dropped image is never downloaded either — which is most
+ * of the capture time, not just most of the size.
+ */
+function _pgMarkPrunable() {
+  const marked = [];
+  const anchored = (el) =>
+    el.hasAttribute('data-pg-index') || el.hasAttribute('data-pg-image-id')
+    || !!el.querySelector('[data-pg-index], [data-pg-image-id]');
+
+  let chrome = [];
+  try { chrome = Array.from(document.querySelectorAll(PG_SNAPSHOT_CHROME)); } catch (e) { chrome = []; }
+  chrome.forEach(el => {
+    if (anchored(el)) return;
+    el.setAttribute('data-pg-drop', '1');
+    marked.push(el);
+  });
+
+  // Icons, spacers and tracking pixels: too small to be the subject of a question, and there are
+  // usually dozens.
+  Array.from(document.querySelectorAll('img')).forEach(img => {
+    if (anchored(img) || img.hasAttribute('data-pg-drop')) return;
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (w < 100 || h < 100) { img.setAttribute('data-pg-drop', '1'); marked.push(img); }
+  });
+
+  return () => marked.forEach(el => el.removeAttribute('data-pg-drop'));
+}
+
+/**
  * Stamp the recorder's own anchors onto the live DOM, and hand back a function to remove them.
  *
  * WHY THIS EXISTS. A recorded citation is `[69:"Foundation series"]` — element 69 IN THE PAGE INDEX
@@ -369,7 +429,9 @@ async function pgCapturePageSnapshot() {
   // Stamped BEFORE the clone so the attributes are copied into it, and removed immediately after so
   // the researcher's live page is left as it was found.
   const unstamp = _pgStampAnchors();
+  const unmark = _pgMarkPrunable();     // after stamping: the anchors are what make pruning safe
   const clone = document.documentElement.cloneNode(true);
+  unmark();
   unstamp();
   live.forEach(img => img.removeAttribute('data-pg-current'));
 
@@ -379,6 +441,8 @@ async function pgCapturePageSnapshot() {
   // PageGuide's own chrome must not be baked in.
   clone.querySelectorAll('[id^="pageguide-"], [class*="pageguide-"], #study-overlay, #study-mini-bar')
     .forEach(el => el.remove());
+  // The furniture, dropped before any image is fetched — see _pgMarkPrunable.
+  clone.querySelectorAll('[data-pg-drop]').forEach(el => el.remove());
   // Existing stylesheet links are replaced by the collected CSS below.
   clone.querySelectorAll('link[rel~="stylesheet"], link[rel="preload"][as="style"]').forEach(el => el.remove());
   // Nothing may reach the network from inside the snapshot.
@@ -419,6 +483,8 @@ if (typeof window !== 'undefined') {
   window._pgBestImageUrl = _pgBestImageUrl;
   window._pgShrinkDataUri = _pgShrinkDataUri;
   window._pgStampAnchors = _pgStampAnchors;
+  window._pgMarkPrunable = _pgMarkPrunable;
+  window.PG_SNAPSHOT_CHROME = PG_SNAPSHOT_CHROME;
   window.PG_SNAPSHOT_IMG_MAX_WIDTH = PG_SNAPSHOT_IMG_MAX_WIDTH;
   window._pgAbsolute = _pgAbsolute;
   window.PG_SNAPSHOT_MAX_TOTAL_BYTES = PG_SNAPSHOT_MAX_TOTAL_BYTES;

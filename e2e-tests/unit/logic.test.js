@@ -11725,7 +11725,8 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
   // Capturing must not leave attributes on a page the researcher is still using.
   test('the live page is left as it was found', () => {
     expect(snap).toMatch(/const unstamp = _pgStampAnchors\(\);/);
-    expect(snap).toMatch(/const clone = document\.documentElement\.cloneNode\(true\);\s*\n\s*unstamp\(\);/);
+    // unmark() sits between them now — both must run, and both before anything else touches the page.
+    expect(snap).toMatch(/const clone = document\.documentElement\.cloneNode\(true\);\s*\n\s*unmark\(\);\s*\n\s*unstamp\(\);/);
     expect(snap).toMatch(/stamped\.forEach\(\(\[el, attr\]\) => el\.removeAttribute\(attr\)\)/);
   });
 
@@ -11751,5 +11752,52 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
     expect(fn).toMatch(/if \(index != null\)/);
     expect(fn).toMatch(/markText\(doc, needle\)/);
     expect(fn).toMatch(/findElementContaining/);
+  });
+});
+
+// ===== PRUNING THE FURNITURE =====
+// On the Mars article 51 of 94 images live in references and navboxes, and the reference apparatus
+// dwarfs the prose. None of it can hold an answer: a question asks about the article, not about its
+// citation list or the "Solar System" navbox. Measured on the live page: 60% less HTML and 56 fewer
+// images fetched, with every anchor intact.
+describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
+  const snap = require('fs').readFileSync(
+    require('path').join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
+
+  test('chrome is identified generically, not per-site', () => {
+    expect(snap).toMatch(/PG_SNAPSHOT_CHROME/);
+    ['nav', 'footer', '\\[role="navigation"\\]', '\\.reflist', '\\.navbox']
+      .forEach(sel => expect(snap).toMatch(new RegExp(sel)));
+  });
+
+  // THE SAFETY PROPERTY. Anything the agent actually pointed at survives by definition, which is
+  // what lets the pruning be aggressive. Cutting a percentage of the page could make no such
+  // promise: if the answer is in the last 30%, the task breaks and nothing says so.
+  test('nothing carrying an anchor is ever dropped', () => {
+    const fn = snap.match(/function _pgMarkPrunable[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/hasAttribute\('data-pg-index'\)/);
+    expect(fn).toMatch(/hasAttribute\('data-pg-image-id'\)/);
+    // ...including anchors nested inside the chrome being considered.
+    expect(fn).toMatch(/querySelector\('\[data-pg-index\], \[data-pg-image-id\]'\)/);
+    expect(fn).toMatch(/if \(anchored\(el\)\) return;/);
+  });
+
+  // Marking has to happen AFTER stamping, or the anchor check has nothing to protect.
+  test('pruning is marked after the anchors are stamped', () => {
+    const order = snap.match(/const unstamp = _pgStampAnchors\(\);[\s\S]{0,200}/)[0];
+    expect(order).toMatch(/_pgMarkPrunable\(\)/);
+    expect(order.indexOf('_pgStampAnchors')).toBeLessThan(order.indexOf('_pgMarkPrunable'));
+  });
+
+  // A dropped image is never downloaded either, which is most of the capture TIME, not just size.
+  test('the drop happens before images are fetched', () => {
+    expect(snap.indexOf("querySelectorAll('[data-pg-drop]')"))
+      .toBeLessThan(snap.indexOf('await _pgInlineImages(clone)'));
+  });
+
+  test('the live page is left as it was found', () => {
+    expect(snap).toMatch(/const unmark = _pgMarkPrunable\(\);/);
+    expect(snap).toMatch(/unmark\(\);\s*\n\s*unstamp\(\);/);
+    expect(snap).toMatch(/marked\.forEach\(el => el\.removeAttribute\('data-pg-drop'\)\)/);
   });
 });
