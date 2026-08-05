@@ -11998,6 +11998,33 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(study).not.toMatch(/flatMap\(item => \(Array\.isArray\(item\?\.marks\)/);
   });
 
+  // [N] means element N, so two citations sharing an index ARE the same place and must land
+  // together. Resolved independently they can disagree, and did: with the anchor missing, each fell
+  // back to text search on its own quote — "Foundation series" is short enough to hit an image
+  // caption, "extend the human species' reach." rare enough to hit nothing. Same target, two
+  // answers, one confidently wrong.
+  test('citations sharing an index resolve to the same element', () => {
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    // The first to resolve an index decides it; the rest reuse rather than searching again.
+    expect(site).toMatch(/const resolvedByIndex = new Map\(\)/);
+    expect(site).toMatch(/if \(el && !already\) resolvedByIndex\.set\(key, el\)/);
+    const fn = site.match(/function markFindCitation[\s\S]*?\n\}/)[0];
+    // Settled wins over EVERY other route, including the recorded locator — they agree by
+    // definition, and checking it first is what makes the reuse unconditional.
+    expect(fn.indexOf('if (settled)')).toBeLessThan(fn.indexOf('resolveCitationAnchor'));
+    // Every route reports what it resolved, or the map never fills and the drift returns.
+    expect(fn).toMatch(/return located;/);
+    expect(fn).toMatch(/return anchored;/);
+    expect(fn).toMatch(/return el;/);
+    expect(fn).toMatch(/return img;/);
+    // A text hit reports its CONTAINING element, not the span it made, so a sibling reuses the
+    // paragraph rather than a fragment of it.
+    expect(fn).toMatch(/return hit\.parentElement \|\| null;/);
+    // markText hands back the mark for that purpose, and stays truthy for boolean callers.
+    expect(site).toMatch(/return mark;/);
+  });
+
   // REGRESSION. Most recorded evidence has NO drawn shapes: the model reports what it saw and
   // where, which gv2BuildFindEvidence stores as region_bbox + note with `annotations` empty.
   // PEDANT-V1, MUFC-V1 and TREE-V1 are all {x:0,y:0,w:1,h:1} — "this whole picture" — and filtering
