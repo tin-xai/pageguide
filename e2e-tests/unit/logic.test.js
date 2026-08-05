@@ -12001,9 +12001,29 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(site).toMatch(/annotations\?\.length \|\| e\?\.marks\?\.region_bbox/);
     const fn = site.match(/function overlayAnnotations[\s\S]*?\n\}/)[0];
     // Only when there are no shapes — a region under real annotations would double up.
-    expect(fn).toMatch(/if \(!shapes\.length && region/);
+    expect(fn).toMatch(/if \(!shapes\.length && usable\)/);
     // The note IS the evidence for these; a bare box says "look at this picture" and no more.
     expect(fn).toMatch(/marks\.note/);
+  });
+
+  // REGRESSION, and provable from SVSF-V1's own numbers. Annotation coordinates are fractions of
+  // the CAPTURED AREA, not of the image — the same space region_bbox is in, which says where the
+  // image sits inside that capture. SVSF's shot took in both book covers, so region_bbox is
+  // {x:0.598, w:0.402} and the "spaceman" ellipse is at x=0.803: 80% across the capture, but
+  // (0.803-0.598)/0.402 = 51% across the cover. Drawn raw it landed at 80% of the cover.
+  test('annotation coordinates are mapped from capture space into the image', () => {
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    const fn = site.match(/function overlayAnnotations[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/const fx = \(x\) =>/);
+    expect(fn).toMatch(/\(\(Number\(x\) \|\| 0\) - \(region\.x \|\| 0\)\) \/ region\.w/);
+    // EVERY shape goes through it — a single raw coordinate is a mark in the wrong place.
+    expect(fn).not.toMatch(/a\.(bbox|from|to)\.[xywh] \* 100/);
+    // A whole-image region is the identity, so items captured on the image alone are unaffected.
+    const fx = (x, r) => (x - r.x) / r.w;
+    expect(fx(0.803, { x: 0.598, w: 0.402 })).toBeCloseTo(0.51, 2);
+    expect(fx(0.715, { x: 0.598, w: 0.402 })).toBeCloseTo(0.29, 2);
+    expect(fx(0.4, { x: 0, w: 1 })).toBeCloseTo(0.4, 5);
   });
 
   // The svg is preserveAspectRatio="none" so a normalized bbox lands on any aspect ratio, and that
@@ -12015,8 +12035,9 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     const fn = site.match(/function overlayAnnotations[\s\S]*?\n\}/)[0];
     expect(fn).toMatch(/createElement\('div'\)/);
     expect(fn).toMatch(/pg-annot-note/);
-    // Inside the region when it starts at the top, or the label sits outside the picture.
-    expect(fn).toMatch(/\(region\.y \|\| 0\) > 0\.05 \? 'transform:translateY\(-100%\)' : ''/);
+    // The region IS the image once mapped, so the note sits at its top-left rather than being
+    // offset by coordinates that no longer apply.
+    expect(fn).toMatch(/'position:absolute', 'left:0', 'top:0', 'max-width:100%'/);
   });
 
   // REGRESSION. "viewport" has no trailing digits, so `Number(id.match(/(\d+)$/)?.[1] || 1)` gave 1
