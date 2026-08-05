@@ -12014,6 +12014,62 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(fn).toMatch(/marks\.note/);
   });
 
+  // THE ROOT CAUSE OF THE MISPLACED EVIDENCE. The strip was `[class*="pageguide-"]` → remove, which
+  // cannot tell an element PageGuide INJECTED from a page element PageGuide DECORATED. A highlight
+  // puts `pageguide-highlight` on the page's own <p> (applyAnimatedHighlight), so capturing with an
+  // answer on screen DELETED every cited paragraph — exactly the elements citations point at, and
+  // only those. SVSF-V1's snapshot lost "Musk has spoken of how science fiction shaped his
+  // ambitions…" while keeping the rest of the article, so nothing looked wrong until a citation was
+  // followed and landed nowhere.
+  test('capturing a highlighted page keeps the highlighted elements', () => {
+    const snap = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
+    // The blanket class removal is gone.
+    expect(snap).not.toMatch(/\[id\^="pageguide-"\], \[class\*="pageguide-"\]/);
+    // Injected UI is named explicitly instead.
+    expect(snap).toMatch(/const PG_INJECTED = \[/);
+    expect(snap).toMatch(/'\.pageguide-som-box'/);
+    // Inline spans wrap the page's OWN words, so they are unwrapped — removing them would delete
+    // the cited sentence out of the paragraph.
+    expect(snap).toMatch(/span\.pageguide-highlight/);
+    expect(snap).toMatch(/while \(span\.firstChild\) parent\.insertBefore\(span\.firstChild, span\)/);
+    // Whole-element highlights are classes on page elements: drop the class, keep the element.
+    expect(snap).toMatch(/Array\.from\(el\.classList\)/);
+    expect(snap).toMatch(/\.filter\(c => c\.startsWith\('pageguide-'\)\)/);
+  });
+
+  // Behavioural, not textual: the rule above is easy to reintroduce by "simplifying".
+  test('the strip keeps decorated content and removes injected UI', () => {
+    // The suite already runs in jsdom, so build the fixture in the ambient document.
+    const root = document.createElement('div');
+    root.innerHTML = '<p class="body pageguide-highlight pageguide-highlight-block">Musk has spoken of '
+      + '<span class="pageguide-highlight">science fiction</span> shaping his ambitions.</p>'
+      + '<div id="pageguide-panel">UI</div><div class="pageguide-som-box">UI</div>'
+      + '<p class="keep">Other</p>';
+    const INJECTED = ['[id^="pageguide-"]', '#study-overlay', '#study-mini-bar',
+      '.pageguide-som-box', '.pageguide-som-mark', '.pageguide-som-container',
+      '.pageguide-evidence-marker', '.pageguide-evidence-overlay',
+      '.pageguide-preview-box', '.pageguide-custom-style'].join(',');
+    root.querySelectorAll(INJECTED).forEach(el => el.remove());
+    root.querySelectorAll('span.pageguide-highlight').forEach(span => {
+      const parent = span.parentNode;
+      while (span.firstChild) parent.insertBefore(span.firstChild, span);
+      parent.removeChild(span);
+    });
+    root.querySelectorAll('[class*="pageguide-"]').forEach(el => {
+      Array.from(el.classList).filter(c => c.startsWith('pageguide-'))
+        .forEach(c => el.classList.remove(c));
+      if (!el.getAttribute('class')) el.removeAttribute('class');
+    });
+
+    const ps = [...root.querySelectorAll('p')];
+    expect(ps).toHaveLength(2);                                   // the cited one SURVIVES
+    expect(ps[0].textContent).toBe('Musk has spoken of science fiction shaping his ambitions.');
+    expect(ps[0].getAttribute('class')).toBe('body');             // decoration stripped
+    expect(root.querySelectorAll('[id^="pageguide-"], .pageguide-som-box')).toHaveLength(0);
+    expect(root.querySelectorAll('[class*="pageguide-"]')).toHaveLength(0);
+  });
+
   // THE WORST BUG OF THE LOT. `[69:"…"]` is element 69 in ONE page's index, and every page has an
   // element 69 — so resolving against the wrong tab does not fail, it returns a real element from
   // the wrong article and banks it as fact. SVSF-V1's anchors were written with the Public Domain

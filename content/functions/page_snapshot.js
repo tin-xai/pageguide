@@ -527,9 +527,41 @@ async function pgCapturePageSnapshot() {
   // Scripts go, all of them. A snapshot that could run code could rewrite itself under a
   // participant, re-fetch the live article, or navigate the study away.
   clone.querySelectorAll('script, noscript').forEach(el => el.remove());
-  // PageGuide's own chrome must not be baked in.
-  clone.querySelectorAll('[id^="pageguide-"], [class*="pageguide-"], #study-overlay, #study-mini-bar')
-    .forEach(el => el.remove());
+  // PageGuide's own chrome must not be baked in — but ONLY the chrome.
+  //
+  // THE BUG THIS REPLACES. The rule was `[class*="pageguide-"]` → remove, which does not
+  // distinguish an element PageGuide INJECTED from a page element PageGuide DECORATED. A highlight
+  // puts `pageguide-highlight` on the page's own <p> (applyAnimatedHighlight), so capturing a page
+  // with an answer showing DELETED every cited paragraph — precisely the elements the citations
+  // point at, and only those. SVSF-V1's snapshot lost "Musk has spoken of how science fiction
+  // shaped his ambitions…" and kept the rest of the article, so nothing looked wrong until a
+  // citation was followed and landed nowhere.
+  //
+  // So: injected UI is removed, decoration is stripped, and the page's own content survives both.
+  const PG_INJECTED = [
+    '[id^="pageguide-"]', '#study-overlay', '#study-mini-bar',
+    '.pageguide-som-box', '.pageguide-som-mark', '.pageguide-som-container',
+    '.pageguide-evidence-marker', '.pageguide-evidence-overlay',
+    '.pageguide-preview-box', '.pageguide-custom-style',
+  ].join(',');
+  clone.querySelectorAll(PG_INJECTED).forEach(el => el.remove());
+
+  // Inline highlight spans wrap the page's OWN words (highlightTextInElement), so they are unwrapped
+  // rather than removed: deleting them would delete the cited sentence out of the paragraph.
+  clone.querySelectorAll('span.pageguide-highlight').forEach(span => {
+    const parent = span.parentNode;
+    if (!parent) return;
+    while (span.firstChild) parent.insertBefore(span.firstChild, span);
+    parent.removeChild(span);
+  });
+  // Whole-element highlights are just classes on page elements. Drop the classes, keep the elements.
+  clone.querySelectorAll('[class*="pageguide-"]').forEach(el => {
+    // Snapshotted first: removing from a live DOMTokenList while iterating it skips entries.
+    Array.from(el.classList)
+      .filter(c => c.startsWith('pageguide-'))
+      .forEach(c => el.classList.remove(c));
+    if (!el.getAttribute('class')) el.removeAttribute('class');
+  });
   // The furniture, dropped before any image is fetched — see _pgMarkPrunable.
   clone.querySelectorAll('[data-pg-drop]').forEach(el => el.remove());
   // Existing stylesheet links are replaced by the collected CSS below.
