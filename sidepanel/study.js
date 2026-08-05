@@ -3148,6 +3148,19 @@ if (typeof window !== 'undefined') {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) { note('No active tab to draw on.', 'bad'); return; }
 
+        // The tab must BE the page this answer is about. `[69:"…"]` is element 69 in one page's
+        // index, and every page has an element 69 — so resolving against the wrong tab does not
+        // fail, it returns a real element from the wrong article and banks it as fact. SVSF-V1's
+        // anchors were written this way with the Public Domain Review page open, and pointed at a
+        // paragraph that is not in the Aeon article at all.
+        const pageUrl = record.url || task.url || '';
+        if (pageUrl && tab.url && !_sameStudyPage(tab.url, pageUrl)) {
+          note(`That tab is ${_shortUrl(tab.url)}, but this answer was recorded on `
+            + `${_shortUrl(pageUrl)}. Open the right page first — resolving against the wrong one `
+            + 'produces anchors that look fine and point at the wrong article.', 'bad');
+          return;
+        }
+
         // The answer goes with the anchors: when the record has none — every answer banked before
         // anchoring existed — the page derives them from its own live index. Refusing instead made
         // this button useless exactly when it mattered, since the only other way to get locators was

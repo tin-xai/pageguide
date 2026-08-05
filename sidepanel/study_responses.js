@@ -164,6 +164,35 @@ function _buildStudyArmRecord(ctx) {
 }
 
 /**
+ * Are these two URLs the same study page?
+ *
+ * Compared on origin + path only. A hash is a position on one page, not another page, and a
+ * trailing slash is the same page written two ways — neither should refuse a legitimate match. The
+ * query string IS kept: on plenty of sites it selects the content.
+ */
+function _sameStudyPage(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const norm = (u) => `${u.origin}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+    return norm(ua) === norm(ub);
+  } catch (e) {
+    return String(a || '') === String(b || '');
+  }
+}
+
+/** A URL short enough to read in a one-line note. */
+function _shortUrl(u) {
+  try {
+    const { hostname, pathname } = new URL(u);
+    const path = pathname.length > 28 ? `${pathname.slice(0, 27)}…` : pathname;
+    return `${hostname}${path === '/' ? '' : path}`;
+  } catch (e) {
+    return String(u || '').slice(0, 40);
+  }
+}
+
+/**
  * Ask the page where this answer's citations point, and hang the result on the record.
  *
  * Runs against the tab the answer was produced on, because the numbers in `[N:"…"]` are only
@@ -182,6 +211,25 @@ async function _attachCitationAnchors(record, tabId) {
   try {
     const id = tabId || (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
     if (!id) return { ok: false, resolved: 0, total: 0, reason: 'no active tab' };
+
+    // THE TAB MUST BE THE PAGE THIS ANSWER IS ABOUT.
+    //
+    // `[69:"…"]` is element 69 in ONE page's index. Every page has an element 69, so resolving
+    // against the wrong tab does not fail — it returns a real element from the wrong article and
+    // banks it as fact. That happened: SVSF-V1's anchors were resolved while the Public Domain
+    // Review page was open, and came back pointing at "The parodies show how the humanists'
+    // confident claims to dignity…", which is not in the Aeon article at all.
+    //
+    // A wrong locator is worse than a missing one, because the site trusts locators over text
+    // search — so this refuses rather than guesses.
+    const tab = await chrome.tabs.get(id).catch(() => null);
+    if (record?.url && tab?.url && !_sameStudyPage(tab.url, record.url)) {
+      return {
+        ok: false, resolved: 0, total: 0,
+        reason: `that tab is ${_shortUrl(tab.url)}, but this answer was recorded on `
+          + `${_shortUrl(record.url)} — open the right page first`,
+      };
+    }
     const res = await chrome.tabs.sendMessage(id, { action: 'resolveCitationAnchors', answer });
     if (!res || res.error) {
       return { ok: false, resolved: 0, total: 0, reason: res?.error || 'the page did not respond' };
@@ -641,6 +689,8 @@ if (typeof window !== 'undefined') {
   window._buildStudyArmRecord = _buildStudyArmRecord;
   window._applyStudyResponseEdit = _applyStudyResponseEdit;
   window._attachCitationAnchors = _attachCitationAnchors;
+  window._sameStudyPage = _sameStudyPage;
+  window._shortUrl = _shortUrl;
   window.listStudyResponses = listStudyResponses;
   window.getStudyResponse = getStudyResponse;
   window.saveStudyResponse = saveStudyResponse;

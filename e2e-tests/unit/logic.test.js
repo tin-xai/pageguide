@@ -12006,6 +12006,45 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(fn).toMatch(/marks\.note/);
   });
 
+  // THE WORST BUG OF THE LOT. `[69:"…"]` is element 69 in ONE page's index, and every page has an
+  // element 69 — so resolving against the wrong tab does not fail, it returns a real element from
+  // the wrong article and banks it as fact. SVSF-V1's anchors were written with the Public Domain
+  // Review page open and came back pointing at "The parodies show how the humanists' confident
+  // claims to dignity…", which is not in the Aeon article at all. The site trusts locators over
+  // text search, so a wrong one is worse than a missing one.
+  test('anchors are never resolved against a tab showing a different page', () => {
+    const resp = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study_responses.js'), 'utf8');
+    const fn = resp.match(/async function _attachCitationAnchors[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/_sameStudyPage\(tab\.url, record\.url\)/);
+    expect(fn).toMatch(/was recorded on/);
+
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const handler = study.match(/if \(showGrounding\) showGrounding\.onclick[\s\S]*?\n    \};/)[0];
+    expect(handler).toMatch(/!_sameStudyPage\(tab\.url, pageUrl\)/);
+    // It must refuse BEFORE resolving, or the wrong anchors are banked regardless of the warning.
+    expect(handler.indexOf('_sameStudyPage'))
+      .toBeLessThan(handler.indexOf("action: 'showSavedGrounding'"));
+  });
+
+  // A hash is a position on one page, not another page; a trailing slash is one page written two
+  // ways. Neither may refuse a legitimate match. A query string often selects the content, so it
+  // stays significant.
+  test('page identity ignores hash and trailing slash but keeps the query', () => {
+    const resp = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study_responses.js'), 'utf8');
+    const src = resp.match(/function _sameStudyPage[\s\S]*?\n\}/)[0];
+    const same = new Function(`${src}; return _sameStudyPage;`)();
+    expect(same('https://a.com/x', 'https://a.com/x/')).toBe(true);
+    expect(same('https://a.com/x#s2', 'https://a.com/x')).toBe(true);
+    expect(same('https://a.com/x?id=1', 'https://a.com/x?id=2')).toBe(false);
+    expect(same('https://a.com/x', 'https://b.com/x')).toBe(false);
+    // The real failure: two different articles, which is what silently produced wrong anchors.
+    expect(same('https://aeon.co/essays/looting-of-science-fiction',
+                'https://publicdomainreview.org/essay/the-pedant')).toBe(false);
+  });
+
   // REGRESSION, and provable from SVSF-V1's own numbers. Annotation coordinates are fractions of
   // the CAPTURED AREA, not of the image — the same space region_bbox is in, which says where the
   // image sits inside that capture. SVSF's shot took in both book covers, so region_bbox is
