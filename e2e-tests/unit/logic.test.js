@@ -11835,19 +11835,76 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // fine, and the capture reported success anyway — so every citation fell back to text search and
   // landed wherever it first hit: "Foundation series" on an unrelated paragraph, Tesla's evidence
   // on the polyphase image instead of the blackboard, Alex Ferguson and Harry Potter both wrong.
-  // One cause, six symptoms. A capture with no citation anchors must SAY SO and store nothing.
-  test('a capture with no citation anchors is refused, not silently stored', () => {
-    expect(snap).toMatch(/anchors: \{ index: anchors\.indexCount, image: anchors\.imageCount \}/);
+  //
+  // Stamping the snapshot fixes the symptom but welds the anchors to one capture, which makes the
+  // recording ORDER load-bearing and cannot help a page already captured. The locator is therefore
+  // stored on the ANSWER as well, and resolved by the same press that captures the page — the one
+  // moment both halves exist at once.
+  test('capturing a page also anchors that task’s recorded answers', () => {
     const study = require('fs').readFileSync(
       require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
-    const guard = study.match(/if \(!snapshot\.anchors \|\| !snapshot\.anchors\.index\)[\s\S]*?\n    \}/);
-    expect(guard).not.toBeNull();
-    // It must refuse BEFORE storing, or the bad snapshot is on the site regardless of the warning.
-    expect(study.indexOf('!snapshot.anchors.index'))
-      .toBeLessThan(study.indexOf('await saveStudyPage(task.id, snapshot)'));
-    // And it must say what to do, since the fix is an ORDER OF OPERATIONS the researcher cannot guess.
-    expect(guard[0]).toMatch(/Ask PageGuide/);
-    expect(guard[0]).toMatch(/without reloading/);
+    expect(study).toMatch(/const anchored = await _anchorRecordedAnswers\(task\.id, tab\.id\)/);
+    const fn = study.match(/async function _anchorRecordedAnswers[\s\S]*?\n  \}/)[0];
+    // Only this task's answers, and only ones that actually cite something.
+    expect(fn).toMatch(/String\(r\.task_id\) === String\(taskId\)/);
+    expect(fn).toMatch(/if \(!r\.total\) continue;/);
+    // Banked, or the resolution is thrown away the moment the panel closes.
+    expect(fn).toMatch(/await saveStudyResponse\(record/);
+    // Reported: an unanchored answer is invisible until it misplaces evidence on the site.
+    expect(fn).toMatch(/citations anchored across/);
+  });
+
+  // The locator has to survive the snapshot's pruning, so it cannot be a CSS path — the capture
+  // drops page chrome and every nth-child index shifts by however many siblings went with it.
+  test('a locator is addressed by flattened text and ordinal, not by position', () => {
+    const anchors = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    expect(anchors).toMatch(/_pgAnchorNormalize\(el\.textContent\)/);
+    expect(anchors).toMatch(/function _pgAnchorOrdinal/);
+    expect(anchors.replace(/\/\/[^\n]*/g, '')).not.toMatch(/nth-child/);
+    // Resolved from the answer run's own index, never rebuilt — see the anchors test above.
+    expect(anchors).toMatch(/pageguideExistingIndexMap\(\)/);
+    expect(anchors.replace(/\/\/[^\n]*/g, '')).not.toMatch(/createPageIndex/);
+  });
+
+  // The recorder writes locators with its normalizer and the site matches them with normText. A
+  // divergence — a curly apostrophe folded on one side only — makes every locator miss silently.
+  test('the recorder and the site normalize text identically', () => {
+    const anchors = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    const body = f => f.match(/function (?:_pgAnchorNormalize|normText)\(\w*\) \{[\s\S]*?\n\}/)[0]
+      .replace(/function \w+/, 'function F').replace(/\s+/g, ' ');
+    expect(body(anchors)).toBe(body(site));
+  });
+
+  // Locators travel with the answer, so they must reach the site — a column the schema lacks makes
+  // PostgREST reject the whole row, and the publish reports a failure with no obvious cause.
+  test('the locators are published and the column exists', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    expect(study).toMatch(/citation_anchors: r\.citation_anchors \|\| null/);
+    const sql = require('fs').readFileSync(
+      require('path').join(__dirname, '../../supabase_schema.sql'), 'utf8');
+    expect(sql).toMatch(/add column if not exists citation_anchors jsonb/);
+  });
+
+  // The recorded locator wins over the stamped one, which wins over text search. A stamped anchor
+  // belongs to ONE capture; the locator belongs to the answer and outlives every re-capture.
+  test('the site prefers the recorded locator over the stamp, and the stamp over text search', () => {
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    const fn = site.match(/function markFindCitation[\s\S]*?\n\}/)[0];
+    expect(fn.indexOf('resolveCitationAnchor(doc, anchor)')).toBeGreaterThan(-1);
+    expect(fn.indexOf('resolveCitationAnchor(doc, anchor)')).toBeLessThan(fn.indexOf('data-pg-index'));
+    expect(fn.indexOf('data-pg-index')).toBeLessThan(fn.indexOf('markText(doc, needle)'));
+    // An out-of-range ordinal falls THROUGH to text search rather than marking something wrong.
+    const res = site.match(/function resolveCitationAnchor[\s\S]*?\n\}/)[0];
+    expect(res).toMatch(/matches\[anchor\.ordinal\] \|\| \(matches\.length === 1 \? matches\[0\] : null\)/);
+    // A truncated locator can only compare on prefix; an untruncated one must match whole, or
+    // "El pedante" would match the caption that merely begins with it.
+    expect(res).toMatch(/anchor\.truncated \? t\.startsWith\(want\) : t === want/);
   });
 
   test('the live page is left as it was found', () => {

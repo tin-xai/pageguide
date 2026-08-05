@@ -121,6 +121,10 @@ function _buildStudyResponseRecord(ctx) {
     answer_raw: answer,
     answer_display: answer,
     evidence,
+    // Where each [N:"…"] citation actually points, resolved on the live page while the index that
+    // issued N was still installed. Filled by _attachCitationAnchors; null when it could not run.
+    // See content/functions/citation_anchors.js for why this is the only moment it is knowable.
+    citation_anchors: Array.isArray(ctx?.citationAnchors) ? ctx.citationAnchors : null,
     highlight_count: Number(r.highlightCount) || 0,
     edited: false,
     recorded_at: new Date().toISOString(),
@@ -157,6 +161,41 @@ function _buildStudyArmRecord(ctx) {
     }),
     text
   );
+}
+
+/**
+ * Ask the page where this answer's citations point, and hang the result on the record.
+ *
+ * Runs against the tab the answer was produced on, because the numbers in `[N:"…"]` are only
+ * meaningful while that run's page index is installed — a reload discards it and it cannot be
+ * rebuilt (see content/functions/citation_anchors.js).
+ *
+ * Failure is soft and REPORTED, never thrown: a page that has since navigated, or an answer banked
+ * from a parked result, simply has no anchors, and the site falls back to text search for those
+ * citations. What must not happen is banking silently and finding out at analysis.
+ *
+ * @returns {Promise<{ok: boolean, resolved: number, total: number, reason: string|null}>}
+ */
+async function _attachCitationAnchors(record, tabId) {
+  const answer = record?.answer_raw || record?.answer_display || '';
+  if (!/\[\d+:"/.test(answer)) return { ok: true, resolved: 0, total: 0, reason: null };
+  try {
+    const id = tabId || (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+    if (!id) return { ok: false, resolved: 0, total: 0, reason: 'no active tab' };
+    const res = await chrome.tabs.sendMessage(id, { action: 'resolveCitationAnchors', answer });
+    if (!res || res.error) {
+      return { ok: false, resolved: 0, total: 0, reason: res?.error || 'the page did not respond' };
+    }
+    record.citation_anchors = res.anchors || [];
+    return {
+      ok: res.hasIndex && res.resolved > 0,
+      resolved: res.resolved,
+      total: res.total,
+      reason: res.hasIndex ? null : 'the answer run\'s page index is gone (was the page reloaded?)',
+    };
+  } catch (e) {
+    return { ok: false, resolved: 0, total: 0, reason: e?.message || String(e) };
+  }
 }
 
 /**
@@ -601,6 +640,7 @@ if (typeof window !== 'undefined') {
   window._buildStudyResponseRecord = _buildStudyResponseRecord;
   window._buildStudyArmRecord = _buildStudyArmRecord;
   window._applyStudyResponseEdit = _applyStudyResponseEdit;
+  window._attachCitationAnchors = _attachCitationAnchors;
   window.listStudyResponses = listStudyResponses;
   window.getStudyResponse = getStudyResponse;
   window.saveStudyResponse = saveStudyResponse;

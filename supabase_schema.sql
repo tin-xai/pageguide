@@ -161,6 +161,14 @@ create table if not exists public.study_canned_responses (
   unique (task_id, condition)
 );
 
+-- Where each [N:"…"] citation actually points, resolved on the LIVE page when the answer was
+-- recorded or when its page was captured. Added after the fact: an index number is only meaningful
+-- while the run that issued it is still installed, so the site could previously do nothing but
+-- search the snapshot for the quoted text — which missed phrases split across tags ("Foundation
+-- series" inside an <i>) and misfired when one quote sat inside another ("El pedante"). Shape:
+--   [{index, quote, tag, text, ordinal, truncated}]
+alter table public.study_canned_responses add column if not exists citation_anchors jsonb;
+
 create index if not exists idx_scr_task_condition on public.study_canned_responses (task_id, condition);
 
 alter table public.study_canned_responses enable row level security;

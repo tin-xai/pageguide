@@ -1793,6 +1793,43 @@ if (typeof window !== 'undefined') {
     return hit ? hit.task_id : null;
   }
 
+  /**
+   * Resolve this task's recorded answers against the page that is open, and bank the locators.
+   *
+   * WHY IT HANGS OFF CAPTURE. A citation is `[69:"…"]` — element 69 in the index the ANSWER RUN
+   * built. That index is the only thing that gives 69 a meaning, it is discarded on reload, and it
+   * cannot be rebuilt (createPageIndex renumbers; see pageguideExistingIndexMap in utils.js). So the
+   * mapping has to be read while the answer's own page is still standing. Capture is exactly that
+   * moment — the researcher is looking at the page with the grounded answer on it — which makes one
+   * press enough and makes re-capturing the way to repair an answer whose anchors are missing.
+   *
+   * Locators are stored ON THE ANSWER rather than stamped into the snapshot, so a later re-capture
+   * cannot silently strip them, and a page captured before any of this existed still resolves.
+   *
+   * Soft, and reported: an answer that cannot be anchored is left as it was, and the count is shown
+   * rather than swallowed — a missing locator is invisible until it misplaces evidence on the site.
+   */
+  async function _anchorRecordedAnswers(taskId, tabId) {
+    const out = { updated: 0, resolved: 0, total: 0, summary: 'no recorded answers to anchor' };
+    if (typeof listStudyResponses !== 'function' || typeof _attachCitationAnchors !== 'function') {
+      return out;
+    }
+    const all = await listStudyResponses() || {};
+    const mine = Object.values(all).filter(r => r && String(r.task_id) === String(taskId));
+    for (const record of mine) {
+      const r = await _attachCitationAnchors(record, tabId);
+      if (!r.total) continue;                        // nothing cited — the non-grounded arm
+      out.total += r.total;
+      out.resolved += r.resolved;
+      if (r.resolved) { await saveStudyResponse(record, { downscale: false }); out.updated++; }
+    }
+    out.summary = out.total
+      ? `${out.resolved}/${out.total} citations anchored across ${out.updated} recorded answer`
+        + `${out.updated === 1 ? '' : 's'}`
+      : 'no citations to anchor';
+    return out;
+  }
+
   async function saveStudyPage(taskId, snapshot) {
     try {
       const all = await listStudyPages();
@@ -1911,6 +1948,10 @@ if (typeof window !== 'undefined') {
           answer_raw: r.answer_raw || null,
           answer_display: r.answer_display || null,
           evidence: r.evidence || [],
+          // Where each [N:"…"] points, resolved on the live page when the answer was recorded or
+          // when the page was captured. Travels with the ANSWER, so it keeps working across
+          // re-captures — see content/functions/citation_anchors.js.
+          citation_anchors: r.citation_anchors || null,
           highlight_count: r.highlight_count ?? null,
           edited: !!r.edited,
         }));
@@ -2959,22 +3000,18 @@ if (typeof window !== 'undefined') {
             + 'saved. It is almost always one huge image or video.', 'bad');
           return;
         }
-        // A snapshot with no citation anchors is not a usable stimulus, and it is worth REFUSING
-        // rather than storing: it looks identical to a good one, and every citation in it lands
-        // wherever text search happens to hit. The anchors exist only while the answer run's own
-        // page index is still installed — that is what makes the order below non-negotiable.
-        if (!snapshot.anchors || !snapshot.anchors.index) {
-          note('Captured, but this page carries NO citation anchors, so nothing was saved. The '
-            + 'anchors come from the index the answer run builds, and it is gone after a reload. '
-            + 'Press 💬 Ask PageGuide, let the answer finish, then press 📄 Capture page in that '
-            + 'same tab without reloading it.', 'bad');
-          return;
-        }
+        // The same press resolves this task's RECORDED ANSWERS against the page in front of it.
+        // Capturing is the one moment both halves are available at once — the live index that gives
+        // `[N:"…"]` its meaning, and the snapshot the site will show — so binding them here means a
+        // researcher never has to get an order of operations right, and answers banked long ago get
+        // their anchors backfilled by re-capturing rather than by being recorded again.
+        const anchored = await _anchorRecordedAnswers(task.id, tab.id);
+
         const sharedWith = await _pageSharedWith(task.id, snapshot.url);
         const res = await saveStudyPage(task.id, snapshot);
         if (!res.saved) { note(`Captured, but could not store it: ${res.error}`, 'bad'); return; }
         note(`Captured ${_fmtSnapshotSize(snapshot.bytes)} from ${snapshot.url} — `
-          + `${snapshot.anchors.index} citation anchors, ${snapshot.anchors.image} image anchors. `
+          + `${anchored.summary}. `
           + (sharedWith
             ? `${sharedWith} already has this same page — only one copy is published, and both tasks read it.`
             : 'Publish find to send it to the website.'), 'ok');

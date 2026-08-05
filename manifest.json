@@ -42,6 +42,7 @@
         "rewind/rewind_store.js",
         "content/functions/scroll.js",
         "content/functions/page_snapshot.js",
+        "content/functions/citation_anchors.js",
         "content/functions/capture_screenshot.js",
         "content/functions/highlight.js",
         "content/functions/study_pick.js",

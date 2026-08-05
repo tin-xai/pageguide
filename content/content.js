@@ -29,6 +29,15 @@ async function handleMessage(request) {
       }
       return await pgCapturePageSnapshot();
 
+    // Resolve an answer's citations to locators the study site can use, while the index that
+    // issued their numbers is still installed. See content/functions/citation_anchors.js — this
+    // has to run in the page, and it has to run before a reload discards the index.
+    case 'resolveCitationAnchors':
+      if (typeof pgResolveCitationAnchors !== 'function') {
+        return { error: 'citation_anchors.js is not loaded — reload the page and try again' };
+      }
+      return pgResolveCitationAnchors(request.answer || '');
+
     case 'handleQuery':
       if (typeof handleSmartQuery === 'function') {
         return await handleSmartQuery(

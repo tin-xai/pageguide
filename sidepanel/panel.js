@@ -6677,7 +6677,11 @@ Previous steps: None`;
         addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
         _lastAnswerEvidenceShots = [];
         // Keep the result reachable from this answer's Save/Edit chips (authoring mode only).
-        _parkAnswerPayload(result, { url: currentTab?.url || '', question: query });
+        // tabId travels with the payload: the citations can only be resolved on the tab that
+        // produced them, and by save time the researcher may be looking at a different one.
+        _parkAnswerPayload(result, {
+          url: currentTab?.url || '', question: query, tabId: currentTab?.id || null,
+        });
       }
     } else {
       const errText = result?.error || 'Unknown error';
@@ -7897,9 +7901,28 @@ async function openStudySaveDialog(answerId) {
       saves.push(_buildStudyResponseRecord(Object.assign({ condition: chosen }, base)));
     }
 
+    // Resolve the citations BEFORE banking, on the tab the answer was produced on. This is the last
+    // moment the mapping exists — the numbers in [N:"…"] belong to the answer run's own page index,
+    // and a reload discards it for good. Only the grounded record has markers to resolve; the bare
+    // one is defined by their absence.
+    const anchoring = [];
+    for (const record of saves) {
+      const r = await _attachCitationAnchors(record, parked.tabId);
+      if (r.total) anchoring.push(r);
+    }
+
     const results = [];
     for (const record of saves) results.push([record.condition, await saveStudyResponse(record)]);
     closeMemoryShotLightbox();
+
+    // Said out loud, because an answer banked without anchors looks identical to one with them and
+    // only misbehaves later, on the study site, as evidence landing on the wrong paragraph.
+    const weak = anchoring.find(r => !r.ok || r.resolved < r.total);
+    if (weak) {
+      addMessage(`⚠️ Saved, but only ${weak.resolved}/${weak.total} citations could be anchored`
+        + `${weak.reason ? ` — ${weak.reason}` : ''}. Re-run the answer on this page and save again `
+        + 'if the evidence lands in the wrong place on the study site.', 'error');
+    }
 
     const failed = results.filter(([, r]) => !r.saved);
     if (failed.length) {
