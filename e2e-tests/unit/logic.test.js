@@ -11893,6 +11893,39 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(sql).toMatch(/add column if not exists citation_anchors jsonb/);
   });
 
+  // Checking grounding by re-asking checks the wrong thing: a fresh ask makes a NEW answer and
+  // re-indexes the page, so what it draws is not what the study will draw. The check has to replay
+  // the BANKED record through the same locators the site resolves, or it proves nothing about it.
+  test('grounding is replayed from the banked record, not from a fresh ask', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const handler = study.match(/if \(showGrounding\) showGrounding\.onclick[\s\S]*?\n    \};/)[0];
+    expect(handler).toMatch(/await getStudyResponse\(task\.id, 'grounding'\)/);
+    expect(handler).toMatch(/record\.citation_anchors/);
+    expect(handler).toMatch(/action: 'showSavedGrounding'/);
+    // The visual marks are the other half of the grounded arm; text alone checks half the stimulus.
+    expect(handler).toMatch(/action: 'showStudyEvidenceMarks'/);
+    // Misses are NAMED. A bare count sends a researcher hunting for which quote failed.
+    expect(handler).toMatch(/Could not place: /);
+    // Refuses rather than drawing nothing silently when the answer was never anchored.
+    expect(handler).toMatch(/no citation anchors yet/);
+  });
+
+  // Three copies of one rule: the recorder writes the ordinal, the extension replays it, the site
+  // resolves it. They must count identically or a locator written by one misses in the others.
+  test('the extension replays a locator exactly as the site resolves it', () => {
+    const anchorsSrc = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    const rule = /anchor\.truncated \? t\.startsWith\(want\) : t === want/;
+    const fallback = /matches\[anchor\.ordinal\] \|\| \(matches\.length === 1 \? matches\[0\] : null\)/;
+    for (const src of [anchorsSrc, site]) {
+      expect(src).toMatch(rule);
+      expect(src).toMatch(fallback);
+    }
+  });
+
   // A ten-page bundle is a slow way to discover the anchors did not land, and it re-uploads nine
   // pages that were already right. One task, same rows, same keys, same upsert.
   test('a single task can be published on its own, through the same publisher', () => {

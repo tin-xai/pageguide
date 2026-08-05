@@ -38,6 +38,14 @@ async function handleMessage(request) {
       }
       return pgResolveCitationAnchors(request.answer || '');
 
+    // Re-draw a BANKED answer's grounding, from the locators saved with it. Not a re-ask: re-asking
+    // makes a new answer and a new index, so it would show something other than what the study will.
+    case 'showSavedGrounding':
+      if (typeof pgShowSavedGrounding !== 'function') {
+        return { error: 'citation_anchors.js is not loaded — reload the page and try again' };
+      }
+      return pgShowSavedGrounding(request.anchors || []);
+
     case 'handleQuery':
       if (typeof handleSmartQuery === 'function') {
         return await handleSmartQuery(

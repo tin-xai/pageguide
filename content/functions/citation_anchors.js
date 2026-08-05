@@ -124,8 +124,72 @@ function pgResolveCitationAnchors(answer) {
   };
 }
 
+/**
+ * Find the element a stored locator names, on the page as it stands now.
+ *
+ * The mirror of _pgAnchorOrdinal, and of resolveCitationAnchor in the study site — all three count
+ * the same way or a locator written by one fails to resolve in the others. Kept here rather than
+ * imported because the site cannot import from an extension, so the rule is written twice and
+ * asserted equal by test rather than shared.
+ */
+function pgFindByCitationAnchor(anchor) {
+  const want = String(anchor?.text || '');
+  if (!want || !anchor.tag) return null;
+  const all = document.getElementsByTagName(anchor.tag);
+  const matches = [];
+  for (let i = 0; i < all.length; i++) {
+    const t = _pgAnchorNormalize(all[i].textContent);
+    if (anchor.truncated ? t.startsWith(want) : t === want) matches.push(all[i]);
+  }
+  if (!matches.length) return null;
+  return matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
+}
+
+/**
+ * Re-draw a banked answer's grounding on the live page.
+ *
+ * WHY THIS IS NOT "just run the ask again". Re-asking produces a NEW answer — possibly a different
+ * one — and re-indexes the page, so what it shows is not what the study will show. The point here
+ * is to look at the highlights a participant will actually get, which are the ones belonging to the
+ * banked record, resolved through the locators saved with it.
+ *
+ * That also makes this a check on the locators themselves: if the highlight lands in the wrong
+ * place here, on the real page, it will land in the wrong place on the site — the same locators
+ * resolve both. A researcher can see the fault before publishing rather than after.
+ *
+ * @param {object[]} anchors - citation_anchors from the banked response
+ * @returns {{shown: number, missed: number, misses: object[]}}
+ */
+function pgShowSavedGrounding(anchors) {
+  if (typeof clearHighlights === 'function') clearHighlights();
+  const list = Array.isArray(anchors) ? anchors : [];
+  let shown = 0;
+  const misses = [];
+  for (const anchor of list) {
+    const el = pgFindByCitationAnchor(anchor);
+    if (!el) { misses.push({ index: anchor?.index, quote: anchor?.quote || '' }); continue; }
+    // The page's own highlight treatment, not one invented here: the researcher is checking what a
+    // participant sees, so a second visual language would be checking the wrong thing.
+    const quote = String(anchor.quote || '').trim();
+    const n = (quote && typeof highlightTextInElement === 'function')
+      ? highlightTextInElement(el, quote, '#ffd93d', 'soft')
+      : 0;
+    if (!n && typeof applyAnimatedHighlight === 'function') {
+      applyAnimatedHighlight(el, '#ffd93d', 'soft', { block: true });
+      if (Array.isArray(window._pageguideHighlights)) window._pageguideHighlights.push(el);
+    }
+    shown++;
+  }
+  // Scrolled to the first hit, because a highlight below the fold reads as no highlight at all.
+  const first = list.length ? pgFindByCitationAnchor(list[0]) : null;
+  if (first) { try { first.scrollIntoView({ block: 'center' }); } catch (e) { } }
+  return { shown, missed: misses.length, misses };
+}
+
 if (typeof window !== 'undefined') {
   window.pgResolveCitationAnchors = pgResolveCitationAnchors;
+  window.pgFindByCitationAnchor = pgFindByCitationAnchor;
+  window.pgShowSavedGrounding = pgShowSavedGrounding;
   window._pgAnchorNormalize = _pgAnchorNormalize;
   window._pgAnchorTextOf = _pgAnchorTextOf;
   window._pgAnchorOrdinal = _pgAnchorOrdinal;

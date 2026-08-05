@@ -2975,6 +2975,12 @@ if (typeof window !== 'undefined') {
                    that the anchors did not land, and it re-uploads nine pages that were already
                    right. Same rows, same keys, same upsert — just this task's — so what it proves
                    about one page holds for the full publish. -->
+              <!-- What a participant will actually see, drawn on the real page from the BANKED
+                   record — not from a fresh ask, which would make a different answer and a new
+                   index and so show something other than what the study shows. Because it resolves
+                   through the same locators the site uses, a highlight that lands wrong here lands
+                   wrong there: this is the check, not a preview. -->
+              <button class="study-evidence-clear" id="study-show-grounding" title="Draw the saved grounded answer's highlights and evidence marks on this page, exactly as the study site will">👁 Show grounding</button>
               <button class="study-evidence-clear" id="study-publish-find-one" title="Publish ONLY this task — its question, recorded answers, ground truth and captured page. For checking one page before sending the lot.">⬆ Publish this find</button>
               <button class="study-evidence-clear" id="study-publish-find" title="Publish the FIND questions, recorded answers, ground truth and captured pages via the local publish helper">⬆ Publish find</button>
             </div>
@@ -3067,6 +3073,59 @@ if (typeof window !== 'undefined') {
         findPublish.disabled = false;
       }
     };
+    // Replay the banked grounding onto the live page.
+    //
+    // Reads the RECORD, never the live result: the researcher is checking what a participant gets,
+    // and a fresh ask would answer a different question — literally, since the model may word it
+    // differently and the page would be re-indexed underneath it.
+    const showGrounding = $('study-show-grounding');
+    if (showGrounding) showGrounding.onclick = async () => {
+      const note = (msg, tone = '') => {
+        const n = $('study-find-publish-note');
+        if (!n) return;
+        n.textContent = msg || '';
+        n.className = `study-llm-answers-note${tone ? ' study-note-' + tone : ''}`;
+      };
+      showGrounding.disabled = true;
+      try {
+        const record = await getStudyResponse(task.id, 'grounding');
+        if (!record) { note(`No grounded answer is banked for ${task.id} yet.`, 'bad'); return; }
+        const anchors = Array.isArray(record.citation_anchors) ? record.citation_anchors : [];
+        if (!anchors.length) {
+          note('That answer has no citation anchors yet, so there is nothing to place. Press '
+            + '💬 Ask PageGuide and then 📄 Capture page on this tab to resolve them.', 'bad');
+          return;
+        }
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) { note('No active tab to draw on.', 'bad'); return; }
+
+        const res = await chrome.tabs.sendMessage(tab.id, { action: 'showSavedGrounding', anchors });
+        if (!res || res.error) { note(`Could not draw: ${res?.error || 'no response'}`, 'bad'); return; }
+
+        // The visual evidence goes up with it: the marks are the other half of what the grounded
+        // arm sees, and showing only the text highlights would check only half the stimulus.
+        let drawn = 0;
+        const marks = (Array.isArray(record.evidence) ? record.evidence : [])
+          .flatMap(item => (Array.isArray(item?.marks) ? item.marks : []));
+        if (marks.length) {
+          const ev = await chrome.tabs.sendMessage(tab.id, { action: 'showStudyEvidenceMarks', marks });
+          drawn = Number(ev?.drawn) || 0;
+        }
+
+        // Misses are NAMED, not counted. "2 could not be placed" sends a researcher hunting; the
+        // quotes say which ones, and a quote that cannot be placed here will be misplaced on the site.
+        const miss = (res.misses || []).map(m => `[${m.index}] "${String(m.quote).slice(0, 40)}"`);
+        note(`Drew ${res.shown}/${anchors.length} citation highlight`
+          + `${anchors.length === 1 ? '' : 's'}${marks.length ? ` and ${drawn} evidence mark${drawn === 1 ? '' : 's'}` : ''}`
+          + (miss.length ? `. Could not place: ${miss.join(', ')}` : '. This is what the site will show.'),
+          miss.length ? 'bad' : 'ok');
+      } catch (e) {
+        note(`Could not draw: ${e?.message || e}. Open the task page first.`, 'bad');
+      } finally {
+        showGrounding.disabled = false;
+      }
+    };
+
     // Same publisher, narrowed to this task. Deliberately NOT a separate path: a check that ran
     // different code from the real publish would prove nothing about the real publish.
     const findPublishOne = $('study-publish-find-one');
