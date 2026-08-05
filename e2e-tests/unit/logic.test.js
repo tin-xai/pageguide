@@ -11510,7 +11510,37 @@ describe('Snapshot size control (content/functions/page_snapshot.js)', () => {
     const fn = snap.match(/async function _pgShrinkDataUri[\s\S]*?\n\}/)[0];
     expect(fn).toMatch(/data:image\/svg/);
     expect(fn).toMatch(/data:image\/gif/);
-    expect(fn).toMatch(/naturalWidth <= PG_SNAPSHOT_IMG_MAX_WIDTH/);
+    expect(fn).toMatch(/img\.naturalWidth <= target && !heavy/);
+  });
+
+  // REGRESSION. Mars grew from 19.7 MB to 37.3 MB after lazy-loading started resolving real images
+  // instead of blur placeholders, and took visibly longer to load than any other page. Nothing on
+  // that article is wider than the 1600px cap, so under the old rule NOTHING on it was ever
+  // re-encoded — a 1280px PNG was banked whole, at PNG weight, to be drawn at 250px.
+  test('images are sized to what they are drawn at, not to what they happen to be', () => {
+    const fn = snap.match(/async function _pgShrinkDataUri[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/renderedWidth/);
+    expect(fn).toMatch(/\(renderedWidth \|\| 0\) \* 2/);
+    // Layout does not survive cloneNode, so the drawn width is stamped on the live page first.
+    expect(snap).toMatch(/img\.setAttribute\('data-pg-w', String\(w\)\)/);
+    expect(snap).toMatch(/getBoundingClientRect\(\)\.width/);
+    expect(snap).toMatch(/_pgShrinkDataUri\(await _pgFetchAsDataUri\(abs\), drawnWidth\)/);
+    // ...and is cleaned off it afterwards, like every other capture-time attribute.
+    expect(snap).toMatch(/removeAttribute\('data-pg-w'\)/);
+  });
+
+  // A heavy file with no excess pixels is the case the width test alone never catches.
+  test('a heavy image is re-encoded even when it has no pixels to drop', () => {
+    const fn = snap.match(/async function _pgShrinkDataUri[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/const heavy = dataUri\.length > PG_SNAPSHOT_IMG_REENCODE_BYTES/);
+    expect(fn).toMatch(/if \(img\.naturalWidth <= target && !heavy\) return dataUri;/);
+  });
+
+  // A thumbnail drawn at 90px would otherwise be stored at 180px and turn to mush in the lightbox.
+  test('the drawn-width budget has a floor', () => {
+    expect(snap).toMatch(/PG_SNAPSHOT_IMG_MIN_WIDTH = 900/);
+    expect(snap.match(/async function _pgShrinkDataUri[\s\S]*?\n\}/)[0])
+      .toMatch(/Math\.max\(PG_SNAPSHOT_IMG_MIN_WIDTH/);
   });
 
   // A small illustration can re-encode LARGER as a JPEG, and a transparent PNG would composite
@@ -11710,8 +11740,14 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
 
   test('citation targets are stamped from the index the citations refer to', () => {
     expect(snap).toMatch(/function _pgStampAnchors/);
-    expect(snap).toMatch(/window\._pageguideIndex/);
     expect(snap).toMatch(/setAttribute\('data-pg-index'/);
+    // The ANSWER RUN's index, reused — never rebuilt. createPageIndex renumbers from the live DOM
+    // and skips the answer's own highlight spans, so a rebuilt index hands out different numbers
+    // than the citations were written against: not a missing anchor, a confidently wrong one.
+    const fn = snap.match(/function _pgStampAnchors[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/pageguideExistingIndexMap\(\)/);
+    // Comments stripped: the rule above NAMES createPageIndex to explain why it is not called.
+    expect(fn.replace(/\/\/[^\n]*/g, '')).not.toMatch(/createPageIndex/);
   });
 
   // Counting images on the site has to guess at the recorder's filtering rule, and guessing put
@@ -11724,9 +11760,9 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
 
   // Capturing must not leave attributes on a page the researcher is still using.
   test('the live page is left as it was found', () => {
-    expect(snap).toMatch(/const unstamp = _pgStampAnchors\(\);/);
+    expect(snap).toMatch(/const anchors = _pgStampAnchors\(\);/);
     // unmark() sits between them now — both must run, and both before anything else touches the page.
-    expect(snap).toMatch(/const clone = document\.documentElement\.cloneNode\(true\);\s*\n\s*unmark\(\);\s*\n\s*unstamp\(\);/);
+    expect(snap).toMatch(/const clone = document\.documentElement\.cloneNode\(true\);\s*\n\s*unmark\(\);\s*\n\s*anchors\.unstamp\(\);/);
     expect(snap).toMatch(/stamped\.forEach\(\(\[el, attr\]\) => el\.removeAttribute\(attr\)\)/);
   });
 
@@ -11784,7 +11820,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
 
   // Marking has to happen AFTER stamping, or the anchor check has nothing to protect.
   test('pruning is marked after the anchors are stamped', () => {
-    const order = snap.match(/const unstamp = _pgStampAnchors\(\);[\s\S]{0,200}/)[0];
+    const order = snap.match(/const anchors = _pgStampAnchors\(\);[\s\S]{0,200}/)[0];
     expect(order).toMatch(/_pgMarkPrunable\(\)/);
     expect(order.indexOf('_pgStampAnchors')).toBeLessThan(order.indexOf('_pgMarkPrunable'));
   });
@@ -11795,9 +11831,28 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
       .toBeLessThan(snap.indexOf('await _pgInlineImages(clone)'));
   });
 
+  // REGRESSION. Every recaptured page came back with data-pg-index: 0 while image anchors stamped
+  // fine, and the capture reported success anyway — so every citation fell back to text search and
+  // landed wherever it first hit: "Foundation series" on an unrelated paragraph, Tesla's evidence
+  // on the polyphase image instead of the blackboard, Alex Ferguson and Harry Potter both wrong.
+  // One cause, six symptoms. A capture with no citation anchors must SAY SO and store nothing.
+  test('a capture with no citation anchors is refused, not silently stored', () => {
+    expect(snap).toMatch(/anchors: \{ index: anchors\.indexCount, image: anchors\.imageCount \}/);
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const guard = study.match(/if \(!snapshot\.anchors \|\| !snapshot\.anchors\.index\)[\s\S]*?\n    \}/);
+    expect(guard).not.toBeNull();
+    // It must refuse BEFORE storing, or the bad snapshot is on the site regardless of the warning.
+    expect(study.indexOf('!snapshot.anchors.index'))
+      .toBeLessThan(study.indexOf('await saveStudyPage(task.id, snapshot)'));
+    // And it must say what to do, since the fix is an ORDER OF OPERATIONS the researcher cannot guess.
+    expect(guard[0]).toMatch(/Ask PageGuide/);
+    expect(guard[0]).toMatch(/without reloading/);
+  });
+
   test('the live page is left as it was found', () => {
     expect(snap).toMatch(/const unmark = _pgMarkPrunable\(\);/);
-    expect(snap).toMatch(/unmark\(\);\s*\n\s*unstamp\(\);/);
+    expect(snap).toMatch(/unmark\(\);\s*\n\s*anchors\.unstamp\(\);/);
     expect(snap).toMatch(/marked\.forEach\(el => el\.removeAttribute\('data-pg-drop'\)\)/);
   });
 });

@@ -2959,10 +2959,22 @@ if (typeof window !== 'undefined') {
             + 'saved. It is almost always one huge image or video.', 'bad');
           return;
         }
+        // A snapshot with no citation anchors is not a usable stimulus, and it is worth REFUSING
+        // rather than storing: it looks identical to a good one, and every citation in it lands
+        // wherever text search happens to hit. The anchors exist only while the answer run's own
+        // page index is still installed — that is what makes the order below non-negotiable.
+        if (!snapshot.anchors || !snapshot.anchors.index) {
+          note('Captured, but this page carries NO citation anchors, so nothing was saved. The '
+            + 'anchors come from the index the answer run builds, and it is gone after a reload. '
+            + 'Press 💬 Ask PageGuide, let the answer finish, then press 📄 Capture page in that '
+            + 'same tab without reloading it.', 'bad');
+          return;
+        }
         const sharedWith = await _pageSharedWith(task.id, snapshot.url);
         const res = await saveStudyPage(task.id, snapshot);
         if (!res.saved) { note(`Captured, but could not store it: ${res.error}`, 'bad'); return; }
-        note(`Captured ${_fmtSnapshotSize(snapshot.bytes)} from ${snapshot.url}. `
+        note(`Captured ${_fmtSnapshotSize(snapshot.bytes)} from ${snapshot.url} — `
+          + `${snapshot.anchors.index} citation anchors, ${snapshot.anchors.image} image anchors. `
           + (sharedWith
             ? `${sharedWith} already has this same page — only one copy is published, and both tasks read it.`
             : 'Publish find to send it to the website.'), 'ok');

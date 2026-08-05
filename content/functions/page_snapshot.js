@@ -78,13 +78,24 @@ const PG_SNAPSHOT_IMG_MAX_WIDTH = 1600;
 const PG_SNAPSHOT_IMG_QUALITY = 0.82;
 
 /**
+ * The narrowest an image is ever stored at, whatever it is drawn at.
+ *
+ * A thumbnail drawn at 90px would otherwise be banked at 180px and turn to mush the moment a
+ * participant opens it in the evidence lightbox — where the whole point is to look at it closely.
+ */
+const PG_SNAPSHOT_IMG_MIN_WIDTH = 900;
+
+/** Past this, an image is re-encoded even when it has no excess pixels — see _pgShrinkDataUri. */
+const PG_SNAPSHOT_IMG_REENCODE_BYTES = 180 * 1024;
+
+/**
  * Re-encode a data: URI down to PG_SNAPSHOT_IMG_MAX_WIDTH, or return it unchanged.
  *
  * Unchanged is the right answer more often than it looks: an image already narrower than the cap
  * gains nothing from a re-encode and would only lose quality, and SVG has no pixels to resample —
  * re-encoding one to JPEG would rasterize a diagram that was crisp at any size.
  */
-async function _pgShrinkDataUri(dataUri) {
+async function _pgShrinkDataUri(dataUri, renderedWidth = 0) {
   if (!dataUri || !dataUri.startsWith('data:image/')) return dataUri;
   if (dataUri.startsWith('data:image/svg')) return dataUri;
   // An ANIMATED GIF is flattened to its first frame when it is large. The animation is lost, which
@@ -100,11 +111,34 @@ async function _pgShrinkDataUri(dataUri) {
       el.src = dataUri;
       setTimeout(() => reject(new Error('decode timeout')), 8000);
     });
-    if (!img.naturalWidth || img.naturalWidth <= PG_SNAPSHOT_IMG_MAX_WIDTH) return dataUri;
+    if (!img.naturalWidth) return dataUri;
 
-    const scale = PG_SNAPSHOT_IMG_MAX_WIDTH / img.naturalWidth;
+    // How many pixels this image is worth KEEPING, rather than how many it happens to have.
+    //
+    // A Wikipedia article is mostly thumbnails drawn at ~250px inside a ~1100px frame. Sizing every
+    // one of them to the 1600px cap stores ~40× the pixels that are ever shown, and the old rule
+    // did worse than that: an image already under 1600px was returned UNTOUCHED, so a 1280px PNG
+    // was banked at full PNG weight. That is why Mars came to 37 MB after lazy-loading started
+    // resolving real images instead of blur placeholders — nothing on that page was wide enough to
+    // trip the cap, so nothing on it was ever re-encoded.
+    //
+    // 2× the drawn width is the retina budget: sharp on any display at the size it is actually
+    // shown, and a fraction of the bytes. The floor keeps an image usable if it is later opened
+    // full-size in the evidence lightbox; the cap is unchanged, so a wide hero image is still
+    // capped rather than doubled.
+    const target = Math.min(
+      PG_SNAPSHOT_IMG_MAX_WIDTH,
+      Math.max(PG_SNAPSHOT_IMG_MIN_WIDTH, (renderedWidth || 0) * 2) || PG_SNAPSHOT_IMG_MAX_WIDTH,
+      img.naturalWidth,
+    );
+    // Re-encode whenever there are pixels to drop OR the file is heavy for its size — a lossless
+    // PNG photo is worth re-encoding at its own width, which the width test alone never catches.
+    const heavy = dataUri.length > PG_SNAPSHOT_IMG_REENCODE_BYTES;
+    if (img.naturalWidth <= target && !heavy) return dataUri;
+
+    const scale = target / img.naturalWidth;
     const canvas = document.createElement('canvas');
-    canvas.width = PG_SNAPSHOT_IMG_MAX_WIDTH;
+    canvas.width = target;
     canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
     const ctx = canvas.getContext('2d');
     // A JPEG has no alpha, so a transparent PNG would composite onto black without this.
@@ -266,7 +300,9 @@ async function _pgInlineImages(root) {
     img.removeAttribute('srcset');
     img.removeAttribute('loading');
     if (!abs) continue;
-    const dataUri = await _pgShrinkDataUri(await _pgFetchAsDataUri(abs));
+    const drawnWidth = Number(img.getAttribute('data-pg-w')) || 0;
+    img.removeAttribute('data-pg-w');
+    const dataUri = await _pgShrinkDataUri(await _pgFetchAsDataUri(abs), drawnWidth);
     if (dataUri) img.setAttribute('src', dataUri);
     // NO URL FALLBACK. The snapshot's own CSP is `img-src data:`, so a remote URL here could never
     // load — it rendered as a broken-image icon, which is worse than either alternative: it looks
@@ -384,14 +420,24 @@ function _pgMarkPrunable() {
  */
 function _pgStampAnchors() {
   const stamped = [];
+  let indexCount = 0;
+  let imageCount = 0;
 
-  // Citation targets: window._pageguideIndex is the very index [N:"…"] refers to.
-  const index = (typeof window !== 'undefined' && window._pageguideIndex) || {};
+  // Citation targets: the index [N:"…"] refers to is the one the ANSWER RUN installed, and only
+  // that one. It is NOT rebuilt here, ever. createPageIndex renumbers from the live DOM and skips
+  // the answer's own highlight spans (see pageguideExistingIndexMap in utils.js), so a rebuild
+  // hands out different numbers than the citations were written against — stamping those would not
+  // be a missing anchor, it would be a CONFIDENTLY WRONG one, and the site trusts anchors over text.
+  // An empty map is therefore the correct outcome when no Find has been run on this page; the
+  // caller reports it so the researcher can run one and capture again.
+  const index = (typeof window !== 'undefined' && typeof pageguideExistingIndexMap === 'function'
+    ? pageguideExistingIndexMap() : null) || {};
   Object.keys(index).forEach(key => {
     const el = index[key];
     if (!el || el.nodeType !== 1 || !el.isConnected) return;
     el.setAttribute('data-pg-index', String(key));
     stamped.push([el, 'data-pg-index']);
+    indexCount++;
   });
 
   // Image ids, from the recorder's own catalog so the numbering matches source_image_id exactly.
@@ -402,11 +448,16 @@ function _pgStampAnchors() {
         if (!el || el.nodeType !== 1 || !el.isConnected) return;
         el.setAttribute('data-pg-image-id', cand.id);
         stamped.push([el, 'data-pg-image-id']);
+        imageCount++;
       });
     }
   } catch (e) { /* best-effort: the text fallback still works */ }
 
-  return () => stamped.forEach(([el, attr]) => el.removeAttribute(attr));
+  return {
+    indexCount,
+    imageCount,
+    unstamp: () => stamped.forEach(([el, attr]) => el.removeAttribute(attr)),
+  };
 }
 
 /**
@@ -422,18 +473,24 @@ async function pgCapturePageSnapshot() {
   // Record what the browser actually resolved for each image BEFORE cloning: currentSrc does not
   // survive a clone, and it is the only place a responsive page keeps the URL it really used.
   const live = Array.from(document.querySelectorAll('img'));
-  live.forEach(img => { if (img.currentSrc) img.setAttribute('data-pg-current', img.currentSrc); });
+  live.forEach(img => {
+    if (img.currentSrc) img.setAttribute('data-pg-current', img.currentSrc);
+    // How wide the image is actually DRAWN. Layout does not survive a clone, and it is the only
+    // honest budget for how many pixels the snapshot needs to keep — see _pgShrinkDataUri.
+    const w = Math.round(img.getBoundingClientRect().width || img.clientWidth || 0);
+    if (w > 0) img.setAttribute('data-pg-w', String(w));
+  });
 
   const css = await _pgCollectCss();
 
   // Stamped BEFORE the clone so the attributes are copied into it, and removed immediately after so
   // the researcher's live page is left as it was found.
-  const unstamp = _pgStampAnchors();
+  const anchors = _pgStampAnchors();
   const unmark = _pgMarkPrunable();     // after stamping: the anchors are what make pruning safe
   const clone = document.documentElement.cloneNode(true);
   unmark();
-  unstamp();
-  live.forEach(img => img.removeAttribute('data-pg-current'));
+  anchors.unstamp();
+  live.forEach(img => { img.removeAttribute('data-pg-current'); img.removeAttribute('data-pg-w'); });
 
   // Scripts go, all of them. A snapshot that could run code could rewrite itself under a
   // participant, re-fetch the live article, or navigate the study away.
@@ -474,6 +531,10 @@ async function pgCapturePageSnapshot() {
     url: location.href,
     title: document.title || '',
     truncated: bytes > PG_SNAPSHOT_MAX_TOTAL_BYTES,
+    // Reported, not just counted. A capture with no citation anchors succeeds in every visible way
+    // and then puts every citation on whatever text search happens to hit first — which is what
+    // "the evidence is on the wrong paragraph" was, on every page at once. The caller says so.
+    anchors: { index: anchors.indexCount, image: anchors.imageCount },
   };
 }
 
