@@ -11532,10 +11532,11 @@ describe('Snapshot size control (content/functions/page_snapshot.js)', () => {
     expect(snap).toMatch(/removeAttribute\('data-pg-w'\)/);
   });
 
-  // A heavy file with no excess pixels is the case the width test alone never catches.
-  test('a heavy image is re-encoded even when it has no pixels to drop', () => {
+  // A heavy LOSSLESS file with no excess pixels is the case the width test alone never catches —
+  // a 1280px PNG drawn at 250px. A lossy one is left alone: see the re-encode test below.
+  test('a heavy lossless image is re-encoded even when it has no pixels to drop', () => {
     const fn = snap.match(/async function _pgShrinkDataUri[\s\S]*?\n\}/)[0];
-    expect(fn).toMatch(/const heavy = dataUri\.length > PG_SNAPSHOT_IMG_REENCODE_BYTES/);
+    expect(fn).toMatch(/const heavy = lossless && dataUri\.length > PG_SNAPSHOT_IMG_REENCODE_BYTES/);
     expect(fn).toMatch(/if \(img\.naturalWidth <= target && !heavy\) return dataUri;/);
   });
 
@@ -11831,7 +11832,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // A dropped image is never downloaded either, which is most of the capture TIME, not just size.
   test('the drop happens before images are fetched', () => {
     expect(snap.indexOf("querySelectorAll('[data-pg-drop]')"))
-      .toBeLessThan(snap.indexOf('await _pgInlineImages(clone)'));
+      .toBeLessThan(snap.indexOf('await _pgInlineImages(clone,'));
   });
 
   // REGRESSION. Every recaptured page came back with data-pg-index: 0 while image anchors stamped
@@ -11891,6 +11892,57 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     const sql = require('fs').readFileSync(
       require('path').join(__dirname, '../../supabase_schema.sql'), 'utf8');
     expect(sql).toMatch(/add column if not exists citation_anchors jsonb/);
+  });
+
+  // A silent wait is indistinguishable from a hang, and both were read as one. Capture inlines an
+  // image at a time and publish uploads a megabyte-scale row at a time; each says where it is.
+  test('capture reports progress per image', () => {
+    const snap = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
+    expect(snap).toMatch(/async function _pgInlineImages\(root, onProgress\)/);
+    expect(snap).toMatch(/action: 'captureProgress', done, total/);
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    expect(study).toMatch(/image \$\{msg\.done\} of \$\{msg\.total\}/);
+    // Removed in finally, or every capture leaves another listener writing to a stale note.
+    expect(study).toMatch(/chrome\.runtime\.onMessage\.removeListener\(onProgress\)/);
+  });
+
+  test('publish uploads in named steps, tasks before pages, one page at a time', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const pub = study.match(/async function _publishStimuliVia[\s\S]*?\n  \}/)[0];
+    // study_task_pages.task_id is a foreign key into study_tasks: a page sent first is rejected.
+    expect(pub.indexOf("add('find questions'")).toBeLessThan(pub.indexOf('study_task_pages: [page]'));
+    // Pages are the megabytes — the only rows where "which one is it stuck on?" is a real question.
+    expect(pub).toMatch(/study_task_pages: \[page\]/);
+    expect(pub).toMatch(/page \$\{i \+ 1\} of \$\{all\.length\}/);
+    expect(pub).toMatch(/Publishing \$\{i \+ 1\}\/\$\{steps\.length\}/);
+    // Stops at the first failure: later steps depend on earlier ones, and a wall of errors hides
+    // which one actually broke.
+    expect(pub).toMatch(/Failed on \$\{step\.label\}/);
+  });
+
+  // A hung fetch hangs the whole capture: there is no deadline above it, so one asset from a host
+  // that accepts the connection and never answers leaves the panel waiting forever with no error.
+  test('an asset fetch cannot hang the capture', () => {
+    const snap = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
+    const fn = snap.match(/async function _pgFetchAsDataUri[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/new AbortController\(\)/);
+    expect(fn).toMatch(/signal: ctl\.signal/);
+    expect(fn).toMatch(/clearTimeout\(timer\)/);
+    expect(snap).toMatch(/PG_SNAPSHOT_FETCH_TIMEOUT_MS = 15000/);
+  });
+
+  // Re-encoding a JPEG to a JPEG at the same size costs tens of milliseconds and saves nothing.
+  // Doing it for every image over 180 KB on an image-heavy article is what made capture look hung.
+  test('a same-size re-encode only happens for lossless formats', () => {
+    const snap = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
+    const fn = snap.match(/async function _pgShrinkDataUri[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/const lossless = \/\^data:image\\\/\(png\|bmp\|tiff\?\)\//);
+    expect(fn).toMatch(/const heavy = lossless && dataUri\.length > PG_SNAPSHOT_IMG_REENCODE_BYTES/);
   });
 
   // Checking grounding by re-asking checks the wrong thing: a fresh ask makes a NEW answer and

@@ -35,6 +35,9 @@
  */
 const PG_SNAPSHOT_MAX_ASSET_BYTES = 10 * 1024 * 1024;
 
+/** How long one asset may take before it is given up on. See _pgFetchAsDataUri. */
+const PG_SNAPSHOT_FETCH_TIMEOUT_MS = 15000;
+
 /** Give up on the whole capture past this, rather than build something nothing can store. */
 const PG_SNAPSHOT_MAX_TOTAL_BYTES = 40 * 1024 * 1024;
 
@@ -48,7 +51,19 @@ const PG_SNAPSHOT_MAX_TOTAL_BYTES = 40 * 1024 * 1024;
 async function _pgFetchAsDataUri(url) {
   try {
     if (!url || url.startsWith('data:') || url.startsWith('blob:')) return null;
-    const res = await fetch(url, { credentials: 'omit', redirect: 'follow' });
+    // TIMED OUT, because a hung request hangs the whole capture. There is no overall deadline above
+    // this — the capture awaits each image in turn — so one asset served by a host that accepts the
+    // connection and then never answers leaves the panel on "inlining styles and images…" forever,
+    // with no error and nothing to retry. A missing image is a normal, recoverable outcome; a
+    // capture that never returns is not.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), PG_SNAPSHOT_FETCH_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(url, { credentials: 'omit', redirect: 'follow', signal: ctl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) return null;
     const blob = await res.blob();
     if (blob.size > PG_SNAPSHOT_MAX_ASSET_BYTES) return null;
@@ -131,9 +146,17 @@ async function _pgShrinkDataUri(dataUri, renderedWidth = 0) {
       Math.max(PG_SNAPSHOT_IMG_MIN_WIDTH, (renderedWidth || 0) * 2) || PG_SNAPSHOT_IMG_MAX_WIDTH,
       img.naturalWidth,
     );
-    // Re-encode whenever there are pixels to drop OR the file is heavy for its size — a lossless
-    // PNG photo is worth re-encoding at its own width, which the width test alone never catches.
-    const heavy = dataUri.length > PG_SNAPSHOT_IMG_REENCODE_BYTES;
+    // Re-encode when there are pixels to drop, or when the file is heavy AND re-encoding it could
+    // plausibly help.
+    //
+    // "Could plausibly help" is doing real work here. Decode + draw + toDataURL costs tens of
+    // milliseconds on a large image, and an article can hold fifty — the first version of this rule
+    // re-encoded every image over 180 KB regardless of format, which on an image-heavy page meant
+    // re-encoding a JPEG to a JPEG at the same size dozens of times over, to save nothing. The
+    // capture appeared to hang. Only LOSSLESS formats are worth a same-size re-encode; anything
+    // already lossy is left alone unless it has pixels to lose.
+    const lossless = /^data:image\/(png|bmp|tiff?)/.test(dataUri);
+    const heavy = lossless && dataUri.length > PG_SNAPSHOT_IMG_REENCODE_BYTES;
     if (img.naturalWidth <= target && !heavy) return dataUri;
 
     const scale = target / img.naturalWidth;
@@ -291,10 +314,19 @@ async function _pgSettleLazyImages() {
   await new Promise(r => setTimeout(r, 200));
 }
 
-/** Inline every <img>, including the srcset/lazy-loading variants that carry the real URL. */
-async function _pgInlineImages(root) {
+/**
+ * Inline every <img>, including the srcset/lazy-loading variants that carry the real URL.
+ *
+ * Reports progress as it goes. Inlining is where all the time goes — one fetch and often one
+ * re-encode per image — and a silent wait of a minute is indistinguishable from a hang, which is
+ * exactly how it was read. `onProgress` lets the panel say "image 14 of 61" instead.
+ */
+async function _pgInlineImages(root, onProgress) {
   const imgs = Array.from(root.querySelectorAll('img'));
+  let done = 0;
   for (const img of imgs) {
+    if (onProgress) { try { onProgress(done, imgs.length); } catch (e) { } }
+    done++;
     const abs = _pgAbsolute(_pgBestImageUrl(img));
     // srcset would otherwise override the data: URI we just set, and re-fetch from the network.
     img.removeAttribute('srcset');
@@ -505,7 +537,13 @@ async function pgCapturePageSnapshot() {
   // Nothing may reach the network from inside the snapshot.
   clone.querySelectorAll('iframe, frame, object, embed, video, audio, source').forEach(el => el.remove());
 
-  await _pgInlineImages(clone);
+  // Progress goes to the panel as a fire-and-forget message: the panel is awaiting this call's
+  // reply, so it cannot be told anything through the return value until the work is already done.
+  await _pgInlineImages(clone, (done, total) => {
+    try {
+      chrome.runtime.sendMessage({ action: 'captureProgress', done, total });
+    } catch (e) { /* no receiver is fine — the capture is not for the panel's benefit */ }
+  });
   await _pgInlineInlineStyles(clone);
 
   const head = clone.querySelector('head') || clone.insertBefore(document.createElement('head'), clone.firstChild);

@@ -2059,26 +2059,63 @@ if (typeof window !== 'undefined') {
     }
     note(`Publishing ${_describeStimulusBundle(bundle)}…`);
 
-    let res;
-    try {
-      res = await fetch(PUBLISH_HELPER, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bundle),
+    // SENT IN PIECES, and in this order. One POST carrying everything gave no way to say what was
+    // happening — a nine-page bundle is tens of megabytes, each row a separate slow insert, and the
+    // panel sat on one unchanging line for minutes looking exactly like a hang. Splitting it lets
+    // each step be named as it goes, keeps any single request small enough not to trip Postgres's
+    // statement timeout, and means a failure names the table it happened in.
+    //
+    // Pages go ONE AT A TIME because they are the megabytes: a page row is the only thing here big
+    // enough for "which one is it stuck on?" to be a real question.
+    const steps = [];
+    const add = (label, payload) => {
+      const rows = Object.values(payload)[0];
+      if (Array.isArray(rows) && rows.length) steps.push({ label, payload });
+    };
+    // study_tasks first: study_task_pages.task_id is a foreign key into it, so a page sent before
+    // its task is rejected. This ordering is the same one the helper applies internally.
+    add('find questions', { study_tasks: bundle.study_tasks });
+    add('guide trajectories', { study_guide_trajectories: bundle.study_guide_trajectories });
+    add('recorded answers', { study_canned_responses: bundle.study_canned_responses });
+    add('find ground truth', { study_ground_truth: bundle.study_ground_truth });
+    (bundle.study_task_pages || []).forEach((page, i, all) => {
+      const size = page.bytes ? ` (${_fmtSnapshotSize(page.bytes)})` : '';
+      steps.push({
+        label: `page ${i + 1} of ${all.length} — ${page.task_id}${size}`,
+        payload: { study_task_pages: [page] },
       });
-    } catch (e) {
-      // The helper is the only thing that can do this: Supabase refuses a secret key sent from a
-      // browser, so there is no in-panel fallback to offer — only instructions.
-      note('The publish helper is not running. In a terminal:  '
-        + 'cd user_study_website && node scripts/publish.mjs --serve  '
-        + '— then press Publish again.', 'bad');
-      return;
+    });
+
+    const summaries = [];
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      note(`Publishing ${i + 1}/${steps.length}: ${step.label}…`);
+
+      let res;
+      try {
+        res = await fetch(PUBLISH_HELPER, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign({ exported_at: bundle.exported_at }, step.payload)),
+        });
+      } catch (e) {
+        // The helper is the only thing that can do this: Supabase refuses a secret key sent from a
+        // browser, so there is no in-panel fallback to offer — only instructions.
+        note('The publish helper is not running. In a terminal:  '
+          + 'cd user_study_website && node scripts/publish.mjs --serve  '
+          + '— then press Publish again.', 'bad');
+        return;
+      }
+
+      const out = await res.json().catch(() => null);
+      if (!res.ok || !out) { note(`The helper returned ${res.status} on ${step.label}.`, 'bad'); return; }
+      // Stopped at the first failure rather than pressing on: the later steps depend on the earlier
+      // ones, and a wall of errors hides which one actually broke.
+      if (out.help) { note(`Failed on ${step.label}: ${out.summary}. ${out.help}`, 'bad'); return; }
+      if (out.summary) summaries.push(out.summary);
     }
 
-    const out = await res.json().catch(() => null);
-    if (!res.ok || !out) { note(`The helper returned ${res.status}.`, 'bad'); return; }
-    if (out.help) { note(`${out.summary}. ${out.help}`, 'bad'); return; }
-    note(`Published — ${out.summary}.`, 'ok');
+    note(`Published — ${summaries.join(' · ')}.`, 'ok');
   }
 
   // ── Guide trajectories (Record Guide User Study) ──
@@ -3019,6 +3056,16 @@ if (typeof window !== 'undefined') {
       };
       capturePage.disabled = true;
       note('Capturing the page — inlining styles and images…');
+
+      // Inlining is a fetch and often a re-encode per image, so a big article genuinely takes a
+      // while. Without a running count that wait is indistinguishable from a hang — which is how it
+      // was read, and reasonably so. Torn down in `finally`, so it cannot outlive the capture.
+      const onProgress = (msg) => {
+        if (msg?.action !== 'captureProgress') return;
+        note(`Capturing the page — image ${msg.done} of ${msg.total}…`);
+      };
+      chrome.runtime.onMessage.addListener(onProgress);
+
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) { note('No active tab to capture.', 'bad'); return; }
@@ -3051,6 +3098,7 @@ if (typeof window !== 'undefined') {
       } catch (e) {
         note(`Could not capture: ${e?.message || e}. Make sure the task page is the active tab.`, 'bad');
       } finally {
+        chrome.runtime.onMessage.removeListener(onProgress);
         capturePage.disabled = false;
       }
     };
