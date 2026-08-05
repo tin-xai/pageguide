@@ -11324,9 +11324,13 @@ describe('Find citation rendering and marking (user_study_website/app/study.js)'
   });
 
   // A caption is rarely a sibling of its image — on publicdomainreview it is two levels away.
-  test('the cited picture is found by walking up, but only so far', () => {
+  // The bound used to be "four ancestors", which was still far too loose: an article section wraps
+  // several blocks, so a text citation reached a photograph it had nothing to do with. The
+  // relationship that matters is caption-to-figure, not nearness. See the Cybertruck test.
+  test('the cited picture is the one this citation is actually about', () => {
     const fn = site.match(/function markElement[\s\S]*?\n\}/)[0];
-    expect(fn).toMatch(/depth < 4/);   // unbounded, every caption reaches <body> and marks the logo
+    expect(fn).toMatch(/el\.closest\?\.\('figure'\)/);
+    expect(fn).not.toMatch(/depth < 4/);
     // The marking itself is markImage's job — an <img> needs a wrapper to carry the badge.
     expect(fn).toMatch(/markImage\(img, needle\)/);
   });
@@ -11996,6 +12000,36 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     const calls = study.match(/\.map\(item => item\?\.marks\)\.filter\(Boolean\)/g) || [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(study).not.toMatch(/flatMap\(item => \(Array\.isArray\(item\?\.marks\)/);
+  });
+
+  // THE CYBERTRUCK. markElement climbed four ancestors and marked the first <img> beneath any of
+  // them. On an article whose sections wrap several blocks that reaches an unrelated photograph:
+  // SVSF-V1's citation resolved correctly onto "Musk has spoken of how science fiction shaped his
+  // ambitions…", then the climb found a Cybertruck picture in a shared wrapper and outlined it.
+  // The data was right; the marking went looking. Proven against the published snapshot.
+  test('a text citation never outlines a picture that merely shares an ancestor', () => {
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    const fn = site.match(/function markElement[\s\S]*?\n\}/)[0];
+    expect(fn).not.toMatch(/for \(let depth = 0; depth < 4/);
+    // A caption belongs to its figure; anything further away is proximity, not evidence.
+    expect(fn).toMatch(/el\.closest\?\.\('figure'\)/);
+    expect(fn).toMatch(/const own = el\.querySelector\?\.\('img'\)/);
+
+    const root = document.createElement('div');
+    root.innerHTML = '<section>'
+      + '<p id="cited">Musk has spoken of how science fiction shaped his ambitions.</p>'
+      + '<figure><img alt="Cybertruck"><figcaption id="cap">Photo by someone</figcaption></figure>'
+      + '</section>';
+    const mark = (el) => {
+      const own = el.querySelector('img');
+      const figure = el.closest('figure');
+      return own || (figure ? figure.querySelector('img') : null);
+    };
+    // A paragraph that merely shares a <section> with the figure marks nothing.
+    expect(mark(root.querySelector('#cited'))).toBeNull();
+    // Its own caption still marks it — that relationship is real, and is why this exists.
+    expect(mark(root.querySelector('#cap'))?.getAttribute('alt')).toBe('Cybertruck');
   });
 
   // THE INDEX IS A HINT; THE QUOTE IS THE PROOF. `[70:"Book covers: Isaac Asimov's…"]` means element
