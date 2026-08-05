@@ -734,6 +734,7 @@ function gv2ResolveEvidenceElement(item) {
 
 /** Remove the on-page evidence marks. */
 function pageguideClearEvidenceAnnotations() {
+  window._pageguideEvidenceMarks = [];
   document.getElementById(PAGEGUIDE_EVIDENCE_OVERLAY_ID)?.remove();
   if (window._pageguideEvidenceKeyHandler) {
     document.removeEventListener('keydown', window._pageguideEvidenceKeyHandler, true);
@@ -770,6 +771,16 @@ function pageguideShowEvidenceAnnotations(items) {
 
   let drawn = 0;
   let firstRect = null;
+  // The first rect drawn for the item currently being processed, so each item can be located again
+  // afterwards (window._pageguideEvidenceMarks / pageguideScrollToEvidenceMark).
+  let currentItemRect = null;
+
+  /** Remember a drawn rect as the page anchor for this item, and for the whole batch. */
+  const noteRect = (rect) => {
+    if (!rect) return;
+    if (!firstRect) firstRect = rect;
+    if (!currentItemRect) currentItemRect = rect;
+  };
 
   const addBox = (rect, color, label, shape) => {
     if (!rect) return;
@@ -787,7 +798,7 @@ function pageguideShowEvidenceAnnotations(items) {
       container.appendChild(tag);
     }
     drawn++;
-    if (!firstRect) firstRect = rect;
+    noteRect(rect);
   };
 
   /** A label chip at document coordinates. */
@@ -840,7 +851,7 @@ function pageguideShowEvidenceAnnotations(items) {
     path.setAttribute('stroke-linejoin', 'round');
     svg.appendChild(path);
     drawn++;
-    if (!firstRect) firstRect = { left: pts[0].x - 20, top: pts[0].y - 20, width: 40, height: 40 };
+    noteRect({ left: pts[0].x - 20, top: pts[0].y - 20, width: 40, height: 40 });
     if (ann.arrow === true) {
       const last = pts[pts.length - 1];
       const prev = pts[pts.length - 2];
@@ -860,14 +871,17 @@ function pageguideShowEvidenceAnnotations(items) {
     svg.appendChild(line);
     if (withHead) addArrowHead(from, to, color); // 'line' is a plain connector, 'arrow' points
     drawn++;
-    if (!firstRect) firstRect = { left: to.x - 20, top: to.y - 20, width: 40, height: 40 };
+    noteRect({ left: to.x - 20, top: to.y - 20, width: 40, height: 40 });
     addLabel(label, (from.x + to.x) / 2, (from.y + to.y) / 2, color, 'translate(-50%,-140%)');
   };
 
-  list.forEach((item) => {
-    const geometry = item?.captureGeometry || null;
+  const marks = [];
+
+  list.forEach((item, i) => {
+    const geometry = item?.annotationGeometry || item?.captureGeometry || null;
     const el = gv2ResolveEvidenceElement(item);
     const annotations = Array.isArray(item?.annotations) ? item.annotations.slice(0, 5) : [];
+    currentItemRect = null;
 
     if (annotations.length) {
       // Annotation coordinates are relative to the capture viewport, so they need geometry — an
@@ -885,13 +899,20 @@ function pageguideShowEvidenceAnnotations(items) {
           addBox(gv2EvidenceDocRect(ann?.bbox, geometry), color, ann?.label, type);
         }
       });
-      return;
+    } else {
+      // No annotations: outline the region itself, so bounding-box evidence is checkable too.
+      const rect = gv2ElementDocRect(el) || gv2EvidenceDocRect(item?.region_bbox || item?.visualEvidenceNormRect, geometry);
+      addBox(rect, PAGEGUIDE_EVIDENCE_COLOR, item?.note || item?.key || '', 'box');
     }
 
-    // No annotations: outline the region itself, so bounding-box evidence is checkable too.
-    const rect = gv2ElementDocRect(el) || gv2EvidenceDocRect(item?.region_bbox || item?.visualEvidenceNormRect, geometry);
-    addBox(rect, PAGEGUIDE_EVIDENCE_COLOR, item?.note || item?.key || '', 'box');
+    // Keyed on the panel's chip number, so clicking [ev:N] scrolls to the mark it belongs to.
+    if (currentItemRect) {
+      const num = Number(item?.evidenceNumber);
+      marks.push({ index: Number.isFinite(num) ? num : i + 1, rect: currentItemRect });
+    }
   });
+
+  window._pageguideEvidenceMarks = marks;
 
   if (!drawn) return 0;
 
@@ -919,7 +940,121 @@ function pageguideShowEvidenceAnnotations(items) {
   return drawn;
 }
 
+/**
+ * Scroll the page to evidence mark `index` — the counterpart of clicking [ev:N] in the side panel.
+ * The rects were recorded by pageguideShowEvidenceAnnotations; an index with no mark is a no-op, so
+ * a stale message from an older answer does nothing rather than jumping somewhere arbitrary.
+ *
+ * Frames the mark a third of the way down, the same way the batch does after drawing.
+ *
+ * @param {number|string} index - the chip number shown in the panel
+ * @returns {boolean} whether a mark was found and scrolled to
+ */
+function pageguideScrollToEvidenceMark(index) {
+  const num = Number(index);
+  const marks = Array.isArray(window._pageguideEvidenceMarks) ? window._pageguideEvidenceMarks : [];
+  const hit = marks.find(m => Number(m?.index) === num);
+  if (!hit?.rect) return false;
+  const y = Math.max(0, hit.rect.top - (window.innerHeight || 600) / 3);
+  try { window.scrollTo({ top: y, behavior: 'smooth' }); } catch (e) { /* best-effort */ }
+  return true;
+}
+
+/**
+ * The page element a citation refers to — the span it created if there is one, else the element its
+ * index points at.
+ *
+ * One resolver for every "take me to [N]" path (hover preview, click-to-scroll), because they must
+ * agree: a citation that previews the span and then scrolls to the paragraph is worse than one that
+ * does neither.
+ *
+ * Order matters. The citation NUMBER is exact: [N:"text"] wraps its quoted words in a span stamped
+ * with that number, and one paragraph routinely carries several citations sharing an index, so the
+ * number is the only thing that tells them apart. The index is the fallback for a whole-element
+ * highlight, and getIndexedElement the fallback for a citation that never highlighted anything.
+ *
+ * @param {number|string} index - the page index inside [N:"…"]
+ * @param {number|string} [citation] - the citation's display number, from data-citation
+ * @returns {Element|null}
+ */
+function pageguideResolveCitationTarget(index, citation) {
+  const c = Number(citation);
+  if (Number.isFinite(c)) {
+    const exact = document.querySelector(`[data-pageguide-citation="${c}"]`);
+    if (exact) return exact;
+  }
+  const n = Number(index);
+  if (Number.isFinite(n)) {
+    const byIndex = document.querySelector(`[data-pageguide-index="${n}"]`);
+    if (byIndex) return byIndex;
+  }
+  return typeof getIndexedElement === 'function' ? getIndexedElement(index) : null;
+}
+
+/**
+ * Mark the element a citation points at, while the pointer is over that citation in the panel.
+ *
+ * Clicking [N] scrolls to its span, but when the whole paragraph around it is already tinted — which
+ * is what PageGuide's own block highlight does whenever it cannot match the cited text to a single
+ * text node — the span it landed on is indistinguishable from everything else, and the jump reads as
+ * having gone nowhere. Marking it answers "which words?" BEFORE the click.
+ *
+ * The mark is the page's existing "PageGuide highlight" badge and outline (content.css), not an
+ * effect of its own: the reader has already been taught what that badge means, and a second visual
+ * language for "this one" would be one more thing to learn.
+ *
+ * @param {number|string} index - the page index inside [N:"text"]
+ * @param {boolean} on - false clears whatever is pulsing
+ * @returns {boolean} whether an element was found to pulse
+ */
+function pageguidePreviewIndex(index, on, citation) {
+  // One preview at a time, whichever kind: the pointer moves from a [N] to an [ev] and back.
+  document.getElementById(PAGEGUIDE_PREVIEW_BOX_ID)?.remove();
+  document.querySelectorAll('.' + PAGEGUIDE_PREVIEW_CLASS)
+    .forEach(el => el.classList.remove(PAGEGUIDE_PREVIEW_CLASS));
+  if (!on) return true;
+  const el = pageguideResolveCitationTarget(index, citation);
+  if (!el || !el.classList) return false;
+  el.classList.add(PAGEGUIDE_PREVIEW_CLASS);
+  return true;
+}
+
+/**
+ * Mark the EVIDENCE a citation points at, while the pointer is over that marker in the panel.
+ *
+ * The text-citation preview marks an element; evidence has no element to mark — it is a region the
+ * annotator drew over a picture or a slab of the page — so this draws a box over the same rect the
+ * mark was drawn at and hangs the badge off it. Same badge, same outline: from the reader's side
+ * "hover a number, see where it points" works the same whether the answer read it or saw it.
+ *
+ * @param {number|string} index - the evidence's capture number (data-evidence-num)
+ * @param {boolean} on
+ * @returns {boolean} whether a mark was found
+ */
+function pageguidePreviewEvidenceMark(index, on) {
+  document.getElementById(PAGEGUIDE_PREVIEW_BOX_ID)?.remove();
+  if (!on) return true;
+  const num = Number(index);
+  const marks = Array.isArray(window._pageguideEvidenceMarks) ? window._pageguideEvidenceMarks : [];
+  const hit = marks.find(m => Number(m?.index) === num);
+  if (!hit?.rect) return false;
+
+  const box = document.createElement('div');
+  box.id = PAGEGUIDE_PREVIEW_BOX_ID;
+  box.className = PAGEGUIDE_PREVIEW_CLASS;
+  box.style.cssText = `position:absolute;left:${hit.rect.left}px;top:${hit.rect.top}px;` +
+    `width:${hit.rect.width}px;height:${hit.rect.height}px;pointer-events:none;z-index:2147483646;`;
+  document.documentElement.appendChild(box);
+  return true;
+}
+
+const PAGEGUIDE_PREVIEW_BOX_ID = 'pageguide-preview-box';
+const PAGEGUIDE_PREVIEW_CLASS = 'pageguide-preview-target';
+
 if (typeof window !== 'undefined') {
+  window.pageguideResolveCitationTarget = pageguideResolveCitationTarget;
+  window.pageguidePreviewIndex = pageguidePreviewIndex;
+  window.pageguidePreviewEvidenceMark = pageguidePreviewEvidenceMark;
   window.gv2DrawDomMarker = gv2DrawDomMarker;
   window.gv2RemoveDomMarker = gv2RemoveDomMarker;
   window.gv2EvidenceDocRect = gv2EvidenceDocRect;
@@ -927,6 +1062,7 @@ if (typeof window !== 'undefined') {
   window.gv2ResolveEvidenceElement = gv2ResolveEvidenceElement;
   window.pageguideShowEvidenceAnnotations = pageguideShowEvidenceAnnotations;
   window.pageguideClearEvidenceAnnotations = pageguideClearEvidenceAnnotations;
+  window.pageguideScrollToEvidenceMark = pageguideScrollToEvidenceMark;
 }
 
 console.log('🎨 highlight.js loaded');

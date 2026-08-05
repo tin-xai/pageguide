@@ -572,6 +572,13 @@
           <input type="number" id="guideLowConfidenceActionThreshold" min="1" max="10" step="1" value="5" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
         </div>
         <div class="form-group" style="margin-bottom: 16px;">
+          <label for="guideLoopStepThreshold">Loop Step Pause Threshold</label>
+          <div class="toggle-info" style="margin-bottom: 8px;">
+            <span class="toggle-desc">Number of consecutive steps scoring at or above the loop threshold (0.3) before the guide stops. 1 stops on the first repeat-looking step; raise it for pages where revisiting the same control is normal. A step that scores below the threshold clears the streak.</span>
+          </div>
+          <input type="number" id="guideLoopStepThreshold" min="1" max="10" step="1" value="1" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
           <label for="guideConfidenceThreshold">Yellow Confidence Threshold</label>
           <div class="toggle-info" style="margin-bottom: 8px;">
             <span class="toggle-desc">Guide steps below this confidence score show yellow status and count toward low-confidence pauses. Use a value from 0 to 1.</span>

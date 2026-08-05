@@ -5,8 +5,8 @@
 .study-mini-bar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 5px;
+  padding: 6px 10px 7px;
   background: linear-gradient(90deg, rgba(155, 132, 255, 0.18) 0%, rgba(184, 156, 255, 0.1) 100%);
   border-bottom: 1px solid rgba(155, 132, 255, 0.28);
   flex-shrink: 0;
@@ -45,12 +45,22 @@
   gap: 8px;
 }
 
+/* Two lines by default, and draggable from there: the questions run from one line to six, and this
+   bar sits above the chat for the whole task — a six-line question would push the conversation off
+   the screen it is meant to be answered in. */
 .study-mini-q {
   font-size: 13px;
   font-weight: 500;
   color: #fff;
   line-height: 1.4;
   flex: 1;
+  display: block;
+  height: 2.9em;
+  min-height: 1.5em;
+  max-height: 60vh;
+  overflow-y: auto;
+  resize: vertical;
+  padding-right: 2px;
 }
 
 .study-mini-actions {
@@ -344,6 +354,9 @@ body.light-mode .study-mini-copy-btn {
   flex-direction: column;
   gap: 8px;
 }
+/* `display: flex` outranks the browser's own [hidden] rule, so the second timer sat on screen from
+   the start with the attribute set and doing nothing. One timer at a time is the whole point. */
+.study-timer-display[hidden] { display: none; }
 .study-timer-display {
   display: flex;
   align-items: center;
@@ -489,7 +502,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   color: rgba(255, 255, 255, 0.85);
   font-size: 12px;
   font-family: system-ui, sans-serif;
-  padding: 8px 10px;
+  padding: 6px 9px;
   resize: vertical;
   outline: none;
   transition: border-color 0.15s;
@@ -500,7 +513,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 }
 .study-notes-textarea { margin-bottom: 10px; }
 .study-mini-notes {
-  margin: 4px 8px 6px;
+  margin: 2px 8px 4px;
   width: calc(100% - 16px);
 }
 
@@ -534,13 +547,89 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   padding: 10px 12px;
   margin-bottom: 12px;
 }
+.study-llm-answers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
 .study-llm-answers-title {
   font-size: 11px;
   font-weight: 800;
   color: #b89cff;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin-bottom: 8px;
+}
+
+/* Researcher-only arm switch over the answers box (debug mode). */
+.study-answer-arm-switch {
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  padding: 2px;
+}
+.study-arm-btn {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.study-arm-btn-active {
+  background: rgba(155, 132, 255, 0.28);
+  color: #e6ddff;
+}
+/* • saved · ✎ unsaved draft · – nothing yet */
+.study-arm-badge {
+  margin-left: 3px;
+  opacity: 0.75;
+}
+
+/* Per-arm actions: the tab you are on says which condition these write to. */
+.study-arm-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.study-arm-actions:empty {
+  display: none;
+}
+.study-act-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.study-act-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.study-act-primary {
+  background: rgba(155, 132, 255, 0.25);
+  border-color: rgba(155, 132, 255, 0.45);
+  color: #e6ddff;
+}
+.study-act-primary:hover {
+  background: rgba(155, 132, 255, 0.38);
+}
+.study-llm-answers-note:empty {
+  display: none;
+}
+.study-llm-answers-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
 }
 .study-llm-answers-list {
   display: flex;
@@ -563,6 +652,46 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   background: rgba(255, 255, 255, 0.04);
   border-radius: 8px;
   padding: 8px 10px;
+}
+/* The "Evidence on the page" card belongs in the chat, not the recall screen — _sanitizeStudyAnswerHtml
+   strips it, and this is the belt-and-braces for any markup that predates it. */
+.study-llm-answers .pageguide-find-evidence,
+.study-llm-answers .pageguide-recap-hero {
+  display: none !important;
+}
+
+/* Researcher-only preview of the banked answers, on the task setup screen. */
+.study-saved-answers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+.study-saved-answers-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.4);
+}
+.study-saved-answers-btn {
+  background: rgba(155, 132, 255, 0.12);
+  border: 1px solid rgba(155, 132, 255, 0.3);
+  color: #c8b8ff;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.study-saved-answers-btn:hover {
+  background: rgba(155, 132, 255, 0.22);
+}
+.study-saved-answers-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .study-evidence-section {
@@ -595,49 +724,61 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   color: rgba(255, 255, 255, 0.78);
   line-height: 1.35;
 }
-.study-evidence-select-row {
-  display: flex;
-  gap: 8px;
-  align-items: stretch;
-}
-.study-evidence-select,
-.study-evidence-textarea {
+/* Answered by pointing at the page, not by typing (see renderStudyEvidenceControls): this shows
+   what was picked, and reads the same way the answer above it does — black on white, wrapping, so a
+   long sentence can be checked in full before submitting. */
+.study-evidence-picked {
   width: 100%;
   box-sizing: border-box;
-  background: rgba(255, 255, 255, 0.055);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.18);
   border-radius: 8px;
-  color: rgba(255, 255, 255, 0.88);
+  color: #111;
   font-size: 12px;
-  font-family: system-ui, sans-serif;
-  outline: none;
+  line-height: 1.5;
+  padding: 9px 10px;
+  min-height: 44px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.study-evidence-select {
-  min-width: 0;
-  padding: 8px 10px;
+.study-evidence-picked-empty {
+  color: rgba(0, 0, 0, 0.4);
+  font-style: italic;
+  background: rgba(0, 0, 0, 0.02);
+  border-style: dashed;
 }
-.study-evidence-textarea {
-  padding: 8px 10px;
-  resize: vertical;
+.study-evidence-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
 }
-.study-evidence-select:focus,
-.study-evidence-textarea:focus {
-  border-color: rgba(155, 132, 255, 0.58);
-}
-.study-evidence-jump {
-  flex: 0 0 auto;
-  background: rgba(155, 132, 255, 0.14);
-  border: 1px solid rgba(155, 132, 255, 0.32);
-  border-radius: 8px;
-  color: #d9ceff;
-  cursor: pointer;
+.study-evidence-annotate,
+.study-evidence-clear {
+  border-radius: 999px;
+  border: 1px solid rgba(120, 87, 255, 0.35);
+  background: rgba(120, 87, 255, 0.1);
+  color: #4a2fc0;
   font-size: 12px;
   font-weight: 700;
-  padding: 0 10px;
+  padding: 5px 12px;
+  cursor: pointer;
 }
-.study-evidence-jump:hover {
-  background: rgba(155, 132, 255, 0.22);
+.study-evidence-annotate:hover,
+.study-evidence-clear:hover {
+  background: rgba(120, 87, 255, 0.2);
 }
+/* Picking is happening on the page right now — the panel says which hop is waiting for it. */
+.study-evidence-annotate.is-picking {
+  background: #7857ff;
+  border-color: #7857ff;
+  color: #fff;
+}
+.study-evidence-clear {
+  background: transparent;
+  border-color: rgba(0, 0, 0, 0.15);
+  color: rgba(0, 0, 0, 0.55);
+}
+
 
 body.light-mode .study-notes-textarea,
 body.light-mode .study-mini-notes {
@@ -664,17 +805,6 @@ body.light-mode .study-evidence-section {
 }
 body.light-mode .study-evidence-title { color: #7857ff; }
 body.light-mode .study-evidence-label { color: rgba(0,0,0,0.72); }
-body.light-mode .study-evidence-select,
-body.light-mode .study-evidence-textarea {
-  background: rgba(0,0,0,0.035);
-  border-color: rgba(0,0,0,0.14);
-  color: rgba(0,0,0,0.8);
-}
-body.light-mode .study-evidence-jump {
-  background: rgba(120, 87, 255, 0.1);
-  border-color: rgba(120, 87, 255, 0.24);
-  color: #6645e8;
-}
 
 /* Results table */
 .study-results-table {
@@ -757,3 +887,808 @@ body.light-mode .study-btn-secondary { background: rgba(0,0,0,0.06); border-colo
 body.light-mode .study-close-btn     { color: rgba(0,0,0,0.4); }
 body.light-mode .study-close-btn:hover { color: #111; background: rgba(0,0,0,0.06); }
 body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
+
+/* ═══════════════════════════════════════════════════════
+   THE ANSWER, READ AS A DOCUMENT
+   The recall screen is where a participant reads the agent's answer and decides what it told them,
+   so this block is black on a light card in BOTH themes rather than following the panel's chrome.
+   Placed last so it wins over the generic .study-llm-* rules above.
+   ═══════════════════════════════════════════════════════ */
+
+.study-llm-answers {
+  background: #f4f2ff;
+  border-color: rgba(120, 87, 255, 0.3);
+}
+.study-llm-answers-title { color: #5b3fd6; }
+.study-llm-answers-list  { max-height: 340px; }
+.study-llm-answer-message {
+  color: #111;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.study-llm-answer-message strong,
+.study-llm-answer-message b { color: #000; }
+.study-llm-answer-plain {
+  background: #fff;
+  color: #111;
+}
+.study-llm-answers-note { color: rgba(0, 0, 0, 0.55); }
+
+/* Citations: legible against the light card, and readable once opened out. Clicking the answer
+   toggles .citations-expanded, which is what turns each [N] into the sentence it points at. */
+.study-llm-answers .pageguide-citation,
+.study-llm-answers .pageguide-citation-idx {
+  color: #4a2fc0;
+  background: rgba(120, 87, 255, 0.13);
+  border-bottom-color: rgba(120, 87, 255, 0.55);
+}
+.study-llm-answers .pageguide-citation:hover,
+.study-llm-answers .pageguide-citation-idx:hover {
+  background: rgba(120, 87, 255, 0.26);
+  color: #1c1030;
+}
+.study-llm-answers .citations-expanded .pageguide-citation-idx .citation-text {
+  color: #1c1030;
+}
+.study-llm-answers .pageguide-clickable.citations-expanded::after {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.45);
+}
+.study-llm-answers .pageguide-clickable:hover::after { color: rgba(0, 0, 0, 0.45); }
+
+/* The arm switch sits on the light card now. */
+.study-answer-arm-switch { background: rgba(120, 87, 255, 0.1); }
+.study-arm-btn { color: rgba(0, 0, 0, 0.5); }
+.study-arm-btn-active {
+  background: #7857ff;
+  color: #fff;
+}
+.study-act-btn {
+  background: rgba(120, 87, 255, 0.1);
+  border-color: rgba(120, 87, 255, 0.3);
+  color: #4a2fc0;
+}
+.study-act-btn:hover {
+  background: rgba(120, 87, 255, 0.2);
+  color: #1c1030;
+}
+.study-act-primary {
+  background: #7857ff;
+  border-color: #7857ff;
+  color: #fff;
+}
+.study-act-primary:hover {
+  background: #6645e8;
+  color: #fff;
+}
+
+/* Supporting evidence sits beside it and reads the same way. */
+.study-evidence-section {
+  background: #f7f6ff;
+  border-color: rgba(120, 87, 255, 0.26);
+}
+.study-evidence-title { color: #5b3fd6; }
+.study-evidence-label { color: rgba(0, 0, 0, 0.78); }
+
+/* Picking which of several live answers gets banked (debug mode, and only when there IS a choice). */
+.study-live-answer {
+  border-top: 1px solid rgba(120, 87, 255, 0.16);
+  padding-top: 8px;
+}
+.study-live-answer:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.study-live-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.study-live-pick input { accent-color: #7857ff; margin: 0; }
+.study-live-answer:has(input:checked) .study-live-pick { color: #4a2fc0; }
+
+/* ═══════════════════════════════════════════════════════
+   GROUND TRUTH (researcher-only)
+   What a participant's picked sentence is scored against. A list per hop, because the answer is
+   often stated in more than one place on the page.
+   ═══════════════════════════════════════════════════════ */
+
+.study-truth-section {
+  background: #fffaf2;
+  border: 1px solid rgba(200, 130, 20, 0.3);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 4px;
+}
+.study-truth-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.study-truth-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: #a55b00;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.study-truth-note {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.5);
+  text-align: right;
+}
+.study-truth-hop { margin-top: 10px; }
+.study-truth-hop:first-of-type { margin-top: 0; }
+.study-truth-prompt {
+  font-size: 12px;
+  font-weight: 650;
+  color: rgba(0, 0, 0, 0.78);
+  line-height: 1.35;
+  margin-bottom: 6px;
+}
+.study-truth-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.study-truth-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 8px;
+  padding: 7px 8px;
+}
+.study-truth-item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #111;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.study-truth-item-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  color: rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 3px;
+  line-height: 1.5;
+}
+.study-truth-item-btn:hover { color: #111; }
+.study-truth-empty {
+  font-size: 12px;
+  font-style: italic;
+  color: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+.study-truth-save-row { justify-content: flex-end; margin-top: 10px; }
+
+/* Submit, and — in authoring mode only — a way past a question without answering it. */
+.study-answer-submit-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.study-answer-submit-row .study-btn-primary { flex: 1 1 auto; }
+.study-btn-skip {
+  flex: 0 0 auto;
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  color: rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+  padding: 11px 14px;
+}
+.study-btn-skip:hover {
+  background: rgba(0, 0, 0, 0.09);
+  color: #111;
+}
+
+/* Recording only: the way back to the chat to re-ask before banking an answer. */
+.study-btn-back {
+  align-self: flex-start;
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  color: rgba(0, 0, 0, 0.6);
+  font-size: 12px;
+  padding: 7px 12px;
+}
+.study-btn-back:hover {
+  background: rgba(0, 0, 0, 0.09);
+  color: #111;
+}
+
+/* Recording only: jump between questions without walking the list. */
+.study-task-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.study-task-nav-btn {
+  background: rgba(120, 87, 255, 0.1);
+  border: 1px solid rgba(120, 87, 255, 0.3);
+  border-radius: 6px;
+  color: #4a2fc0;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+}
+.study-task-nav-btn:hover:not(:disabled) { background: rgba(120, 87, 255, 0.2); }
+.study-task-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.study-task-nav-select {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  color: #111;
+  font-size: 11px;
+  max-width: 150px;
+  padding: 3px 6px;
+}
+
+/* A recorded pick you can click to go back to on the page. The image hop needs this most: its label
+   names the picture rather than quoting it, so "which one was that?" is a click away. */
+.study-evidence-picked-locatable,
+.study-truth-item-locatable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(120, 87, 255, 0.5);
+  text-underline-offset: 3px;
+}
+.study-evidence-picked-locatable:hover,
+.study-truth-item-locatable:hover {
+  background: rgba(120, 87, 255, 0.07);
+}
+
+/* A per-task hint under a supporting question: where on THIS page the answer sits. Quieter than the
+   question, because it is not part of it. */
+.study-evidence-hint {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(0, 0, 0, 0.55);
+  font-style: italic;
+}
+
+/* Citation picker (recording only): point at the page, get the marker to paste into the answer. */
+.study-cite-section {
+  background: #f2f9f4;
+  border: 1px solid rgba(22, 163, 74, 0.28);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 4px;
+}
+.study-cite-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: #15803d;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.study-cite-out {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  color: #111;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.study-cite-out[data-selector]:not([data-selector=""]) {
+  cursor: pointer;
+}
+.study-cite-out[data-selector]:not([data-selector=""]):hover {
+  background: rgba(22, 163, 74, 0.06);
+}
+
+/* ═══════════════════════════════════════════════════════
+   GUIDE TRAJECTORIES (Record Guide User Study)
+   ═══════════════════════════════════════════════════════ */
+
+.study-traj-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  padding: 9px 10px;
+  margin-bottom: 6px;
+}
+.study-traj-main { flex: 1 1 auto; min-width: 0; }
+.study-traj-title {
+  color: #111;
+  font-size: 13px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.study-traj-meta {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.study-traj-step {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.study-traj-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+.study-traj-step-n {
+  font-size: 11px;
+  font-weight: 800;
+  color: #5b3fd6;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.study-traj-step-tools { display: flex; gap: 2px; }
+
+.study-traj-shot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+.study-traj-shot img {
+  width: 120px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+}
+.study-traj-shot-empty {
+  width: 120px;
+  padding: 14px 6px;
+  text-align: center;
+  font-size: 11px;
+  font-style: italic;
+  color: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+}
+.study-traj-insert {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.study-guide-steps-wrap {
+  margin: -2px 0 6px 26px;
+}
+
+/* The editor's own field. Roomier than the participant's inputs, with a focus ring, because this is
+   a screen someone types into for twenty minutes at a stretch. */
+.study-field {
+  width: 100%;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 10px;
+  color: #111;
+  font: 400 13px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.study-field::placeholder { color: rgba(0, 0, 0, 0.32); }
+.study-field:hover { border-color: rgba(0, 0, 0, 0.26); }
+.study-field:focus {
+  border-color: #7857ff;
+  box-shadow: 0 0 0 3px rgba(120, 87, 255, 0.16);
+}
+.study-field-small { max-width: 220px; }
+.study-field-tiny  { max-width: 64px; text-align: center; }
+
+.study-traj-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  color: #5b3fd6;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.study-traj-sub {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* ── Condition filter + tags (Record Guide User Study) ─────────────────────────────
+   Assigning trajectories to the two halves of the design is bulk work done in one sitting, so the
+   list has to answer "what is left" at a glance: the counts sit in the filter buttons themselves,
+   and every row states its condition and whether its ground truth is complete. */
+.study-traj-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.study-traj-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: 700 11px/1.5 inherit;
+  color: rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+.study-traj-filter:hover { border-color: rgba(0, 0, 0, 0.3); color: rgba(0, 0, 0, 0.8); }
+.study-traj-filter-on {
+  background: #7857ff;
+  border-color: #7857ff;
+  color: #fff;
+}
+.study-traj-filter-n {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.study-traj-bulk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+/* An excluded trajectory stays legible — it is still editable, it just will not be shown to a
+   participant — so it is dimmed rather than hidden or struck through. */
+.study-traj-row-out { opacity: 0.5; }
+.study-traj-pick {
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+  cursor: pointer;
+}
+.study-traj-pick input { width: 15px; height: 15px; accent-color: #7857ff; cursor: pointer; }
+.study-traj-pick input:disabled { cursor: not-allowed; }
+
+/* The service-role key entry, folded away until publishing is asked for. A privileged key on
+   screen by default is a privileged key someone screenshots. */
+.study-traj-publish-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0 0 10px;
+}
+.study-traj-publish-row .study-field { flex: 1; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
+
+.study-traj-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+.study-traj-tag {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font: 700 10px/1.6 inherit;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+}
+.study-traj-tag-visual { background: rgba(120, 87, 255, 0.12); color: #5b3fd6; }
+.study-traj-tag-text   { background: rgba(0, 0, 0, 0.07);      color: rgba(0, 0, 0, 0.62); }
+.study-traj-tag-none   { background: transparent; color: rgba(0, 0, 0, 0.45); border-color: rgba(0, 0, 0, 0.18); border-style: dashed; }
+.study-traj-tag-ok     { background: rgba(22, 143, 90, 0.12);  color: #0f6b43; }
+.study-traj-tag-warn   { background: rgba(201, 122, 0, 0.14);  color: #8a5300; }
+
+/* An optional field, marked as such so nobody stalls on it. */
+.study-optional { color: rgba(0, 0, 0, 0.45); font-weight: 600; }
+
+/* ── "It saved" ───────────────────────────────────────────────────────────────────
+   A save used to report itself in the same grey as every other note, which is
+   indistinguishable from the note already sitting there — so pressing Save twice, unsure whether
+   the first press registered, was the normal way to use this screen. Three states now: it landed,
+   it did not, and there are edits not yet written. */
+.study-note-ok,
+.study-note-bad,
+.study-note-warn {
+  display: block;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-weight: 700;
+  animation: study-note-in 0.18s ease-out;
+}
+.study-note-ok   { background: rgba(22, 143, 90, 0.12);  color: #0f6b43; }
+.study-note-bad  { background: rgba(211, 47, 47, 0.10);  color: #a52020; }
+.study-note-warn { background: rgba(201, 122, 0, 0.12);  color: #8a5300; }
+
+@keyframes study-note-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Confirmation AT the button, because that is where the eye already is — the status line is small
+   and sits below the fold on a long trajectory. */
+.study-btn-saved {
+  background: #168f5a !important;
+  border-color: #168f5a !important;
+  color: #fff !important;
+  animation: study-saved-pop 0.28s ease-out;
+}
+@keyframes study-saved-pop {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+
+/* The one place motion is skipped entirely rather than shortened: the confirmation is carried by
+   the colour and the word, so removing the movement loses nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .study-note-ok,
+  .study-note-bad,
+  .study-note-warn,
+  .study-btn-saved { animation: none; }
+}
+
+/* ── Ground truth ────────────────────────────────────────────────────────────────── */
+.study-truth-warn {
+  background: rgba(201, 122, 0, 0.1);
+  border: 1px solid rgba(201, 122, 0, 0.28);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 6px 0;
+  font-size: 11px;
+  color: #8a5300;
+}
+.study-truth-err {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.study-truth-err-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.study-truth-err-head .study-field-small { max-width: none; flex: 1; }
+.study-truth-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+/* Step numbers as toggles rather than a typed list: the ground truth has to be comparable to a
+   participant's answer, and they pick their steps from buttons exactly like these. */
+.study-step-chip {
+  min-width: 28px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  background: #fff;
+  border-radius: 8px;
+  padding: 3px 7px;
+  font: 700 11px/1.5 inherit;
+  font-variant-numeric: tabular-nums;
+  color: rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+.study-step-chip:hover { border-color: #7857ff; color: #5b3fd6; }
+.study-step-chip-on {
+  background: #7857ff;
+  border-color: #7857ff;
+  color: #fff;
+}
+
+.study-traj-ev,
+.study-traj-ms {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.study-traj-ms {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.study-traj-ms .study-field { margin-bottom: 0; }
+.study-traj-ms textarea.study-field { flex: 1 1 180px; }
+
+
+/* ═══════════════════════════════════════════════════════
+   THE QUESTIONS
+   What is being ASKED has to out-weigh what it is about. Everything above these is material to read;
+   this is the only part the participant has to act on, so it gets a card, a number and the heaviest
+   type on the screen.
+   ═══════════════════════════════════════════════════════ */
+
+.study-question-card {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  margin: 12px 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.study-question-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.study-question-badge {
+  flex: 0 0 auto;
+  background: #7857ff;
+  color: #fff;
+  border-radius: 6px;
+  font: 800 10px/18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  letter-spacing: 0.04em;
+  padding: 0 7px;
+  margin-top: 1px;
+}
+.study-question-card .study-question-text {
+  flex: 1 1 auto;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.45;
+  color: #111;
+}
+
+/* Options: white, a real selected state, a hit area worth aiming at. */
+.study-question-card .study-radio-btn {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.14);
+  color: #111;
+  padding: 11px 12px;
+  line-height: 1.45;
+}
+.study-question-card .study-radio-btn:hover {
+  background: rgba(120, 87, 255, 0.05);
+  border-color: rgba(120, 87, 255, 0.4);
+}
+.study-question-card .study-radio-btn:has(input:checked) {
+  background: rgba(120, 87, 255, 0.09);
+  border-color: #7857ff;
+  box-shadow: inset 0 0 0 1px #7857ff;
+  color: #111;
+}
+.study-question-card .study-radio-btn input { accent-color: #7857ff; }
+
+/* An error type is a name plus an explanation, not one long sentence. */
+.study-error-opt { align-items: flex-start; }
+.study-error-num {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(120, 87, 255, 0.14);
+  color: #4a2fc0;
+  font: 700 11px/18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  text-align: center;
+  margin-top: 1px;
+}
+.study-error-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.study-error-name { font-weight: 650; color: #111; }
+.study-error-detail {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+/* The step field belongs to the option above it — the rule says which one. */
+.study-error-steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px 14px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(120, 87, 255, 0.3);
+}
+.study-error-steps .study-evidence-label { margin: 0; white-space: nowrap; }
+.study-error-steps .study-field { margin: 0; }
+
+/* The steps as a closed set of buttons rather than a text field. The participant is choosing from
+   four things they can see on the left, not recalling a number and guessing at a format. */
+.study-step-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.study-step-pick {
+  min-width: 32px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.8);
+  font: 700 13px/1 inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.study-step-pick:hover { border-color: rgba(155, 132, 255, 0.6); }
+
+body.light-mode .study-step-pick {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.18);
+  color: #333;
+}
+
+/* Selected. Stated for BOTH themes at a specificity that beats the light-mode base rule above —
+   `body.light-mode .study-step-pick` (0,2,1) outranks a bare `.study-step-pick.is-on` (0,2,0), which
+   left the fill unchanged and the text white on white. A selected state that can lose to the
+   unselected one is worse than no selected state: it reads as the button having vanished. */
+.study-step-pick.is-on,
+body.light-mode .study-step-pick.is-on {
+  background: #6d4aff;
+  border-color: #5a37e8;
+  color: #fff;
+  box-shadow: 0 0 0 3px rgba(109, 74, 255, 0.22);
+}
+
+.study-step-pick.is-on:hover,
+body.light-mode .study-step-pick.is-on:hover {
+  background: #5c3ae0;
+  border-color: #4a2cc9;
+}
+
+/* Exclusive of the three above it, so it does not read as a fourth error. */
+.study-error-none {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 0 0 9px 9px;
+}
+
+/* Submit is the button to press; the debug skip should not compete with it. */
+.study-answer-submit-row .study-btn-skip {
+  background: transparent;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 11px 12px;
+}
+.study-answer-submit-row .study-btn-skip:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.7);
+}
+
+
+/* Open page / Ask PageGuide, side by side while recording. Opening is the smaller act — it just
+   navigates the tab — so it takes the quieter half and the ask keeps the primary styling. */
+.study-open-row {
+  display: flex;
+  gap: 8px;
+}
+.study-open-row .study-btn { flex: 1; margin: 0; }

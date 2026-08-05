@@ -3,6 +3,27 @@
 
 console.log('🤖 PageGuide Service Worker started');
 
+// ===== Session storage: let content scripts read and write it =====
+//
+// chrome.storage.session is TRUSTED-ONLY by default: a content script's get/set throws "Access to
+// storage is not allowed from this context". guidev2.js keeps the guide's resume state there
+// (gv2SaveFallback / gv2LoadFallback, content/tasks/guidev2.js) with the throw swallowed, so
+// without this grant the fallback silently stored nothing and read back nothing.
+//
+// That is the whole reason Pause could not be undone. Resume asks _gv2HydrateResumeState for the
+// run: it returns window._guidev2 when the page still has it, and otherwise rebuilds from this
+// storage. Every navigation the agent makes destroys window._guidev2 — so once the run had moved
+// pages, the only copy of it was in a store the content script could not read, and Resume answered
+// "Guide not active" for a guide that was merely parked.
+//
+// Set at the top level: it applies for the life of the browser session and has to be re-applied
+// each time the worker restarts, which is exactly when this file is evaluated.
+try {
+  chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' });
+} catch (e) {
+  console.warn('[pageguide] could not open session storage to content scripts:', e);
+}
+
 // ===== Keep-Alive Mechanism =====
 // Prevents service worker from going inactive during long LLM calls
 let keepAliveInterval = null;
@@ -55,6 +76,7 @@ const CONTENT_SCRIPTS = [
   'content/functions/highlight.js',
   'content/functions/highlight_pdf.js',
   'content/functions/scroll.js',
+  'content/functions/page_snapshot.js',
   'content/functions/main_router.js',
   'content/tasks/protection.js',
   'content/tasks/guidev2.js',
@@ -219,6 +241,80 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // Append a debug prompt history entry, capping at 50 to avoid quota storage issues.
 // Returns the entry id so the caller can attach the model's response once the call settles.
 let _debugPromptSeq = 0;
+// ===== COST ACCOUNTING (OpenRouter) =====
+// What a run cost, in the provider's own numbers.
+//
+// OpenRouter is the only provider that returns a PRICE. Asked with `usage: {include: true}`, its
+// response carries `usage.cost` — the actual credits that call spent, already accounting for the
+// model, the cache discount and the image surcharge. Everything else here is derived from that one
+// number; nothing is estimated from a local price table, which would silently rot every time a
+// model's price changed. Gemini and OpenAI return token counts but no price, so their entries are
+// logged with tokens and a null cost rather than a guess.
+const COST_LEDGER_KEY = 'pageguideCostLedger';
+// Entries are a few dozen bytes each (no prompts, no images), so the cap is about keeping the ledger
+// from growing without bound over months, not about space. A long guide run is ~20 calls.
+const COST_LEDGER_MAX = 2000;
+
+/**
+ * Normalize a provider response's usage block. Pure.
+ *
+ * @param {object|null} data - the raw provider JSON
+ * @param {string} provider - 'openrouter' | 'gemini' | 'openai'
+ * @param {string} model - the model actually asked for
+ * @returns {object|null} {provider, model, promptTokens, completionTokens, totalTokens, costUsd}
+ */
+function normalizeUsage(data, provider, model) {
+  const u = data?.usage;
+  if (!u) return null;
+  const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+  const prompt = num(u.prompt_tokens) ?? num(u.input_tokens) ?? num(u.promptTokenCount);
+  const completion = num(u.completion_tokens) ?? num(u.output_tokens) ?? num(u.candidatesTokenCount);
+  const total = num(u.total_tokens) ?? num(u.totalTokenCount)
+    ?? ((prompt != null && completion != null) ? prompt + completion : null);
+  return {
+    provider: provider || '',
+    model: model || '',
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: total,
+    // Only OpenRouter reports a price. `cost` is in USD credits; cost_details carries the breakdown.
+    costUsd: num(u.cost),
+  };
+}
+
+/**
+ * Record what one call cost, against the run it belongs to.
+ *
+ * `sessionId` is the guide session (stamped onto every LLM message by safeSendMessage), which is
+ * what ties a row to a journey. A Find outside a guide run has none — those are attributed by
+ * debug-log position instead, the same range the 🐞 chip already uses, so both surfaces work
+ * without every call site having to learn about cost.
+ */
+async function appendCostEntry({ usage, metadata, action, debugId }) {
+  if (!usage) return;
+  const entry = {
+    ts: Date.now(),
+    debugId: debugId || null,
+    sessionId: metadata?.sessionId || null,
+    mode: metadata?.mode || action || '',
+    step: metadata?.step != null ? metadata.step : null,
+    provider: usage.provider || '',
+    model: usage.model || '',
+    promptTokens: usage.promptTokens,
+    completionTokens: usage.completionTokens,
+    costUsd: usage.costUsd,
+  };
+  try {
+    const result = await chrome.storage.local.get(COST_LEDGER_KEY);
+    const list = Array.isArray(result[COST_LEDGER_KEY]) ? result[COST_LEDGER_KEY] : [];
+    list.push(entry);
+    while (list.length > COST_LEDGER_MAX) list.shift();
+    await chrome.storage.local.set({ [COST_LEDGER_KEY]: list });
+  } catch (e) {
+    console.error('[SW cost] Failed to append cost entry:', e);
+  }
+}
+
 async function appendDebugPrompt(promptData) {
   const id = `${Date.now()}-${++_debugPromptSeq}`;
   const entry = { id, ...promptData };
@@ -267,14 +363,27 @@ async function updateDebugPrompt(idPromise, patch) {
 }
 
 /** Wrap an LLM call so its result (or error) lands on the debug entry. Never changes the result. */
-function _withDebugResponse(idPromise, startedAt, promise) {
+function _withDebugResponse(idPromise, startedAt, promise, request = null) {
   return promise.then(
     (res) => {
       updateDebugPrompt(idPromise, {
         rawResponse: res?.content != null ? res.content : (res?.error || ''),
         ok: !res?.error,
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
+        // On the entry as well as in the ledger: the debug dialog shows one call at a time and
+        // reads what it needs from the entry it is already holding.
+        usage: res?.usage || null
       }).catch(() => {});
+      // The ledger is what the journey/answer totals are summed from. Keyed by the debug id so a
+      // row can be traced back to the exact prompt that spent it.
+      if (res?.usage) {
+        Promise.resolve(idPromise).then(debugId => appendCostEntry({
+          usage: res.usage,
+          metadata: request?.metadata,
+          action: request?.action,
+          debugId
+        })).catch(() => {});
+      }
       return res;
     },
     (err) => {
@@ -302,6 +411,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
+  if (request.action === 'callImageSelectionLLM') {
+    const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
+    const debugId = appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'callImageSelectionLLM',
+      systemPrompt: request.systemPrompt || '',
+      userPrompt: userPrompt,
+      messages: request.messages || [],
+      metadata: request.metadata || {}
+    }).catch(() => null);
+
+    _withDebugResponse(debugId, Date.now(), callImageSelectionLLM(request.messages, request.systemPrompt), request)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   if (request.action === 'callLLM') {
     const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
     const debugId = appendDebugPrompt({
@@ -314,7 +439,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       metadata: request.metadata || {}
     }).catch(() => null);
 
-    _withDebugResponse(debugId, Date.now(), callLLM(request.messages, request.systemPrompt, request.imageBase64))
+    _withDebugResponse(debugId, Date.now(), callLLM(request.messages, request.systemPrompt, request.imageBase64), request)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -331,7 +456,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       metadata: request.metadata || {}
     }).catch(() => null);
 
-    _withDebugResponse(debugId, Date.now(), callLLMWithImages(request.messages, request.systemPrompt, request.images))
+    _withDebugResponse(debugId, Date.now(), callLLMWithImages(request.messages, request.systemPrompt, request.images), request)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -347,7 +472,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       metadata: request.metadata || {}
     }).catch(() => null);
 
-    _withDebugResponse(debugId, Date.now(), watchVideoWithGemini(request.videoUrl, request.query, request.metadata || {}))
+    _withDebugResponse(debugId, Date.now(), watchVideoWithGemini(request.videoUrl, request.query, request.metadata || {}), request)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -362,6 +487,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const targetTabId = request.tabId || sender.tab?.id;
     const targetWindowId = sender.tab?.windowId;
     captureScreenshot(targetTabId, targetWindowId)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'fetchImageAsBase64') {
+    fetchImageAsBase64(request.url)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -461,6 +592,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
     sendResponse({ success: true });
+    return false;
+  }
+  if (request.action === 'guidanceV2_getState') {
+    // "What was this tab running?" — asked by a content script that has lost window._guidev2 to a
+    // navigation and needs the run back in order to pause or resume it. The port handshake only
+    // offers state at page load, and a paused run is deliberately not resumed there, so a pause that
+    // outlives one navigation had no way to be picked up again. Keyed by the sender's own tab, like
+    // every other entry in this map.
+    const senderTabId = request.tabId ?? sender.tab?.id;
+    const session = senderTabId != null ? _gv2Sessions.get(senderTabId) : null;
+    sendResponse({ state: session?.active ? session : null });
     return false;
   }
   if (request.action === 'guidanceV2_isOwner') {
@@ -655,6 +797,53 @@ async function _doCaptureScreenshot(tabId, windowId) {
   }
 }
 
+async function fetchImageAsBase64(url) {
+  const rawUrl = String(url || '').trim();
+  if (!rawUrl) return { error: 'Missing image URL' };
+  let parsed = null;
+  try { parsed = new URL(rawUrl); } catch (e) {
+    return { error: 'Invalid image URL' };
+  }
+  if (!/^https?:$/i.test(parsed.protocol) && !/^data:$/i.test(parsed.protocol)) {
+    return { error: `Unsupported image URL protocol: ${parsed.protocol}` };
+  }
+  if (/^data:/i.test(parsed.protocol)) {
+    const m = rawUrl.match(/^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/i);
+    if (!m) return { error: 'Unsupported data image URL' };
+    return {
+      success: true,
+      imageBase64: m[2] || '',
+      contentType: m[1] || 'image/jpeg',
+      sourceUrl: rawUrl.slice(0, 500)
+    };
+  }
+  try {
+    const response = await fetch(rawUrl, {
+      credentials: 'omit',
+      cache: 'force-cache',
+      redirect: 'follow'
+    });
+    if (!response.ok) return { error: `Image fetch failed: HTTP ${response.status}` };
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    if (!/^image\//i.test(contentType)) return { error: `URL did not return an image: ${contentType}` };
+    const buf = await response.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return {
+      success: true,
+      imageBase64: btoa(binary),
+      contentType,
+      sourceUrl: rawUrl
+    };
+  } catch (e) {
+    return { error: `Image fetch failed: ${e?.message || e}` };
+  }
+}
+
 async function callOpenAIEmbeddings(texts = []) {
   let settings = {};
   try {
@@ -829,6 +1018,104 @@ async function callRouterLLM(messages, systemPrompt) {
     return { content: text };
   } catch (error) {
     return { error: `Router network error: ${error.message}` };
+  }
+}
+
+// ===== Cheap Image Selection LLM =====
+// Text-only prefilter for Find/Ask visual image attachments. It intentionally uses Gemini 2.5
+// Flash Lite and only sees candidate ids/titles, never image pixels.
+async function callImageSelectionLLM(messages, systemPrompt) {
+  const geminiConfig = CONFIG.providers.gemini;
+  const openrouterConfig = CONFIG.providers.openrouter;
+  const selectorModel = 'gemini-2.5-flash-lite';
+  const openrouterSelectorModel = 'google/gemini-2.5-flash-lite';
+
+  let settings = {};
+  try {
+    settings = await chrome.storage.sync.get(['geminiApiKey', 'openrouterApiKey']);
+  } catch (e) { /* ignore */ }
+
+  let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
+  if (messages?.length > 0) {
+    userContent += messages[messages.length - 1].content;
+  }
+
+  const geminiApiKey = (settings.geminiApiKey || geminiConfig.defaultApiKey || '').trim();
+  const openrouterApiKey = (settings.openrouterApiKey || openrouterConfig.defaultApiKey || '').trim();
+  let geminiError = '';
+
+  if (geminiApiKey) {
+    const url = `${geminiConfig.endpoint}/${selectorModel}:generateContent?key=${geminiApiKey}`;
+    try {
+      console.log('🖼️ Image selector LLM (Gemini 2.5 Flash Lite) - prompt length:', userContent.length);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: userContent }] }],
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 256
+          }
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        geminiError = `Gemini selector API error: ${data.error?.message || response.status}`;
+      } else {
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) return { content: text, provider: 'gemini', model: selectorModel };
+        geminiError = 'Empty response from Gemini image selector';
+      }
+    } catch (error) {
+      geminiError = `Gemini selector network error: ${error.message}`;
+    }
+  } else {
+    geminiError = 'Gemini API key not configured for image selection';
+  }
+
+  if (!openrouterApiKey) {
+    return { error: geminiError };
+  }
+
+  try {
+    console.log('🖼️ Image selector LLM (OpenRouter Gemini 2.5 Flash Lite) - prompt length:', userContent.length);
+    const extensionReferer = (typeof chrome?.runtime?.getURL === 'function')
+      ? chrome.runtime.getURL('')
+      : 'https://pageguide.local/';
+    const response = await fetch(`${openrouterConfig.endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openrouterApiKey}`,
+        'HTTP-Referer': extensionReferer,
+        'X-Title': 'PageGuide'
+      },
+      body: JSON.stringify({
+        model: openrouterSelectorModel,
+        messages: [{ role: 'user', content: userContent }],
+        temperature: 0,
+        max_tokens: 256
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return { error: `OpenRouter image selector API error: ${data.error?.message || response.status}${geminiError ? ` (Gemini fallback reason: ${geminiError})` : ''}` };
+    }
+
+    const text = data.choices?.[0]?.message?.content;
+    if (!text) {
+      return { error: `Empty response from OpenRouter image selector${geminiError ? ` (Gemini fallback reason: ${geminiError})` : ''}` };
+    }
+
+    return { content: text, provider: 'openrouter', model: openrouterSelectorModel, fallbackReason: geminiError };
+  } catch (error) {
+    return { error: `OpenRouter image selector network error: ${error.message}${geminiError ? ` (Gemini fallback reason: ${geminiError})` : ''}` };
   }
 }
 
@@ -1092,22 +1379,25 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
         model: model,
         messages: chatMessages,
         temperature: 0.1,
-        max_tokens: 1024
+        max_tokens: 1024,
+        // Ask OpenRouter to price the call. Without this the response carries token counts but no
+        // `usage.cost`, and cost would have to be guessed from a local price table.
+        usage: { include: true }
       })
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
     }
-    
+
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenRouter' };
     }
-    
-    return { content: text };
+
+    return { content: text, usage: normalizeUsage(data, 'openrouter', model) };
   } catch (error) {
     return { error: `OpenRouter network error: ${error.message}` };
   }
@@ -1306,22 +1596,25 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
         model: model,
         messages: chatMessages,
         temperature: 0.1,
-        max_tokens: 1024
+        max_tokens: 1024,
+        // Same as the single-image path: this is what makes `usage.cost` come back. Images are the
+        // expensive half of a guide step, so a run priced without them would be badly wrong.
+        usage: { include: true }
       })
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
     }
-    
+
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenRouter' };
     }
-    
-    return { content: text };
+
+    return { content: text, usage: normalizeUsage(data, 'openrouter', model) };
   } catch (error) {
     return { error: `OpenRouter network error: ${error.message}` };
   }

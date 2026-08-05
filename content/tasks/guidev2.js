@@ -478,6 +478,7 @@ async function gv2SaveFallback(extra = {}) {
         autonomyLevel: s.autonomyLevel || (s.autoMode ? 'auto' : 'manual'),
         paused: !!s.paused,
         lowConfidenceCount: s.lowConfidenceCount || 0,
+        loopStepCount: s.loopStepCount || 0,
         predictedGoalState: s.predictedGoalState || null,
         mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
         mechElementTexts: Array.isArray(s._mechElementTexts) ? s._mechElementTexts : [],
@@ -687,6 +688,7 @@ async function _gv2ResumeFromState(state) {
     autonomyLevel: _gv2NormalizeAutonomyLevel(state.autonomyLevel, state.autoMode === true),
     paused: false,
     lowConfidenceCount: state.lowConfidenceCount || 0,
+    loopStepCount: state.loopStepCount || 0,
     _mechKeys: Array.isArray(state.mechKeys) ? state.mechKeys : [],
     _mechElementTexts: Array.isArray(state.mechElementTexts) ? state.mechElementTexts : [],
     guidePlan: Array.isArray(state.guidePlan) ? state.guidePlan : [],
@@ -880,6 +882,7 @@ async function _gv2ResumeFromSteer(payload, opts = {}) {
       autonomyLevel,
       paused: false,
       lowConfidenceCount: 0,
+      loopStepCount: 0,
       _mechKeys: [],
       _mechElementTexts: kept
         .map(r => _gv2NormalizeDomText(r.target?.domText || r.target?.text || r.instruction))
@@ -1372,6 +1375,7 @@ async function _gv2SetState(pendingResume) {
     autonomyLevel: s.autonomyLevel || (s.autoMode ? 'auto' : 'manual'),
     paused: !!s.paused,
     lowConfidenceCount: s.lowConfidenceCount || 0,
+    loopStepCount: s.loopStepCount || 0,
     predictedGoalState: s.predictedGoalState || null,
     // Mechanical confidence: carry the loop-detection key list across navigations.
     mechKeys: Array.isArray(s._mechKeys) ? s._mechKeys : [],
@@ -1395,6 +1399,7 @@ async function _gv2SetState(pendingResume) {
     paused: !!s.paused,
     autonomyLevel: s.autonomyLevel || (s.autoMode ? 'auto' : 'manual'),
     lowConfidenceCount: s.lowConfidenceCount || 0,
+    loopStepCount: s.loopStepCount || 0,
     lastActionStepNumber: s._lastActionStepNumber || null,
     activeStepNumber: s._activeStepNumber || null,
     mechElementTexts: Array.isArray(s._mechElementTexts) ? s._mechElementTexts : [],
@@ -1462,6 +1467,7 @@ async function _gv2IsAutoMode() {
 
 const _GV2_CONF_THRESHOLD_KEY = 'guideConfidenceThreshold';
 const _GV2_ACTION_THRESHOLD_KEY = 'guideLowConfidenceActionThreshold';
+const _GV2_LOOP_STEPS_KEY = 'guideLoopStepThreshold';
 
 async function _gv2ConfidenceThreshold() {
   try {
@@ -1482,6 +1488,41 @@ async function _gv2LowConfidenceActionThreshold() {
     return 3;
   }
 }
+
+/**
+ * How many steps in a row may score at or above GV2_LOOP_STOP_THRESHOLD before the guide stops.
+ *
+ * Default 1, which is what the guard has always done: one repeat-looking step and it stops. The
+ * setting exists because that is tuned for safety, not for every page — a site that legitimately
+ * revisits the same control twice (paging a list, retrying a flaky menu) trips it on a step that is
+ * making progress, and the operator is better placed than the constant to say how much repetition
+ * is normal here.
+ */
+async function _gv2LoopStepThreshold() {
+  try {
+    const r = await chrome.storage.local.get(_GV2_LOOP_STEPS_KEY);
+    const n = Number(r[_GV2_LOOP_STEPS_KEY]);
+    return Number.isFinite(n) ? Math.max(1, Math.round(n)) : 1;
+  } catch (e) {
+    return 1;
+  }
+}
+if (typeof window !== 'undefined') window._gv2LoopStepThreshold = _gv2LoopStepThreshold;
+
+/**
+ * The running count of consecutive over-threshold steps, given this step's score. Pure.
+ *
+ * CONSECUTIVE, not cumulative: a loop is a run of steps that get nowhere, so one step that scores
+ * clean is evidence the guide moved on and the count starts again. A cumulative count would add up
+ * unrelated repeats from opposite ends of a long session and stop a run that was never looping.
+ */
+function _gv2NextLoopStreak(previousCount, loopScore, stopThreshold = GV2_LOOP_STOP_THRESHOLD) {
+  const score = Number(loopScore);
+  if (!Number.isFinite(score) || score < stopThreshold) return 0;
+  const prev = Number(previousCount);
+  return (Number.isFinite(prev) && prev > 0 ? prev : 0) + 1;
+}
+if (typeof window !== 'undefined') window._gv2NextLoopStreak = _gv2NextLoopStreak;
 
 function _gv2MaxFiniteScore(...values) {
   const nums = values.map(v => Number(v)).filter(n => Number.isFinite(n));
@@ -1965,7 +2006,7 @@ function _gv2ShouldAutoExecute(step) {
  */
 /**
  * @param {Element} el - element to bring on screen
- * @param {{exact?: boolean}} opts - exact: scroll THIS element, not its nearest interactive
+ * @param {{exact?: boolean, fitInViewport?: boolean, headerOffset?: number}} opts - exact: scroll THIS element, not its nearest interactive
  *   ancestor. Evidence crops need the exact span centered; centering an ancestor link or <nav>
  *   instead can leave the span itself off screen, and the capture then fails as offscreen.
  */
@@ -1984,12 +2025,65 @@ async function _gv2ScrollRegionTargetIntoView(el, opts = {}) {
   // Flag this scroll as agent-driven so the study tracker attributes the resulting gesture to the
   // agent, not the participant. Cleared after the scroll settles + the tracker's 300 ms debounce.
   if (typeof window !== 'undefined') window._xwaAgentScrolling = true;
-  scrollEl.scrollIntoView({ behavior: instant ? 'instant' : 'smooth', block: 'center', inline: 'nearest' });
+  if (opts.fitInViewport && typeof window.scrollTo === 'function' && scrollEl.getBoundingClientRect) {
+    const r = scrollEl.getBoundingClientRect();
+    const target = _gv2FitViewportScrollTargetForRect(
+      { left: r.left, top: r.top, width: r.width, height: r.height },
+      {
+        x: window.scrollX || 0,
+        y: window.scrollY || 0,
+        w: window.innerWidth || 0,
+        h: window.innerHeight || 0,
+        scrollW: document.documentElement.scrollWidth || 0,
+        scrollH: document.documentElement.scrollHeight || 0
+      },
+      { headerOffset: opts.headerOffset }
+    );
+    if (target) {
+      window.scrollTo({ top: target.top, left: target.left, behavior: instant ? 'instant' : 'smooth' });
+    } else {
+      scrollEl.scrollIntoView({ behavior: instant ? 'instant' : 'smooth', block: 'center', inline: 'nearest' });
+    }
+  } else {
+    scrollEl.scrollIntoView({ behavior: instant ? 'instant' : 'smooth', block: 'center', inline: 'nearest' });
+  }
   await new Promise((resolve) => setTimeout(resolve, instant ? 200 : 550));
   if (typeof window !== 'undefined') {
     setTimeout(() => { window._xwaAgentScrolling = false; }, 400);
   }
 }
+
+function _gv2FitViewportScrollTargetForRect(rect, viewport, opts = {}) {
+  if (!rect || !viewport) return null;
+  const vw = Number(viewport.w);
+  const vh = Number(viewport.h);
+  if (!(vw > 0) || !(vh > 0)) return null;
+  const left = Number(rect.left);
+  const top = Number(rect.top);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![left, top, width, height].every(Number.isFinite) || !(width > 0) || !(height > 0)) return null;
+  const scrollX = Number(viewport.x) || 0;
+  const scrollY = Number(viewport.y) || 0;
+  const docLeft = scrollX + left;
+  const docTop = scrollY + top;
+  const maxTop = Math.max(0, (Number(viewport.scrollH) || document.documentElement.scrollHeight || 0) - vh);
+  const maxLeft = Math.max(0, (Number(viewport.scrollW) || document.documentElement.scrollWidth || 0) - vw);
+  const headerOffset = Math.max(0, Number.isFinite(Number(opts.headerOffset)) ? Number(opts.headerOffset) : 80);
+  const margin = 12;
+  const desiredTop = height + headerOffset + margin <= vh
+    ? docTop - headerOffset - margin
+    : docTop - headerOffset;
+  const desiredLeft = width + margin * 2 <= vw
+    ? docLeft - margin
+    : docLeft;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  return {
+    top: clamp(Math.round(desiredTop), 0, maxTop),
+    left: clamp(Math.round(desiredLeft), 0, maxLeft)
+  };
+}
+if (typeof window !== 'undefined') window._gv2FitViewportScrollTargetForRect = _gv2FitViewportScrollTargetForRect;
 
 async function gv2CaptureRegion(screenshotBase64, options = {}) {
   const aligned = options.aligned === true;
@@ -2248,7 +2342,7 @@ function _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr
 
 function _gv2MarkFullScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = []) {
   if (typeof window !== 'undefined' && window.IS_TEST_ENV) {
-    return Promise.resolve({ base64: 'MOCK_MARK', marker: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
+    return Promise.resolve({ base64: 'MOCK_MARK', marker: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, cropGeometry: { x: window.scrollX || 0, y: window.scrollY || 0, w: window.innerWidth || 0, h: window.innerHeight || 0 } });
   }
   return new Promise((resolve) => {
     let done = false;
@@ -2269,7 +2363,11 @@ function _gv2MarkFullScreenshot(base64, rect, markerNumber, color = GV2_ACTION_M
           if (bakeMarker) _gv2DrawMarkerOnCanvas(ctx, canvas, marker, markerNumber, color, fill);
           _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr);
           const out = canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/\w+;base64,/, '');
-          finish({ base64: out, marker });
+          finish({
+            base64: out,
+            marker,
+            cropGeometry: { x: window.scrollX || 0, y: window.scrollY || 0, w: window.innerWidth || 0, h: window.innerHeight || 0 }
+          });
         } catch (e) { finish(null); }
       };
       img.onerror = () => finish(null);
@@ -2284,7 +2382,7 @@ function _gv2MarkFullScreenshot(base64, rect, markerNumber, color = GV2_ACTION_M
  * crop (or null), marker is the target's normalized rect within the crop (or null). */
 function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL, bakeMarker = true, annotations = [], maxWidth = 0) {
   if (typeof window !== 'undefined' && window.IS_TEST_ENV) {
-    return Promise.resolve({ base64: 'MOCK_CROP', marker: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
+    return Promise.resolve({ base64: 'MOCK_CROP', marker: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, cropGeometry: { x: window.scrollX || 0, y: window.scrollY || 0, w: window.innerWidth || 0, h: window.innerHeight || 0 } });
   }
   return new Promise((resolve) => {
     // Hard time-box: never let a stuck Image decode hang the caller (which gates the record store).
@@ -2319,7 +2417,17 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
           if (bakeMarker) _gv2DrawMarkerOnCanvas(ctx, canvas, marker, markerNumber, color, fill);
           _gv2DrawEvidenceAnnotationsOnCanvas(ctx, canvas, annotations, crop, dpr);
           const base = canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/\w+;base64,/, '');
-          finish({ base64: base, marker });
+          const cssScale = dpr > 0 ? dpr : 1;
+          finish({
+            base64: base,
+            marker,
+            cropGeometry: {
+              x: (window.scrollX || 0) + (crop.sx / cssScale),
+              y: (window.scrollY || 0) + (crop.sy / cssScale),
+              w: crop.sw / cssScale,
+              h: crop.sh / cssScale
+            }
+          });
         } catch (e) { finish(null); }
       };
       img.onerror = () => finish(null);
@@ -2334,7 +2442,7 @@ function _gv2CropScreenshot(base64, rect, markerNumber, color = GV2_ACTION_MARKE
 // scroll a DOM/SoM target into view before capture; bbox-only evidence remains current-viewport only.
 // Best-effort — never throws.
 async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = null, options = {}) {
-  const out = { visualEvidenceShot: null, visualEvidenceOriginalShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, captureGeometry: null, captureMode: null, captureError: null };
+  const out = { visualEvidenceShot: null, visualEvidenceOriginalShot: null, visualEvidenceNormRect: null, visualEvidenceMarker: null, visualEvidenceCropGeometry: null, captureGeometry: null, captureMode: null, captureError: null };
   try {
     // Resolve a CSS-px viewport rect from either the live element or a normalized {x,y,w,h} box,
     // plus the marker target (the element when we have one, else the normalized rect).
@@ -2342,7 +2450,11 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
     let markerTarget = null;
     if (evidenceEl && evidenceEl.getBoundingClientRect && document.contains(evidenceEl)) {
       if (options.scrollIntoView) {
-        await _gv2ScrollRegionTargetIntoView(evidenceEl);
+        await _gv2ScrollRegionTargetIntoView(evidenceEl, {
+          exact: !!options.exactScrollTarget,
+          fitInViewport: !!options.fitInViewport,
+          headerOffset: options.headerOffset
+        });
         await _gv2WaitForLayoutSettle();
       }
       const r0 = evidenceEl.getBoundingClientRect();
@@ -2451,6 +2563,7 @@ async function gv2CaptureEvidenceRegion(evidenceEl, markerNumber, normRect = nul
         );
     out.visualEvidenceShot = marked?.base64 || null;
     out.visualEvidenceMarker = marked?.marker || null;
+    out.visualEvidenceCropGeometry = marked?.cropGeometry || null;
     const original = options.fullViewport
       ? await _gv2MarkFullScreenshot(
           cleanShot,
@@ -2502,7 +2615,10 @@ Annotate the screenshot so the user can visually understand this evidence.`;
       action: 'callLLMWithImages',
       systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
-      images: [{ base64: screenshotBase64, label: 'Current viewport screenshot for evidence annotation' }],
+      images: [{
+        base64: screenshotBase64,
+        label: item?.source_image_id ? `[image_id=${item.source_image_id}] Source image for evidence annotation` : 'Current viewport screenshot for evidence annotation'
+      }],
       metadata: { mode: 'guide_evidence_annotator', step: window._guidev2?._activeStepNumber || null, url: window.location.href }
     });
     out.rawResponse = response?.content ? String(response.content) : '';
@@ -2525,6 +2641,148 @@ Annotate the screenshot so the user can visually understand this evidence.`;
     out.annotations = Array.isArray(norm.annotations) ? norm.annotations : [];
   } catch (e) {
     out.error = e?.message || String(e);
+  }
+  return out;
+}
+
+function _gv2EvidenceItemNeedsAnnotator(item) {
+  return !!(item && !item.evidenceEl && !item.som_id &&
+    (item.need_annotation || item.needAnnotation || !Array.isArray(item.annotations) || !item.annotations.length));
+}
+
+function _gv2AnnotationSourceKey(item) {
+  if (!item) return 'none';
+  if (item.annotationSourceEl) {
+    const selector = typeof gv2ElementSelector === 'function' ? gv2ElementSelector(item.annotationSourceEl) : '';
+    return `el:${selector || item.source_image_id || ''}`;
+  }
+  if (item.annotationSourceGeometry) {
+    const g = item.annotationSourceGeometry || {};
+    return `geom:${Number(g.x) || 0}:${Number(g.y) || 0}:${Number(g.w) || 0}:${Number(g.h) || 0}:${item.source_image_id || ''}`;
+  }
+  return `viewport:${item.source_image_id || 'viewport'}`;
+}
+
+function _gv2ApplyAnnotatorResultToItem(item, annotated, shotForItem) {
+  if (!item) return;
+  const annotatesExternalSource = _gv2AnnotatesExternalSource(item);
+  if (annotated?.region_bbox) {
+    item.annotationRegionBbox = annotated.region_bbox;
+    if (!annotatesExternalSource) {
+      item.region_bbox = annotated.region_bbox;
+      item.evidenceRect = annotated.region_bbox;
+    }
+  }
+  item.annotations = Array.isArray(annotated?.annotations) ? annotated.annotations : [];
+  item.annotationSystemPrompt = annotated?.systemPrompt || '';
+  item.annotationUserPrompt = annotated?.userPrompt || '';
+  item.annotationScreenshot = annotated?.screenshotBase64 || shotForItem || null;
+  item.annotationRawResponse = annotated?.rawResponse || '';
+  item.annotationError = annotated?.error || null;
+  item.annotationCoordinateDebug = annotated?.annotationCoordinateDebug || null;
+  item._gv2AnnotationDone = true;
+}
+
+function _gv2AnnotatesExternalSource(item) {
+  if (!item) return false;
+  const sourceImageId = String(item.source_image_id || '').trim();
+  return !!(item.annotationSourceShot || (sourceImageId && sourceImageId !== 'viewport'));
+}
+
+function _gv2EvidenceDisplayRegion(item) {
+  if (!item) return null;
+  if (item.annotationRegionBbox) return item.annotationRegionBbox;
+  if (item.region_bbox) return item.region_bbox;
+  if (_gv2AnnotatesExternalSource(item) && item.fullViewportCapture) return null;
+  return item.evidenceRect || null;
+}
+
+async function _gv2AnnotateEvidenceItemsBatch(items, screenshotBase64) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (list.length <= 1) return list.length ? [await _gv2AnnotateEvidenceItem(list[0], screenshotBase64)] : [];
+  const systemPrompt = (typeof window !== 'undefined' && window.PROMPTS?.GUIDE_EVIDENCE_ANNOTATOR) || GUIDE_EVIDENCE_ANNOTATOR_PROMPT || '';
+  const rows = list.map((item, idx) => {
+    const prompt = item.annotation_prompt || item.annotationPrompt || item.note || item.reason || item.key || '';
+    const hint = item.evidenceRect ? JSON.stringify(item.evidenceRect) : '(none)';
+    return [
+      `ITEM ${idx + 1}`,
+      `EVIDENCE KEY: ${item.key || `item_${idx + 1}`}`,
+      `EVIDENCE NOTE: ${item.note || ''}`,
+      `ANNOTATION REQUEST: ${prompt}`,
+      `CURRENT WORKER REGION_BBOX HINT: ${hint}`
+    ].join('\n');
+  }).join('\n\n');
+  const userPrompt = `${rows}
+
+Annotate the screenshot so the user can visually understand every evidence item.
+Return one keyed item per EVIDENCE KEY using the batch JSON shape.`;
+  const base = (item) => ({
+    region_bbox: item?.evidenceRect || item?.region_bbox || null,
+    annotations: Array.isArray(item?.annotations) ? item.annotations : [],
+    systemPrompt,
+    userPrompt,
+    screenshotBase64: screenshotBase64 || null,
+    rawResponse: '',
+    error: null
+  });
+  const out = list.map(base);
+  if (!screenshotBase64) return out;
+  try {
+    const response = await safeSendMessage({
+      action: 'callLLMWithImages',
+      systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      images: [{
+        base64: screenshotBase64,
+        label: list[0]?.source_image_id ? `[image_id=${list[0].source_image_id}] Source image for evidence annotation` : 'Current viewport screenshot for evidence annotation'
+      }],
+      metadata: {
+        mode: 'guide_evidence_annotator',
+        batch: true,
+        evidenceKeys: list.map((item, idx) => item.key || `item_${idx + 1}`),
+        step: window._guidev2?._activeStepNumber || null,
+        url: window.location.href
+      }
+    });
+    const rawText = response?.content ? String(response.content) : '';
+    out.forEach(o => { o.rawResponse = rawText; });
+    if (response?.error) {
+      out.forEach(o => { o.error = response.error; });
+      return out;
+    }
+    const repairedRawResponse = _gv2RepairAnnotatorJsonText(rawText);
+    const raw = repairedRawResponse && typeof gv2ExtractJsonObject === 'function' ? gv2ExtractJsonObject(repairedRawResponse) : null;
+    const rawItems = Array.isArray(raw?.items) ? raw.items : [];
+    if (!rawItems.length) {
+      out.forEach(o => { o.error = 'batch-response-missing-items'; });
+      return out;
+    }
+    const imageSize = await _gv2ImageSizeFromBase64(screenshotBase64);
+    const byKey = new Map();
+    rawItems.forEach((rawItem, idx) => {
+      const key = String(rawItem?.key || rawItem?.evidence_key || rawItem?.evidenceKey || '').trim();
+      if (key) byKey.set(key, rawItem);
+      byKey.set(`__idx_${idx}`, rawItem);
+    });
+    list.forEach((item, idx) => {
+      const rawItem = byKey.get(String(item.key || '').trim()) || byKey.get(`__idx_${idx}`) || null;
+      if (!rawItem) {
+        out[idx].error = 'batch-item-missing';
+        return;
+      }
+      const coercedRaw = _gv2CoerceAnnotatorResult(rawItem, imageSize);
+      out[idx].annotationCoordinateDebug = coercedRaw?.__coordinateDebug || null;
+      if (out[idx].annotationCoordinateDebug && repairedRawResponse !== rawText) {
+        out[idx].annotationCoordinateDebug.repairedRawResponse = repairedRawResponse;
+      }
+      const norm = typeof gv2NormalizeEvidenceAnnotationResult === 'function'
+        ? gv2NormalizeEvidenceAnnotationResult(coercedRaw)
+        : { region_bbox: null, annotations: [] };
+      if (norm.region_bbox) out[idx].region_bbox = norm.region_bbox;
+      out[idx].annotations = Array.isArray(norm.annotations) ? norm.annotations : [];
+    });
+  } catch (e) {
+    out.forEach(o => { o.error = e?.message || String(e); });
   }
   return out;
 }
@@ -2780,13 +3038,102 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
   // fractions of THAT screenshot, so this is what converts them back to document coordinates when
   // the marks are replayed on the live page (pageguideShowEvidenceAnnotations).
   let annotationGeometry = null;
+  const annotationGroups = new Map();
   for (const item of input) {
-    if (item && !item.evidenceEl && !item.som_id && (item.need_annotation || item.needAnnotation || !Array.isArray(item.annotations) || !item.annotations.length)) {
+    if (!_gv2EvidenceItemNeedsAnnotator(item)) continue;
+    const key = _gv2AnnotationSourceKey(item);
+    if (!annotationGroups.has(key)) annotationGroups.set(key, []);
+    annotationGroups.get(key).push(item);
+  }
+
+  for (const groupItems of annotationGroups.values()) {
+    if (!groupItems.length) continue;
+    const first = groupItems[0];
+    let itemAnnotationShot = null;
+    let itemAnnotationGeometry = null;
+    try {
+      if (first.annotationSourceShot) {
+        itemAnnotationShot = first.annotationSourceShot;
+        itemAnnotationGeometry = first.annotationSourceGeometry || null;
+        for (const item of groupItems) {
+          item.evidenceRect = { x: 0, y: 0, w: 1, h: 1 };
+          item.fullViewportCapture = true;
+        }
+      } else if (first.annotationSourceEl && document.contains(first.annotationSourceEl)) {
+        await _gv2ScrollRegionTargetIntoView(first.annotationSourceEl, { exact: true, fitInViewport: true });
+        await _gv2WaitForLayoutSettle();
+        for (const item of groupItems) {
+          if (!item.evidenceRect && typeof gv2TargetNormRect === 'function') {
+            const src = item.annotationSourceEl && document.contains(item.annotationSourceEl) ? item.annotationSourceEl : first.annotationSourceEl;
+            const r = src.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              item.evidenceRect = gv2TargetNormRect({ left: r.left, top: r.top, width: r.width, height: r.height },
+                window.innerWidth, window.innerHeight);
+              item.region_bbox = item.region_bbox || item.evidenceRect;
+            }
+          }
+        }
+        itemAnnotationShot = typeof captureScreenshot === 'function' ? await captureScreenshot() : null;
+        itemAnnotationGeometry = {
+          x: window.scrollX || 0,
+          y: window.scrollY || 0,
+          w: window.innerWidth || 0,
+          h: window.innerHeight || 0
+        };
+      } else if (first.annotationSourceGeometry) {
+        const g = first.annotationSourceGeometry;
+        try { window.scrollTo({ top: Number(g.y) || 0, left: Number(g.x) || 0, behavior: 'instant' in window ? 'instant' : 'auto' }); } catch (e) {}
+        await _gv2WaitForLayoutSettle();
+        for (const item of groupItems) {
+          item.evidenceRect = item.evidenceRect || item.region_bbox || item.annotationSourceRect || first.annotationSourceRect || { x: 0, y: 0, w: 1, h: 1 };
+          item.region_bbox = item.region_bbox || item.evidenceRect;
+        }
+        itemAnnotationShot = typeof captureScreenshot === 'function' ? await captureScreenshot() : null;
+        itemAnnotationGeometry = {
+          x: window.scrollX || 0,
+          y: window.scrollY || 0,
+          w: window.innerWidth || 0,
+          h: window.innerHeight || 0
+        };
+      } else {
+        if (!annotationShot && typeof captureScreenshot === 'function') {
+          annotationShot = await captureScreenshot();
+          annotationGeometry = {
+            x: window.scrollX || 0,
+            y: window.scrollY || 0,
+            w: window.innerWidth || 0,
+            h: window.innerHeight || 0
+          };
+        }
+      }
+    } catch (e) {}
+
+    const shotForGroup = itemAnnotationShot || annotationShot;
+    const geometryForGroup = itemAnnotationGeometry || annotationGeometry;
+    groupItems.forEach(item => {
+      item.annotationGeometry = geometryForGroup;
+      item.captureGeometry = geometryForGroup;
+    });
+    const annotatedItems = await _gv2AnnotateEvidenceItemsBatch(groupItems, shotForGroup);
+    groupItems.forEach((item, idx) => {
+      _gv2ApplyAnnotatorResultToItem(item, annotatedItems[idx], shotForGroup);
+    });
+  }
+
+  for (const item of input) {
+    if (!_gv2EvidenceItemNeedsAnnotator(item) || item._gv2AnnotationDone) {
+      // Already handled by the grouped annotator pre-pass, or no annotation is needed.
+    } else {
       let itemAnnotationShot = null;
       let itemAnnotationGeometry = null;
       try {
-        if (item.annotationSourceEl && document.contains(item.annotationSourceEl)) {
-          await _gv2ScrollRegionTargetIntoView(item.annotationSourceEl, { exact: true });
+        if (item.annotationSourceShot) {
+          itemAnnotationShot = item.annotationSourceShot;
+          itemAnnotationGeometry = item.annotationSourceGeometry || null;
+          item.evidenceRect = { x: 0, y: 0, w: 1, h: 1 };
+          item.fullViewportCapture = true;
+        } else if (item.annotationSourceEl && document.contains(item.annotationSourceEl)) {
+          await _gv2ScrollRegionTargetIntoView(item.annotationSourceEl, { exact: true, fitInViewport: true });
           await _gv2WaitForLayoutSettle();
           if (!item.evidenceRect && typeof gv2TargetNormRect === 'function') {
             const r = item.annotationSourceEl.getBoundingClientRect();
@@ -2828,19 +3175,10 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       } catch (e) {}
       const shotForItem = itemAnnotationShot || annotationShot;
       const geometryForItem = itemAnnotationGeometry || annotationGeometry;
+      item.annotationGeometry = geometryForItem;
       item.captureGeometry = geometryForItem;
       const annotated = await _gv2AnnotateEvidenceItem(item, shotForItem);
-      if (annotated.region_bbox) {
-        item.region_bbox = annotated.region_bbox;
-        item.evidenceRect = annotated.region_bbox;
-      }
-      item.annotations = Array.isArray(annotated.annotations) ? annotated.annotations : [];
-      item.annotationSystemPrompt = annotated.systemPrompt || '';
-      item.annotationUserPrompt = annotated.userPrompt || '';
-      item.annotationScreenshot = annotated.screenshotBase64 || shotForItem || null;
-      item.annotationRawResponse = annotated.rawResponse || '';
-      item.annotationError = annotated.error || null;
-      item.annotationCoordinateDebug = annotated.annotationCoordinateDebug || null;
+      _gv2ApplyAnnotatorResultToItem(item, annotated, shotForItem);
     }
     if ((item?.fullViewportCapture || item?.need_annotation || item?.needAnnotation || (Array.isArray(item?.annotations) && item?.annotations.length)) && !item?.evidenceEl && !item?.evidenceRect) {
       item.evidenceRect = { x: 0, y: 0, w: 1, h: 1 };
@@ -2852,7 +3190,8 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
         note: item?.note || null,
         source_image_id: item?.source_image_id || null,
         som_id: item?.som_id || null,
-        region_bbox: item?.region_bbox || item?.evidenceRect || null,
+        region_bbox: _gv2EvidenceDisplayRegion(item),
+        annotationRegionBbox: item?.annotationRegionBbox || null,
         annotations: Array.isArray(item?.annotations) ? item.annotations : [],
         need_annotation: !!(item?.need_annotation || item?.needAnnotation),
         annotation_prompt: item?.annotation_prompt || item?.annotationPrompt || null,
@@ -2861,6 +3200,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
         annotationScreenshot: item?.annotationScreenshot || null,
         annotationRawResponse: item?.annotationRawResponse || '',
         annotationCoordinateDebug: item?.annotationCoordinateDebug || null,
+        annotationGeometry: item?.annotationGeometry || item?.captureGeometry || null,
         captureGeometry: item?.captureGeometry || null,
         annotationError: item?.annotationError || (item?.evidenceRect ? null : 'missing-target'),
         visualEvidenceShot: null,
@@ -2897,7 +3237,8 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       note: item.note || null,
       source_image_id: item.source_image_id || null,
       som_id: item.som_id || null,
-      region_bbox: item.region_bbox || item.evidenceRect || null,
+      region_bbox: _gv2EvidenceDisplayRegion(item),
+      annotationRegionBbox: item.annotationRegionBbox || null,
       annotations: Array.isArray(item.annotations) ? item.annotations : [],
       need_annotation: !!(item.need_annotation || item.needAnnotation),
       annotation_prompt: item.annotation_prompt || item.annotationPrompt || null,
@@ -2907,6 +3248,7 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
       annotationRawResponse: item.annotationRawResponse || '',
       annotationCoordinateDebug: item.annotationCoordinateDebug || null,
       annotationError: item.annotationError || null,
+      annotationGeometry: item.annotationGeometry || item.captureGeometry || cap.captureGeometry || null,
       captureGeometry: item.captureGeometry || cap.captureGeometry || null,
       visualEvidenceShot: cap.visualEvidenceShot || null,
       visualEvidenceOriginalShot: cap.visualEvidenceOriginalShot || null,
@@ -2924,6 +3266,13 @@ async function gv2CaptureEvidenceItems(items, options = {}) {
   }
   return out;
 }
+if (typeof window !== 'undefined') {
+  window.gv2CaptureEvidenceItems = gv2CaptureEvidenceItems;
+  window._gv2RealCaptureEvidenceItems = gv2CaptureEvidenceItems;
+  window._gv2ApplyAnnotatorResultToItem = _gv2ApplyAnnotatorResultToItem;
+  window._gv2AnnotatesExternalSource = _gv2AnnotatesExternalSource;
+  window._gv2EvidenceDisplayRegion = _gv2EvidenceDisplayRegion;
+}
 
 async function gv2RunTerminalVerifyResult({ action, instruction, findQuery, visualEvidenceItems, restoreScroll = false } = {}) {
   const startX = window.scrollX || 0;
@@ -2939,9 +3288,13 @@ async function gv2RunTerminalVerifyResult({ action, instruction, findQuery, visu
   };
   try {
     await _gv2WaitForPageReady(10000);
-    const scroller = document.scrollingElement || document.documentElement || document.body;
-    const amount = Math.max(240, Math.min(800, Math.round((window.innerHeight || 800) * 0.8)));
-    try { scroller.scrollTop = (scroller.scrollTop || 0) + amount; } catch (e) { /* best-effort */ }
+    // The sweep exists to see what the action DID. If the action opened a filter popup, the popup
+    // is what has to be swept — scrolling the page behind it reveals nothing and the verification
+    // then judges the result from a screenshot of the wrong thing.
+    const swept = (typeof gv2ScrollBy === 'function')
+      ? gv2ScrollBy('down', null)
+      : null;
+    const scroller = swept?.el || document.scrollingElement || document.documentElement || document.body;
     await gv2WaitForDomStable(4000, 500);
     out.verifyResultScrollY = window.scrollY || scroller?.scrollTop || startY;
     let shot = null;
@@ -3459,6 +3812,7 @@ async function _handleStepByStepGuideV2(question) {
     _recapOn: recapOn,
     paused: false,
     lowConfidenceCount: 0,
+    loopStepCount: 0,
     _mechKeys: [],
     _mechElementTexts: [],
     evidenceScratchpad: [],
@@ -4410,7 +4764,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     g.autonomyLevel = autonomyLevel;
     const bypassNoAskStops = g.autoMode && autonomyLevel === 'auto_no_ask';
     const activeLoopScore = _gv2MaxFiniteScore(mech.loop);
-    const loopStop = activeLoopScore !== null && activeLoopScore >= GV2_LOOP_STOP_THRESHOLD;
+    const loopStepThreshold = await _gv2LoopStepThreshold();
+    g.loopStepCount = _gv2NextLoopStreak(g.loopStepCount, activeLoopScore);
+    const loopStop = g.loopStepCount >= loopStepThreshold;
     const confidenceThreshold = await _gv2ConfidenceThreshold();
     if (confidence !== null && confidence < confidenceThreshold) {
       g.lowConfidenceCount = (g.lowConfidenceCount || 0) + 1;
@@ -4423,7 +4779,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const riskStop = !bypassNoAskStops && isHighRiskJson;
     const willPause = loopStop || (!isFind && !isVisualHighlight && !isWatchVideo && (lowConfidenceStop || riskStop || confirmationStop));
     const loopPauseMessage = loopStop
-      ? `Page Guide paused: loop score ${activeLoopScore.toFixed(2)} is above the ${GV2_LOOP_STOP_THRESHOLD.toFixed(1)} threshold. Review and resume when ready.`
+      ? (loopStepThreshold > 1
+        ? `Page Guide paused: ${g.loopStepCount} steps in a row scored at or above the ${GV2_LOOP_STOP_THRESHOLD.toFixed(1)} loop threshold (latest ${activeLoopScore.toFixed(2)}). Review and resume when ready.`
+        : `Page Guide paused: loop score ${activeLoopScore.toFixed(2)} is above the ${GV2_LOOP_STOP_THRESHOLD.toFixed(1)} threshold. Review and resume when ready.`)
       : '';
 
     // Gate 1 (Risk) + hand-back override: Auto: Ask runs low-risk actions; Auto: No Ask bypasses
@@ -5163,6 +5521,10 @@ async function _gv2UpdatePersonalizedProfile(g, outcome) {
 function _gv2ResetPauseGuards(g) {
   if (!g) return g;
   g.lowConfidenceCount = 0;
+  // The loop streak goes too. Resuming with it intact would stop again on the next over-threshold
+  // step no matter what the threshold is set to — the user has just reviewed the repetition and
+  // said to continue, so the guide owes them a fresh streak before stopping for it again.
+  g.loopStepCount = 0;
   g._mechElementTexts = [];
   g._mechKeys = [];
   return g;
@@ -5359,6 +5721,36 @@ async function _gv2WaitForNavOrSettle(startUrl) {
  * Schedule the agent to perform the current step AFTER gv2CaptureStepRecord finishes,
  * so target-region screenshots always reflect the highlighted DOM before the action.
  */
+/**
+ * Note on the step's record which container a scroll moved, and whether it moved at all.
+ *
+ * Without this, "the agent scrolled and nothing happened" can only be inferred by eyeballing two
+ * identical screenshots. With it, the inspector says which element was scrolled and why it was
+ * chosen — the difference between debugging a wrong pick and guessing at one.
+ *
+ * Fire-and-forget, like every other capture patch: a run must never fail over telemetry.
+ */
+function _gv2RecordScrollOutcome(step, outcome) {
+  const g = window._guidev2;
+  if (!g?.sessionId || !outcome || typeof rewindPatchRecord !== 'function') return;
+  const stepNumber = Number(step?.step);
+  if (!Number.isFinite(stepNumber)) return;
+  let target = '';
+  try {
+    const el = outcome.el;
+    target = el === (document.scrollingElement || document.documentElement)
+      ? 'page'
+      : `${el?.tagName?.toLowerCase() || '?'}${el?.id ? '#' + el.id : ''}`;
+  } catch (e) { /* best-effort */ }
+  Promise.resolve(rewindPatchRecord(g.sessionId, stepNumber, {
+    scrollTarget: target,
+    scrollSource: outcome.source || '',
+    scrollMoved: !!outcome.scrolled,
+    scrollDelta: (outcome.after || 0) - (outcome.before || 0),
+  })).catch(() => {});
+}
+if (typeof window !== 'undefined') window._gv2RecordScrollOutcome = _gv2RecordScrollOutcome;
+
 function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
   if (!g || !step) return;
   _gv2ClearActionTimers();
@@ -5386,9 +5778,16 @@ function _gv2ScheduleAutoPerformAfterCapture(g, step, action) {
       g._autoClickTimer = null;
       if (_gv2IsStopped()) return;
       _gv2SetWorkingStatus(_gv2ActionStatus(action, step));
-      const scroller = document.scrollingElement || document.documentElement || document.body;
-      const amount = Math.max(240, Math.min(800, Math.round((window.innerHeight || 800) * 0.8)));
-      try { scroller.scrollTop = (scroller.scrollTop || 0) + (action === 'scroll_up' ? -amount : amount); } catch (e) {}
+      // Scroll what is actually in front of the user, not the page root. When the step names an
+      // element, that is the strongest signal available about which pane it means — the planner saw
+      // the page. Otherwise gv2ScrollBy detects it (open popup → locked body → page).
+      const hintEl = (typeof getIndexedElement === 'function' && step?.element?.index != null)
+        ? getIndexedElement(step.element.index)
+        : null;
+      const scrolled = (typeof gv2ScrollBy === 'function')
+        ? gv2ScrollBy(action === 'scroll_up' ? 'up' : 'down', hintEl)
+        : null;
+      _gv2RecordScrollOutcome(step, scrolled);
       if (typeof gv2NextStep === 'function') setTimeout(() => {
         _gv2SetWorkingStatus('Checking result…');
         setTimeout(gv2NextStep, 250);
@@ -5443,6 +5842,9 @@ async function gv2RunFind(findQuery) {
   // Evidence: Visual answers from the page text AND a screenshot, and returns its own evidence in
   // the same reply. Evidence: Text runs the original text-only call below, untouched.
   const visualMode = typeof getEvidenceMode === 'function' && (await getEvidenceMode()) === 'visual';
+  const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+  // Both study arms get the SAME prompt for a given evidence mode — see the note in
+  // content/prompts.js where ANSWER_NONGROUNDING used to be. Non-grounding filters the reply below.
   const systemPrompt = (visualMode ? (PROMPTS.FIND_ANSWER_VISUAL || PROMPTS.ANSWER_AND_HIGHLIGHT) : PROMPTS.ANSWER_AND_HIGHLIGHT)
     .replace('{pageContent}', pageContent || '(No text content found)')
     .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)')
@@ -5463,14 +5865,18 @@ async function gv2RunFind(findQuery) {
 
   // Viewport + crops of the pictures this question is about, so the agent can actually see (and
   // then annotate) the thing it is asked about.
-  const answerImages = answerShot ? await gv2BuildFindAnswerImages(question, answerShot) : [];
-
+  let answerImages = answerShot ? await gv2BuildFindAnswerImages(question, answerShot) : [];
   const askVisual = (images, userContent) => safeSendMessage({
     action: 'callLLMWithImages',
     systemPrompt,
     messages: [{ role: 'user', content: userContent }],
     images,
-    metadata: { mode: 'guide_find_visual', url: window.location.href }
+    metadata: {
+      mode: nonGrounding ? 'guide_find_nongrounding_visual' : 'guide_find_visual',
+      url: window.location.href,
+      findImageDiagnostics: typeof gv2FindImageDiagnostics === 'function' ? gv2FindImageDiagnostics() : [],
+      imageSelectionDiagnostics: images?.selectionDiagnostics || null
+    }
   });
 
   let response = answerShot
@@ -5479,7 +5885,7 @@ async function gv2RunFind(findQuery) {
         action: 'callLLM',
         systemPrompt,
         messages: [{ role: 'user', content: question }],
-        metadata: { mode: 'guide_find', url: window.location.href }
+        metadata: { mode: nonGrounding ? 'guide_find_nongrounding' : 'guide_find', url: window.location.href }
       });
 
   if (response?.error) {
@@ -5496,35 +5902,41 @@ async function gv2RunFind(findQuery) {
   }
 
   let rawAnswer = response?.content?.trim() || '';
-  // Visual mode replies with {answer, evidence}; a malformed envelope degrades to prose-only.
-  let parsedAnswer = (visualMode && answerShot && typeof gv2ParseFindAnswer === 'function')
-    ? gv2ParseFindAnswer(rawAnswer)
-    : { answer: rawAnswer, evidence: [], needMoreView: null };
-
-  // One escalation round, and only one: the model can ask to see further down/up, a specific
-  // element, or top/middle/bottom, and we re-ask with those extra views attached. A second request
-  // is ignored — an unbounded "show me more" loop is how a Find turns into a page crawl.
-  if (parsedAnswer.needMoreView && answerShot && answerImages.length < GV2_FIND_MAX_IMAGES) {
-    console.log('[guidev2] find: model asked for more view —', parsedAnswer.needMoreView.want, parsedAnswer.needMoreView.reason);
-    const extra = await gv2CaptureMoreViews(parsedAnswer.needMoreView);
-    if (extra.length) {
-      const images = answerImages.concat(extra).slice(0, GV2_FIND_MAX_IMAGES);
-      const followUp = `${question}\n\n(The extra views you asked for are attached: ${extra.map(e => e.label).join(', ')}. Answer now — no further views are available.)`;
-      const second = await askVisual(images, followUp);
-      const secondRaw = second?.content?.trim() || '';
-      if (secondRaw) {
-        rawAnswer = secondRaw;
-        parsedAnswer = gv2ParseFindAnswer(secondRaw);
-      }
-    }
+  if (nonGrounding) {
+    // The baseline shares the grounding prompt, so in Visual mode the reply is the JSON envelope
+    // {answer, evidence}. Unwrap it and drop the evidence on the floor: it never reaches
+    // gv2BuildFindEvidence, which is what keeps the annotator, the crops and the on-page marks out of
+    // the baseline in one move. Without the unwrap the participant would read raw JSON.
+    const parsed = (visualMode && typeof gv2ParseFindAnswer === 'function')
+      ? gv2ParseFindAnswer(rawAnswer)
+      : { answer: rawAnswer };
+    const stripped = parsed.answer || rawAnswer;
+    const answer = typeof stripNonGroundingMarkers === 'function' ? stripNonGroundingMarkers(stripped) : stripped;
+    const { notOnPage } = gv2ParseFindResponse(answer);
+    console.log('[guidev2] find: non-grounding plain answer');
+    return {
+      answer,
+      notOnPage,
+      highlightCount: 0,
+      hasHighlights: false,
+      findEvidenceShots: [],
+      systemPrompt,
+      userPrompt: question,
+      rawResponse: rawAnswer
+    };
   }
+  // Visual mode replies with {answer, evidence}; a malformed envelope degrades to prose-only. Keyed on
+  // visualMode alone, not on answerShot: the prompt is chosen by visualMode, so a run whose screenshot
+  // capture failed still gets the envelope back and would otherwise print it raw.
+  let parsedAnswer = (visualMode && typeof gv2ParseFindAnswer === 'function')
+    ? gv2ParseFindAnswer(rawAnswer)
+    : { answer: rawAnswer, evidence: [] };
 
   const answer = parsedAnswer.answer || rawAnswer;
   const modelEvidence = parsedAnswer.evidence || [];
   const { notOnPage } = gv2ParseFindResponse(answer);
 
   let highlightCount = 0;
-  const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
   if (!nonGrounding && answer && !notOnPage && typeof applyHighlightsFromCitations === 'function') {
     highlightCount = applyHighlightsFromCitations(answer);
     if (highlightCount > 0 && typeof scrollToHighlight === 'function') {
@@ -5537,14 +5949,14 @@ async function gv2RunFind(findQuery) {
   // applying the on-page highlight — otherwise the side panel's parseCitations() would still
   // render clickable citation chips, and clicking one triggers scrollToIndex()'s own flash
   // highlight independent of applyHighlightsFromCitations.
-  const answerOut = nonGrounding && typeof stripCitationMarkers === 'function'
-    ? stripCitationMarkers(answer)
+  const answerOut = nonGrounding && typeof stripNonGroundingMarkers === 'function'
+    ? stripNonGroundingMarkers(answer)
     : answer;
 
   // Visual evidence mode: a crop per cited span plus annotated evidence of what the PAGE shows, so
   // the evidence travels with the answer instead of only living on the page — and so a question the
   // DOM cannot answer still gets proof. Text mode keeps the citation links and nothing else.
-  const findEvidenceShots = await gv2BuildFindEvidence(highlightCount > 0, question, modelEvidence);
+  const findEvidenceShots = await gv2BuildFindEvidence(highlightCount > 0, question, modelEvidence, answer);
 
   return {
     answer: answerOut,
@@ -5711,26 +6123,9 @@ const GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS = 3;
  * @param {number} maxItems - cap on evidence items
  * @returns {{answer: string, evidence: Array<object>}}
  */
-/**
- * Validate the model's request for more of the page. Only the four documented shapes are honoured —
- * anything else is dropped rather than triggering a capture we cannot aim.
- *
- * @param {any} raw - the need_more_view field
- * @returns {{want: string, reason: string}|null}
- */
-function gv2ParseNeedMoreView(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const want = String(raw.want || raw.view || '').trim().toLowerCase();
-  if (!want) return null;
-  const ok = want === 'below' || want === 'above' || want === 'whole_page' || want === 'page' || /^element:\d+$/.test(want);
-  if (!ok) return null;
-  return { want, reason: String(raw.reason || '').replace(/\s+/g, ' ').trim().slice(0, 200) };
-}
-if (typeof window !== 'undefined') window.gv2ParseNeedMoreView = gv2ParseNeedMoreView;
-
 function gv2ParseFindAnswer(raw, maxItems = GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS) {
   const text = String(raw || '').trim();
-  if (!text) return { answer: '', evidence: [], needMoreView: null };
+  if (!text) return { answer: '', evidence: [] };
   const cleaned = text.replace(/```json|```/g, '').trim();
   try {
     const parsed = typeof gv2ExtractJsonObject === 'function'
@@ -5739,14 +6134,13 @@ function gv2ParseFindAnswer(raw, maxItems = GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS) 
     if (parsed && typeof parsed.answer === 'string') {
       return {
         answer: parsed.answer,
-        evidence: gv2ParseFindVisualEvidence(JSON.stringify({ items: parsed.evidence || [] }), maxItems),
-        needMoreView: gv2ParseNeedMoreView(parsed.need_more_view)
+        evidence: gv2ParseFindVisualEvidence(JSON.stringify({ items: parsed.evidence || [] }), maxItems)
       };
     }
   } catch (e) { /* fall through to prose */ }
   // Not the envelope we asked for — treat the reply as the answer, which is what it almost always
   // is when a model drops the JSON.
-  return { answer: text, evidence: [], needMoreView: null };
+  return { answer: text, evidence: [] };
 }
 if (typeof window !== 'undefined') window.gv2ParseFindAnswer = gv2ParseFindAnswer;
 
@@ -5904,8 +6298,9 @@ async function gv2CaptureFindEvidenceItems(items, startNumber = 1) {
       region_bbox: insideRect || item.region_bbox,
       need_annotation: !!item.need_annotation,
       annotation_prompt: item.annotation_prompt,
+      annotationSourceShot: sourceImageId !== 'viewport' ? (source?.shot || source?.base64 || source?.screenshotBase64 || null) : null,
       annotationSourceEl: sourceEl || null,
-      annotationSourceGeometry: !sourceEl && sourceImageId !== 'viewport' ? (source?.captureGeometry || null) : null,
+      annotationSourceGeometry: sourceImageId !== 'viewport' ? (source?.annotationGeometry || source?.captureGeometry || null) : null,
       annotationSourceRect: !sourceEl && sourceImageId !== 'viewport' ? (source?.targetRect || null) : null,
       annotations: [],
       evidenceEl: useEl,
@@ -5938,8 +6333,12 @@ async function gv2CaptureFindEvidenceItems(items, startNumber = 1) {
         marks: {
           annotations: Array.isArray(cap?.annotations) ? cap.annotations : [],
           region_bbox: cap?.region_bbox || cap?.visualEvidenceNormRect || null,
-          captureGeometry: cap?.captureGeometry || null,
+          annotationGeometry: cap?.annotationGeometry || cap?.captureGeometry || null,
+          captureGeometry: cap?.annotationGeometry || cap?.captureGeometry || null,
           visualEvidenceIndex: cap?.visualEvidenceIndex != null ? cap.visualEvidenceIndex : null,
+          // The chip number, so clicking [ev:N] in the panel can scroll to THIS mark on the page.
+          // Distinct from visualEvidenceIndex above, which is the SoM page index of the target.
+          evidenceNumber: startNumber + i,
           source_image_id: cap?.source_image_id || resolved[i]?.source_image_id || 'viewport',
           note: cap?.note || resolved[i]?.note || ''
         }
@@ -5956,27 +6355,38 @@ if (typeof window !== 'undefined') window.gv2CaptureFindEvidenceItems = gv2Captu
 
 // ===== IMAGES FOR THE FIND ANSWER CALL =====
 // The viewport alone is a narrow window: the picture a question is about is often half out of
-// frame, or below the fold. Rather than tiling the page on every question, send the viewport plus
-// crops of the pictures the DOM says the question is about (gv2FindMediaCandidates), and let the
-// model ask for more when that is not enough.
+// frame, or below the fold. Rather than pre-cropping only the top heuristics, first send a cheap
+// text catalog of all page-image labels to the selector, then scroll/capture only the selected ids.
 
 /** Media crops attached to the answer call, on top of the viewport shot. */
-const GV2_FIND_MEDIA_CROPS = 2;
-/** Hard ceiling across both rounds, so an escalation cannot run away. */
+const GV2_FIND_MEDIA_CROPS = 3;
+/** Hard ceiling for the final answer attachment count, including the viewport. */
 const GV2_FIND_MAX_IMAGES = 8;
-/** Crops are downscaled to this width: a retina crop of a painting costs several times the tokens
- *  for no extra detail. */
-const GV2_FIND_CROP_MAX_WIDTH = 1024;
+/** Crops are downscaled to this width before being attached to the answer call.
+ *
+ *  Was 1024, on the reasoning that a retina crop of a painting costs several times the tokens for no
+ *  extra detail. That holds for a painting and fails badly for anything text-bearing: a two-page
+ *  scanned spread of captioned portraits squeezed to 1024px leaves each caption a few pixels tall,
+ *  and the model cannot read what the question is about — the image arrives blurry and useless.
+ *  Find attaches at most GV2_FIND_MEDIA_CROPS images, so the extra tokens are bounded and worth it.
+ *  _gv2DownscaleImageBase64 only ever shrinks, so a smaller source is passed through untouched. */
+const GV2_FIND_CROP_MAX_WIDTH = 2048;
 
 // Crop cache for the session: the same page answers several questions in a study task, and the
 // pictures do not move. Keyed by page identity + element, cleared when the page changes.
 const _gv2FindCropCache = new Map();
 const _gv2FindAnswerImageSources = new Map();
+let _gv2FindImageDiagnostics = [];
 /** Cap so a long session cannot accumulate crops for every page visited. */
 const GV2_FIND_CROP_CACHE_MAX = 20;
 /** Drop the cached crops (navigation, or a test that wants a cold start). */
-function gv2ClearFindCropCache() { _gv2FindCropCache.clear(); _gv2FindAnswerImageSources.clear(); }
+function gv2ClearFindCropCache() { _gv2FindCropCache.clear(); _gv2FindAnswerImageSources.clear(); _gv2FindImageDiagnostics = []; }
 if (typeof window !== 'undefined') window.gv2ClearFindCropCache = gv2ClearFindCropCache;
+
+function gv2FindImageDiagnostics() {
+  return _gv2FindImageDiagnostics.slice();
+}
+if (typeof window !== 'undefined') window.gv2FindImageDiagnostics = gv2FindImageDiagnostics;
 
 function gv2RememberFindAnswerImageSource(meta) {
   const id = String(meta?.id || '').trim();
@@ -6005,11 +6415,324 @@ function _gv2LiveElementForFindImageSource(source) {
   return null;
 }
 
+function _gv2PrimaryImageElement(el) {
+  if (!el) return null;
+  const tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'IMG') return el;
+  if (tag === 'PICTURE') return el.querySelector?.('img') || null;
+  if (tag === 'FIGURE') return el.querySelector?.('img') || null;
+  return el.querySelector?.('img') || null;
+}
+if (typeof window !== 'undefined') window._gv2PrimaryImageElement = _gv2PrimaryImageElement;
+
+function _gv2ImageSourceUrl(img) {
+  if (!img) return '';
+  const raw = img.currentSrc || img.src || img.getAttribute?.('src') || '';
+  try {
+    return raw ? new URL(raw, window.location.href).href : '';
+  } catch (e) {
+    return raw || '';
+  }
+}
+
+function _gv2ElementDocumentGeometry(el) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+  try {
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0) || !(r.height > 0)) return null;
+    return {
+      x: (window.scrollX || 0) + r.left,
+      y: (window.scrollY || 0) + r.top,
+      w: r.width,
+      h: r.height
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function _gv2DownscaleImageBase64(base64, maxWidth = GV2_FIND_CROP_MAX_WIDTH, contentType = 'image/jpeg') {
+  if (!base64) return null;
+  if (typeof window !== 'undefined' && window.IS_TEST_ENV) return base64;
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v || null); } };
+    setTimeout(() => finish(base64), 1500);
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const srcW = img.naturalWidth || img.width || 0;
+          const srcH = img.naturalHeight || img.height || 0;
+          if (!(srcW > 0) || !(srcH > 0)) return finish(base64);
+          const scale = maxWidth > 0 && srcW > maxWidth ? maxWidth / srcW : 1;
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(srcW * scale));
+          canvas.height = Math.max(1, Math.round(srcH * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const mime = /^image\/png$/i.test(contentType) ? 'image/png' : 'image/jpeg';
+          const dataUrl = canvas.toDataURL(mime, mime === 'image/jpeg' ? 0.86 : undefined);
+          finish(dataUrl.replace(/^data:image\/\w+;base64,/, ''));
+        } catch (e) {
+          finish(base64);
+        }
+      };
+      img.onerror = () => finish(base64);
+      img.src = String(base64).startsWith('data:') ? String(base64) : `data:${contentType || 'image/jpeg'};base64,${base64}`;
+    } catch (e) {
+      finish(base64);
+    }
+  });
+}
+
+async function _gv2CaptureWholeMediaImage(el, maxWidth = GV2_FIND_CROP_MAX_WIDTH) {
+  const img = _gv2PrimaryImageElement(el);
+  const url = _gv2ImageSourceUrl(img);
+  if (!img || !url || typeof safeSendMessage !== 'function') return null;
+  try {
+    const response = await safeSendMessage({ action: 'fetchImageAsBase64', url });
+    if (response?.error || !response?.imageBase64) return { error: response?.error || 'image-fetch-empty' };
+    const base64 = await _gv2DownscaleImageBase64(response.imageBase64, maxWidth, response.contentType || 'image/jpeg');
+    if (!base64) return { error: 'image-downscale-empty' };
+    const geometry = _gv2ElementDocumentGeometry(img) || _gv2ElementDocumentGeometry(el);
+    return {
+      shot: base64,
+      contentType: response.contentType || 'image/jpeg',
+      sourceUrl: response.sourceUrl || url,
+      geometry,
+      el: img,
+      selector: typeof gv2ElementSelector === 'function' ? gv2ElementSelector(img) : ''
+    };
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+}
+if (typeof window !== 'undefined') window._gv2CaptureWholeMediaImage = _gv2CaptureWholeMediaImage;
+
 function _gv2FindCropCacheKey(el) {
   const sig = `${window.location.href}|${document.documentElement.scrollHeight}|${window.devicePixelRatio || 1}`;
   const sel = typeof gv2ElementSelector === 'function' ? gv2ElementSelector(el) : (el?.tagName || '');
   return `${sig}|${sel}`;
 }
+
+async function _gv2CaptureViewportAroundMedia(el) {
+  if (!el || !document.contains(el)) return null;
+  try {
+    await _gv2ScrollRegionTargetIntoView(el, { exact: true });
+    await _gv2WaitForLayoutSettle();
+    const shot = typeof captureScreenshot === 'function' ? await captureScreenshot() : null;
+    if (!shot) return null;
+    let rect = null;
+    try {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && typeof gv2TargetNormRect === 'function') {
+        rect = gv2TargetNormRect({ left: r.left, top: r.top, width: r.width, height: r.height },
+          window.innerWidth, window.innerHeight);
+      }
+    } catch (e) {}
+    return {
+      shot,
+      captureGeometry: { x: window.scrollX || 0, y: window.scrollY || 0, w: window.innerWidth || 0, h: window.innerHeight || 0 },
+      targetRect: rect
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function _gv2CropDocumentGeometryForRect(rect, viewportGeometry) {
+  if (!rect || !viewportGeometry) return null;
+  const vw = Number(viewportGeometry.w);
+  const vh = Number(viewportGeometry.h);
+  if (!(vw > 0) || !(vh > 0)) return null;
+  const left = Number(rect.left);
+  const top = Number(rect.top);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![left, top, width, height].every(Number.isFinite) || !(width > 0) || !(height > 0)) return null;
+  const pad = Math.max(120, width * 0.6, height * 0.6);
+  const cropLeft = Math.max(0, Math.min(vw, left - pad));
+  const cropTop = Math.max(0, Math.min(vh, top - pad));
+  const cropRight = Math.max(cropLeft, Math.min(vw, left + width + pad));
+  const cropBottom = Math.max(cropTop, Math.min(vh, top + height + pad));
+  return {
+    x: (Number(viewportGeometry.x) || 0) + cropLeft,
+    y: (Number(viewportGeometry.y) || 0) + cropTop,
+    w: cropRight - cropLeft,
+    h: cropBottom - cropTop
+  };
+}
+if (typeof window !== 'undefined') window._gv2CropDocumentGeometryForRect = _gv2CropDocumentGeometryForRect;
+
+function gv2BuildFindImageCatalog(question) {
+  if (typeof gv2FindMediaCandidates !== 'function') return [];
+  let candidates = [];
+  try { candidates = gv2FindMediaCandidates(question, { limit: Infinity, includeAll: true }); } catch (e) { candidates = []; }
+  return candidates.map((cand, idx) => Object.assign({}, cand, {
+    id: `page_image_${idx + 1}`,
+    selectorLabel: gv2FindImageSelectorLabel(cand),
+    selector: typeof gv2ElementSelector === 'function' ? gv2ElementSelector(cand.el) : ''
+  }));
+}
+if (typeof window !== 'undefined') window.gv2BuildFindImageCatalog = gv2BuildFindImageCatalog;
+
+function gv2FindImageSelectorLabel(cand) {
+  const parts = Array.isArray(cand?.descriptor) ? cand.descriptor : [];
+  if (parts.length) {
+    return parts
+      .slice(0, 5)
+      .map(p => `${p.kind}: ${String(p.text || '').replace(/\s+/g, ' ').trim()}`)
+      .filter(Boolean)
+      .join(' | ')
+      .slice(0, 700);
+  }
+  return String(cand?.label || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+}
+if (typeof window !== 'undefined') window.gv2FindImageSelectorLabel = gv2FindImageSelectorLabel;
+
+async function gv2CaptureFindImageCatalogItems(catalogItems, maxCrops = GV2_FIND_MEDIA_CROPS) {
+  const images = [];
+  let sent = 0;
+  for (const cand of (catalogItems || [])) {
+    if (sent >= maxCrops || images.length >= GV2_FIND_MAX_IMAGES - 1) break;
+    const diag = {
+      id: cand.id || null,
+      label: String(cand.label || '').slice(0, 160),
+      score: Number.isFinite(cand.score) ? Number(cand.score.toFixed(3)) : null,
+      why: cand.why || '',
+      selector: cand.selector || (typeof gv2ElementSelector === 'function' ? gv2ElementSelector(cand.el) : ''),
+      status: 'selected',
+      captureError: null
+    };
+    const key = _gv2FindCropCacheKey(cand.el);
+    let cached = _gv2FindCropCache.get(key) || null;
+    let shot = typeof cached === 'string' ? cached : (cached?.shot || null);
+    let sourceMeta = cached && typeof cached === 'object' ? cached.source : null;
+    let fallbackCap = null;
+    if (!shot) {
+      try {
+        const whole = await _gv2CaptureWholeMediaImage(cand.el, GV2_FIND_CROP_MAX_WIDTH);
+        if (whole?.shot) {
+          shot = whole.shot;
+          diag.status = 'sent_whole_image';
+          diag.captureError = null;
+          sourceMeta = {
+            kind: 'page_image',
+            selector: whole.selector || diag.selector,
+            shot,
+            captureGeometry: whole.geometry || null,
+            annotationGeometry: whole.geometry || null,
+            targetRect: { x: 0, y: 0, w: 1, h: 1 },
+            label: cand.label,
+            el: whole.el || cand.el,
+            sourceUrl: whole.sourceUrl || null,
+            wholeImage: true
+          };
+          if (_gv2FindCropCache.size >= GV2_FIND_CROP_CACHE_MAX) {
+            _gv2FindCropCache.delete(_gv2FindCropCache.keys().next().value);
+          }
+          _gv2FindCropCache.set(key, { shot, source: sourceMeta });
+        } else {
+          diag.captureError = whole?.error || null;
+        }
+        if (!shot) {
+          const cap = await gv2CaptureEvidenceRegion(cand.el, null, null, {
+            noMarker: true,
+            scrollIntoView: true,
+            exactScrollTarget: true,
+            fitInViewport: true,
+            maxWidth: GV2_FIND_CROP_MAX_WIDTH
+          });
+          shot = cap?.visualEvidenceShot || null;
+          diag.captureError = cap?.captureError || diag.captureError || null;
+          if (shot) {
+            if (diag.status === 'selected') diag.status = 'sent_crop';
+            const viewportGeometry = cap?.captureGeometry || {
+              x: window.scrollX || 0,
+              y: window.scrollY || 0,
+              w: window.innerWidth || 0,
+              h: window.innerHeight || 0
+            };
+            let cropGeometry = null;
+            try {
+              const r = cand.el.getBoundingClientRect();
+              cropGeometry = _gv2CropDocumentGeometryForRect(
+                { left: r.left, top: r.top, width: r.width, height: r.height },
+                viewportGeometry
+              );
+            } catch (e) { cropGeometry = null; }
+            sourceMeta = {
+              kind: 'page_image',
+              selector: diag.selector,
+              shot,
+              captureGeometry: cap?.captureGeometry || null,
+              annotationGeometry: cap?.visualEvidenceCropGeometry || cropGeometry || cap?.captureGeometry || null,
+              targetRect: cap?.visualEvidenceNormRect || null,
+              label: cand.label
+            };
+            if (_gv2FindCropCache.size >= GV2_FIND_CROP_CACHE_MAX) {
+              _gv2FindCropCache.delete(_gv2FindCropCache.keys().next().value);
+            }
+            _gv2FindCropCache.set(key, { shot, source: sourceMeta });
+          }
+        }
+        if (!shot) {
+          fallbackCap = await _gv2CaptureViewportAroundMedia(cand.el);
+          if (fallbackCap?.shot) {
+            shot = fallbackCap.shot;
+            diag.status = 'fallback_viewport';
+            sourceMeta = {
+              kind: 'page_image',
+              selector: diag.selector,
+              shot,
+              captureGeometry: fallbackCap.captureGeometry || null,
+              annotationGeometry: fallbackCap.captureGeometry || null,
+              targetRect: fallbackCap.targetRect || null,
+              label: cand.label
+            };
+          }
+        }
+      } catch (e) {
+        diag.captureError = e?.message || 'capture-failed';
+        fallbackCap = await _gv2CaptureViewportAroundMedia(cand.el);
+        if (fallbackCap?.shot) {
+          shot = fallbackCap.shot;
+          diag.status = 'fallback_viewport';
+          sourceMeta = {
+            kind: 'page_image',
+            selector: diag.selector,
+            shot,
+            captureGeometry: fallbackCap.captureGeometry || null,
+            annotationGeometry: fallbackCap.captureGeometry || null,
+            targetRect: fallbackCap.targetRect || null,
+            label: cand.label
+          };
+        }
+      }
+    } else {
+      diag.status = 'cache_hit';
+    }
+    if (shot) {
+      if (diag.status === 'selected') diag.status = 'sent';
+      gv2RememberFindAnswerImageSource(Object.assign({}, sourceMeta || {}, {
+        id: cand.id,
+        kind: 'page_image',
+        shot,
+        el: sourceMeta?.el || cand.el,
+        selector: sourceMeta?.selector || diag.selector,
+        label: cand.label
+      }));
+      images.push({ id: cand.id, base64: shot, label: `[image_id=${cand.id}] Image on page: ${cand.selectorLabel || cand.label}` });
+      sent += 1;
+    } else {
+      diag.status = 'skipped';
+    }
+    _gv2FindImageDiagnostics.push(diag);
+  }
+  return images;
+}
+if (typeof window !== 'undefined') window.gv2CaptureFindImageCatalogItems = gv2CaptureFindImageCatalogItems;
 
 /**
  * The images that go with a Find answer call: the viewport, then a crop per ranked media candidate.
@@ -6021,6 +6744,7 @@ function _gv2FindCropCacheKey(el) {
  */
 async function gv2BuildFindAnswerImages(question, viewportShot, maxCrops = GV2_FIND_MEDIA_CROPS) {
   _gv2FindAnswerImageSources.clear();
+  _gv2FindImageDiagnostics = [];
   const images = [];
   const startX = window.scrollX || 0;
   const startY = window.scrollY || 0;
@@ -6034,57 +6758,47 @@ async function gv2BuildFindAnswerImages(question, viewportShot, maxCrops = GV2_F
   }
   if (maxCrops <= 0 || typeof gv2FindMediaCandidates !== 'function') return images;
 
-  let candidates = [];
-  try { candidates = gv2FindMediaCandidates(question, { limit: maxCrops }); } catch (e) { candidates = []; }
+  let candidates = gv2BuildFindImageCatalog(question);
   if (!candidates.length) {
     console.log('[guidev2] find images: no media candidates above threshold');
     return images;
   }
   console.log('[guidev2] find images:', candidates.map(c => `${c.label.slice(0, 40)} (${c.score.toFixed(2)} ${c.why})`).join(' | '));
 
-  let cropNumber = 1;
   try {
-    for (const cand of candidates) {
-      if (images.length >= GV2_FIND_MAX_IMAGES) break;
-      const key = _gv2FindCropCacheKey(cand.el);
-      let cached = _gv2FindCropCache.get(key) || null;
-      let shot = typeof cached === 'string' ? cached : (cached?.shot || null);
-      let sourceMeta = cached && typeof cached === 'object' ? cached.source : null;
-      if (!shot) {
-        try {
-          const cap = await gv2CaptureEvidenceRegion(cand.el, null, null, {
-            noMarker: true,
-            scrollIntoView: true,
-            maxWidth: GV2_FIND_CROP_MAX_WIDTH
-          });
-          shot = cap?.visualEvidenceShot || null;
-          if (shot) {
-            sourceMeta = {
-              kind: 'page_image',
-              selector: typeof gv2ElementSelector === 'function' ? gv2ElementSelector(cand.el) : '',
-              captureGeometry: cap?.captureGeometry || null,
-              targetRect: cap?.visualEvidenceNormRect || null,
-              label: cand.label
-            };
-            if (_gv2FindCropCache.size >= GV2_FIND_CROP_CACHE_MAX) {
-              _gv2FindCropCache.delete(_gv2FindCropCache.keys().next().value);
-            }
-            _gv2FindCropCache.set(key, { shot, source: sourceMeta });
-          }
-        } catch (e) { shot = null; }
-      }
-      if (shot) {
-        const id = `page_image_${cropNumber++}`;
-        gv2RememberFindAnswerImageSource(Object.assign({}, sourceMeta || {}, {
-          id,
-          kind: 'page_image',
-          el: cand.el,
-          selector: sourceMeta?.selector || (typeof gv2ElementSelector === 'function' ? gv2ElementSelector(cand.el) : ''),
-          label: cand.label
-        }));
-        images.push({ id, base64: shot, label: `[image_id=${id}] Image on page: ${cand.label}` });
-      }
+    const catalogForSelection = candidates.map(c => ({
+      id: c.id,
+      label: `[image_id=${c.id}] Image on page: ${c.selectorLabel || c.label}`,
+      score: c.score,
+      why: c.why,
+      selector: c.selector
+    }));
+    let selected = candidates.slice(0, maxCrops);
+    let selectionDiagnostics = {
+      status: candidates.length > maxCrops ? 'heuristic_top_candidates' : 'skipped_small_catalog',
+      selectedImageIds: selected.map(c => c.id),
+      candidateImageIds: candidates.map(c => c.id)
+    };
+    if (candidates.length > maxCrops && typeof gv2SelectFindAnswerImages === 'function') {
+      const selectedCatalog = await gv2SelectFindAnswerImages(question, catalogForSelection, {
+        mode: 'find_answer_image_builder',
+        url: window.location.href,
+        maxIds: maxCrops,
+        diagnostics: candidates.map(c => ({
+          id: c.id,
+          label: c.selectorLabel || c.label,
+          score: Number.isFinite(c.score) ? Number(c.score.toFixed(3)) : null,
+          why: c.why,
+          selector: c.selector
+        }))
+      });
+      const selectedIds = new Set((selectedCatalog || []).map(item => item.id).filter(Boolean));
+      if (selectedIds.size) selected = candidates.filter(c => selectedIds.has(c.id)).slice(0, maxCrops);
+      selectionDiagnostics = selectedCatalog?.selectionDiagnostics || selectionDiagnostics;
     }
+    const captured = await gv2CaptureFindImageCatalogItems(selected, maxCrops);
+    images.push(...captured);
+    images.selectionDiagnostics = selectionDiagnostics;
   } finally {
     try { window.scrollTo(startX, startY); } catch (e) { /* best-effort */ }
   }
@@ -6092,97 +6806,196 @@ async function gv2BuildFindAnswerImages(question, viewportShot, maxCrops = GV2_F
 }
 if (typeof window !== 'undefined') window.gv2BuildFindAnswerImages = gv2BuildFindAnswerImages;
 
-/**
- * Extra views the model asked for, captured once. Bands are viewport-height slices in the requested
- * direction; whole_page is at most three evenly spaced bands, never the full scroll height.
- *
- * @param {{want?: string}} request - the model's need_more_view
- * @returns {Promise<Array<{id: string, base64: string, label: string}>>}
- */
-async function gv2CaptureMoreViews(request) {
-  const want = String(request?.want || '').trim().toLowerCase();
-  if (!want) return [];
-  const out = [];
-  const startY = window.scrollY || 0;
-  const vh = window.innerHeight || 800;
-  const maxY = Math.max(0, (document.documentElement.scrollHeight || 0) - vh);
-
-  const shootAt = async (y, label) => {
-    if (out.length >= 3) return;
-    try {
-      window.scrollTo({ top: Math.max(0, Math.min(maxY, y)), behavior: 'instant' in window ? 'instant' : 'auto' });
-      await _gv2WaitForLayoutSettle();
-      const shot = typeof captureScreenshot === 'function' ? await captureScreenshot() : null;
-      if (shot) {
-        const id = `extra_view_${out.length + 1}`;
-        gv2RememberFindAnswerImageSource({
-          id,
-          kind: 'extra_view',
-          captureGeometry: { x: window.scrollX || 0, y: window.scrollY || 0, w: window.innerWidth || 0, h: window.innerHeight || 0 }
-        });
-        out.push({ id, base64: shot, label: `[image_id=${id}] ${label}` });
-      }
-    } catch (e) { /* best-effort */ }
-  };
-
+function gv2ParseImageSelection(raw, allowedIds) {
+  const allowed = new Set((allowedIds || []).map(String));
+  let obj = null;
   try {
-    const elMatch = want.match(/^element:(\d+)$/);
-    if (elMatch) {
-      const el = window._pageguideIndex?.[Number(elMatch[1])];
-      if (el) {
-        const cap = await gv2CaptureEvidenceRegion(el, null, null, {
-          noMarker: true, scrollIntoView: true, maxWidth: GV2_FIND_CROP_MAX_WIDTH
-        });
-        if (cap?.visualEvidenceShot) {
-          const id = `extra_view_${out.length + 1}`;
-          gv2RememberFindAnswerImageSource({
-            id,
-            kind: 'extra_view',
-            selector: typeof gv2ElementSelector === 'function' ? gv2ElementSelector(el) : '',
-            el,
-            captureGeometry: cap?.captureGeometry || null,
-            targetRect: cap?.visualEvidenceNormRect || null
-          });
-          out.push({ id, base64: cap.visualEvidenceShot, label: `[image_id=${id}] Requested element ${elMatch[1]}` });
-        }
-      }
-    } else if (want === 'below') {
-      await shootAt(startY + vh, 'View below the original viewport');
-      await shootAt(startY + vh * 2, 'Further below');
-    } else if (want === 'above') {
-      await shootAt(startY - vh, 'View above the original viewport');
-      await shootAt(startY - vh * 2, 'Further above');
-    } else if (want === 'whole_page' || want === 'page') {
-      await shootAt(0, 'Top of page');
-      await shootAt(maxY / 2, 'Middle of page');
-      await shootAt(maxY, 'Bottom of page');
-    }
-  } finally {
-    try { window.scrollTo(window.scrollX || 0, startY); } catch (e) { /* best-effort */ }
+    obj = typeof gv2ExtractJsonObject === 'function' ? gv2ExtractJsonObject(String(raw || '')) : JSON.parse(String(raw || ''));
+  } catch (e) {
+    obj = null;
   }
-  console.log(`[guidev2] find: captured ${out.length} extra view(s) for "${want}"`);
-  return out;
+  const rawIds = Array.isArray(obj?.selected_image_ids)
+    ? obj.selected_image_ids
+    : (Array.isArray(obj?.image_ids) ? obj.image_ids : []);
+  const ids = [];
+  for (const id of rawIds) {
+    const clean = String(id || '').trim();
+    if (allowed.has(clean) && !ids.includes(clean)) ids.push(clean);
+  }
+  return {
+    selectedIds: ids,
+    reason: typeof obj?.reason === 'string' ? obj.reason.slice(0, 500) : ''
+  };
 }
-if (typeof window !== 'undefined') window.gv2CaptureMoreViews = gv2CaptureMoreViews;
 
 /**
- * The full evidence strip for a Find answer in Visual mode: a crop per cited span, then the
- * annotated page evidence, in one numbered list. Both call sites (Guide's find action and the Ask
- * route) use this so the two behave identically.
+ * Cheap text-only model pass that chooses which page image ids should be attached to the real
+ * vision answer call. It accepts either already-built image attachments or uncaptured catalog rows.
+ * The viewport is always retained when present; selector failures fall back to the first max ids.
+ *
+ * @param {string} question
+ * @param {Array<{id?: string, label?: string, base64?: string}>} images
+ * @param {{mode?: string, url?: string, diagnostics?: Array, maxIds?: number}} opts
+ * @returns {Promise<Array>}
+ */
+async function gv2SelectFindAnswerImages(question, images, opts = {}) {
+  const allImages = Array.isArray(images) ? images.filter(img => img && img.id) : [];
+  const viewport = allImages.filter(img => String(img.id || '') === 'viewport');
+  const candidates = allImages.filter(img => String(img.id || '') !== 'viewport');
+  const maxIds = Number.isFinite(opts.maxIds) ? Math.max(1, opts.maxIds) : GV2_FIND_MEDIA_CROPS;
+  const fallbackSelection = () => {
+    const kept = viewport.concat(candidates.slice(0, maxIds));
+    kept.selectionDiagnostics = {
+      status: candidates.length ? 'heuristic_fallback' : 'skipped_no_candidates',
+      selectedImageIds: kept.map(img => img.id).filter(Boolean),
+      candidateImageIds: candidates.map(img => img.id).filter(Boolean)
+    };
+    return kept;
+  };
+  if (candidates.length <= 1 || typeof safeSendMessage !== 'function') {
+    allImages.selectionDiagnostics = {
+      status: candidates.length ? 'skipped_single_candidate' : 'skipped_no_candidates',
+      selectedImageIds: allImages.map(img => img.id).filter(Boolean)
+    };
+    return allImages;
+  }
+
+  const candidateRows = candidates.map((img, idx) => {
+    const id = String(img.id || `image_${idx + 1}`);
+    const label = String(img.label || '').replace(/\s+/g, ' ').slice(0, 500);
+    return `- ${id}: ${label}`;
+  }).join('\n');
+  const systemPrompt = [
+    'You are a cheap image-attachment selector.',
+    'Choose which PAGE IMAGE ids are likely relevant to answering the user question based only on titles/labels.',
+    'Do not select viewport; it is always attached separately.',
+    'Return only JSON: {"selected_image_ids":["page_image_1"],"reason":"short reason"}.',
+    `Select at most ${maxIds} ids. Prefer recall: include an image if it might contain the answer.`
+  ].join('\n');
+  const userPrompt = [
+    `Question: ${String(question || '').trim()}`,
+    '',
+    'Candidate page images:',
+    candidateRows
+  ].join('\n');
+  const allowedIds = candidates.map(img => String(img.id || '')).filter(Boolean);
+  let selection = null;
+  try {
+    const response = await safeSendMessage({
+      action: 'callImageSelectionLLM',
+      systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      metadata: {
+        mode: 'find_image_selector',
+        parentMode: opts.mode || '',
+        url: opts.url || window.location.href,
+        candidateImageIds: allowedIds,
+        findImageDiagnostics: Array.isArray(opts.diagnostics) ? opts.diagnostics : []
+      }
+    });
+    if (response?.error) throw new Error(response.error);
+    selection = gv2ParseImageSelection(response?.content || '', allowedIds);
+  } catch (e) {
+    const kept = fallbackSelection();
+    kept.selectionDiagnostics = {
+      status: 'fail_open',
+      error: e?.message || String(e),
+      selectedImageIds: kept.map(img => img.id).filter(Boolean),
+      candidateImageIds: candidates.map(img => img.id).filter(Boolean)
+    };
+    return kept;
+  }
+
+  if (!selection?.selectedIds?.length) {
+    const kept = fallbackSelection();
+    kept.selectionDiagnostics = {
+      status: 'empty_fail_open',
+      reason: selection?.reason || '',
+      selectedImageIds: kept.map(img => img.id).filter(Boolean),
+      candidateImageIds: candidates.map(img => img.id).filter(Boolean)
+    };
+    return kept;
+  }
+
+  const keep = new Set([...viewport.map(img => img.id), ...selection.selectedIds.slice(0, maxIds)]);
+  const filtered = allImages.filter(img => keep.has(img.id));
+  filtered.selectionDiagnostics = {
+    status: 'selected',
+    reason: selection.reason || '',
+    selectedImageIds: filtered.map(img => img.id).filter(Boolean),
+    candidateImageIds: candidates.map(img => img.id).filter(Boolean),
+    droppedImageIds: candidates.map(img => img.id).filter(id => !keep.has(id))
+  };
+  return filtered;
+}
+if (typeof window !== 'undefined') {
+  window.gv2ParseImageSelection = gv2ParseImageSelection;
+  window.gv2SelectFindAnswerImages = gv2SelectFindAnswerImages;
+}
+
+/**
+ * The evidence strip for a Find answer in Visual mode: the annotated page evidence, and only that.
+ * Both call sites (Guide's find action and the Ask route) use this so the two behave identically.
+ *
+ * Cited text spans are deliberately NOT illustrated. They are already highlighted on the live page
+ * and their [N] citation scrolls the page to them, so a crop of that highlight showed the reader
+ * nothing the page did not — while costing a scroll and a rate-limited captureVisibleTab each.
+ * gv2CaptureFindEvidenceShots is left in place, unused by this path, as the way back.
+ *
+ * Numbering still runs on from the answer's citations (via gv2FindEvidenceTargets, which reads the
+ * numbers applyHighlightsFromCitations assigned), so an [ev] marker never collides with an [N] one.
  *
  * @param {boolean} hasHighlights - did the answer highlight anything on the page
  * @param {string} question - the question, for the visual pass
  * @returns {Promise<Array<{shot: string, note: string, index: number}>>}
  */
-async function gv2BuildFindEvidence(hasHighlights, question, modelEvidence = null) {
-  const spans = await gv2CaptureFindEvidenceShots(hasHighlights);
-  const nextNumber = spans.reduce((max, s) => Math.max(max, Number(s.index) || 0), 0) + 1;
+/**
+ * Keep only the evidence the answer actually cites.
+ *
+ * Pure, and the rule is one-directional both ways: the panel already drops an [ev:key] marker whose
+ * evidence never made it past capture, and this drops evidence the answer never referred to. Without
+ * it the page ends up marked in places the reader has no way to reach — a box and a label sitting on
+ * a sentence with no number pointing at it, which reads as the answer having claimed something it
+ * did not.
+ *
+ * An answer with no [ev:] markers at all cites nothing, so nothing is shown.
+ *
+ * @param {Array<object>} items - captured evidence, each with a `key`
+ * @param {string} answerText - the answer with its markers intact
+ * @returns {Array<object>}
+ */
+function gv2FilterCitedEvidence(items, answerText) {
+  const list = Array.isArray(items) ? items : [];
+  const cited = new Set();
+  String(answerText || '').replace(/\[ev:\s*([^\]]+)\]/gi, (m, key) => {
+    cited.add(String(key).trim().toLowerCase());
+    return m;
+  });
+  if (!cited.size) return [];
+  return list.filter(item => item?.key && cited.has(String(item.key).trim().toLowerCase()));
+}
+if (typeof window !== 'undefined') window.gv2FilterCitedEvidence = gv2FilterCitedEvidence;
+
+/**
+ * @param {string|null} answerText - the answer these items belong to. When given, evidence the
+ *   answer does not cite is dropped before anything is drawn on the page.
+ */
+async function gv2BuildFindEvidence(hasHighlights, question, modelEvidence = null, answerText = null) {
+  const targets = hasHighlights && typeof gv2FindEvidenceTargets === 'function' ? gv2FindEvidenceTargets() : [];
+  const nextNumber = targets.reduce((max, t) => Math.max(max, Number(t.number) || 0), 0) + 1;
   // The answer call now returns its own evidence (FIND_ANSWER_VISUAL), so there is nothing left to
   // ask a second model. gv2RunFindVisualEvidence stays as the fallback for callers that have no
   // model evidence — e.g. a reply whose JSON envelope was malformed.
-  const visual = Array.isArray(modelEvidence) && modelEvidence.length
+  const captured = Array.isArray(modelEvidence) && modelEvidence.length
     ? await gv2CaptureFindEvidenceItems(modelEvidence, nextNumber)
     : (modelEvidence ? [] : await gv2RunFindVisualEvidence(question, nextNumber));
+
+  // Only what the answer points at. Done before the marks are drawn, so the page never shows
+  // evidence the reader cannot reach from the text.
+  const visual = answerText == null ? captured : gv2FilterCitedEvidence(captured, answerText);
+  if (captured.length !== visual.length) {
+    console.log(`[guidev2] find evidence: ${captured.length - visual.length} item(s) not cited by the answer, not shown`);
+  }
 
   // Put the annotator's marks on the real page, not just in the evidence card: the participant is
   // being asked to check the answer, and a box drawn over a picture of the page proves less than
@@ -6198,7 +7011,7 @@ async function gv2BuildFindEvidence(hasHighlights, question, modelEvidence = nul
     console.warn('[guidev2] on-page evidence marks failed:', e);
   }
 
-  return spans.concat(visual);
+  return visual;
 }
 if (typeof window !== 'undefined') window.gv2BuildFindEvidence = gv2BuildFindEvidence;
 
@@ -6759,7 +7572,18 @@ window.gv2NextStep = async function (options = {}) {
 // ===== PAUSE / RESUME GUIDE =====
 
 async function gv2PauseGuide(reason = '') {
-  const g = window._guidev2;
+  // Hydrated, exactly as resume is. Every navigation the agent makes lands in a FRESH document
+  // where window._guidev2 does not exist yet — it is rebuilt only when the service worker drives
+  // the next step. Reading the live object alone meant pause answered "Guide not active" during
+  // precisely the window in which a user reaches for it: the agent has just navigated somewhere
+  // unexpected and they want it to stop before it acts again.
+  //
+  // Persisting paused:true here is also what stops the pending resume: _gv2CheckSessionStorageFallback
+  // continues a saved run only when it is not paused, so a pause taken mid-navigation still holds
+  // once the new page boots.
+  const g = (typeof _gv2HydrateResumeState === 'function')
+    ? await _gv2HydrateResumeState()
+    : window._guidev2;
   if (!g || !g.active) return { success: false, error: 'Guide not active' };
   g.paused = true;
   _gv2ClearActionTimers();
@@ -6780,10 +7604,28 @@ async function gv2PauseGuide(reason = '') {
 }
 if (typeof window !== 'undefined') window.gv2PauseGuide = gv2PauseGuide;
 
+/** The run this tab was executing, from wherever a copy of it survived. */
+async function _gv2LoadResumableState() {
+  // Session storage first: it is written on every step and survives an SW restart.
+  const saved = await gv2LoadFallback();
+  if (saved?.active) return saved;
+
+  // Then the service worker's per-tab copy. It is the only survivor when session storage was
+  // unreadable — content scripts get no access to it until the worker grants it — and it is worth
+  // asking for regardless: it is the same state, written by the same steps.
+  try {
+    const res = await safeSendMessage({ action: 'guidanceV2_getState' });
+    if (res?.state?.active) return res.state;
+  } catch (e) { /* the worker may be restarting; the caller reports "not active" */ }
+  return null;
+}
+
+if (typeof window !== 'undefined') window._gv2LoadResumableState = _gv2LoadResumableState;
+
 async function _gv2HydrateResumeState() {
   const live = window._guidev2;
   if (live && live.active) return live;
-  const saved = await gv2LoadFallback();
+  const saved = await _gv2LoadResumableState();
   if (!saved?.active) return null;
   window._guidev2 = {
     active: true,
@@ -6799,6 +7641,7 @@ async function _gv2HydrateResumeState() {
     autonomyLevel: _gv2NormalizeAutonomyLevel(saved.autonomyLevel, saved.autoMode === true),
     paused: !!saved.paused,
     lowConfidenceCount: saved.lowConfidenceCount || 0,
+    loopStepCount: saved.loopStepCount || 0,
     predictedGoalState: saved.predictedGoalState || null,
     guidePlan: Array.isArray(saved.guidePlan) ? saved.guidePlan : [],
     guideTitle: saved.guideTitle || '',

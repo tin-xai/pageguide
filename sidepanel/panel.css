@@ -5461,49 +5461,10 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   text-transform: uppercase;
 }
 
-.pageguide-recap-summary {
-  grid-column: 1 / 2;
-  font-weight: 600;
-  color: var(--pg-text);
-  font-size: 13px;
-  line-height: 1.4;
-}
-
 .pageguide-recap-hero > .pageguide-final-verdict {
   grid-column: 2 / 3;
   grid-row: 1 / span 2;
   align-self: center;
-}
-
-.pageguide-recap-body-note {
-  padding: 0 16px;
-  color: var(--pg-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.pageguide-recap-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0 16px;
-}
-
-.pageguide-recap-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--pg-border);
-  border-radius: 12px;
-  background: var(--pg-surface);
-}
-
-.pageguide-recap-row-head {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: start;
-  gap: 8px;
 }
 
 /* The merged visual-evidence line: the model's justification, on its own row beneath the milestone,
@@ -5521,27 +5482,9 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   line-height: 1.4;
   color: var(--pg-muted);
 }
-.pageguide-recap-evidence-label {
-  color: #b51655;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 10px;
-}
 .pageguide-recap-evidence-link { --pg-som: #ff2d78; }
 .pageguide-recap-evidence-pop.is-visual,
 .pageguide-recap-detail-evidence-fig { --pg-som: #ff2d78; }
-
-.pageguide-recap-text {
-  flex: 1 1 auto;
-  line-height: 1.35;
-  color: var(--pg-text);
-  font-size: 12px;
-}
-
-.pageguide-recap-row.is-wrong .pageguide-recap-text {
-  color: var(--pg-text);
-}
 
 .pageguide-recap-error-label {
   display: inline-block;
@@ -5609,26 +5552,6 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   text-decoration-color: var(--pg-som);
 }
 
-.pageguide-recap-step-num {
-  flex: 0 0 auto;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 7px;
-  border-radius: 8px;
-  border: 1px solid var(--pg-border);
-  background: color-mix(in srgb, var(--pg-som) 12%, transparent);
-  color: var(--pg-som);
-  font-weight: 800;
-  font-size: 12px;
-  line-height: 24px;
-  cursor: pointer;
-  transition: background 0.12s ease, transform 0.12s ease;
-}
-.pageguide-recap-step-num:hover {
-  background: color-mix(in srgb, var(--pg-som) 24%, transparent);
-  transform: translateY(-1px);
-}
-
 /* Always-present closing line linking to the final checkpoint. */
 .pageguide-recap-final {
   color: var(--pg-text);
@@ -5675,41 +5598,6 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 
 .pageguide-recap-final-title {
   font-weight: 700;
-}
-
-/* Numbered checkpoint cards. */
-.pageguide-recap-checkpoints-label {
-  margin: 0 16px;
-  padding-top: 2px;
-  border-top: 1px solid var(--pg-border);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--pg-muted);
-}
-.pageguide-recap-checkpoints {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 16px 16px;
-}
-.pageguide-recap-checkpoint {
-  min-width: 26px;
-  height: 26px;
-  padding: 0 8px;
-  border-radius: 8px;
-  border: 1px solid var(--pg-border);
-  background: color-mix(in srgb, var(--pg-som) 12%, transparent);
-  color: var(--pg-som);
-  font-weight: 700;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s ease, transform 0.12s ease;
-}
-.pageguide-recap-checkpoint:hover {
-  background: color-mix(in srgb, var(--pg-som) 24%, transparent);
-  transform: translateY(-1px);
 }
 
 .pageguide-answer-card {
@@ -5884,52 +5772,27 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   border-color: var(--pg-muted);
 }
 
-/* Find × Visual evidence: numbered chips that stay collapsed until clicked, so the answer is not
-   buried under screenshots. The numbers match the [N] citations in the answer text; clicking
-   either opens the crop in the Guide's evidence card (openFindEvidenceView). */
-.pageguide-find-evidence {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0 16px 14px;
-  background: var(--pg-bg);
-}
-
-.pageguide-find-evidence-chips {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.pageguide-find-evidence-hint {
-  color: var(--pg-muted);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  margin-right: 2px;
-}
-
-.pageguide-find-evidence-chip {
-  min-width: 24px;
-  height: 24px;
-  padding: 0 7px;
+/* What the run cost. Sits beside the 🐞 chip and on the View Journey card, debug mode only.
+   Deliberately quieter than the buttons next to it: it is a readout, not something to click, and
+   tabular figures keep the total from jittering sideways as it climbs during a run. */
+.pageguide-cost-chip {
+  border: 1px solid var(--pg-border);
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--pg-som, #7857ff) 34%, transparent);
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 10%, transparent);
-  color: var(--pg-som, #7857ff);
-  font: 800 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  cursor: pointer;
+  padding: 2px 10px;
+  color: var(--pg-muted);
+  font: 700 11px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
 }
 
-.pageguide-find-evidence-chip:hover {
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 20%, transparent);
+.pageguide-debug-answer-row .pageguide-cost-chip {
+  margin-right: 6px;
 }
 
-/* The crops live here until one is opened in the evidence card, so they never render in the chat. */
-.pageguide-find-evidence-panel {
-  display: none;
+.pageguide-journey-cost {
+  margin-left: 6px;
+  align-self: center;
 }
 
 /* Text evidence mode: what a step touched, in words, where a screenshot would otherwise sit.
@@ -6130,9 +5993,6 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
     grid-column: 1 / 2;
     grid-row: auto;
     justify-self: start;
-  }
-  .pageguide-recap-summary {
-    font-size: 13px;
   }
   .pageguide-recap-evidence {
     margin-left: 0;
@@ -6422,3 +6282,132 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
   box-shadow: none !important;
   max-width: 95% !important;
 }
+
+/* Study authoring chips (debug mode only): record this answer as the study response for a task +
+   condition, or edit its text first. Share the debug chip's row and restraint — they sit under every
+   answer and must not compete with it. */
+.pageguide-debug-answer-row {
+  gap: 6px;
+}
+
+.pageguide-study-save-chip,
+.pageguide-study-edit-chip {
+  border: 1px solid var(--pg-border);
+  background: transparent;
+  color: var(--pg-muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: 600 11px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  cursor: pointer;
+}
+
+.pageguide-study-save-chip:hover,
+.pageguide-study-edit-chip:hover {
+  color: var(--pg-text);
+  border-color: var(--pg-som, #7857ff);
+}
+
+.pageguide-study-save-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+.pageguide-study-save-label {
+  color: var(--pg-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pageguide-study-save-select,
+.pageguide-study-edit-text {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--pg-bg);
+  color: var(--pg-text);
+  border: 1px solid var(--pg-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: 400 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.pageguide-study-edit-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
+  min-height: 180px;
+}
+
+.pageguide-study-save-meta {
+  color: var(--pg-text);
+  font-size: 12px;
+}
+
+.pageguide-study-save-hint {
+  color: var(--pg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pageguide-study-save-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.pageguide-study-save-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pageguide-study-save-confirm,
+.pageguide-study-edit-apply {
+  background: var(--pg-som, #7857ff);
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 18px;
+  font: 700 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  cursor: pointer;
+}
+
+/* Read-only preview of a banked study response (openStudyResponsePreview). */
+.pageguide-study-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.pageguide-study-preview-meta {
+  color: var(--pg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 800;
+}
+
+.pageguide-study-preview-answer {
+  color: var(--pg-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.pageguide-study-preview-figure {
+  margin: 0;
+}
+
+.pageguide-study-preview-figure img {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--pg-border);
+}
+
+.pageguide-study-preview-figure figcaption {
+  color: var(--pg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+

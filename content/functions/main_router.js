@@ -11,6 +11,19 @@ async function safeSendMessage(message, timeoutMs = 60000) {
   // calls are excluded so this reflects the guide agent's step reasoning.
   const _isAgentThink = message && (message.action === 'callLLM' || message.action === 'callLLMWithImages');
   const _thinkStart = _isAgentThink ? Date.now() : 0;
+
+  // Stamp the guide session onto every LLM call, in ONE place. It is what ties a call's cost to the
+  // journey that spent it (appendCostEntry, background/service-worker.js). Doing it here rather
+  // than at the ~20 call sites that build a `metadata` block is not just less code — it is the only
+  // version that stays true, since a new call site would otherwise be silently unattributed and its
+  // cost would quietly vanish from the journey's total. A Find outside a guide run has no session;
+  // those are attributed by debug-log position instead.
+  if (_isAgentThink && typeof window !== 'undefined' && window._guidev2?.sessionId) {
+    message = Object.assign({}, message, {
+      metadata: Object.assign({ sessionId: window._guidev2.sessionId }, message.metadata || {})
+    });
+  }
+
   try {
     // Create a timeout promise
     const timeoutPromise = new Promise((_, reject) => {
@@ -108,6 +121,7 @@ async function routeQuery(query) {
  * @param {boolean} hasImage - Whether current message has an image attached
  * @param {boolean} hasImageInHistory - Whether any previous message had an image
  * @param {string} forcedRoute - Whether a specific route is requested by user ('ask'|'hide'|'guide')
+ * @param {string} cleanQuery - Query with any slash command stripped
  */
 async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false, forcedRoute = null, cleanQuery = null) {
   // expandTruncatedContent is called AFTER routing (below), only for non-guide modes.

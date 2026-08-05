@@ -72,7 +72,7 @@ async function loadSettings() {
   // Kept in chrome.storage.local (not sync) because the capture writes large
   // snapshots locally and the content script reads the flag from local too.
   try {
-    const local = await chrome.storage.local.get(['rewindCaptureEnabled', 'guidePlanningEnabled', 'guideConfidenceThreshold', 'guideLowConfidenceActionThreshold']);
+    const local = await chrome.storage.local.get(['rewindCaptureEnabled', 'guidePlanningEnabled', 'guideConfidenceThreshold', 'guideLowConfidenceActionThreshold', 'guideLoopStepThreshold']);
     document.getElementById('rewindCaptureEnabled').checked = local.rewindCaptureEnabled !== false;
     const planningToggle = document.getElementById('guidePlanningEnabled');
     if (planningToggle) planningToggle.checked = local.guidePlanningEnabled === true;
@@ -80,6 +80,9 @@ async function loadSettings() {
     if (thresholdInput) thresholdInput.value = Number.isFinite(Number(local.guideConfidenceThreshold)) ? Number(local.guideConfidenceThreshold) : 0.7;
     const actionThresholdInput = document.getElementById('guideLowConfidenceActionThreshold');
     if (actionThresholdInput) actionThresholdInput.value = Number.isFinite(Number(local.guideLowConfidenceActionThreshold)) ? Number(local.guideLowConfidenceActionThreshold) : 5;
+    const loopStepInput = document.getElementById('guideLoopStepThreshold');
+    // Default 1 — what the loop guard did before it was configurable.
+    if (loopStepInput) loopStepInput.value = Number.isFinite(Number(local.guideLoopStepThreshold)) ? Number(local.guideLoopStepThreshold) : 1;
   } catch (e) {}
 }
 
@@ -350,6 +353,21 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         await chrome.storage.local.set({ guideLowConfidenceActionThreshold: value });
         showStatus(`Low confidence action threshold set to ${value}`, 'success');
+      } catch (e) {}
+    });
+  }
+
+  const loopStepThresholdInput = document.getElementById('guideLoopStepThreshold');
+  if (loopStepThresholdInput) {
+    loopStepThresholdInput.addEventListener('change', async () => {
+      const raw = Number(loopStepThresholdInput.value);
+      const value = Number.isFinite(raw) ? Math.max(1, Math.round(raw)) : 1;
+      loopStepThresholdInput.value = value;
+      try {
+        await chrome.storage.local.set({ guideLoopStepThreshold: value });
+        showStatus(value === 1
+          ? 'Guide stops on the first looping step'
+          : `Guide stops after ${value} looping steps in a row`, 'success');
       } catch (e) {}
     });
   }

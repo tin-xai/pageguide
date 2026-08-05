@@ -117,6 +117,14 @@ Answer: The main actors are Leonardo DiCaprio [23:"Leonardo DiCaprio"], Tom Hard
 
 Answer the user's question with citations:`,
 
+  // There is deliberately NO separate Non-grounding prompt. The baseline arm asks the model exactly
+  // what the grounding arm asks — the same prompt below, the same images, the same call — so the arms
+  // differ only in what the participant is shown, not in what was generated. A prompt of its own made
+  // the answers themselves incomparable: different length, structure and hedging, and the baseline
+  // silently lost the "not provided on this page" escape hatch and the footnote-marker prohibition.
+  // Everything grounding-shaped is filtered out of the reply instead — see the nonGrounding branches
+  // in content/tasks/ask.js and gv2RunFind (gv2ParseFindAnswer + stripNonGroundingMarkers).
+
   // Find × Visual evidence mode ONLY. Text mode keeps using ANSWER_AND_HIGHLIGHT above, untouched.
   //
   // One call does what used to take two: it answers from the page text AND the screenshot, and
@@ -136,7 +144,6 @@ The screenshot shows the page as the user currently sees it, with numbered SoM t
 
 Reply with ONLY a JSON object:
 {"answer": "your answer, with [N:\"text\"] citations inline",
- "need_more_view": {"want": "below"|"above"|"whole_page"|"element:N", "reason": "why"} or null,
  "evidence": [
    {"key": "slug_safe_key",
     "note": "one sentence: what this evidence shows",
@@ -166,17 +173,11 @@ ANSWER RULES (identical to the text-only mode, plus the screenshot):
    - Example when not on page: "The information is not provided on this page. However, the tallest building in the world is the [Burj Khalifa](https://en.wikipedia.org/wiki/Burj_Khalifa#:~:text=tallest%20structure%20and%20building%20in%20the%20world)."
    - Do NOT use this escape hatch for something the screenshot shows. If you can see the answer in the image, it IS on this page.
 
-SEEING MORE OF THE PAGE:
-- You are given the current viewport plus crops of the page images most likely relevant. If the thing you need is NOT in any of them — it is further down, further up, or is a specific indexed element — set "need_more_view" and say why, rather than guessing or falling back to general knowledge.
-- Each attached image label includes an image_id such as "viewport", "page_image_1", or "extra_view_1". Use exactly one of those IDs in each evidence item's "source_image_id" so the system knows which image supports the annotation.
-- "below"/"above" gets you the next screens in that direction; "element:N" gets you a close crop of indexed element N; "whole_page" gets you top/middle/bottom.
-- You get ONE such request per question, so ask for the view that actually settles it. Set it to null when the images you have are enough.
-
 EVIDENCE RULES:
 - **Cite your visual evidence in the answer** as [ev:key], placed right after the claim it supports — e.g. "the man has a full reddish beard [ev:portrait_beard]". Every evidence item you return should be cited this way; every [ev:key] you write must match a key below. These are for what you SAW; keep using [N:"text"] for what you READ.
 - Return AT MOST {maxItems} evidence items, most relevant first. Only evidence for what you actually claimed.
 - Prefer "som_id" when the evidence is an indexed element (an image, a card, a figure). Otherwise give "region_bbox" as fractions of the CURRENT viewport.
-- Set "source_image_id" to the exact image_id of the attachment where you saw the evidence. Use "viewport" for the full page screenshot; use "page_image_N" when the claim depends on an attached image crop.
+- Each attached image label includes an image_id such as "viewport" or "page_image_1". Set "source_image_id" to that exact image_id so the system knows which image supports the annotation. Use "viewport" for the full page screenshot; use "page_image_N" when the claim depends on an attached image crop.
 - Set "need_annotation":true with an "annotation_prompt" when a box/arrow/label would make the evidence obvious ("box the man's beard", "circle the red shirt"). A separate annotator draws it — never hand-author annotations.
 - "note" must state what is actually visible, not what you expect to be there.
 - Return "evidence": [] when the answer rests entirely on page TEXT you already cited with [N:"text"], or when you answered from general knowledge. Text citations are evidence on their own; do not duplicate them here.
@@ -543,6 +544,11 @@ Reply with ONLY JSON:
    {"type":"path","points":[{"x":0..1,"y":0..1},{"x":0..1,"y":0..1},{"x":0..1,"y":0..1}],"curved":true,"arrow":false,"label":"short label","color":"#ff2d78"}
  ]}
 
+If the user prompt contains multiple EVIDENCE ITEMS, reply with ONLY JSON in this batch shape instead:
+{"items":[
+  {"key":"same evidence key from request","region_bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},"annotations":[{"type":"box","bbox":{"x":0..1,"y":0..1,"w":0..1,"h":0..1},"label":"short label","color":"#ff2d78"}]}
+]}
+
 COORDINATE SYSTEM (0-1000 Integer Grid):
 - Imagine a grid from 0 to 1000 on the screenshot: origin (0,0) is top-left, and (1000,1000) is bottom-right.
 - Locate elements and specify all coordinates as raw integers on this 0-1000 grid (e.g., x=450, y=700, w=150, h=80).
@@ -557,6 +563,7 @@ RULES & ARTISTIC GUIDELINES:
 - Pick the shape that matches the thing: box for rectangular UI, ellipse for faces/objects, path for anything irregular or route-like, arrow for pointing.
 - Colors: Choose high-contrast, professional, and visually appealing colors (e.g., bright pink '#ff2d78' or yellow '#ffd93d' on dark pages; dark blue '#1e90ff' or red '#ff4757' on light pages).
 - Keep labels short, descriptive, and clean. Return at most 5 annotations.
+- For batch requests, return one item for each requested evidence key and at most 5 annotations per item.
 
 EXAMPLE:
 If asked to "draw a box around the Search button at the center-right and point an arrow from the input field to it":
@@ -706,7 +713,10 @@ RULES:
    empty/null. Use it before typing a replacement value or when the task asks to reset a field.
    Sensitive fields (passwords, payment, private data) are high risk and should be handed to the user.
 7. action="drag_drop": drag the highlighted source element to dropTarget. Use this for reorder, move, kanban, upload drop zones, sliders that require dragging, or drag-based placement.
-8. action="scroll_down" or action="scroll_up": scroll the page to reveal more content.
+8. action="scroll_down" or action="scroll_up": scroll to reveal more content. When the content to
+   reveal is inside an open popup, dialog, filter panel or other scrollable container rather than
+   the page itself, set "element" to any PAGE INDEX marker inside that container — the scroll is
+   applied there instead of to the page behind it. Leave "element" null to scroll the page.
 9. action="goto_url": navigate the browser to the specified URL. Provide the target URL in "url".
 10. action="watch_video": watch the video at "videoUrl" (or "url") and answer "videoQuery" from the video content. This is a terminal read-only action and does not need an element index.
 11. Evidence is NOT its own action. To save evidence, populate "evidence" on the same step that also does the browser action. Example: click a result and save the visible title as evidence in one JSON response.

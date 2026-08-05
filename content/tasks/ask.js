@@ -87,26 +87,28 @@ function getScrollPosition() {
  * @returns {boolean} Whether scroll was possible
  */
 function scrollPage(direction) {
+  if (direction !== 'down' && direction !== 'up') return false;
+  // Whatever is actually scrollable here — an open filter popup keeps its content in its own
+  // overflow container, and the vision agent asking to "scroll down" means that content, not the
+  // page frozen behind it. gv2ScrollBy (content/functions/scroll.js) also reports whether anything
+  // moved, which is exactly the false this function has always returned to mean "nothing below".
+  if (typeof gv2ScrollBy === 'function') {
+    return gv2ScrollBy(direction, null).scrolled;
+  }
+
+  // scroll.js absent (older injected bundle on the page): the original page-only behavior.
   const viewportHeight = window.innerHeight;
   const scrollAmount = viewportHeight * 0.8; // 80% of viewport
   const maxScroll = document.documentElement.scrollHeight - viewportHeight;
-  
+
   if (direction === 'down') {
     if (window.scrollY >= maxScroll) return false;
-    window.scrollTo({ 
-      top: Math.min(window.scrollY + scrollAmount, maxScroll), 
-      behavior: 'smooth' 
-    });
-    return true;
-  } else if (direction === 'up') {
-    if (window.scrollY <= 0) return false;
-    window.scrollTo({ 
-      top: Math.max(window.scrollY - scrollAmount, 0), 
-      behavior: 'smooth' 
-    });
+    window.scrollTo({ top: Math.min(window.scrollY + scrollAmount, maxScroll), behavior: 'smooth' });
     return true;
   }
-  return false;
+  if (window.scrollY <= 0) return false;
+  window.scrollTo({ top: Math.max(window.scrollY - scrollAmount, 0), behavior: 'smooth' });
+  return true;
 }
 
 /**
@@ -249,15 +251,16 @@ async function handleAskWithVision(query) {
       // with no on-page highlight applied).
       const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
       const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(parsed.answer);
-      const answerOut = nonGrounding && typeof stripCitationMarkers === 'function'
-        ? stripCitationMarkers(parsed.answer)
+      const answerOut = nonGrounding && typeof stripNonGroundingMarkers === 'function'
+        ? stripNonGroundingMarkers(parsed.answer)
         : parsed.answer;
       cleanupSom();
 
-      // Visual evidence mode only: a crop per cited span plus annotated page evidence for what
-      // the DOM cannot say (empty array in Text mode). Same helper the Guide find path uses.
-      const findEvidenceShots = typeof gv2BuildFindEvidence === 'function'
-        ? await gv2BuildFindEvidence(highlightCount > 0, query)
+      // Visual evidence mode only: annotated page evidence for what the DOM cannot say (empty array
+      // in Text mode). Same helper the Guide find path uses. Skipped outright in the Non-grounding
+      // baseline — it is the one call that would run the annotator and draw marks on the page.
+      const findEvidenceShots = (!nonGrounding && typeof gv2BuildFindEvidence === 'function')
+        ? await gv2BuildFindEvidence(highlightCount > 0, query, null, parsed.answer)
         : [];
 
       return {
@@ -419,8 +422,11 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
   // Evidence: Visual takes a different prompt and a different call — the answer sees a screenshot
   // and returns its own evidence. Evidence: Text falls through to the lines below, unchanged.
   const visualMode = typeof getEvidenceMode === 'function' && (await getEvidenceMode()) === 'visual';
+  const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
 
-  // Build system prompt with page content (fresh context each time)
+  // Build system prompt with page content (fresh context each time). Both study arms get the SAME
+  // prompt for a given evidence mode — see the note in content/prompts.js where ANSWER_NONGROUNDING
+  // used to be. Non-grounding filters the reply below instead of asking for a different reply.
   const systemPrompt = (visualMode ? (PROMPTS.FIND_ANSWER_VISUAL || PROMPTS.ANSWER_AND_HIGHLIGHT) : PROMPTS.ANSWER_AND_HIGHLIGHT)
     .replace('{pageContent}', pageContent || '(No text content found)')
     .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)')
@@ -450,17 +456,57 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
 
   // Viewport + crops of the pictures this question is about (gv2BuildFindAnswerImages), so the
   // agent can see the portrait/chart/product it is being asked about instead of guessing.
-  const answerImages = (answerShot && typeof gv2BuildFindAnswerImages === 'function')
+  let answerImages = (answerShot && typeof gv2BuildFindAnswerImages === 'function')
     ? await gv2BuildFindAnswerImages(query, answerShot)
-    : (answerShot ? [{ base64: answerShot, label: 'Page screenshot with SoM markers' }] : []);
+    : (answerShot ? [{ id: 'viewport', base64: answerShot, label: '[image_id=viewport] Page screenshot with SoM markers' }] : []);
 
   const askVisual = (images, msgs) => safeSendMessage({
     action: 'callLLMWithImages',
     systemPrompt: systemPrompt,
     messages: msgs,
     images,
-    metadata: { mode: 'ask_chat_visual', url: window.location.href }
+    metadata: {
+      mode: nonGrounding ? 'ask_chat_nongrounding_visual' : 'ask_chat_visual',
+      url: window.location.href,
+      findImageDiagnostics: typeof gv2FindImageDiagnostics === 'function' ? gv2FindImageDiagnostics() : [],
+      imageSelectionDiagnostics: images?.selectionDiagnostics || null
+    }
   });
+
+  if (nonGrounding) {
+    const response = answerShot
+      ? await askVisual(answerImages, messages)
+      : await safeSendMessage({
+          action: 'callLLM',
+          systemPrompt,
+          messages,
+          metadata: {
+            mode: 'ask_chat_nongrounding',
+            url: window.location.href
+          }
+        });
+    if (response?.error) {
+      return { success: false, error: response.error, answer: "Could not answer the question" };
+    }
+    // The baseline now shares the grounding prompt, so in Visual mode the reply is the JSON envelope
+    // {answer, evidence}. Unwrap it and throw the evidence away: without this the participant would
+    // read raw JSON, since stripNonGroundingMarkers only knows about markers, not about JSON.
+    const raw = (response?.content || '').trim();
+    const parsed = (visualMode && typeof gv2ParseFindAnswer === 'function')
+      ? gv2ParseFindAnswer(raw)
+      : { answer: raw };
+    const answer = parsed.answer || raw;
+    if (!answer) {
+      return { success: false, error: 'No answer from AI', answer: "Could not answer the question" };
+    }
+    return {
+      success: true,
+      answer: typeof stripNonGroundingMarkers === 'function' ? stripNonGroundingMarkers(answer) : answer,
+      highlightCount: 0,
+      hasHighlights: false,
+      findEvidenceShots: []
+    };
+  }
 
   // LLM call with history
   let response = answerShot
@@ -486,28 +532,13 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
 
   // Visual mode replies with {answer, evidence}; text mode replies with prose. gv2ParseFindAnswer
   // degrades to prose-only if the envelope is missing, so a malformed reply still shows an answer.
-  let parsedAnswer = (visualMode && answerShot && typeof gv2ParseFindAnswer === 'function')
+  //
+  // Keyed on visualMode alone, not on answerShot: the prompt is chosen by visualMode, so a run whose
+  // screenshot capture failed still asked for — and gets — the JSON envelope, and would otherwise
+  // print it raw.
+  let parsedAnswer = (visualMode && typeof gv2ParseFindAnswer === 'function')
     ? gv2ParseFindAnswer(rawAnswer)
-    : { answer: rawAnswer, evidence: [], needMoreView: null };
-
-  // One escalation round only: the model may ask to see below/above/an element/the whole page, and
-  // we re-ask with those views attached. A second request is ignored — see gv2RunFind.
-  if (parsedAnswer.needMoreView && answerShot && typeof gv2CaptureMoreViews === 'function') {
-    const extra = await gv2CaptureMoreViews(parsedAnswer.needMoreView);
-    if (extra.length) {
-      const images = answerImages.concat(extra).slice(0, (typeof GV2_FIND_MAX_IMAGES !== 'undefined' ? GV2_FIND_MAX_IMAGES : 8));
-      const followUp = messages.concat([{
-        role: 'user',
-        content: `(The extra views you asked for are attached: ${extra.map(e => e.label).join(', ')}. Answer now — no further views are available.)`
-      }]);
-      const second = await askVisual(images, followUp);
-      const secondRaw = second?.content?.trim();
-      if (secondRaw) {
-        rawAnswer = secondRaw;
-        parsedAnswer = gv2ParseFindAnswer(secondRaw);
-      }
-    }
-  }
+    : { answer: rawAnswer, evidence: [] };
 
   const answer = parsedAnswer.answer || rawAnswer;
   const modelEvidence = parsedAnswer.evidence || [];
@@ -518,17 +549,16 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
   // which also strips the citation markers themselves so no clickable chips appear in the chat
   // (parseCitations in the side panel would otherwise still turn them into chips even with no
   // on-page highlight applied).
-  const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
   const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(answer);
-  const answerOut = nonGrounding && typeof stripCitationMarkers === 'function'
-    ? stripCitationMarkers(answer)
+  const answerOut = nonGrounding && typeof stripNonGroundingMarkers === 'function'
+    ? stripNonGroundingMarkers(answer)
     : answer;
 
   // Visual evidence mode: a crop per cited span plus annotated page evidence for what the DOM
   // cannot say. Returns [] in Text mode, where the citation chips are the whole story. Same helper
   // the Guide find path uses.
   const findEvidenceShots = typeof gv2BuildFindEvidence === 'function'
-    ? await gv2BuildFindEvidence(highlightCount > 0, query, modelEvidence)
+    ? await gv2BuildFindEvidence(highlightCount > 0, query, modelEvidence, answer)
     : [];
 
   return {
@@ -594,9 +624,24 @@ function applyHighlightsFromCitations(answer) {
   };
   // Parallel to window._pageguideHighlights: the citation number each highlighted element serves.
   window._pageguideHighlightNumbers = [];
-  const tagHighlightsSince = (startLen, citationNumber) => {
+  /**
+   * Record which citation each newly created highlight serves — in the parallel array, and ON the
+   * element itself.
+   *
+   * The DOM stamp is what lets a citation reach the span it actually created. [N:"text"] wraps the
+   * quoted words in a new span INSIDE the element N points at, but only the element is in
+   * window._pageguideIndex, so resolving by index alone lands on the whole paragraph. The citation
+   * NUMBER is the discriminator, not the index: one paragraph often carries several citations —
+   * [69:"Foundation series"] and [69:"extend the human species' reach."] are both index 69 — and
+   * they must not resolve to each other.
+   */
+  const tagHighlightsSince = (startLen, citationNumber, pageIndex) => {
     for (let i = startLen; i < window._pageguideHighlights.length; i++) {
       window._pageguideHighlightNumbers[i] = citationNumber;
+      const el = window._pageguideHighlights[i];
+      if (!el || !el.setAttribute) continue;
+      if (citationNumber != null) el.setAttribute('data-pageguide-citation', String(citationNumber));
+      if (pageIndex != null) el.setAttribute('data-pageguide-index', String(pageIndex));
     }
   };
 
@@ -664,7 +709,7 @@ function applyHighlightsFromCitations(answer) {
     const style = getRandomHighlightStyle(pageBg.isDark);
     const beforeLen = window._pageguideHighlights.length;
     const highlighted = applyIndexedHighlight(index, textToHighlight, style);
-    tagHighlightsSince(beforeLen, citationNumberAt(match.index));
+    tagHighlightsSince(beforeLen, citationNumberAt(match.index), index);
 
     if (highlighted > 0) {
       // Do NOT add element to highlightedElements here — other phrases inside the
@@ -717,8 +762,9 @@ function applyHighlightsFromCitations(answer) {
       ? pageguideHighlightTint(style.color, true)
       : `${style.color}22`;
 
-    window._pageguideHighlightNumbers[window._pageguideHighlights.length] = citationNumberAt(match.index);
+    const simpleLen = window._pageguideHighlights.length;
     window._pageguideHighlights.push(element);
+    tagHighlightsSince(simpleLen, citationNumberAt(match.index), index);
     highlightedElements.add(element);
     count++;
     
@@ -739,132 +785,5 @@ function applyHighlightsFromCitations(answer) {
   
   return count;
 }
-
-/** Fold a fragment to comparable text: no markdown emphasis, no quotes, no case, single spaces. */
-function _citationCompareText(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[*_`"']/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/** Content words of a fragment: punctuation dropped, so "world," and "world" are the same word. */
-function _citationTokens(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(t => t.length > 2);
-}
-
-/**
- * Does the prose around the marker already say what the cited span says? Exact containment is not
- * enough — models paraphrase and then cite the page's near-identical wording, which inlines as an
- * obvious stutter. Two signals catch the real cases:
- *
- *   seam  — the prose right before the marker ends with the span's opening words, or the prose
- *           right after starts with its closing words:
- *           "…featured the Rose Cross lamen [10:"featured the Rose Cross lamen of this famous …"]
- *            of this famous society."
- *   ratio — most of the span's content words are already in the surrounding sentence:
- *           "…in the Theosophical Society [7:"Theosophical Society's hierarchy of ascended …"]"
- *
- * Spans under three content words are judged by exact containment only: a two-word overlap says
- * nothing, and dropping "within 30 days" would put a hole back in the sentence.
- *
- * @param {string} before - normalized prose preceding the marker
- * @param {string} after - normalized prose following the marker
- * @param {string} span - normalized cited text
- * @returns {boolean}
- */
-function _citationEchoesProse(before, after, span) {
-  const spanTokens = _citationTokens(span);
-  if (!spanTokens.length) return true;
-  const beforeStr = _citationTokens(before).join(' ');
-  const afterStr = _citationTokens(after).join(' ');
-  const spanStr = spanTokens.join(' ');
-
-  if (beforeStr.endsWith(spanStr) || afterStr.startsWith(spanStr)) return true;
-  if (spanTokens.length < 3) return false;
-
-  // Try progressively shorter openings/closings (down to 3 words): the prose repeats "featured
-  // the rose cross lamen" — five words — so a fixed-length probe misses it.
-  for (let k = Math.min(8, spanTokens.length); k >= 3; k--) {
-    if (beforeStr.endsWith(spanTokens.slice(0, k).join(' '))) return true;
-    if (afterStr.startsWith(spanTokens.slice(-k).join(' '))) return true;
-  }
-
-  // Substring rather than exact token match, so "pathways" counts as "pathway".
-  const windowStr = `${beforeStr} ${afterStr}`;
-  const hits = spanTokens.filter(t => windowStr.includes(t)).length;
-  return hits / spanTokens.length >= 0.7;
-}
-
-/**
- * Strip citation markers from an answer, keeping the model's prose intact and complete. Used by
- * Non-grounding baseline mode (isNonGroundingModeOn) so the displayed answer has no clickable
- * citation chips at all — not just no on-page highlight — since parseCitations() in the side panel
- * would otherwise turn any leftover marker into a clickable span regardless of whether
- * applyHighlightsFromCitations() ever ran on the page.
- *
- * A cited span plays one of two roles, and they need opposite treatment:
- *
- *   1. It repeats prose that is already there — `**Peter Thiel** [12:"Peter Thiel"] wrote…`.
- *      Grounding mode collapses the marker to a chip so the repeat is invisible; inlining it
- *      printed the phrase twice ("Peter Thiel Peter Thiel"). The marker is dropped.
- *   2. It carries words the sentence needs — `Contact the depot [12:"within 30 days"] of travel.`
- *      Deleting it left a gap ("Contact the depot of travel."). The span is kept.
- *
- * So each marker is compared against the prose right before and after it: a duplicate is removed,
- * anything else is unwrapped in place. Markers with no text of their own ([N], [N, M], [idx:1-2])
- * are always removed — there is nothing to keep.
- *
- * @param {string} answer - Answer text with citation markers
- * @returns {string} The same text, marker-free, with no gaps and no repeats
- */
-function stripCitationMarkers(answer) {
-  if (!answer) return answer;
-  // Curly quotes must be folded to straight ones with explicit escapes — a literal ["”] in the
-  // source is just a straight quote twice and never matched the smart quotes models emit.
-  const normalized = String(answer)
-    .replace(/[“”„‟"]/g, '"')
-    .replace(/[‘’‚‛']/g, "'");
-
-  // One pass over every marker shape, so each match can see the text around it. The index part
-  // allows comma-separated lists ([517, 519:"text"]) the same way parseCitations does. The quoted
-  // alternatives take everything up to the LAST quote before the closing bracket, because cited
-  // page text frequently contains quotes of its own:
-  //   [94:"claimed sanction from the "Great White Lodge""]
-  // A [^"]+ capture stops at the inner quote, fails to reach the bracket, and leaves the whole
-  // marker sitting in the answer as raw text.
-  const MARKER = /\[(?:Page\s*)?[\d,\s]+:\s*(?:"([^\]]*)"|'([^\]]*)'|([^\]"']+))\s*\]|\[idx:[^\]]+\]|\[[\d,\s]+\](?!:)/gi;
-
-  return normalized
-    .replace(MARKER, (match, dq, sq, uq, offset, whole) => {
-      const span = dq || sq || uq;
-      if (!span) return ''; // [N] / [N, M] / [idx:1-2] — no text of its own
-      const spanCmp = _citationCompareText(span);
-      if (!spanCmp) return '';
-
-      // Look at the sentence on both sides of the marker. The windows are generous because the
-      // repeat is often split across the marker (prose ends with the span's opening words, then
-      // continues with its closing ones).
-      const beforeRaw = whole.slice(Math.max(0, offset - spanCmp.length - 120), offset);
-      const afterRaw = whole.slice(offset + match.length, offset + match.length + spanCmp.length + 120);
-      if (_citationEchoesProse(beforeRaw, afterRaw, spanCmp)) return '';
-
-      return span;
-    })
-    // Safety net: anything still bracket-shaped is a marker whose form we failed to parse, and a
-    // raw "[94:...]" in the baseline answer is worse than a dropped quote — the prose around it
-    // already carries the claim. Nothing DOM- or index-shaped reaches the user.
-    .replace(/\[\s*(?:idx\s*:|Page\s*\d|\d)[^\][]*\]/gi, '')
-    .replace(/\s+([.,;:!?])/g, '$1')  // drop stray space a removed marker left before punctuation
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
-if (typeof window !== 'undefined') window.stripCitationMarkers = stripCitationMarkers;
 
 console.log('💬 ask.js loaded');

@@ -1,0 +1,454 @@
+/* PageGuide study — the trajectory viewer that fills the tab beside the panel.
+   Mirrors the live run's View Journey card (sidepanel/panel.css .pageguide-goal-*), with one
+   difference that matters: the dots here carry NO status colour. In the live run green and amber
+   encode the agent's own confidence and verification; in a study that asks a participant which step
+   went wrong, colouring the suspect step is telling them the answer. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: #f4f4f8;
+  color: #111;
+  font: 400 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+.tv-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px 16px;
+  background: #fff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.tv-head-main { min-width: 0; }
+
+/* Labelled, because "add an orange to the cart" on its own could be an instruction TO the reader.
+   It is the task the agent was given, and the whole screen is about judging how it went. */
+.tv-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.4);
+  margin-bottom: 3px;
+}
+
+/* The goal stays on screen for the whole task: "does this action serve the goal?" is one of the
+   questions, and it cannot be answered while scrolling the panel back up to re-read it. */
+.tv-goal {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.tv-count {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b3fd6;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tv-main {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+.tv-stage {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 20px 24px 40px;
+}
+
+/* One column at reading width. The screenshots want the space; the prose does not. */
+.tv-col { max-width: 860px; }
+
+.tv-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(0, 0, 0, 0.4);
+  font-style: italic;
+}
+
+.tv-step-url {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+/* ── The two page states ──────────────────────────────────────────────────────
+   Their own section, side by side, above the journey: they are the pair a participant compares to
+   answer "did this actually get done?", and a comparison spread across a long scroll is a memory
+   test. Closed by default — clicking opens the full-size view, so the section stays a summary. */
+.tv-states {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.tv-state-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 14px 16px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.tv-state-btn:hover {
+  border-color: rgba(120, 87, 255, 0.5);
+  background: rgba(120, 87, 255, 0.04);
+}
+
+/* A state the run never recorded says so, rather than vanishing — an absent card and an absent
+   feature look identical, and one of them is worth re-capturing to fix. */
+.tv-state-btn.is-empty {
+  cursor: default;
+  background: transparent;
+  border-style: dashed;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.tv-state-btn.is-empty:hover { border-color: rgba(0, 0, 0, 0.12); background: transparent; }
+
+.tv-state-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5b3fd6;
+}
+
+.tv-state-btn.is-empty .tv-state-kicker { color: rgba(0, 0, 0, 0.35); }
+
+.tv-state-cap {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.tv-state-hint {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* ── View Journey ─────────────────────────────────────────────────────────────
+   Open by default, unlike the live run's, which collapses once the run ends: there the reader
+   watched it happen, here it is the material they were brought to look at. */
+.tv-journey {
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+}
+
+.tv-journey-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.tv-journey-summary::-webkit-details-marker { display: none; }
+
+.tv-journey-summary::before {
+  content: "▸";
+  font-size: 10px;
+  transition: transform .12s ease;
+}
+
+.tv-journey[open] > .tv-journey-summary::before { transform: rotate(90deg); }
+
+.tv-journey-list { margin-top: 10px; }
+
+.tv-journey-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: start;
+  gap: 10px;
+  padding: 9px 6px;
+  border-radius: 8px;
+  position: relative;
+}
+
+/* Only a row that can show you something behaves like it can. */
+.tv-journey-row.is-shot { cursor: pointer; }
+.tv-journey-row.is-shot:hover { background: rgba(120, 87, 255, 0.08); }
+
+/* The connecting line, as in the live timeline. */
+.tv-journey-row:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 26px;
+  bottom: -9px;
+  width: 2px;
+  background: #e2e5f0;
+}
+
+.tv-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: #c9cde0;
+  z-index: 1;
+}
+
+.tv-journey-row.is-shot .tv-dot { background: #a99bf0; }
+
+.tv-journey-text {
+  font-size: 15px;
+  line-height: 1.45;
+  min-width: 0;
+}
+
+/* A row that can show you something says so. Without this the only cue was a hover that either
+   produced a card or did not, which makes an empty trajectory indistinguishable from a broken page. */
+.tv-peek {
+  justify-self: end;
+  align-self: center;
+  font-size: 14px;
+  color: rgba(120, 87, 255, 0.55);
+}
+
+.tv-journey-row.is-shot:hover .tv-peek { color: #5b3fd6; }
+
+.tv-warn {
+  margin: 10px 6px 0;
+  padding: 9px 12px;
+  background: rgba(234, 179, 8, 0.1);
+  border-left: 2px solid rgba(234, 179, 8, 0.6);
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.tv-journey-text b {
+  display: inline-block;
+  min-width: 16px;
+  margin-right: 4px;
+  color: #5b3fd6;
+  font-weight: 700;
+}
+
+/* ── Answer and trail ────────────────────────────────────────────────────── */
+/* The heading carries its own explanation, folded away. Grid rather than flex so the hint can drop
+   onto its own full-width row underneath instead of squeezing the title. */
+.tv-section-title {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 22px 0 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5b3fd6;
+}
+
+.tv-info {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(91, 63, 214, 0.45);
+  border-radius: 999px;
+  background: transparent;
+  color: #5b3fd6;
+  font: 700 10px/1 Georgia, 'Times New Roman', serif;
+  cursor: pointer;
+}
+
+.tv-info:hover,
+.tv-info.is-open {
+  background: #5b3fd6;
+  border-color: #5b3fd6;
+  color: #fff;
+}
+
+/* Full width on the row below the title — the hint is a sentence, not a label. */
+.tv-hint {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding: 9px 12px;
+  background: rgba(120, 87, 255, 0.07);
+  border-left: 2px solid rgba(120, 87, 255, 0.45);
+  border-radius: 0 8px 8px 0;
+  color: rgba(0, 0, 0, 0.72);
+  font: 400 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.tv-answer,
+.tv-trail {
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.tv-trail-summary { margin: 0 0 8px; }
+
+.tv-trail .tv-journey-row { padding: 7px 6px; }
+.tv-trail .tv-journey-text { font-size: 14px; }
+
+/* The linked phrase, underlined where it sits — mirrors .pageguide-answer-summary-ref in the chat.
+   A number at the end of a sentence says evidence exists; the underline says which words it backs. */
+.tv-ref {
+  color: #4a2fc0;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: rgba(120, 87, 255, 0.5);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.tv-ref:hover {
+  text-decoration-thickness: 2px;
+  text-decoration-color: #5b3fd6;
+  background: rgba(120, 87, 255, 0.08);
+  border-radius: 3px;
+}
+
+/* The evidence chip: small, numbered, and unmistakably a control rather than a citation number. */
+.tv-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  margin: 0 2px;
+  padding: 0 5px;
+  vertical-align: 1px;
+  background: rgba(120, 87, 255, 0.12);
+  border: 1px solid rgba(120, 87, 255, 0.35);
+  border-radius: 6px;
+  color: #4a2fc0;
+  font: 700 11px/1 inherit;
+  cursor: pointer;
+}
+
+.tv-chip:hover { background: rgba(120, 87, 255, 0.24); }
+
+/* ── The hover card ──────────────────────────────────────────────────────── */
+.tv-pop {
+  position: fixed;
+  z-index: 40;
+  width: 460px;
+  max-width: calc(100vw - 16px);
+  padding: 10px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.tv-pop-shot {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  cursor: zoom-in;
+}
+
+.tv-pop-title {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b3fd6;
+}
+
+.tv-pop-note {
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(0, 0, 0, 0.7);
+}
+
+/* ── The full-size view ──────────────────────────────────────────────────── */
+.tv-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.tv-lightbox-dialog {
+  max-width: 1200px;
+  max-height: 100%;
+  overflow: auto;
+  padding: 14px;
+  background: #fff;
+  border-radius: 12px;
+}
+
+.tv-lightbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tv-lightbox-close {
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.tv-lightbox img {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+}
+
+.tv-lightbox-note {
+  margin-top: 10px;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.7);
+}

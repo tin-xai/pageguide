@@ -58,12 +58,17 @@ html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active 
   position: relative;
 }
 
-[data-pageguide-styled]:hover {
+[data-pageguide-styled]:hover,
+.pageguide-preview-target {
   outline-color: #7857ff !important;
   box-shadow: 0 0 0 4px rgba(120, 87, 255, 0.14), 0 12px 32px rgba(120, 87, 255, 0.22) !important;
 }
 
-[data-pageguide-styled]:hover::after {
+/* The same badge the page already shows on a highlight, raised from the side panel: hovering a
+   citation in the answer names the span it points at, in the vocabulary the page has already
+   taught. See pageguidePreviewIndex. */
+[data-pageguide-styled]:hover::after,
+.pageguide-preview-target::after {
   content: 'PageGuide highlight';
   position: absolute;
   left: 0;
@@ -116,4 +121,164 @@ html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active 
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   pointer-events: none;
   z-index: 10001;
+}
+
+/* ═══════════════════════════════════════════════════════
+   USER STUDY — pick a sentence off the page (study_pick.js)
+   The outline follows the pointer and never eats the click; only the confirm bar takes input.
+   ═══════════════════════════════════════════════════════ */
+
+.pageguide-study-pick-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 2147483600;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* One box per client rect: a sentence wraps across lines, so the outline is several boxes, not one. */
+.pageguide-study-pick-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.pageguide-study-pick-box {
+  position: absolute;
+  border: 2px solid #7857ff;
+  border-radius: 3px;
+  background: rgba(120, 87, 255, 0.14);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.pageguide-study-pick-box.is-chosen {
+  border-color: #16a34a;
+  background: rgba(22, 163, 74, 0.14);
+}
+
+.pageguide-study-pick-hint {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #221c3a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.pageguide-study-pick-bar {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, 90vw);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+}
+
+.pageguide-study-pick-text {
+  color: #111;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pageguide-study-pick-bar button {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 87, 255, 0.35);
+  background: rgba(120, 87, 255, 0.1);
+  color: #4a2fc0;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.pageguide-study-pick-bar .pageguide-study-pick-done {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════
+   CITATION HOVER PREVIEW (pageguidePreviewIndex)
+   Hovering [N] in the panel points at the span on the page. No new effect is invented for it: it
+   borrows the outline and the "PageGuide highlight" badge above, so the thing being pointed at looks
+   like what it is — a PageGuide highlight — instead of introducing a second visual language.
+   ═══════════════════════════════════════════════════════ */
+
+.pageguide-preview-target {
+  position: relative;
+  outline: 2px solid #7857ff !important;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   WHILE PICKING (study_pick.js)
+   PageGuide's own marks step back for the duration. They are the loudest thing on the page, and the
+   pick outline has to be read against them — which is why choosing a sentence inside an already
+   highlighted region looked like nothing was selectable. Restored the moment the pick ends.
+   ═══════════════════════════════════════════════════════ */
+
+html.pageguide-picking .pageguide-highlight {
+  background-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* The annotator's boxes and their labels sit over the text they mark; nothing to choose under one. */
+html.pageguide-picking #pageguide-evidence-overlay {
+  display: none !important;
+}
+
+/* No "PageGuide highlight" badge on hover either — the pick outline is the only thing pointing. */
+html.pageguide-picking [data-pageguide-styled]:hover::after,
+html.pageguide-picking .pageguide-preview-target::after {
+  content: none !important;
+}
+
+html.pageguide-picking [data-pageguide-styled]:hover,
+html.pageguide-picking .pageguide-preview-target {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* The evidence preview is a box drawn over the region the annotator marked (an image, usually), so
+   it can carry the same badge an element does. See pageguidePreviewEvidenceMark. */
+#pageguide-preview-box {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2147483646;
+}
+
+/* The non-grounded arm reads the same answer with no grounding shown. The spans the run drew stay in
+   the page — hidden, not removed — because re-applying them later resolves [N] against an index that
+   has since been rebuilt, and they come back in the wrong places. See setAnswerHighlightsVisible. */
+html.pageguide-highlights-off .pageguide-highlight {
+  background-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+html.pageguide-highlights-off #pageguide-evidence-overlay {
+  display: none !important;
 }

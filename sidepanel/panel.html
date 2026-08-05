@@ -224,7 +224,13 @@
             <div class="pageguide-menu" id="pageguide-more-menu" style="display:none;">
               <button class="pageguide-menu-item" id="pageguide-no-page-ctx" title="Toggle: answer from AI knowledge only (ignore current page)"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/></svg></span>Page: On</button>
               <button class="pageguide-menu-item pageguide-pdf-reader-btn" id="pageguide-pdf-reader"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg></span>Open PDF reader</button>
-              <button class="pageguide-menu-item" id="pageguide-open-study" title="Run the Find/Guide user study"><span class="pageguide-inline-icon">📋</span>User Study</button>
+              <button class="pageguide-menu-item" id="pageguide-open-study" title="Run the user study: read the recorded answer, then answer the question"><span class="pageguide-inline-icon">📋</span>User Study</button>
+              <!-- Authoring (debug-only): walk the task list recording each question's grounded and
+                   non-grounded answer, and the ground truth for its supporting questions. -->
+              <button class="pageguide-menu-item pageguide-record-study-item" id="pageguide-record-study" title="Record the answers and ground truth the study will replay" style="display:none;"><span class="pageguide-inline-icon">🎬</span>Record User Study</button>
+              <!-- Authoring (debug-only): edit the guide trajectories captured from live runs, and
+                   the questions asked about them. -->
+              <button class="pageguide-menu-item pageguide-record-study-item" id="pageguide-record-guide-study" title="Edit the captured guide trajectories the study will show" style="display:none;"><span class="pageguide-inline-icon">🧭</span>Record Guide User Study</button>
             </div>
           </div>
 
@@ -257,5 +263,9 @@
        See supabase_config.example.js. Safe to leave as placeholders (study.js checks for that). -->
   <script src="supabase_config.js"></script>
   <script src="study.js"></script>
+  <!-- Pre-recorded study answers (Save/Edit on an answer). Loads after study.js, which is where
+       supabaseInsert lives. -->
+  <script src="study_responses.js"></script>
+  <script src="guide_trajectories.js"></script>
 </body>
 </html>

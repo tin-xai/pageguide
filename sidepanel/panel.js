@@ -467,9 +467,9 @@ function _recapVisualEvidence(rec) {
 function _recapVisualEvidenceItems(rec) {
   if (!rec) return [];
   const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
-  // Keep only items backed by real evidence (a captured crop or a marker rect), matching the link
-  // filter in renderGuideRecap — so a hovered/clicked link's data-evidence-item index lines up with
-  // this list. Reason-only items are excluded (they'd be "fake" links that show nothing).
+  // Keep only items backed by real evidence (a captured crop or a marker rect), so a hovered or
+  // clicked link's data-evidence-item index lines up with this list. Reason-only items are excluded
+  // (they'd be "fake" links that show nothing).
   const rawItems = (Array.isArray(rec.visualEvidenceItems) ? rec.visualEvidenceItems.slice(0, 5) : [])
     .filter(item => item && (item.visualEvidenceShot || item.visualEvidenceNormRect));
   const items = rawItems.map((item) => {
@@ -900,12 +900,18 @@ function renderVisualHighlightAnswer(result) {
 }
 
 /**
- * Turn the answer's [ev:key] citations into chips that open the matching evidence card.
+ * Turn the answer's [ev:key] citations into a numbered marker that jumps to the mark drawn on the
+ * live page.
  *
  * In Visual mode the model cites what it SAW as [ev:key] (FIND_ANSWER_VISUAL), alongside the usual
- * [N:"text"] citations for what it READ. Keys only mean something to the model, so they are mapped
- * to the chip numbers assigned during capture; a key with no captured evidence has its marker
- * dropped rather than shown as raw text.
+ * [N:"text"] citations for what it READ. Every marker in the answer leads to the page and nowhere
+ * else: a [N] scrolls to its highlighted span, an [ev] to its annotation. There used to be a picture
+ * button beside each [ev] opening the captured crop, but a crop re-encoded out of a JPEG viewport
+ * screenshot is soft enough that it read as worse evidence than the page it came from — so the
+ * answer points at the real thing instead.
+ *
+ * Keys only mean something to the model, so they are mapped to the chip numbers assigned during
+ * capture; a key with no captured evidence has its marker dropped rather than shown as raw text.
  *
  * @param {string} html - answer HTML (already through parseMarkdown/parseCitations)
  * @param {Array<object>} shots - captured evidence, each {key, index}
@@ -918,135 +924,45 @@ function _expandEvidenceKeyCitations(html, shots) {
   (Array.isArray(shots) ? shots : []).forEach((s) => {
     if (s && s.key) byKey.set(String(s.key).trim().toLowerCase(), s.index);
   });
+
+  // The reader sees ONE sequence of numbers, so evidence markers are numbered where they appear,
+  // continuing after the text citations parseCitations has already numbered 1..K.
+  //
+  // The capture-time number cannot be shown: it was assigned when the evidence was taken, and an
+  // answer that has since been edited — a marker removed, evidence dropped for having no crop —
+  // then reads "[1] … [4]" with 2 and 3 nowhere, which looks like missing evidence rather than
+  // renumbered evidence. It survives on data-evidence-num, which is what scrollToEvidenceMark
+  // resolves against; only the label is renumbered.
+  let shown = _countRenderedCitations(text);
+
   return text.replace(/\[ev:\s*([^\]]+)\]/gi, (match, rawKey) => {
     const num = byKey.get(String(rawKey).trim().toLowerCase());
     if (num == null) return ''; // cited evidence never made it past capture — don't show the marker
-    return `<span class="pageguide-citation pageguide-citation-idx pageguide-evidence-citation" data-evidence-num="${num}" title="Show this evidence"><sup class="citation-index">[${num}]</sup></span>`;
+    shown++;
+    return `<span class="pageguide-citation pageguide-citation-idx pageguide-evidence-citation" data-evidence-num="${num}" title="Go to this evidence on the page"><sup class="citation-index">[${shown}]</sup></span>`;
   });
 }
+
+/**
+ * How many citations parseCitations has already numbered in `html`. Web citations carry
+ * `.citation-index`, PDF ones `.pageguide-pdf-citation`; the two branches are exclusive, so summing
+ * them is the count either way.
+ */
+function _countRenderedCitations(html) {
+  const text = String(html || '');
+  const web = (text.match(/class="citation-index"/g) || []).length;
+  const pdf = (text.match(/class="pageguide-pdf-citation"/g) || []).length;
+  return web + pdf;
+}
+window._countRenderedCitations = _countRenderedCitations;
 window._expandEvidenceKeyCitations = _expandEvidenceKeyCitations;
 
-let _findEvidenceGroupSeq = 0;
-
-/**
- * Visual evidence mode: the crops of the cited spans a Find answer carries with it
- * (result.findEvidenceShots, produced by gv2CaptureFindEvidenceShots). Empty string in Text mode,
- * where the citation chips linking to the page are the whole story.
- *
- * Rendered collapsed: a row of numbered chips. Showing the screenshots inline buried the answer
- * under images the reader had not asked for. The numbers match the [N] citations in the answer,
- * and clicking either a chip or a citation opens the crop in the same lightbox card the Guide
- * uses for its visual evidence (openFindEvidenceView).
- *
- * The <figure> elements below stay hidden — they are where the crops live until one is opened, so
- * the dialog can read an image out of the DOM instead of us keeping a second copy of the base64.
- */
-function _findEvidenceShotsHtml(result) {
-  const shots = (Array.isArray(result?.findEvidenceShots) ? result.findEvidenceShots : [])
-    .filter(item => item && item.shot);
-  if (!shots.length) return '';
-  const gid = `fev-${++_findEvidenceGroupSeq}`;
-  const chips = shots.map((item, i) => {
-    const num = item.index || i + 1;
-    const caption = item.note || `Evidence ${num}`;
-    return `<button type="button" class="pageguide-find-evidence-chip" data-evidence-num="${num}" title="${escapeHtml(caption)}">${escapeHtml(String(num))}</button>`;
-  }).join('');
-  const panels = shots.map((item, i) => {
-    const num = item.index || i + 1;
-    const caption = item.note || `Evidence ${num}`;
-    return `<figure class="pageguide-find-evidence-panel" data-evidence-num="${num}" hidden>
-      ${_recapFigureHtml(`data:image/jpeg;base64,${item.shot}`, null, null, caption)}
-      ${caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : ''}
-    </figure>`;
-  }).join('');
-  return `<div class="pageguide-find-evidence" data-evidence-group="${gid}">
-    <div class="pageguide-find-evidence-chips">
-      <span class="pageguide-find-evidence-hint">Evidence</span>${chips}
-    </div>
-    ${panels}
-  </div>`;
-}
-
-/**
- * The evidence group a citation chip belongs to: the one inside its own message (the Find card
- * renders answer + evidence together) or, failing that, the one in the message right after it
- * (the Ask route posts the crops as a follow-up bubble). Returns null when there is none — which
- * is the normal case in Text mode.
- */
-function _findEvidenceGroupFor(el) {
-  const msg = el?.closest?.('.pageguide-message');
-  if (!msg) return null;
-  const own = msg.querySelector('.pageguide-find-evidence');
-  if (own) return own;
-  let next = msg.nextElementSibling;
-  for (let i = 0; i < 2 && next; i++, next = next.nextElementSibling) {
-    const found = next.querySelector?.('.pageguide-find-evidence');
-    if (found) return found;
-  }
-  return null;
-}
-
-/**
- * Open evidence `num` from `group` in the same lightbox card the Guide uses for its visual
- * evidence (openScratchpadEvidenceView) — one dialog, the image sized to the viewport, a caption
- * underneath. Reached from the numbered chips and from clicking [N] in the answer text.
- *
- * The crops live in the hidden panels inside `group`; this reads the image out of the matching one
- * rather than carrying another copy of the base64 around.
- */
-function openFindEvidenceView(group, num) {
-  if (!group) return;
-  const panel = group.querySelector(`.pageguide-find-evidence-panel[data-evidence-num="${num}"]`);
-  const img = panel?.querySelector('img');
-  if (!img) return;
-  const note = panel.querySelector('figcaption')?.textContent || '';
-
-  closeMemoryShotLightbox();
-  hideRecapEvidencePopover();
-  const overlay = document.createElement('div');
-  overlay.id = 'pageguide-memory-shot-lightbox';
-  overlay.className = 'pageguide-memory-shot-lightbox';
-  overlay.innerHTML = `
-    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Evidence ${escapeHtml(String(num))}">
-      <div class="pageguide-memory-shot-head">
-        <span>Evidence ${escapeHtml(String(num))} — on the page</span>
-        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
-      </div>
-      <div class="pageguide-recap-detail-body">
-        ${_recapFigureHtml(img.src, null, null, note || `evidence ${num}`)}
-        ${note ? `<div class="pageguide-recap-detail-text">
-          <div class="pageguide-recap-detail-evidence"><b>Cited text:</b> ${escapeHtml(note)}</div>
-        </div>` : ''}
-      </div>
-    </div>`;
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
-  });
-  document.body.appendChild(overlay);
-}
-window.openFindEvidenceView = openFindEvidenceView;
-
-/**
- * Post the cited-span crops as their own assistant bubble, for answer paths that render plain
- * chat messages (the Ask route) rather than the recap-styled Find card. No-op when there are no
- * shots — i.e. always, in Text evidence mode.
- */
-function renderFindEvidenceShotsMessage(result) {
-  const html = _findEvidenceShotsHtml(result);
-  if (!html) return;
-  const container = document.getElementById('pageguide-messages');
-  if (!container) return;
-  const msg = document.createElement('div');
-  msg.className = 'pageguide-message assistant pageguide-recap-message';
-  msg.innerHTML = `<div class="pageguide-recap pageguide-find-answer" style="border: 2px solid var(--pg-som);">
-      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
-        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Evidence on the page</div>
-      </div>
-      ${html}
-    </div>`;
-  container.appendChild(msg);
-  container.scrollTop = container.scrollHeight;
-}
+// The captured evidence crops (result.findEvidenceShots) are no longer rendered in the chat at all.
+// They used to appear as an "Evidence on the page" card of numbered chips opening a lightbox, but a
+// crop is a canvas re-encode of a JPEG viewport screenshot and read as blurrier than the page it came
+// from — so every affordance in an answer now points at the live page instead (see
+// _expandEvidenceKeyCitations). The crops are still carried on the result object, where the study
+// recorder banks them (_buildStudyResponseRecord) and the response preview shows them.
 
 // Render a find answer as a persistent assistant bubble using the recap styling.
 function renderFindAnswer(result) {
@@ -1056,7 +972,6 @@ function renderFindAnswer(result) {
     parseCitations(parseMarkdown(result.findAnswer)),
     result.findEvidenceShots
   );
-  const evidenceShots = _findEvidenceShotsHtml(result);
   const msg = document.createElement('div');
   msg.className = 'pageguide-message assistant pageguide-recap-message';
   msg.innerHTML = `
@@ -1067,12 +982,12 @@ function renderFindAnswer(result) {
       <div style="font-size: 14px; line-height: 1.5; color: var(--pg-text); padding: 16px; background: var(--pg-bg); font-weight: 500;">
         ${answerText}
       </div>
-      ${evidenceShots}
       ${_debugAnswerChipRow()}
     </div>`;
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
   _recordAssistantMessage(result.findAnswer);
+  _parkAnswerPayload(result, {});
 }
 
 function renderWatchVideoAnswer(result) {
@@ -1497,6 +1412,7 @@ async function renderGuideFinalAnswer(result) {
   const container = document.getElementById('pageguide-messages');
   if (!container || !result || !result.finalAnswer) return;
   const sessionId = result.sessionId || result.recap?.sessionId || '';
+  if (result.recap) _rememberGuideRecap(Object.assign({ sessionId }, result.recap));
   const model = _buildAnswerEvidenceModel(result.finalAnswer, result.evidenceScratchpad || [], result.answerEvidence || []);
   const { verdict, verdictKey } = _answerVerdictInfo(result);
   const trailHtml = _answerReasoningTrailHtml(result.recap, sessionId);
@@ -1513,7 +1429,7 @@ async function renderGuideFinalAnswer(result) {
   msg.innerHTML = `
     <div class="pageguide-recap pageguide-answer-card" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(result.recap?.steps || result.recap?.milestones?.map(m => m.step) || []))}">
       <div class="pageguide-answer-head">
-        <div class="pageguide-recap-kicker">Answer</div>
+        <div class="pageguide-recap-kicker">${escapeHtml(result.kicker || 'Answer')}</div>
         <span class="pageguide-answer-status ${escapeHtml(verdict.cls)}">${escapeHtml(verdict.label)}</span>
       </div>
       <div class="pageguide-answer-copy">${model.answerHtml}</div>
@@ -1527,159 +1443,35 @@ async function renderGuideFinalAnswer(result) {
 
 
 
-// Render an end-of-task Visual Recap into the chat: an LLM summary, milestone lines whose key
-// phrase is an inline hover-link (hover → the step's marked screenshot pops up), and a row of
-// numbered checkpoint cards that open a before/after detail view with the SOM marker + action.
-async function renderGuideRecap(recap) {
-  const container = document.getElementById('pageguide-messages');
-  if (!container || !recap || !recap.summary) return;
-  const milestones = Array.isArray(recap.milestones) ? recap.milestones : [];
-  const sessionId = recap.sessionId;
-  guideTimelineCheckpointSteps = milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n) && n > 0);
-  goalDotsExpanded = false;
-  if (currentGuideStep) renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
-
-  const msg = document.createElement('div');
-  msg.className = 'pageguide-message assistant pageguide-recap-message';
-
-  const displayMilestones = milestones.filter((m) => m && m.goalRelated !== false);
-
-  const collapsedMilestones = [];
-  for (let i = 0; i < displayMilestones.length; i++) {
-    const current = displayMilestones[i];
-    const isScrollDown = String(current.text || '').toLowerCase().includes('scroll down');
-    if (isScrollDown) {
-      let j = i + 1;
-      while (j < displayMilestones.length) {
-        const next = displayMilestones[j];
-        const nextIsScrollDown = String(next.text || '').toLowerCase().includes('scroll down');
-        if (nextIsScrollDown) {
-          j++;
-        } else {
-          break;
-        }
-      }
-      const count = j - i;
-      if (count > 1) {
-        collapsedMilestones.push({
-          ...current,
-          step: `${current.step} - ${displayMilestones[j - 1].step}`,
-          firstStep: current.step,
-          isCollapsedScroll: true,
-          mergedEvidenceSteps: displayMilestones.slice(i, j).map(m => m.step)
-        });
-        i = j - 1;
-      } else {
-        collapsedMilestones.push({
-          ...current,
-          firstStep: current.step
-        });
-      }
-    } else {
-      collapsedMilestones.push({
-        ...current,
-        firstStep: current.step
-      });
-    }
-  }
-
-  const rowsHtml = collapsedMilestones.map((m) => {
-    const text = m.text || '';
-    const phrase = (m.phrase && text.toLowerCase().includes(m.phrase.toLowerCase())) ? m.phrase : '';
-    const clickStep = m.firstStep != null ? m.firstStep : m.step;
-    // Non-grounding baseline: milestone text is inert (no recap-link), so hovering/clicking a
-    // recap step opens no screenshot checkpoint.
-    const link = (label) => _isPanelNonGrounding()
-      ? escapeHtml(label)
-      : `<span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}">${escapeHtml(label)}</span>`;
-    const status = String(m.status || '').toLowerCase();
-    const errorLabel = String(m.errorLabel || '').trim();
-    const reason = String(m.reason || '').trim();
-    const labelHtml = status === 'wrong' && errorLabel
-      ? `<span class="pageguide-recap-error-label" title="${escapeHtml(reason)}">(${escapeHtml(errorLabel)})</span>`
-      : (status === 'unclear' ? `<span class="pageguide-recap-error-label unclear" title="${escapeHtml(reason)}">(unclear)</span>` : '');
-    const stepValue = String(m.step || '');
-    // Baseline: keep the step number as a plain label instead of a button that opens the
-    // step's screenshot checkpoint.
-    const stepNumHtml = stepValue
-      ? (_isPanelNonGrounding()
-          ? `<span class="pageguide-recap-step-num">${escapeHtml(stepValue)}</span>`
-          : `<button type="button" class="pageguide-recap-step-num" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(clickStep))}" title="Open step ${escapeHtml(stepValue)} checkpoint">${escapeHtml(stepValue)}</button>`)
-      : '';
-    let inner;
-    if (phrase) {
-      const idx = text.toLowerCase().indexOf(phrase.toLowerCase());
-      inner = `${escapeHtml(text.slice(0, idx))}${link(text.slice(idx, idx + phrase.length))}${escapeHtml(text.slice(idx + phrase.length))}`;
-    } else {
-      inner = link(text);
-    }
-    // Merge in the captured visual evidence for this step. Skipped entirely in the
-    // Non-grounding baseline — the whole "Visual evidence" block is a grounding affordance.
-    let evidenceHtml = '';
-    if (_isPanelNonGrounding()) {
-      evidenceHtml = '';
-    } else if (m.isCollapsedScroll) {
-      const allEvItems = [];
-      (m.mergedEvidenceSteps || []).forEach(stepNum => {
-        const ev = recap.evidenceByStep && recap.evidenceByStep[stepNum];
-        // Only real evidence (a captured shot or a marker rect) becomes a link. Reason-only items
-        // have nothing to show on hover/click — they render as "fake" links, so drop them.
-        const items = (Array.isArray(ev?.items) ? ev.items : []).filter(it => it.hasShot || it.hasRect);
-        allEvItems.push(...items.map(item => ({ ...item, stepNum })));
-      });
-      const evidenceItems = allEvItems.slice(0, 5);
-      if (evidenceItems.length) {
-        evidenceHtml = `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div>${evidenceItems.map((item, i) => `<span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-evidence-item="${escapeHtml(String(i))}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(item.stepNum))}" title="Visual evidence ${escapeHtml(String(i + 1))} for step ${escapeHtml(String(item.stepNum))}">${escapeHtml(`${i + 1}. ${item.index != null ? `[${item.index}] ` : ''}${item.reason || 'Why this step is correct'}`)}</span>`).join(' ')}</div>`;
-      }
-    } else {
-      const evidence = recap.evidenceByStep && recap.evidenceByStep[m.step];
-      // Only real evidence (a captured shot or marker rect) becomes a clickable link; reason-only
-      // items are dropped so they don't render as "fake" links that pop nothing on hover/click.
-      const evidenceItems = (Array.isArray(evidence?.items) ? evidence.items : []).filter(it => it.hasShot || it.hasRect).slice(0, 5);
-      evidenceHtml = evidenceItems.length
-        ? `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div>${evidenceItems.map((item, i) => `<span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-evidence-item="${escapeHtml(String(i))}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence ${escapeHtml(String(i + 1))} for step ${escapeHtml(String(m.step))}">${escapeHtml(`${i + 1}. ${item.index != null ? `[${item.index}] ` : ''}${item.reason || 'Why this step is correct'}`)}</span>`).join(' ')}</div>`
-        : (evidence && evidence.hasShot
-            ? `<div class="pageguide-recap-evidence"><div class="pageguide-recap-evidence-label">Visual evidence</div><span class="pageguide-recap-link pageguide-recap-evidence-link" data-evidence="visual" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Visual evidence for step ${escapeHtml(String(m.step))}">${escapeHtml(evidence.reason || 'Why this step is correct')}</span></div>`
-            : '');
-    }
-    return `<div class="pageguide-recap-row ${status ? `is-${escapeHtml(status)}` : ''}">
-      <div class="pageguide-recap-row-head">${stepNumHtml}<span class="pageguide-recap-text">${inner} ${labelHtml}</span></div>
-      ${evidenceHtml}
-    </div>`;
-  }).join('');
-
-  // Final State links to the last checkpoint reached, and is displayed at the end of the checkpoint row.
-  const finalStep = Number.isFinite(Number(recap.finalStep)) ? Number(recap.finalStep)
-    : (milestones.length ? milestones[milestones.length - 1].step : null);
-  const finalVerdict = recap?.final?.verdict || recap?.finalVerdict || 'unclear';
-  // Baseline: the Checkpoints strip is nothing but buttons into per-step screenshots, so the
-  // whole row (including the Final State chip) is dropped rather than rendered inert.
-  const finalChipHtml = (finalStep != null && !_isPanelNonGrounding())
-    ? _recapFinalButtonHtml(sessionId, finalStep, finalVerdict)
-    : '';
-  const statusInfo = _recapStatusText(recap);
-  const bodyNote = (statusInfo.summary && statusInfo.summary !== statusInfo.title && !statusInfo.summary.endsWith(statusInfo.title))
-    ? statusInfo.summary
-    : '';
-  const chipsHtml = _isPanelNonGrounding() ? '' : (milestones.map((m) =>
-    `<button type="button" class="pageguide-recap-checkpoint" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(m.step))}" title="Open step ${escapeHtml(String(m.step))} detail">${escapeHtml(String(m.step))}</button>`
-  ).join('') + finalChipHtml);
-  const recapSteps = recap.steps || milestones.map(m => m.step);
-  msg.innerHTML = `
-    <div class="pageguide-recap" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(recapSteps))}">
-      <div class="pageguide-recap-hero">
-        <div class="pageguide-recap-kicker">${escapeHtml(statusInfo.verdictKey === 'completed' ? 'Task Complete' : (statusInfo.verdictKey === 'failed' ? 'Task Incomplete' : 'Task Review'))}</div>
-        <div class="pageguide-recap-summary">${escapeHtml(statusInfo.title)}</div>
-        <span class="pageguide-final-verdict ${escapeHtml(statusInfo.verdict.cls)}">${escapeHtml(statusInfo.verdict.label)}</span>
-      </div>
-      ${bodyNote ? `<div class="pageguide-recap-body-note">${escapeHtml(bodyNote)}</div>` : ''}
-      ${displayMilestones.length ? `<div class="pageguide-recap-list">${rowsHtml}</div>` : ''}
-      ${chipsHtml ? `<div class="pageguide-recap-checkpoints-label">Checkpoints</div><div class="pageguide-recap-checkpoints">${chipsHtml}</div>` : ''}
-    </div>`;
-  container.appendChild(msg);
-  container.scrollTop = container.scrollHeight;
-  _recordAssistantMessage(recap.summary);
+/**
+ * The card for a run that ENDED WITHOUT AN ANSWER — stopped by the user, capped, or a read-only
+ * terminal. Same card as a finished run, because it is the same material.
+ *
+ * There used to be a second card for this: a "TASK INCOMPLETE" hero, a flat list of milestone rows,
+ * and a strip of numbered Checkpoints. It predated the summariser, and it showed the same run in a
+ * different shape — the milestones without the summary's linked phrases, always expanded, and with
+ * the per-step screenshots reachable only through a row of numbers that said nothing about what was
+ * at each one. A reader who stopped a run got a layout they had never seen, at exactly the moment
+ * they were trying to work out what went wrong.
+ *
+ * The recap's summary IS the summarising agent's output, so it becomes the answer text, and the
+ * verdict comes from the recap rather than from having finished — a stopped run reads "Incompleted"
+ * on the same badge a completed one reads "Completed".
+ */
+async function renderGuideRecapCard(recap, kicker = 'Summary') {
+  if (!recap || !recap.summary) return;
+  const sessionId = recap.sessionId || '';
+  await renderGuideFinalAnswer({
+    finalAnswer: recap.summary,
+    sessionId,
+    recap,
+    kicker,
+    evidenceScratchpad: [],
+    answerEvidence: [],
+    isFinish: false,
+  });
 }
+window.renderGuideRecapCard = renderGuideRecapCard;
 
 // Compute all three confidence formula versions for a step from its stored LLM signals
 // (grounded/loop/progress). Pure — no LLM call — so Full vs No-progress vs No-loop can be compared
@@ -2184,6 +1976,17 @@ function renderConfChart() {
 // interactive instance of it at a time (id="pageguide-goal"); once a session finishes or a
 // new one starts, the old one is "sealed" (see _sealGoalCardMessage) so its id frees up and
 // a brand-new bubble is created fresh for the next session, further down the chat.
+// The recap — the agent's summary, its milestones and its final verdict — is the one part of a run
+// that rewind does NOT persist (rewind_store.js keeps steps and screenshots; _gv2BuildRecap's output
+// is rendered and then lives only in the volatile per-tab session). It is also exactly what the guide
+// study asks about, so it is kept here per session for the capture button to pick up.
+const _lastRecapBySession = new Map();
+function _rememberGuideRecap(recap) {
+  const sid = recap?.sessionId || currentGuideSessionId;
+  if (sid && recap) _lastRecapBySession.set(String(sid), recap);
+}
+window._rememberGuideRecap = _rememberGuideRecap;
+
 function ensureGoalCardMessage() {
   let card = document.getElementById('pageguide-goal');
   if (card) return card;
@@ -2216,6 +2019,8 @@ function ensureGoalCardMessage() {
               </svg>
             </span>
           </button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-study" title="Capture this trajectory for the user study" style="display:none;">🎬</button>
+          <span class="pageguide-journey-cost" id="pageguide-card-cost"></span>
         </div>
       </div>
       <div class="pageguide-goal-timeline" id="pageguide-goal-timeline"></div>
@@ -2227,7 +2032,36 @@ function ensureGoalCardMessage() {
   container.scrollTop = container.scrollHeight;
   document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => exportJourneyPdf());
   document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => saveTrajectoryToRepo());
+  document.getElementById('pageguide-card-capture-study')?.addEventListener('click', () => captureTrajectoryForStudy());
+  const captureBtn = document.getElementById('pageguide-card-capture-study');
+  if (captureBtn) captureBtn.style.display = window.__pgDebugEnabled ? '' : 'none';
+  updateJourneyCostChip(card);
   return card;
+}
+
+/**
+ * Point this card's cost chip at the session it is showing, and price it.
+ *
+ * Called on creation and again whenever the card re-renders, because the session id is not known
+ * when the card is built — the first step has to arrive before there is a run to price. A card
+ * showing a recalled journey prices THAT journey, not the live one, which is why the session is
+ * written onto the chip rather than read from a global at fill time.
+ */
+function updateJourneyCostChip(root = document) {
+  const chip = root?.querySelector?.('#pageguide-card-cost')
+    || document.getElementById('pageguide-card-cost');
+  if (!chip) return;
+  const sid = visibleJourneySessionId || currentGuideSessionId || '';
+  if (!window.__pgDebugEnabled || !sid) {
+    chip.style.display = 'none';
+    chip.textContent = '';
+    return;
+  }
+  chip.style.display = '';
+  chip.className = 'pageguide-journey-cost pageguide-cost-chip';
+  chip.dataset.costSession = sid;
+  delete chip.dataset.costFrom;
+  refreshCostChips();
 }
 
 // Removes an empty card that never got real content (e.g. the route flipped away before any
@@ -2252,7 +2086,7 @@ function _sealGoalCardMessage() {
   card.querySelectorAll('.pageguide-goal-row').forEach(row => { row.replaceWith(row.cloneNode(true)); });
   ['pageguide-goal-title', 'pageguide-goal-timeline', 'pageguide-plan-list', 'pageguide-conf-chart',
    'pageguide-goal-journey-actions', 'pageguide-card-export-pdf', 'pageguide-card-save-trajectory',
-   'pageguide-goal-collapse'].forEach(id => {
+   'pageguide-card-capture-study', 'pageguide-goal-collapse'].forEach(id => {
     const el = card.querySelector(`#${id}`);
     if (el) el.id = '';
   });
@@ -2293,6 +2127,9 @@ function renderGoalCard({ prompt, route, title, step, total } = {}) {
   const card = ensureGoalCardMessage();
   if (!card) return;
   card.dataset.hasContent = '1';
+  // The session id is not known when the card is first built — the run has to produce a step
+  // before there is anything to price — so the chip is re-pointed on every render.
+  updateJourneyCostChip(card);
 
   const titleEl = document.getElementById('pageguide-goal-title');
   const timeline = document.getElementById('pageguide-goal-timeline');
@@ -2439,6 +2276,8 @@ function setExportEnabled(on) {
   if (cardBtn) cardBtn.disabled = !on;
   const saveBtn = document.getElementById('pageguide-card-save-trajectory');
   if (saveBtn) saveBtn.disabled = !on;
+  const captureBtn = document.getElementById('pageguide-card-capture-study');
+  if (captureBtn) captureBtn.disabled = !on;
   refreshGuideOnlyActions();
 }
 
@@ -2600,7 +2439,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // User Study (defined in study.js, loaded after this file)
   document.getElementById('pageguide-open-study')?.addEventListener('click', () => {
     hideMoreMenu();
-    if (typeof window.openStudyPanel === 'function') window.openStudyPanel();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('study');
+  });
+  document.getElementById('pageguide-record-study')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record');
+  });
+  document.getElementById('pageguide-record-guide-study')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-guide');
   });
   // Export PDF / Save trajectory now live on the dynamically-created "View Journey" chat
   // bubble (see ensureGoalCardMessage), which attaches their click listeners itself at
@@ -2782,6 +2629,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (namespace === 'local' && changes[GUIDE_EVIDENCE_MODE_KEY]) {
       panelEvidenceMode = _normalizeEvidenceMode(changes[GUIDE_EVIDENCE_MODE_KEY].newValue);
     }
+    // A call's price arrives AFTER the answer it paid for is already on screen — the service worker
+    // appends to the ledger when the response settles. Repainting on the ledger changing is what
+    // makes a journey's total climb as the run goes, instead of showing a stale number until the
+    // next render happens to come along.
+    if (namespace === 'local' && changes[PAGEGUIDE_COST_LEDGER_KEY]) {
+      refreshCostChips(changes[PAGEGUIDE_COST_LEDGER_KEY].newValue);
+    }
   });
 });
 
@@ -2791,6 +2645,41 @@ document.addEventListener('DOMContentLoaded', async () => {
  * 1. Web page citations: [N:"text"] or [N] - scrolls to indexed element
  * 2. PDF citations: [Page N: "text"] - navigates to PDF page
  */
+function _citationPlainTextForComparison(s) {
+  return String(s || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function _placeholderCitationEchoesProse(before, after, span) {
+  const spanWords = _citationPlainTextForComparison(span).split(/\s+/).filter(Boolean);
+  if (!spanWords.length) return true;
+  const beforeWords = _citationPlainTextForComparison(before).split(/\s+/).filter(Boolean).join(' ');
+  const afterWords = _citationPlainTextForComparison(after).split(/\s+/).filter(Boolean).join(' ');
+  const spanText = spanWords.join(' ');
+  if (beforeWords.endsWith(spanText) || afterWords.startsWith(spanText)) return true;
+  if (spanWords.length < 3) return false;
+  const windowText = `${beforeWords} ${afterWords}`;
+  const hits = spanWords.filter(w => windowText.includes(w)).length;
+  return hits / spanWords.length >= 0.7;
+}
+
+function _stripInvalidPlaceholderCitations(text) {
+  return String(text || '').replace(/\[N\s*:\s*(?:"([^\]]*)"|'([^\]]*)'|([^\]"']+))\s*\]|\[N\]/gi,
+    (match, dq, sq, uq, offset, whole) => {
+      const span = dq || sq || uq || '';
+      if (!span) return '';
+      const before = whole.slice(Math.max(0, offset - span.length - 160), offset);
+      const after = whole.slice(offset + match.length, offset + match.length + span.length + 160);
+      return _placeholderCitationEchoesProse(before, after, span) ? '' : escapeHtml(span);
+    });
+}
+
 function parseCitations(text, isPdf = false) {
   // Normalize curly/smart quotes to straight quotes first
   const normalizedText = text
@@ -2798,7 +2687,7 @@ function parseCitations(text, isPdf = false) {
     .replace(/['']/g, "'");
   
   // Use normalized text for parsing
-  text = normalizedText;
+  text = _stripInvalidPlaceholderCitations(normalizedText);
   
   let result = '';
   let lastIndex = 0;
@@ -2912,6 +2801,14 @@ function parseCitations(text, isPdf = false) {
   result += text.slice(lastIndex);
   
   return result;
+}
+if (typeof window !== 'undefined') {
+  window.parseCitations = parseCitations;
+  window._stripInvalidPlaceholderCitations = _stripInvalidPlaceholderCitations;
+  // Named for the study overlay, which renders a banked answer through the same chain the chat uses
+  // — that identity is the whole point of the Grounded tab. A no-op at runtime (a top-level function
+  // is already a window property); it is here so the dependency is written down.
+  window.parseMarkdown = parseMarkdown;
 }
 
 /**
@@ -3056,6 +2953,7 @@ async function showModelStatus() {
  * Call once at startup (DOMContentLoaded).
  */
 function _setupMessageContainerDelegate(container) {
+  bindCitationHoverPreview(container);
   container.addEventListener('click', async (e) => {
     // 0. "View journey" recall button. Delegated (not a per-button listener) so it keeps working
     // after a tab switch, which restores the chat via innerHTML and would drop direct listeners.
@@ -3078,7 +2976,9 @@ function _setupMessageContainerDelegate(container) {
       return;
     }
 
-    const recapEl = e.target.closest('.pageguide-recap-checkpoint, .pageguide-recap-link, .pageguide-recap-step-num');
+    // .pageguide-recap-link only: the checkpoint chips and step-number buttons belonged to the
+    // deleted recap card, and nothing emits them any more.
+    const recapEl = e.target.closest('.pageguide-recap-link');
     if (recapEl) {
       e.stopPropagation();
       const wrap = recapEl.closest('.pageguide-recap');
@@ -3150,36 +3050,39 @@ function _setupMessageContainerDelegate(container) {
       return;
     }
 
-    // 2a. [ev:key] citation inside the answer → open that evidence card.
+    // 2a. Study authoring (debug mode only): record this answer as the response for a task +
+    // condition, or edit its text first.
+    const saveChip = e.target.closest('.pageguide-study-save-chip');
+    if (saveChip) {
+      e.stopPropagation();
+      openStudySaveDialog(saveChip.dataset.answerId);
+      return;
+    }
+    const editChip = e.target.closest('.pageguide-study-edit-chip');
+    if (editChip) {
+      e.stopPropagation();
+      openStudyEditDialog(editChip.dataset.answerId);
+      return;
+    }
+
+    // 2b. [ev:key] citation inside the answer → go to the mark drawn on the live page, the same way
+    // an [N] citation goes to its highlighted span. Every marker in the answer leads to the page;
+    // the crops are reachable only from the numbered chips below.
     const evCit = e.target.closest('.pageguide-evidence-citation');
     if (evCit) {
       e.stopPropagation();
-      openFindEvidenceView(_findEvidenceGroupFor(evCit), evCit.dataset.evidenceNum);
+      sendToContentScript({ action: 'scrollToEvidenceMark', index: Number(evCit.dataset.evidenceNum) });
       return;
     }
 
-    // 2a. Evidence chip (Visual mode) → open that crop in the Guide's evidence card.
-    const evChip = e.target.closest('.pageguide-find-evidence-chip');
-    if (evChip) {
-      e.stopPropagation();
-      openFindEvidenceView(evChip.closest('.pageguide-find-evidence'), evChip.dataset.evidenceNum);
-      return;
-    }
-
-    // 2b. Web citation. In Visual evidence mode the answer does not link into the page at all —
-    // clicking [N] opens the crop of that span instead, which IS the evidence in that condition.
-    // In Text mode it keeps its original job: scroll the page to the cited element.
+    // 2c. Web citation → scroll the page to the cited element. The same in both evidence modes: the
+    // span is highlighted on the page either way, and a crop of that highlight told the reader
+    // nothing the page did not, so Visual mode no longer diverts the click to an image.
     const webCit = e.target.closest('.pageguide-citation');
     if (webCit) {
       e.stopPropagation();
-      const citationNum = webCit.dataset.citation;
-      const group = _isPanelVisualEvidence() ? _findEvidenceGroupFor(webCit) : null;
-      if (group && citationNum) {
-        openFindEvidenceView(group, citationNum);
-        return;
-      }
       const index = parseInt(webCit.dataset.index, 10);
-      sendToContentScript({ action: 'scrollToIndex', index });
+      sendToContentScript({ action: 'scrollToIndex', index, citation: webCit.dataset.citation });
       return;
     }
 
@@ -3308,6 +3211,11 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
   
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
+
+  // A cost chip renders empty and is filled from the ledger. The storage listener catches every
+  // price that lands AFTER this point; this catches the ones already in the ledger by the time the
+  // answer was rendered, which is most of them.
+  if (window.__pgDebugEnabled && msg.querySelector('.pageguide-cost-chip')) refreshCostChips();
 
   chatMessages.push({ content, type, timestamp: Date.now(), context });
 }
@@ -4838,6 +4746,111 @@ function _shouldRetryGuideActionOnActiveTab(res, triedTabId, activeTabId) {
 }
 window._shouldRetryGuideActionOnActiveTab = _shouldRetryGuideActionOnActiveTab;
 
+/**
+ * Send a guide control message, recovering from a stale guideTabId.
+ *
+ * guideTabId goes stale whenever the run moves between tabs, and the tracked tab then answers "Guide
+ * not active" for a guide that is running perfectly well in front of the user. Resume has always
+ * retried on the frontmost tab; PAUSE DID NOT, so the button that stops a misbehaving agent was the
+ * one that gave up first — exactly backwards, since pause is what you reach for when the run has
+ * wandered somewhere you did not expect.
+ */
+/**
+ * Does this failure mean "nothing is listening on that page" rather than "the guide said no"?
+ *
+ * Reloading the extension orphans every content script already on a page: the bundle stops
+ * listening, and messaging it rejects with "Receiving end does not exist". Same for a page loaded
+ * before the extension was installed, and for "Extension context invalidated" after an update. None
+ * of these are answers from the guide — they are the absence of anyone to ask.
+ */
+function _isDeadContentScriptError(res) {
+  const msg = String(res?.error || '');
+  return /receiving end does not exist|could not establish connection|extension context invalidated|message port closed/i.test(msg);
+}
+window._isDeadContentScriptError = _isDeadContentScriptError;
+
+/**
+ * Say what the reader can do about it. "Receiving end does not exist" is a Chrome internal that
+ * describes our plumbing, not their problem — reaching it means reinjection was refused too, which
+ * on a chrome:// page, the Web Store or a PDF viewer it always will be.
+ */
+function _guideControlErrorText(message) {
+  return _isDeadContentScriptError({ error: message })
+    ? 'this page is not running PageGuide any more — reload the page (F5), then try again.'
+    : String(message || 'unknown error');
+}
+window._guideControlErrorText = _guideControlErrorText;
+
+/** Send, turning a messaging rejection into a result so callers can branch on it. */
+async function _sendGuideOnce(message, tabId) {
+  try {
+    const res = await sendToContentScript(message, tabId);
+    return res || { success: false, error: 'No response' };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * Put the content script back on a page that has lost it, so a guide can be controlled again.
+ *
+ * Injects the same bundle the manifest declares, read from the manifest itself so the two cannot
+ * drift. Only ever after a ping fails: content scripts share one global scope, and injecting a
+ * second copy over a live one is a redeclaration SyntaxError that would break the page's listener
+ * for good.
+ */
+async function _ensureContentScript(tabId) {
+  if (tabId == null) return false;
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'pageguidePing' });
+    return true;                                  // answered, so the bundle is alive
+  } catch (e) { /* nobody home — reinject below */ }
+
+  try {
+    const cs = chrome.runtime.getManifest().content_scripts?.[0] || {};
+    if (cs.css?.length) await chrome.scripting.insertCSS({ target: { tabId }, files: cs.css });
+    await chrome.scripting.executeScript({ target: { tabId }, files: cs.js || [] });
+    return true;
+  } catch (e) {
+    console.warn('[pageguide] could not reinject the content script:', e);
+    return false;   // chrome:// pages, the web store, and PDFs cannot be injected into
+  }
+}
+
+/**
+ * Send a guide control message, recovering from the two ways it goes astray.
+ *
+ * A stale guideTabId — the run moved tabs, and the tracked one answers "Guide not active" for a
+ * guide running fine in front of the user. And a dead content script — the extension was reloaded,
+ * so the page has no listener at all. Resume used to handle neither well: the first only for
+ * resume, the second not at all, which turned "reload the extension to pick up a fix" into "your
+ * paused run is gone".
+ */
+async function _sendGuideControl(action, extra = {}) {
+  const message = () => Object.assign({ action }, extra);
+
+  let res = await _sendGuideOnce(message(), guideTabId);
+
+  // The page stopped listening: put the bundle back and ask again, same tab.
+  if (_isDeadContentScriptError(res) && guideTabId != null) {
+    if (await _ensureContentScript(guideTabId)) res = await _sendGuideOnce(message(), guideTabId);
+  }
+
+  // Still nothing, or the tracked tab has no session: try the tab actually in front.
+  if (!res || res.success === false) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const worthRetrying = _shouldRetryGuideActionOnActiveTab(res, guideTabId, activeTab?.id)
+      || (_isDeadContentScriptError(res) && activeTab?.id != null && activeTab.id !== guideTabId);
+    if (worthRetrying) {
+      await _ensureContentScript(activeTab.id);
+      const retry = await _sendGuideOnce(message(), activeTab.id);
+      if (retry && retry.success !== false) { guideTabId = activeTab.id; res = retry; }
+    }
+  }
+  return res;
+}
+window._sendGuideControl = _sendGuideControl;
+
 async function resumeGuideFromPanel() {
   const btn = document.getElementById('pageguide-guide-pause');
   const stopBtn = document.getElementById('pageguide-guide-stop-paused');
@@ -4846,16 +4859,7 @@ async function resumeGuideFromPanel() {
   showTyping();
   const pauseSeqBefore = guidePauseSeq;
   try {
-    let res = await sendToContentScript({ action: 'resumeGuide' }, guideTabId);
-    // guideTabId can go stale after the guide opened/moved between tabs; if the tracked tab has no
-    // live session, retry on the tab actually in front (the guide's own tab) before giving up.
-    if ((!res || res.success === false) && /not active/i.test(String(res?.error || ''))) {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (_shouldRetryGuideActionOnActiveTab(res, guideTabId, activeTab?.id)) {
-        const retry = await sendToContentScript({ action: 'resumeGuide' }, activeTab.id);
-        if (retry && retry.success !== false) { guideTabId = activeTab.id; res = retry; }
-      }
-    }
+    const res = await _sendGuideControl('resumeGuide');
     if (!res || res.success === false) throw new Error(res?.error || 'Could not resume guide');
     if (_shouldApplyResumeSuccess(pauseSeqBefore, guidePauseSeq)) {
       guidePaused = false;
@@ -4873,7 +4877,7 @@ async function resumeGuideFromPanel() {
       btn.disabled = false;
       if (stopBtn) stopBtn.disabled = false;
     }
-    addMessage(`Could not resume the guide: ${err.message}`, 'system');
+    addMessage(`Could not resume the guide: ${_guideControlErrorText(err.message)}`, 'system');
   }
 }
 
@@ -4883,7 +4887,7 @@ async function pauseGuide(message = 'Guide paused.') {
   if (btn) btn.disabled = true;
   if (stopBtn) stopBtn.disabled = true;
   try {
-    const res = await sendToContentScript({ action: 'pauseGuide', reason: message }, guideTabId);
+    const res = await _sendGuideControl('pauseGuide', { reason: message });
     if (!res || res.success === false) throw new Error(res?.error || 'Guide not active');
     guidePaused = true;
     guideActive = false;
@@ -4892,7 +4896,7 @@ async function pauseGuide(message = 'Guide paused.') {
   } catch (e) {
     if (btn) btn.disabled = false;
     if (stopBtn) stopBtn.disabled = false;
-    addMessage(`Could not pause the guide: ${e.message}`, 'system');
+    addMessage(`Could not pause the guide: ${_guideControlErrorText(e.message)}`, 'system');
   }
 }
 
@@ -4922,7 +4926,8 @@ async function stopPausedGuideWithRecap() {
       renderGoalTimeline(currentGuideStep, Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0));
     }
     if (res.recap && res.recap.summary) {
-      await renderGuideRecap(res.recap);
+      _rememberGuideRecap(res.recap);
+      await renderGuideRecapCard(res.recap, 'Stopped');
     } else {
       addMessage('⏹ Guide stopped.', 'system');
     }
@@ -5077,9 +5082,6 @@ function addGuideStep(result) {
   if (result.isVisualHighlight && result.visualHighlightImage && _lastVisualHighlightStep !== result.step) {
     _lastVisualHighlightStep = result.step;
     renderVisualHighlightAnswer(result);
-    // A find that fell back to visual_highlight still captured its span crops before the fallback
-    // flipped the action — the evidence belongs to the answer, not to the action name.
-    if (!result.isFind) renderFindEvidenceShotsMessage(result);
   }
 
   if (result.isWatchVideo && (result.watchVideoAnswer || result.watchVideoError) && _lastWatchVideoMessageStep !== result.step) {
@@ -5105,7 +5107,8 @@ function addGuideStep(result) {
     const recapKey = `${result.recap.sessionId || ''}:${result.step}`;
     if (_lastRecapKey !== recapKey) {
       _lastRecapKey = recapKey;
-      renderGuideRecap(result.recap);
+      _rememberGuideRecap(result.recap);
+      renderGuideRecapCard(result.recap, 'Answer');
     }
   }
 
@@ -5332,6 +5335,140 @@ async function sendToContentScript(message, targetTabId) {
     });
   });
 }
+
+/**
+ * Pulse the page span a citation points at, while the pointer is over that citation.
+ *
+ * Clicking [N] scrolls to its span, but a span inside an already-tinted paragraph is invisible on
+ * arrival — the jump reads as having gone nowhere. Previewing on hover says "these words" before the
+ * click, so the reader knows what the number means.
+ *
+ * One index at a time, and a short delay before arming: the pointer crosses several citations on its
+ * way to the one it wants, and firing a message for each would be noise on both ends.
+ */
+let _pgPreview = null;       // {action, index} currently marked on the page
+let _pgPreviewTimer = null;
+
+/**
+ * @param {{action: string, index: number|string}|null} target - null clears whatever is marked
+ */
+function previewCitationIndex(target, tabId) {
+  const action = target?.action || 'previewIndex';
+  const raw = target && typeof target === 'object' ? target.index : target;
+  // Number(null) is 0 — a finite, valid-looking index — so "nothing under the pointer" has to be
+  // screened out before the conversion, or moving off a citation arms element 0 instead of clearing.
+  const n = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
+  if (_pgPreviewTimer) { clearTimeout(_pgPreviewTimer); _pgPreviewTimer = null; }
+
+  if (!Number.isFinite(n)) {
+    if (_pgPreview) {
+      const was = _pgPreview;
+      _pgPreview = null;
+      sendToContentScript({ action: was.action, index: was.index, on: false }, tabId).catch(() => {});
+    }
+    return;
+  }
+  const citation = target && typeof target === 'object' ? target.citation : undefined;
+  if (_pgPreview && _pgPreview.index === n && _pgPreview.action === action) return;
+  // Clear whatever is marked before arming the next one. Moving from an [ev] marker to a [N] marks
+  // through two different mechanisms on the page, so the old one does not clear itself and would be
+  // left behind — two badges, one pointer.
+  if (_pgPreview) {
+    const was = _pgPreview;
+    _pgPreview = null;
+    sendToContentScript({ action: was.action, index: was.index, on: false }, tabId).catch(() => {});
+  }
+  _pgPreviewTimer = setTimeout(() => {
+    _pgPreview = { action, index: n };
+    sendToContentScript({ action, index: n, citation, on: true }, tabId).catch(() => {});
+  }, 90);
+}
+window.previewCitationIndex = previewCitationIndex;
+
+/**
+ * Wire citation hover-preview on a container of rendered answers. Used by the chat and by the
+ * study overlay, which show the same markup.
+ */
+function bindCitationHoverPreview(container) {
+  if (!container || container.dataset.pgHoverPreview) return;
+  container.dataset.pgHoverPreview = '1';
+  container.addEventListener('mouseover', (e) => {
+    // An [ev] marker points at a region the annotator drew — over a picture, usually — rather than
+    // at an element, so it is marked a different way on the page. From the reader's side both are
+    // "hover a number, see where it points".
+    const ev = e.target.closest?.('.pageguide-evidence-citation[data-evidence-num]');
+    if (ev) {
+      previewCitationIndex({ action: 'previewEvidenceMark', index: ev.dataset.evidenceNum });
+      return;
+    }
+    const cit = e.target.closest?.('.pageguide-citation-idx[data-index]');
+    previewCitationIndex(cit
+      ? { action: 'previewIndex', index: cit.dataset.index, citation: cit.dataset.citation }
+      : null);
+  });
+  container.addEventListener('mouseleave', () => previewCitationIndex(null));
+}
+window.bindCitationHoverPreview = bindCitationHoverPreview;
+
+/**
+ * Copy the finished run on screen into the guide-trajectory bank.
+ *
+ * Reads rewind rather than the panel's own state, because rewind has the full records — instructions,
+ * targets, before/after screenshots — while the panel only keeps the lightweight metas. Read-only on
+ * purpose: rewindVerifyScreenshots would DELETE any step whose shot is missing, and a study's source
+ * material must not be edited by looking at it.
+ */
+/**
+ * Read one session out of rewind and project it into a trajectory, without saving.
+ *
+ * Split from the capture button so the study editor can re-read a run it already banked — a
+ * trajectory captured before the projection understood something (answer evidence, the finish
+ * answer) is stale, and re-capturing from scratch would throw away the researcher's edits.
+ *
+ * @returns {Promise<object|null>} the projected trajectory, or null when the run is gone
+ */
+async function readTrajectoryFromSession(sid) {
+  if (!sid || typeof rewindGetIndex !== 'function' || typeof _buildGuideTrajectory !== 'function') return null;
+  const index = await rewindGetIndex(sid);
+  const metas = (Array.isArray(index?.steps) ? index.steps : []).filter(m => m && !m.isInitial);
+  if (!metas.length) return null;
+  const records = [];
+  // Step 0 too: it is not a step a participant is asked about, but it holds the only picture of the
+  // page BEFORE the agent touched anything. _buildGuideTrajectory keeps it out of the numbered steps
+  // and uses it as the opening bookend.
+  const initialRec = await rewindGetRecord(sid, 0);
+  if (initialRec) records.push(initialRec);
+  for (const meta of metas) {
+    const rec = await rewindGetRecord(sid, meta.step);
+    if (rec) records.push(rec);
+  }
+  return _buildGuideTrajectory(index, records, _lastRecapBySession.get(String(sid)) || null);
+}
+window.readTrajectoryFromSession = readTrajectoryFromSession;
+
+async function captureTrajectoryForStudy() {
+  const sid = typeof getActiveSessionId === 'function' ? getActiveSessionId() : currentGuideSessionId;
+  if (!sid) { addMessage('⚠️ No guide run to capture — run a guide task first.', 'error'); return; }
+
+  try {
+    const trajectory = await readTrajectoryFromSession(sid);
+    if (!trajectory) { addMessage('⚠️ That run has no steps to capture.', 'error'); return; }
+    const recap = _lastRecapBySession.get(String(sid)) || null;
+    const res = await saveGuideTrajectory(trajectory);
+    if (!res.saved) { addMessage(`❌ Could not capture: ${res.error || 'unknown error'}`, 'error'); return; }
+
+    const shots = trajectory.arms.grounding.steps.filter(st => st.screenshot).length;
+    addMessage(
+      `🎬 Captured **${trajectory.title}** — ${trajectory.arms.grounding.steps.length} step(s), ${shots} screenshot(s)` +
+      `${recap ? '' : ', no recap (the answer and trail will need writing by hand)'}. ` +
+      'Edit it under ⋯ → Record Guide User Study.',
+      'system'
+    );
+  } catch (e) {
+    addMessage(`❌ Could not capture: ${e?.message || e}`, 'error');
+  }
+}
+window.captureTrajectoryForStudy = captureTrajectoryForStudy;
 
 /** Human-readable byte size for chip labels. */
 function _fmtBytes(bytes) {
@@ -6539,9 +6676,8 @@ Previous steps: None`;
         _lastAnswerEvidenceShots = Array.isArray(result.findEvidenceShots) ? result.findEvidenceShots : [];
         addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
         _lastAnswerEvidenceShots = [];
-        // Visual evidence mode: follow the answer with a crop of each cited span. No-op in Text
-        // mode, where findEvidenceShots is empty and the citation chips carry the grounding.
-        renderFindEvidenceShotsMessage(result);
+        // Keep the result reachable from this answer's Save/Edit chips (authoring mode only).
+        _parkAnswerPayload(result, { url: currentTab?.url || '', question: query });
       }
     } else {
       const errText = result?.error || 'Unknown error';
@@ -7399,7 +7535,7 @@ function handleContentMessage(message, sender, sendResponse) {
       _lastAnswerEvidenceShots = Array.isArray(message.result.findEvidenceShots) ? message.result.findEvidenceShots : [];
       addMessage(answerText, 'assistant', hasHighlights);
       _lastAnswerEvidenceShots = [];
-      renderFindEvidenceShotsMessage(message.result);
+      _parkAnswerPayload(message.result, {});
     }
   } else if (message.action === 'showTyping') {
     showTyping();
@@ -7418,7 +7554,7 @@ function handleContentMessage(message, sender, sendResponse) {
   } else if (message.action === 'guideRecap') {
     // Full diagnostic recap for a failed run (e.g. hit the step cap). Content only sends this when
     // Visual Recap is on, so render it directly.
-    if (message.recap) renderGuideRecap(message.recap);
+    if (message.recap) { _rememberGuideRecap(message.recap); renderGuideRecapCard(message.recap, 'Summary'); }
   } else if (message.action === 'closePanel') {
     window.close();
   } else if (message.action === 'selectedText') {
@@ -7472,7 +7608,403 @@ function closeDebugPromptLightbox() {
 /** A row holding the per-answer 🐞 chip. Empty string outside debug mode. */
 function _debugAnswerChipRow() {
   const chip = _debugAnswerChipHtml(_debugAnswerStart);
-  return chip ? `<div class="pageguide-debug-answer-row">${chip}</div>` : '';
+  const cost = _costChipHtml({ from: _debugAnswerStart });
+  const author = _studyAuthorChipRow(_stampAnswerId());
+  if (!chip && !author && !cost) return '';
+  return `<div class="pageguide-debug-answer-row">${chip}${cost}${author}</div>`;
+}
+
+// ===== COST CHIPS =====
+// What the run cost, next to the run. Debug-mode only, like every other researcher affordance —
+// a participant must never see a price tag attached to their task.
+//
+// Two scopes, because the two things being priced are attributed differently (see
+// costEntriesForSession / costEntriesForAnswer in content/utils.js):
+//   • a guide journey — every call stamped with that run's session id;
+//   • one Find answer — every call logged since that question went out.
+// Both render the same chip and both are filled by refreshCostChips, so the journey total and the
+// answer totals can never be computed two different ways.
+
+/**
+ * An unfilled cost chip. The number is not known at render time — the answer is on screen before
+ * its last call has even settled — so the chip is emitted empty and filled in by refreshCostChips
+ * as the ledger lands.
+ *
+ * @param {{from?: number, session?: string}} scope - one or the other, not both
+ */
+function _costChipHtml(scope = {}) {
+  if (!window.__pgDebugEnabled) return '';
+  const attr = scope.session != null
+    ? `data-cost-session="${escapeHtml(String(scope.session))}"`
+    : `data-cost-from="${Number(scope.from) || 0}"`;
+  return `<span class="pageguide-cost-chip" ${attr} title="OpenRouter spend (loading…)">💰 …</span>`;
+}
+window._costChipHtml = _costChipHtml;
+
+/** The chip's text and tooltip for one summed slice. Pure. */
+function _costChipText(totals) {
+  if (!totals || !totals.calls) return { label: '💰 —', title: 'No priced calls recorded' };
+  const money = formatCostUsd(totals.costUsd);
+  const tokens = totals.promptTokens + totals.completionTokens;
+  const unpriced = totals.unpriced
+    ? ` · ${totals.unpriced} unpriced (only OpenRouter reports a price)`
+    : '';
+  return {
+    label: `💰 ${money}`,
+    title: `${money} over ${totals.calls} call(s) · ${tokens.toLocaleString()} tokens${unpriced}`
+  };
+}
+window._costChipText = _costChipText;
+
+/**
+ * Fill every cost chip currently on screen from the ledger.
+ *
+ * Re-reads all of them each time rather than tracking which chip is stale: a guide journey's chip
+ * changes on every step, and a chip whose answer is still running has to keep climbing. The DOM
+ * here holds tens of chips at most.
+ *
+ * @param {Array<object>|null} ledger - passed by the storage listener; re-read when omitted
+ */
+async function refreshCostChips(ledger = null) {
+  const chips = document.querySelectorAll('.pageguide-cost-chip');
+  if (!chips.length) return;
+  let entries = ledger;
+  let debugPrompts = [];
+  try {
+    const local = await chrome.storage.local.get([PAGEGUIDE_COST_LEDGER_KEY, 'debugPrompts']);
+    if (!Array.isArray(entries)) entries = local[PAGEGUIDE_COST_LEDGER_KEY];
+    debugPrompts = Array.isArray(local.debugPrompts) ? local.debugPrompts : [];
+  } catch (e) { /* best-effort: a chip that cannot be priced stays as it is */ }
+  if (!Array.isArray(entries)) return;
+
+  chips.forEach(chip => {
+    const session = chip.dataset.costSession;
+    const slice = session
+      ? costEntriesForSession(entries, session)
+      : costEntriesForAnswer(entries, debugPrompts, Number(chip.dataset.costFrom) || 0);
+    const { label, title } = _costChipText(sumCostEntries(slice));
+    chip.textContent = label;
+    chip.title = title;
+  });
+}
+window.refreshCostChips = refreshCostChips;
+
+// ===== RECORDING STUDY ANSWERS =====
+// The researcher records each answer once per (task × condition) so every participant reads the same
+// thing. The chips below sit in the same row as the 🐞 Debug chip and are gated the same way, so a
+// participant never sees them.
+//
+// The chips need the whole result object for the answer they sit under, but the panel does not keep
+// one: _lastAnswerEvidenceShots is set immediately before addMessage and cleared immediately after.
+// So each rendered answer gets an id, and the result is parked here under that id until the researcher
+// clicks. Session-scoped and capped — everything durable goes to chrome.storage.local on Save.
+const _answerPayloads = new Map();
+const ANSWER_PAYLOAD_MAX = 50;
+let _answerIdSeq = 0;
+let _pendingAnswerId = 0;
+
+/** Allocate the id for the answer about to be rendered; read by _studyAuthorChipRow. */
+function _stampAnswerId() {
+  _pendingAnswerId = ++_answerIdSeq;
+  return _pendingAnswerId;
+}
+
+/**
+ * Park the result for the answer just rendered, so its Save/Edit chips can find it.
+ * Call immediately after the render call that produced the chip row.
+ */
+function _parkAnswerPayload(result, meta = {}) {
+  if (!window.__pgDebugEnabled) return; // nothing can read it back outside authoring mode
+  _answerPayloads.set(_pendingAnswerId, { result, ...meta });
+  while (_answerPayloads.size > ANSWER_PAYLOAD_MAX) {
+    _answerPayloads.delete(_answerPayloads.keys().next().value);
+  }
+}
+window._parkAnswerPayload = _parkAnswerPayload;
+
+/** The parked result for a rendered answer, or undefined. Read by the study's Answer screen. */
+function _getAnswerPayload(answerId) {
+  return _answerPayloads.get(Number(answerId));
+}
+window._getAnswerPayload = _getAnswerPayload;
+
+/** Save/Edit chips for one rendered answer. Empty outside debug mode, like the Debug chip. */
+function _studyAuthorChipRow(answerId) {
+  if (!window.__pgDebugEnabled) return '';
+  const id = Number(answerId) || 0;
+  return `<button type="button" class="pageguide-study-save-chip" data-answer-id="${id}" title="Save this answer as the study response for a task + condition">💾 Save</button>` +
+    `<button type="button" class="pageguide-study-edit-chip" data-answer-id="${id}" title="Edit the answer text before saving">✏️ Edit</button>`;
+}
+window._studyAuthorChipRow = _studyAuthorChipRow;
+
+/** The task list, for the Save dialog's picker. Same file the study itself runs from. */
+async function _loadStudyTaskChoices() {
+  try {
+    const data = await fetch(chrome.runtime.getURL('user_study_data/tasks.json')).then(r => r.json());
+    return (data?.find || []).map(t => ({ id: t.id, question: t.question || '', url: t.url || '' }));
+  } catch (e) {
+    return [];
+  }
+}
+
+/** The condition the CURRENT panel toggles describe — what this answer was produced under. */
+function _currentStudyCondition() {
+  const nonGrounding = typeof _isPanelNonGrounding === 'function' && _isPanelNonGrounding();
+  return typeof _studyResponseCondition === 'function'
+    ? _studyResponseCondition(nonGrounding)
+    : (nonGrounding ? 'nongrounding' : 'grounding');
+}
+
+/**
+ * Which study task an answer belongs to, for the Edit dialog — which, unlike Save, has no picker.
+ *
+ * The study overlay publishes the task it is currently running (window.__pgStudyCurrentTask), and
+ * that is the authoritative answer while a session is in progress. Outside a session the answer is
+ * matched back to tasks.json by question text, then by page URL. Returns '' when nothing matches,
+ * which the caller treats as "keep the edit in memory only".
+ */
+async function _resolveStudyTaskId(parked) {
+  const live = window.__pgStudyCurrentTask;
+  if (live?.id) return String(live.id);
+  const tasks = await _loadStudyTaskChoices();
+  if (!tasks.length) return '';
+  const question = String(parked?.question || '').trim().toLowerCase();
+  if (question) {
+    const hit = tasks.find(t => (t.question || '').trim().toLowerCase() === question);
+    if (hit) return hit.id;
+  }
+  const url = String(parked?.url || '').trim();
+  if (url) {
+    const hit = tasks.find(t => t.url && t.url === url);
+    if (hit) return hit.id;
+  }
+  return '';
+}
+
+/**
+ * Persist an edited answer straight away, so an Apply is never lost because the researcher forgot
+ * to press Save afterwards. Updates the stored record for this (task, condition) when one exists,
+ * and records a fresh one when it does not.
+ *
+ * @returns {Promise<{status: 'updated'|'created'|'unresolved'|'failed', taskId?: string, condition?: string, error?: string}>}
+ */
+async function _persistStudyAnswerEdit(parked, newAnswer) {
+  const taskId = await _resolveStudyTaskId(parked);
+  if (!taskId) return { status: 'unresolved' };
+  const condition = _currentStudyCondition();
+  const existing = await getStudyResponse(taskId, condition);
+  // Existing records already carry downscaled crops — running them through the canvas again is
+  // pure loss, so only a freshly built record gets downscaled.
+  const res = existing
+    ? await saveStudyResponse(_applyStudyResponseEdit(existing, newAnswer), { downscale: false })
+    : await saveStudyResponse(_applyStudyResponseEdit(_buildStudyResponseRecord({
+        taskId,
+        condition,
+        url: parked?.url || '',
+        question: parked?.question || '',
+        result: parked?.result
+      }), newAnswer));
+  if (!res.saved) return { status: 'failed', taskId, condition, error: res.error };
+  return { status: existing ? 'updated' : 'created', taskId, condition };
+}
+
+/**
+ * Save dialog: pick the task this answer belongs to, confirm the detected condition, write.
+ * Reuses the memory-shot lightbox shell so it looks like every other panel dialog.
+ */
+async function openStudySaveDialog(answerId) {
+  const parked = _answerPayloads.get(Number(answerId));
+  if (!parked) {
+    addMessage('⚠️ This answer is no longer in memory — re-run the question and Save again.', 'error');
+    return;
+  }
+  const detected = _currentStudyCondition();
+  const tasks = await _loadStudyTaskChoices();
+  const shots = Array.isArray(parked.result?.findEvidenceShots) ? parked.result.findEvidenceShots.length : 0;
+  // The panel toggles say what this answer was PRODUCED under, but the researcher may be banking it
+  // for a different arm (a bare answer recorded with grounding on, say). Detected is the default,
+  // not the decision.
+  const conditionChoices = [
+    { id: 'grounding', label: 'Grounded' },
+    { id: 'nongrounding', label: 'Non-grounded' }
+  ];
+
+  closeMemoryShotLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  const options = tasks.length
+    ? tasks.map(t => `<option value="${escapeAttr(t.id)}">${escapeHtml(t.id)} — ${escapeHtml(t.question.slice(0, 70))}</option>`).join('')
+    : '<option value="">(no tasks in user_study_data/tasks.json)</option>';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Save study response">
+      <div class="pageguide-memory-shot-head">
+        <span>Save this answer as a study response</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body pageguide-study-save-body">
+        <label class="pageguide-study-save-label" for="pg-study-save-task">Task</label>
+        <select id="pg-study-save-task" class="pageguide-study-save-select">${options}</select>
+        <label class="pageguide-study-save-label" for="pg-study-save-condition">Condition</label>
+        <select id="pg-study-save-condition" class="pageguide-study-save-select">
+          <option value="both">Both arms — grounded, and a bare copy for non-grounded</option>
+          ${conditionChoices.map(c => `<option value="${c.id}"${c.id === detected ? ' selected' : ''}>${escapeHtml(c.label)}${c.id === detected ? ' (detected)' : ''}</option>`).join('')}
+        </select>
+        <!-- BOTH ARMS FROM ONE ANSWER, and derived rather than re-asked. The arms must differ in
+             grounding and in NOTHING ELSE; asking the model a second time returns different prose,
+             so the two arms would differ in content as well and nothing they measure would be
+             comparable. _stripStudyGrounding is the same function the live non-grounding mode
+             applies, so a banked bare answer reads exactly like a generated one. -->
+        <div class="pageguide-study-save-meta">
+          ${shots} evidence image${shots === 1 ? '' : 's'}
+          · ${Number(parked.result?.highlightCount) || 0} highlight(s)
+        </div>
+        <div class="pageguide-study-save-hint">Saving overwrites any existing response for this task and condition.</div>
+        <div class="pageguide-study-save-actions">
+          <button type="button" class="pageguide-study-save-confirm">Save</button>
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  overlay.querySelector('.pageguide-study-save-confirm')?.addEventListener('click', async () => {
+    const taskId = overlay.querySelector('#pg-study-save-task')?.value || '';
+    if (!taskId) { addMessage('⚠️ Pick a task first.', 'error'); return; }
+    const chosen = overlay.querySelector('#pg-study-save-condition')?.value || detected;
+    const base = {
+      taskId,
+      url: parked.url || '',
+      question: parked.question || '',
+      result: parked.result,
+    };
+
+    const saves = [];
+    if (chosen === 'both') {
+      // Grounded exactly as generated; non-grounded is that same answer with its markers taken out.
+      const grounded = _buildStudyResponseRecord(Object.assign({ condition: 'grounding' }, base));
+      const bare = _applyStudyResponseEdit(
+        _buildStudyResponseRecord(Object.assign({ condition: 'nongrounding' }, base)),
+        _stripStudyGrounding(grounded.answer_raw || grounded.answer_display || '')
+      );
+      // Derived, not hand-written: `edited` would claim a researcher rewrote it.
+      bare.edited = false;
+      // A bare answer has nothing to point at, so its evidence goes with its markers.
+      bare.evidence = [];
+      bare.highlight_count = 0;
+      saves.push(grounded, bare);
+    } else {
+      saves.push(_buildStudyResponseRecord(Object.assign({ condition: chosen }, base)));
+    }
+
+    const results = [];
+    for (const record of saves) results.push([record.condition, await saveStudyResponse(record)]);
+    closeMemoryShotLightbox();
+
+    const failed = results.filter(([, r]) => !r.saved);
+    if (failed.length) {
+      addMessage(`❌ Could not save ${failed.map(([c]) => c).join(' + ')}: `
+        + `${failed[0][1].error || 'unknown error'}`, 'error');
+      return;
+    }
+    const synced = results.every(([, r]) => r.synced);
+    addMessage(
+      `💾 Saved **${taskId}** · ${results.map(([c]) => c).join(' + ')}`
+      + `${synced ? ' (synced to Supabase)' : ' (local — publish with ⬆ Publish find)'}`,
+      'system'
+    );
+  });
+  document.body.appendChild(overlay);
+}
+window.openStudySaveDialog = openStudySaveDialog;
+
+/**
+ * Edit dialog: change the answer text before (or after) saving. Text only — evidence is left alone,
+ * because editing prose must never silently drop a screenshot.
+ */
+function openStudyEditDialog(answerId) {
+  const id = Number(answerId);
+  const parked = _answerPayloads.get(id);
+  if (!parked) {
+    addMessage('⚠️ This answer is no longer in memory — re-run the question to edit it.', 'error');
+    return;
+  }
+  const current = parked.result?.findAnswer || parked.result?.answer || '';
+
+  closeMemoryShotLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Edit answer">
+      <div class="pageguide-memory-shot-head">
+        <span>Edit the agent's answer</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body pageguide-study-save-body">
+        <textarea id="pg-study-edit-text" class="pageguide-study-edit-text" rows="12">${escapeHtml(current)}</textarea>
+        <div class="pageguide-study-save-hint">
+          Markers are live: deleting an <code>[ev:key]</code> removes that evidence chip, and changing the
+          quoted text inside <code>[N:"…"]</code> changes what gets highlighted on the page.
+        </div>
+        <div class="pageguide-study-save-actions">
+          <button type="button" class="pageguide-study-edit-apply">Apply</button>
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  overlay.querySelector('.pageguide-study-edit-apply')?.addEventListener('click', async () => {
+    const next = overlay.querySelector('#pg-study-edit-text')?.value ?? '';
+    // Update the parked result so a subsequent Save records the edit, and re-render the visible
+    // message so the researcher sees exactly what a participant would.
+    if (parked.result.findAnswer) parked.result.findAnswer = next;
+    parked.result.answer = next;
+    _rerenderAnswerMessage(id, parked.result);
+    closeMemoryShotLightbox();
+    // Then write it through, so the edit survives the session even without a separate Save.
+    const res = await _persistStudyAnswerEdit(parked, next);
+    if (res.status === 'unresolved') {
+      addMessage('✏️ Edit applied to this answer only — no matching study task, so use 💾 Save to record it.', 'system');
+    } else if (res.status === 'failed') {
+      addMessage(`❌ Edit applied but not saved: ${res.error || 'unknown error'}`, 'error');
+    } else {
+      addMessage(`✏️ Saved edit to **${res.taskId}** · ${res.condition}`, 'system');
+    }
+  });
+  document.body.appendChild(overlay);
+}
+window.openStudyEditDialog = openStudyEditDialog;
+
+/**
+ * Replace the body of an already-rendered answer with edited text, keeping its evidence and chips.
+ * Finds the message by the answer id stamped on its Save chip.
+ *
+ * There can be more than one copy on screen: the study overlay replays the same bubble (chips and
+ * all) on its Answer screen, and an edit made from there must update both, not just the chat.
+ */
+function _rerenderAnswerMessage(answerId, result) {
+  const chips = document.querySelectorAll(`.pageguide-study-save-chip[data-answer-id="${answerId}"]`);
+  if (!chips.length) return;
+  const text = result.findAnswer || result.answer || '';
+  const html = _expandEvidenceKeyCitations(
+    parseCitations(parseMarkdown(text)),
+    Array.isArray(result.findEvidenceShots) ? result.findEvidenceShots : []
+  );
+  chips.forEach((chip) => {
+    const msg = chip.closest('.pageguide-message');
+    if (!msg) return;
+    // The Find card keeps its answer in a styled div; a plain Ask bubble puts it straight in the
+    // message. Target whichever this is, leaving the evidence strip and chip row untouched.
+    const findBody = msg.querySelector('.pageguide-find-answer > div:nth-of-type(2)');
+    if (findBody) {
+      findBody.innerHTML = html;
+      return;
+    }
+    const chipRow = msg.querySelector('.pageguide-debug-answer-row');
+    msg.innerHTML = html + (chipRow ? chipRow.outerHTML : '');
+  });
 }
 
 // Evidence captured for the answer currently being rendered. addMessage() runs before the caller
@@ -7504,15 +8036,33 @@ function _debugRawResponseHtml(p) {
     ? escapeHtml(String(p.rawResponse))
     : '(pending… the call had not returned when this entry was written)';
   const timing = p && p.durationMs != null ? ` · ${Math.round(p.durationMs)}ms` : '';
+  // What this one call cost, beside how long it took. Only OpenRouter prices a call, so this is
+  // absent for Gemini/OpenAI rather than shown as zero.
+  const cost = _debugUsageLabel(p?.usage);
   const label = failed ? 'Raw model response — ERROR' : 'Raw model response';
   return `
     <details open style="margin-top: 0; display: block; border: 1px solid ${failed ? '#d32f2f' : 'var(--pg-border)'}; border-radius: 8px; padding: 8px; background: var(--pg-card);">
-      <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: ${failed ? '#d32f2f' : 'var(--pg-accent)'}; outline: none;">${label}${timing}</summary>
+      <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: ${failed ? '#d32f2f' : 'var(--pg-accent)'}; outline: none;">${label}${timing}${cost}</summary>
       <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin-top: 6px; border: 1px solid var(--pg-border); max-height: 30vh; overflow-y: auto; color: var(--pg-text);">${body}</pre>
     </details>
   `;
 }
 window._debugRawResponseHtml = _debugRawResponseHtml;
+
+/**
+ * The " · $0.0021 · 1,204→180 tok" suffix for one call's usage block. Pure; '' when the provider
+ * reported nothing (Gemini and OpenAI return no price, and a failed call returns no usage at all).
+ */
+function _debugUsageLabel(usage) {
+  if (!usage) return '';
+  const bits = [];
+  if (usage.costUsd != null) bits.push(formatCostUsd(usage.costUsd));
+  if (usage.promptTokens != null || usage.completionTokens != null) {
+    bits.push(`${Number(usage.promptTokens) || 0}→${Number(usage.completionTokens) || 0} tok`);
+  }
+  return bits.length ? ` · ${escapeHtml(bits.join(' · '))}` : '';
+}
+window._debugUsageLabel = _debugUsageLabel;
 
 function _debugImageIdForAttachment(img, fallback = '') {
   const explicit = String(img?.id || img?.image_id || img?.source_image_id || '').trim();
@@ -7579,6 +8129,21 @@ async function openAnswerDebugView(from) {
 }
 window.openAnswerDebugView = openAnswerDebugView;
 
+/**
+ * "💰 $0.0184 · 12 calls" for the set of debug entries the dialog is showing. Pure.
+ *
+ * Summed from the entries' own usage blocks rather than the ledger, because the dialog is scoped to
+ * exactly these entries — including, when opened from an answer's 🐞 chip, precisely the calls that
+ * answer paid for.
+ */
+function _debugTotalCostLabel(prompts) {
+  const list = Array.isArray(prompts) ? prompts : [];
+  const totals = sumCostEntries(list.map(p => p?.usage).filter(Boolean));
+  if (!totals.calls) return '';
+  return `💰 ${formatCostUsd(totals.costUsd)} · ${totals.calls} call${totals.calls === 1 ? '' : 's'}`;
+}
+window._debugTotalCostLabel = _debugTotalCostLabel;
+
 function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId, opts = {}) {
   // answerOnly: opened from an answer's 🐞 chip, so it shows just that answer's calls — no session
   // picker to get lost in.
@@ -7592,6 +8157,7 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId, o
     <div class="pageguide-memory-shot-dialog" role="dialog" aria-modal="true" style="padding: 16px; overflow: auto; display: flex; flex-direction: column; height: 85vh; width: 90vw; max-width: 680px; box-sizing: border-box;">
       <div class="pageguide-memory-shot-head" style="margin-bottom: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;">
         <span style="font-size: 15px; font-weight: 800; color: var(--pg-text);">${answerOnly ? '🐞 Debug this answer' : '🐞 Debug Agent Prompt History'}</span>
+        <span id="pageguide-debug-cost-total" style="font-size: 12px; font-weight: 700; color: var(--pg-muted); margin-left: auto; margin-right: 10px;">${escapeHtml(_debugTotalCostLabel(livePrompts))}</span>
         <button type="button" class="pageguide-memory-shot-close" id="pageguide-debug-prompt-close" aria-label="Close prompt viewer" style="font-size: 20px; border: 0; background: transparent; cursor: pointer; color: var(--pg-muted);">×</button>
       </div>
       <div style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;">
@@ -7839,6 +8405,48 @@ function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId, o
     // is either still in flight or was rolled off the 50-entry cap mid-call.
     html += _debugRawResponseHtml(p);
 
+    const mediaDiag = Array.isArray(p.metadata?.findImageDiagnostics) ? p.metadata.findImageDiagnostics : [];
+    if (mediaDiag.length) {
+      const rows = mediaDiag.map(d => {
+        const id = d.id ? `<code style="color: var(--pg-accent);">${escapeHtml(d.id)}</code>` : '<span style="color: var(--pg-muted);">(not sent)</span>';
+        const err = d.captureError ? ` · error=${escapeHtml(d.captureError)}` : '';
+        const sel = d.selector ? `<div style="color: var(--pg-muted); word-break: break-all;">${escapeHtml(d.selector)}</div>` : '';
+        return `<div style="border-bottom: 1px solid var(--pg-border); padding: 6px 0;">
+          <div>${id} <b>${escapeHtml(d.status || 'unknown')}</b> · score=${escapeHtml(String(d.score ?? '?'))} · ${escapeHtml(d.why || '')}${err}</div>
+          <div style="color: var(--pg-text);">${escapeHtml(d.label || '')}</div>
+          ${sel}
+        </div>`;
+      }).join('');
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Media Candidate Diagnostics (${mediaDiag.length})</summary>
+          <div style="margin-top: 6px; max-height: 28vh; overflow-y: auto;">${rows}</div>
+        </details>
+      `;
+    }
+
+    const selectionDiag = p.metadata?.imageSelectionDiagnostics || null;
+    if (selectionDiag) {
+      const kept = Array.isArray(selectionDiag.selectedImageIds) ? selectionDiag.selectedImageIds.join(', ') : '';
+      const candidates = Array.isArray(selectionDiag.candidateImageIds) ? selectionDiag.candidateImageIds.join(', ') : '';
+      const dropped = Array.isArray(selectionDiag.droppedImageIds) ? selectionDiag.droppedImageIds.join(', ') : '';
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Image Selection</summary>
+          <div style="display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin-top: 6px; line-height: 1.4;">
+            <span style="font-weight: 700; color: var(--pg-muted);">Status:</span>
+            <span style="color: var(--pg-text);">${escapeHtml(selectionDiag.status || 'unknown')}</span>
+            ${candidates ? `<span style="font-weight: 700; color: var(--pg-muted);">Candidates:</span><span style="color: var(--pg-text);">${escapeHtml(candidates)}</span>` : ''}
+            <span style="font-weight: 700; color: var(--pg-muted);">Kept:</span>
+            <span style="color: var(--pg-text);">${escapeHtml(kept || '(none)')}</span>
+            ${dropped ? `<span style="font-weight: 700; color: var(--pg-muted);">Dropped:</span><span style="color: var(--pg-text);">${escapeHtml(dropped)}</span>` : ''}
+            ${selectionDiag.reason ? `<span style="font-weight: 700; color: var(--pg-muted);">Reason:</span><span style="color: var(--pg-text);">${escapeHtml(selectionDiag.reason)}</span>` : ''}
+            ${selectionDiag.error ? `<span style="font-weight: 700; color: var(--pg-muted);">Error:</span><span style="color: #d32f2f;">${escapeHtml(selectionDiag.error)}</span>` : ''}
+          </div>
+        </details>
+      `;
+    }
+
     // System Prompt Block
     html += `
       <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
@@ -8039,4 +8647,8 @@ function updateDebugButtonVisibility(enabled, alwaysShowPromptBtn = false) {
   if (recapWrap) {
     recapWrap.style.display = enabled ? '' : 'none';
   }
+  // Recording is the researcher's half of the study; a participant only ever sees "User Study".
+  document.querySelectorAll('.pageguide-record-study-item, .pageguide-capture-study-btn').forEach(el => {
+    el.style.display = enabled ? '' : 'none';
+  });
 }

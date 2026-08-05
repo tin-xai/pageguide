@@ -33,14 +33,18 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "<all_urls>"
+      ],
       "js": [
         "content/prompts.js",
         "content/utils.js",
         "rewind/rewind_store.js",
         "content/functions/scroll.js",
+        "content/functions/page_snapshot.js",
         "content/functions/capture_screenshot.js",
         "content/functions/highlight.js",
+        "content/functions/study_pick.js",
         "content/functions/highlight_pdf.js",
         "content/functions/main_router.js",
         "content/tasks/ask.js",
@@ -51,7 +55,9 @@
         "content/study_tracker.js",
         "content/content.js"
       ],
-      "css": ["content/content.css"],
+      "css": [
+        "content/content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -63,8 +69,17 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json", "rewind/*", "user_study_data/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "icons/*",
+        "lib/*",
+        "pdf-viewer/*",
+        "guide_tutorials.json",
+        "rewind/*",
+        "user_study_data/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

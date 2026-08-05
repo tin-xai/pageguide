@@ -276,11 +276,74 @@ const _INTERACTIVE_ROLES = new Set([
   'alertdialog', 'gridcell',
 ]);
 
-function createPageIndex(maxItems = 200, interactiveOnly = false) {
+/**
+ * What an open popup, dialog, menu or dropdown looks like. YouTube, Google and most SPAs render
+ * these into their own containers rather than inline, so there is no structural rule that finds
+ * them — only this list of the shapes they actually take.
+ *
+ * ONE list, read by two callers that must agree: createPageIndex (below), which indexes what is on
+ * screen, and gv2PickScroller (content/functions/scroll.js), which decides what a scroll should
+ * move. If they disagreed, the agent could see an option inside a filter popup, ask to scroll to
+ * it, and have the scroll go to the page behind — which is the bug this const exists to prevent
+ * from coming back.
+ */
+const PAGEGUIDE_POPUP_SELECTORS = [
+  '[role="menu"]',
+  '[role="dialog"]',
+  '[role="listbox"]',
+  'ytd-popup-container',
+  'ytd-menu-popup-renderer',
+  'tp-yt-iron-dropdown',
+  '[class*="popup"]',
+  '[class*="dropdown"]',
+  '[class*="menu"][style*="display: block"]',
+  '[class*="menu"][style*="visibility: visible"]',
+  '[aria-expanded="true"]',
+  '.MuiMenu-paper',
+  '.MuiPopover-paper',
+  '[data-radix-popper-content-wrapper]'
+];
+if (typeof window !== 'undefined') window.PAGEGUIDE_POPUP_SELECTORS = PAGEGUIDE_POPUP_SELECTORS;
+
+/**
+ * The index a previous run installed, if it is still usable — the map [N] citations resolve through.
+ *
+ * Anything that walks the page for its own purposes AFTER an answer has been given must read this
+ * rather than rebuild: createPageIndex renumbers from the live DOM, and the answer's own highlight
+ * spans change what that walk sees (isPageGuideElement skips them, taking the elements they mark out
+ * of the index), so a rebuild silently renumbers everything after the first highlight. The citations
+ * in the answer then point at the wrong elements — which is what "the evidence span cites to the
+ * wrong place" looked like from the reader's side.
+ *
+ * @returns {object|null} the live index map, or null when there is nothing usable to reuse
+ */
+function pageguideExistingIndexMap() {
+  const map = (typeof window !== 'undefined') ? window._pageguideIndex : null;
+  if (!map || typeof map !== 'object') return null;
+  const keys = Object.keys(map);
+  if (!keys.length) return null;
+  // A map full of detached elements is a leftover from a page that has since navigated.
+  const alive = keys.some(k => { try { return document.contains(map[k]); } catch (e) { return false; } });
+  return alive ? map : null;
+}
+if (typeof window !== 'undefined') window.pageguideExistingIndexMap = pageguideExistingIndexMap;
+
+/**
+ * Build the numbered element index the LLM cites against.
+ *
+ * @param {number} maxItems - how many elements to index
+ * @param {boolean} interactiveOnly - guide mode: only clickable/typable elements
+ * @param {number} startIndex - the number the first element gets (always 1 today).
+ * @returns {{indexText: string, indexMap: object, count: number, startIndex: number}}
+ */
+function createPageIndex(maxItems = 200, interactiveOnly = false, startIndex = 1) {
   const indexMap = {};
   const indexLines = [];
-  let idx = 1;
-  
+  let idx = startIndex;
+  // Last number this index may hand out. Was a bare `maxItems` comparison when numbering always
+  // began at 1.
+  const lastIndex = startIndex + maxItems - 1;
+
   const seen = new Set();
   const seenText = new Set();
   
@@ -308,7 +371,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
   const walker = walkRoot(document.body);
   
   let el;
-  while ((el = walker.nextNode()) && idx <= maxItems) {
+  while ((el = walker.nextNode()) && idx <= lastIndex) {
     // Skip our UI
     if (isPageGuideElement(el)) continue;
     
@@ -364,25 +427,10 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
   
   // Second pass: Look for popup/overlay containers that might have menus
   // YouTube, Google, and many SPAs render popups in special containers
-  const popupSelectors = [
-    '[role="menu"]',
-    '[role="dialog"]',
-    '[role="listbox"]',
-    'ytd-popup-container',
-    'ytd-menu-popup-renderer',
-    'tp-yt-iron-dropdown',
-    '[class*="popup"]',
-    '[class*="dropdown"]',
-    '[class*="menu"][style*="display: block"]',
-    '[class*="menu"][style*="visibility: visible"]',
-    '[aria-expanded="true"]',
-    '.MuiMenu-paper',
-    '.MuiPopover-paper',
-    '[data-radix-popper-content-wrapper]'
-  ];
-  
+  const popupSelectors = PAGEGUIDE_POPUP_SELECTORS;
+
   const processElement = (el) => {
-    if (idx > maxItems) return;
+    if (idx > lastIndex) return;
     if (isPageGuideElement(el)) return;
     if (seen.has(el)) return;
     
@@ -437,10 +485,10 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
   ];
 
   socialMediaSelectors.forEach(selector => {
-    if (idx > maxItems) return;
+    if (idx > lastIndex) return;
     try {
       document.querySelectorAll(selector).forEach(el => {
-        if (idx > maxItems) return;
+        if (idx > lastIndex) return;
         if (isPageGuideElement(el)) return;
         if (seen.has(el)) return;
 
@@ -468,7 +516,7 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
 
   // SPA Fallback: If we found very few elements, try broader selectors
   // This helps with React/Vue/Angular apps that may not have proper accessibility
-  if (idx < 10) {
+  if (idx - startIndex < 9) {
     console.log('🤖 Few elements found, trying SPA fallback selectors');
     
     // Common interactive elements in SPAs
@@ -482,10 +530,10 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
     ];
     
     spaSelectors.forEach(selector => {
-      if (idx > maxItems) return;
+      if (idx > lastIndex) return;
       try {
         document.querySelectorAll(selector).forEach(el => {
-          if (idx > maxItems) return;
+          if (idx > lastIndex) return;
           if (seen.has(el)) return;
           if (isPageGuideElement(el)) return;
           
@@ -511,13 +559,17 @@ function createPageIndex(maxItems = 200, interactiveOnly = false) {
   // Store globally
   window._pageguideIndex = indexMap;
   
-  console.log('🤖 Indexed', idx - 1, 'elements (including fallbacks)');
+  console.log('🤖 Indexed', idx - startIndex, 'elements (including fallbacks)');
   console.log('🤖 Index keys stored:', Object.keys(indexMap).slice(0, 10), '...');
-  
+
   return {
     indexText: indexLines.join('\n'),
     indexMap: indexMap,
-    count: idx - 1
+    // How many elements were indexed, NOT the last number handed out — those differ once the index
+    // starts at an offset.
+    count: idx - startIndex,
+    startIndex,
+    lastIndex: idx - 1
   };
 }
 
@@ -2689,14 +2741,78 @@ const GV2_FIND_STOPWORDS = new Set([
   'all', 'can', 'will', 'would', 'should', 'could', 'been', 'being', 'page', 'show', 'shows'
 ]);
 
+function gv2MediaNormalizeText(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function gv2QuestionWantsVisualMedia(query) {
+  const q = gv2MediaNormalizeText(query);
+  return /\b(color|colour|shirt|clothing|wearing|dress|hat|beard|face|man|woman|person|people|old|young|instrument|ukulele|guitar|lute|painting|portrait|photo|image|picture|figure|chart|diagram|map|visual|shown|look|looks|see|visible)\b/.test(q);
+}
+
 /** Content words of a phrase: lowercase, punctuation-free, no stopwords, 3+ chars. */
 function gv2MediaTokens(text) {
-  return String(text || '')
-    .toLowerCase()
+  return gv2MediaNormalizeText(text)
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .split(' ')
     .filter(t => t.length > 2 && !GV2_FIND_STOPWORDS.has(t));
+}
+
+function gv2MediaDescriptor(el) {
+  if (!el) return '';
+  const parts = [];
+  const seen = new Set();
+  const clean = (v, max = 240) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, max);
+  const add = (kind, value, max) => {
+    const text = clean(value, max);
+    if (!text) return;
+    const key = `${kind}:${text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    parts.push({ kind, text });
+  };
+  const mediaEl = (el.tagName === 'FIGURE' || el.tagName === 'PICTURE')
+    ? (el.querySelector && el.querySelector('img, video, canvas, svg')) || el
+    : el;
+  add('alt', mediaEl.getAttribute && mediaEl.getAttribute('alt'));
+  add('title', mediaEl.getAttribute && mediaEl.getAttribute('title'));
+  add('aria-label', mediaEl.getAttribute && mediaEl.getAttribute('aria-label'));
+  if (mediaEl !== el) {
+    add('title', el.getAttribute && el.getAttribute('title'));
+    add('aria-label', el.getAttribute && el.getAttribute('aria-label'));
+  }
+  const describedBy = (mediaEl.getAttribute && mediaEl.getAttribute('aria-describedby')) ||
+    (el.getAttribute && el.getAttribute('aria-describedby'));
+  if (describedBy && el.ownerDocument) {
+    describedBy.split(/\s+/).forEach(id => {
+      try { add('describedby', el.ownerDocument.getElementById(id)?.textContent, 300); } catch (e) {}
+    });
+  }
+  const fig = el.closest && el.closest('figure');
+  if (fig) {
+    const cap = fig.querySelector('figcaption');
+    add('caption', cap && cap.textContent, 300);
+  }
+  const parent = el.parentElement;
+  if (parent && parts.length < 3) {
+    const sib = parent.querySelector('figcaption, .caption, [class*="caption"], [class*="credit"], [class*="source"]');
+    add('nearby', sib && sib.textContent, 300);
+  }
+  let sib = el.nextElementSibling;
+  for (let i = 0; sib && i < 3; i++, sib = sib.nextElementSibling) {
+    const cls = String(sib.className || '');
+    const role = String(sib.getAttribute?.('role') || '');
+    if (/caption|credit|source|figcaption/i.test(cls) || role === 'note' || sib.tagName === 'P') {
+      add('nearby', sib.textContent, 300);
+      break;
+    }
+  }
+  if (!parts.length && parent) add('parent', parent.textContent, 300);
+  return parts;
 }
 
 /**
@@ -2705,12 +2821,22 @@ function gv2MediaTokens(text) {
  * @returns {string}
  */
 function gv2MediaDescribe(el) {
+  const structured = gv2MediaDescriptor(el);
+  if (Array.isArray(structured) && structured.length) {
+    return structured.map(p => p.text).join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+  }
   if (!el) return '';
   const parts = [];
   const push = (v) => { const s = String(v || '').trim(); if (s) parts.push(s); };
   push(el.getAttribute && el.getAttribute('alt'));
   push(el.getAttribute && el.getAttribute('title'));
   push(el.getAttribute && el.getAttribute('aria-label'));
+  const describedBy = el.getAttribute && el.getAttribute('aria-describedby');
+  if (describedBy && el.ownerDocument) {
+    describedBy.split(/\s+/).forEach(id => {
+      try { push(el.ownerDocument.getElementById(id)?.textContent); } catch (e) {}
+    });
+  }
   const fig = el.closest && el.closest('figure');
   if (fig) {
     const cap = fig.querySelector('figcaption');
@@ -2719,10 +2845,50 @@ function gv2MediaDescribe(el) {
   // Nearest caption-ish sibling text, capped so a whole article body never drowns the signal.
   const parent = el.parentElement;
   if (parent && parts.length < 2) {
-    const sib = parent.querySelector('figcaption, .caption, [class*="caption"]');
+    const sib = parent.querySelector('figcaption, .caption, [class*="caption"], [class*="credit"], [class*="source"]');
     push(sib && sib.textContent);
   }
+  let sib = el.nextElementSibling;
+  for (let i = 0; sib && i < 3; i++, sib = sib.nextElementSibling) {
+    const cls = String(sib.className || '');
+    const role = String(sib.getAttribute?.('role') || '');
+    if (/caption|credit|source|figcaption/i.test(cls) || role === 'note' || sib.tagName === 'P') {
+      push(sib.textContent);
+      break;
+    }
+  }
+  if (!parts.length && parent) push(parent.textContent);
   return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+}
+
+function gv2MediaHasBackgroundImage(el) {
+  if (!el) return false;
+  const inline = String(el.getAttribute?.('style') || '');
+  if (/background-image\s*:\s*url\(/i.test(inline)) return true;
+  try {
+    const bg = el.ownerDocument?.defaultView?.getComputedStyle?.(el)?.backgroundImage || '';
+    return /url\(/i.test(bg) && bg !== 'none';
+  } catch (e) {
+    return false;
+  }
+}
+
+function gv2MediaDiscoveryNodes(doc) {
+  const seen = new Set();
+  const out = [];
+  const add = (el) => {
+    if (!el || seen.has(el)) return;
+    seen.add(el);
+    out.push(el);
+  };
+  try {
+    doc.querySelectorAll('img, picture, figure, canvas, svg, video, [style*="background-image"]').forEach(add);
+    doc.querySelectorAll('main *, article *, [role="main"] *').forEach(el => {
+      if (out.length > 220) return;
+      if (gv2MediaHasBackgroundImage(el)) add(el);
+    });
+  } catch (e) {}
+  return out;
 }
 
 /**
@@ -2738,28 +2904,36 @@ function gv2MediaDescribe(el) {
 function gv2FindMediaCandidates(query, opts = {}) {
   const doc = opts.doc || (typeof document !== 'undefined' ? document : null);
   if (!doc) return [];
-  const limit = Number.isFinite(opts.limit) ? opts.limit : 2;
+  const limit = opts.limit === Infinity ? Infinity : (Number.isFinite(opts.limit) ? opts.limit : 2);
   const minPx = Number.isFinite(opts.minPx) ? opts.minPx : GV2_FIND_MEDIA_MIN_PX;
+  const includeAll = !!opts.includeAll;
   const queryTokens = gv2MediaTokens(query);
+  const visualIntent = gv2QuestionWantsVisualMedia(query);
 
   const out = [];
   let nodes = [];
   try {
-    nodes = Array.from(doc.querySelectorAll('img, figure, canvas, svg, video, [style*="background-image"]'));
+    nodes = gv2MediaDiscoveryNodes(doc);
   } catch (e) {
     return [];
   }
 
-  for (const el of nodes) {
+  for (let el of nodes) {
     if (typeof isPageGuideElement === 'function' && isPageGuideElement(el)) continue;
     // A <figure> and the <img> inside it are the same picture; keep the figure, which carries the
     // caption, and skip the child.
-    if (el.tagName !== 'FIGURE' && el.closest && el.closest('figure')) continue;
+    if (el.tagName !== 'FIGURE' && el.tagName !== 'PICTURE' && el.closest && el.closest('figure')) continue;
+    if (el.tagName !== 'PICTURE' && el.closest && el.closest('picture')) continue;
+    if (el.tagName === 'PICTURE') {
+      const img = el.querySelector('img');
+      if (img) el = img;
+    }
 
     let rect = null;
     try { rect = el.getBoundingClientRect(); } catch (e) { rect = null; }
     if (!rect || rect.width < minPx || rect.height < minPx) continue;
 
+    const descriptor = (typeof gv2MediaDescriptor === 'function') ? gv2MediaDescriptor(el) : [];
     const text = gv2MediaDescribe(el);
     const haystack = `${text} ${el.className || ''} ${el.id || ''}`;
     const inChrome = !!(el.closest && el.closest('header, footer, nav, aside'));
@@ -2768,43 +2942,305 @@ function gv2FindMediaCandidates(query, opts = {}) {
     const textTokens = gv2MediaTokens(text);
     const hits = queryTokens.filter(t => textTokens.some(w => w.includes(t) || t.includes(w))).length;
     const overlap = queryTokens.length ? hits / queryTokens.length : 0;
+    if (noisy && overlap < 0.4) continue;
 
     // Area matters, but only as a tiebreak — a hero banner should not beat the figure the question
     // names. log10 of the area in px keeps it to roughly 0..1.
     const area = rect.width * rect.height;
     const areaScore = Math.min(1, Math.log10(Math.max(10, area)) / 6);
 
-    const hasCaption = !!(el.closest && el.closest('figure') && el.closest('figure').querySelector('figcaption'));
+    const hasCaption = !!(el.closest && el.closest('figure') && el.closest('figure').querySelector('figcaption')) ||
+      /caption|credit|source/i.test(String(el.nextElementSibling?.className || ''));
     const inMain = !!(el.closest && el.closest('main, article'));
+    const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < (window.innerHeight || 0) && rect.left < (window.innerWidth || 0);
+    const viewportDistance = inViewport ? 0 : Math.min(1, Math.abs(rect.top) / Math.max(1, window.innerHeight || 800));
+
+    const isLargeContentMedia = area >= minPx * minPx * 4 && !inChrome && !noisy;
 
     let score = overlap * 3 + areaScore;
     if (hasCaption) score += 0.35;
     if (inMain) score += 0.25;
+    if (isLargeContentMedia) score += 0.2;
+    if (inViewport) score += 0.2;
+    else score -= viewportDistance * 0.15;
+    if (visualIntent && isLargeContentMedia) score += 0.45;
     if (inChrome) score -= 0.6;
     if (noisy) score -= 1.2;
 
     const why = `overlap=${overlap.toFixed(2)} area=${areaScore.toFixed(2)}` +
-      `${hasCaption ? ' +caption' : ''}${inMain ? ' +main' : ''}${inChrome ? ' -chrome' : ''}${noisy ? ' -noise' : ''}`;
-    if (score <= 0) continue;
+      `${hasCaption ? ' +caption' : ''}${inMain ? ' +main' : ''}${isLargeContentMedia ? ' +large' : ''}${inViewport ? ' +viewport' : ''}${visualIntent ? ' +visual-query' : ''}${inChrome ? ' -chrome' : ''}${noisy ? ' -noise' : ''}`;
+    if (!includeAll && score <= 0 && !(visualIntent && isLargeContentMedia && areaScore >= 0.55)) continue;
 
     out.push({
       el,
       score,
       label: (text || el.tagName.toLowerCase()).slice(0, 120),
+      descriptor,
       why
     });
   }
 
   out.sort((a, b) => b.score - a.score);
-  return out.slice(0, Math.max(0, limit));
+  return limit === Infinity ? out : out.slice(0, Math.max(0, limit));
 }
 
 if (typeof window !== 'undefined') {
   window.gv2MediaTokens = gv2MediaTokens;
+  window.gv2QuestionWantsVisualMedia = gv2QuestionWantsVisualMedia;
+  window.gv2MediaDescriptor = gv2MediaDescriptor;
   window.gv2MediaDescribe = gv2MediaDescribe;
+  window.gv2MediaDiscoveryNodes = gv2MediaDiscoveryNodes;
   window.gv2FindMediaCandidates = gv2FindMediaCandidates;
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports.gv2MediaTokens = gv2MediaTokens;
+  module.exports.gv2QuestionWantsVisualMedia = gv2QuestionWantsVisualMedia;
+  module.exports.gv2MediaDescriptor = gv2MediaDescriptor;
+  module.exports.gv2MediaDescribe = gv2MediaDescribe;
   module.exports.gv2FindMediaCandidates = gv2FindMediaCandidates;
+}
+
+// ===== CITATION MARKER STRIPPING =====
+// Lives here rather than beside its callers in content/tasks/ask.js because two very different
+// places need the SAME strip: the Non-grounding arm strips a generated answer on the way out
+// (gv2RunFind / handleAsk), and the study's Answer screen strips a banked grounded answer to derive
+// the matched non-grounded recording (_stripStudyGrounding, sidepanel/study_responses.js). If those
+// two ever diverged, a recorded bare answer would not read like a generated one, which is the whole
+// thing the paired recordings exist to rule out. content/utils.js is loaded by both the content
+// scripts (manifest.json, before ask.js) and the side panel (sidepanel/panel.html).
+
+/** Fold a fragment to comparable text: no markdown emphasis, no quotes, no case, single spaces. */
+function _citationCompareText(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[*_`"']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Content words of a fragment: punctuation dropped, so "world," and "world" are the same word. */
+function _citationTokens(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(t => t.length > 2);
+}
+
+/**
+ * Does the prose around the marker already say what the cited span says? Exact containment is not
+ * enough — models paraphrase and then cite the page's near-identical wording, which inlines as an
+ * obvious stutter. Two signals catch the real cases:
+ *
+ *   seam  — the prose right before the marker ends with the span's opening words, or the prose
+ *           right after starts with its closing words:
+ *           "…featured the Rose Cross lamen [10:"featured the Rose Cross lamen of this famous …"]
+ *            of this famous society."
+ *   ratio — most of the span's content words are already in the surrounding sentence:
+ *           "…in the Theosophical Society [7:"Theosophical Society's hierarchy of ascended …"]"
+ *
+ * Spans under three content words are judged by exact containment only: a two-word overlap says
+ * nothing, and dropping "within 30 days" would put a hole back in the sentence.
+ *
+ * @param {string} before - normalized prose preceding the marker
+ * @param {string} after - normalized prose following the marker
+ * @param {string} span - normalized cited text
+ * @returns {boolean}
+ */
+function _citationEchoesProse(before, after, span) {
+  const spanTokens = _citationTokens(span);
+  if (!spanTokens.length) return true;
+  const beforeStr = _citationTokens(before).join(' ');
+  const afterStr = _citationTokens(after).join(' ');
+  const spanStr = spanTokens.join(' ');
+
+  if (beforeStr.endsWith(spanStr) || afterStr.startsWith(spanStr)) return true;
+  if (spanTokens.length < 3) return false;
+
+  // Try progressively shorter openings/closings (down to 3 words): the prose repeats "featured
+  // the rose cross lamen" — five words — so a fixed-length probe misses it.
+  for (let k = Math.min(8, spanTokens.length); k >= 3; k--) {
+    if (beforeStr.endsWith(spanTokens.slice(0, k).join(' '))) return true;
+    if (afterStr.startsWith(spanTokens.slice(-k).join(' '))) return true;
+  }
+
+  // Substring rather than exact token match, so "pathways" counts as "pathway".
+  const windowStr = `${beforeStr} ${afterStr}`;
+  const hits = spanTokens.filter(t => windowStr.includes(t)).length;
+  return hits / spanTokens.length >= 0.7;
+}
+
+/**
+ * Strip citation markers from an answer, keeping the model's prose intact and complete. Used by
+ * Non-grounding baseline mode (isNonGroundingModeOn) so the displayed answer has no clickable
+ * citation chips at all — not just no on-page highlight — since parseCitations() in the side panel
+ * would otherwise turn any leftover marker into a clickable span regardless of whether
+ * applyHighlightsFromCitations() ever ran on the page.
+ *
+ * A cited span plays one of two roles, and they need opposite treatment:
+ *
+ *   1. It repeats prose that is already there — `**Peter Thiel** [12:"Peter Thiel"] wrote…`.
+ *      Grounding mode collapses the marker to a chip so the repeat is invisible; inlining it
+ *      printed the phrase twice ("Peter Thiel Peter Thiel"). The marker is dropped.
+ *   2. It carries words the sentence needs — `Contact the depot [12:"within 30 days"] of travel.`
+ *      Deleting it left a gap ("Contact the depot of travel."). The span is kept.
+ *
+ * So each marker is compared against the prose right before and after it: a duplicate is removed,
+ * anything else is unwrapped in place. Markers with no text of their own ([N], [N, M], [idx:1-2])
+ * are always removed — there is nothing to keep.
+ *
+ * @param {string} answer - Answer text with citation markers
+ * @returns {string} The same text, marker-free, with no gaps and no repeats
+ */
+function stripCitationMarkers(answer) {
+  if (!answer) return answer;
+  // Curly quotes must be folded to straight ones with explicit escapes — a literal ["”] in the
+  // source is just a straight quote twice and never matched the smart quotes models emit.
+  const normalized = String(answer)
+    .replace(/[“”„‟"]/g, '"')
+    .replace(/[‘’‚‛']/g, "'");
+
+  // One pass over every marker shape, so each match can see the text around it. The index part
+  // allows comma-separated lists ([517, 519:"text"]) the same way parseCitations does. The quoted
+  // alternatives take everything up to the LAST quote before the closing bracket, because cited
+  // page text frequently contains quotes of its own:
+  //   [94:"claimed sanction from the "Great White Lodge""]
+  // A [^"]+ capture stops at the inner quote, fails to reach the bracket, and leaves the whole
+  // marker sitting in the answer as raw text.
+  const MARKER = /\[(?:Page\s*)?[\d,\s]+:\s*(?:"([^\]]*)"|'([^\]]*)'|([^\]"']+))\s*\]|\[idx:[^\]]+\]|\[[\d,\s]+\](?!:)/gi;
+
+  return normalized
+    .replace(MARKER, (match, dq, sq, uq, offset, whole) => {
+      const span = dq || sq || uq;
+      if (!span) return ''; // [N] / [N, M] / [idx:1-2] — no text of its own
+      const spanCmp = _citationCompareText(span);
+      if (!spanCmp) return '';
+
+      // Look at the sentence on both sides of the marker. The windows are generous because the
+      // repeat is often split across the marker (prose ends with the span's opening words, then
+      // continues with its closing ones).
+      const beforeRaw = whole.slice(Math.max(0, offset - spanCmp.length - 120), offset);
+      const afterRaw = whole.slice(offset + match.length, offset + match.length + spanCmp.length + 120);
+      if (_citationEchoesProse(beforeRaw, afterRaw, spanCmp)) return '';
+
+      return span;
+    })
+    // Safety net: anything still bracket-shaped is a marker whose form we failed to parse, and a
+    // raw "[94:...]" in the baseline answer is worse than a dropped quote — the prose around it
+    // already carries the claim. Nothing DOM- or index-shaped reaches the user.
+    .replace(/\[\s*(?:idx\s*:|Page\s*\d|\d)[^\][]*\]/gi, '')
+    .replace(/\s+([.,;:!?])/g, '$1')  // drop stray space a removed marker left before punctuation
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+if (typeof window !== 'undefined') window.stripCitationMarkers = stripCitationMarkers;
+
+function stripNonGroundingMarkers(answer) {
+  if (!answer) return answer;
+  const withoutVisualEvidenceBlocks = String(answer)
+    .replace(/([.!?])\s*\[ev:[^\]]+\](?:\s*\[(?:Page\s*)?[\d,\s]+:\s*(?:"[^\]]*"|'[^\]]*'|[^\]"']+)\s*\]|\s*\[[\d,\s]+\](?!:))*/gi, '$1')
+    .replace(/\s*\[ev:[^\]]+\]/gi, '');
+  const noTextCitations = typeof stripCitationMarkers === 'function'
+    ? stripCitationMarkers(withoutVisualEvidenceBlocks)
+    : withoutVisualEvidenceBlocks;
+  return String(noTextCitations)
+    .replace(/\s*\[ev:[^\]]+\]/gi, '')
+    .replace(/\s+([.,;:!?])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+if (typeof window !== 'undefined') window.stripNonGroundingMarkers = stripNonGroundingMarkers;
+
+// ===== COST LEDGER (read side) =====
+// The service worker writes one entry per priced LLM call (appendCostEntry, background/
+// service-worker.js); everything below reads that ledger. Kept here, in the shared pure-logic file,
+// because three surfaces display the same numbers — the journey card, the per-answer chip and the
+// debug dialog — and three separate implementations of "add up the cost" would eventually disagree
+// about what a run cost, which is the one thing this feature exists to answer.
+
+const PAGEGUIDE_COST_LEDGER_KEY = 'pageguideCostLedger';
+
+/**
+ * Add up a ledger slice. Pure.
+ *
+ * Entries with a null cost — Gemini and OpenAI return token counts but no price, and an OpenRouter
+ * call whose usage never came back has none either — are counted in `calls` and `unpriced` but add
+ * nothing to the total. That distinction is the point: "$0.0000 · 12 calls" reads as free, whereas
+ * "$0.0184 · 12 calls · 4 unpriced" says what was actually measured.
+ *
+ * @param {Array<object>} entries
+ * @returns {{costUsd:number, calls:number, unpriced:number, promptTokens:number, completionTokens:number}}
+ */
+function sumCostEntries(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  return list.reduce((acc, e) => {
+    acc.calls += 1;
+    const c = Number(e?.costUsd);
+    if (e?.costUsd != null && isFinite(c)) acc.costUsd += c; else acc.unpriced += 1;
+    acc.promptTokens += Number(e?.promptTokens) || 0;
+    acc.completionTokens += Number(e?.completionTokens) || 0;
+    return acc;
+  }, { costUsd: 0, calls: 0, unpriced: 0, promptTokens: 0, completionTokens: 0 });
+}
+
+/** Every entry belonging to one guide session — the journey's own calls and nothing else. Pure. */
+function costEntriesForSession(entries, sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return [];
+  return (Array.isArray(entries) ? entries : []).filter(e => String(e?.sessionId || '') === sid);
+}
+
+/**
+ * Every entry belonging to one rendered answer — the Find case. Pure.
+ *
+ * A Find outside a guide run has no session to key on, so it is attributed the way the 🐞 chip
+ * already attributes prompts: everything logged from the moment the question went out. The chip
+ * records the debug log's length at that moment; each ledger entry carries the id of the debug
+ * entry it came from, and those ids are allocated in order, so "logged since" is a position
+ * comparison against the ids present in the log.
+ *
+ * @param {Array<object>} entries - ledger entries
+ * @param {Array<object>} debugPrompts - the debug log, in order
+ * @param {number} from - the log length when the question was sent
+ */
+function costEntriesForAnswer(entries, debugPrompts, from) {
+  const log = Array.isArray(debugPrompts) ? debugPrompts : [];
+  const start = Math.max(0, Number(from) || 0);
+  const ids = new Set(log.slice(start).map(p => p && p.id).filter(Boolean));
+  if (!ids.size) return [];
+  return (Array.isArray(entries) ? entries : []).filter(e => e && ids.has(e.debugId));
+}
+
+/**
+ * Money, at the scale these calls actually cost. Pure.
+ *
+ * A guide step runs well under a cent, so the usual two decimals would render every step as $0.00
+ * and every journey as a rounding error. Four decimals show a step; below that the number is shown
+ * in a tenth-of-a-cent form rather than as zero, because "too small to price" and "not measured"
+ * must not look the same.
+ */
+function formatCostUsd(costUsd) {
+  const n = Number(costUsd);
+  if (costUsd == null || !isFinite(n)) return '—';
+  if (n === 0) return '$0';
+  if (n < 0.0001) return '<$0.0001';
+  return `$${n.toFixed(4)}`;
+}
+
+if (typeof window !== 'undefined') {
+  window.PAGEGUIDE_COST_LEDGER_KEY = PAGEGUIDE_COST_LEDGER_KEY;
+  window.sumCostEntries = sumCostEntries;
+  window.costEntriesForSession = costEntriesForSession;
+  window.costEntriesForAnswer = costEntriesForAnswer;
+  window.formatCostUsd = formatCostUsd;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports.stripCitationMarkers = stripCitationMarkers;
+  module.exports.stripNonGroundingMarkers = stripNonGroundingMarkers;
+  module.exports.sumCostEntries = sumCostEntries;
+  module.exports.costEntriesForSession = costEntriesForSession;
+  module.exports.costEntriesForAnswer = costEntriesForAnswer;
+  module.exports.formatCostUsd = formatCostUsd;
 }
