@@ -3172,8 +3172,11 @@ if (typeof window !== 'undefined') {
         // The visual evidence goes up with it: the marks are the other half of what the grounded
         // arm sees, and showing only the text highlights would check only half the stimulus.
         let drawn = 0;
+        // ONE marks OBJECT per evidence item — `marks` is {annotations, region_bbox, geometry, …}
+        // (gv2BuildFindEvidence), not a list. Flattening it as though it were an array yielded
+        // nothing at all, so this drew no evidence and looked like the marks were missing.
         const marks = (Array.isArray(record.evidence) ? record.evidence : [])
-          .flatMap(item => (Array.isArray(item?.marks) ? item.marks : []));
+          .map(item => item?.marks).filter(Boolean);
         if (marks.length) {
           const ev = await chrome.tabs.sendMessage(tab.id, { action: 'showStudyEvidenceMarks', marks });
           drawn = Number(ev?.drawn) || 0;

@@ -11783,7 +11783,9 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
   test('evidence annotations prefer the stamped image', () => {
     expect(site).toMatch(/data-pg-image-id="\$\{CSS\.escape\(id\)\}/);
     // Positional counting survives only as the fallback for older snapshots.
-    expect(site).toMatch(/const img = stamped \|\| contentImages\[n - 1\]/);
+    // Falls back to counting only when there IS a number to count to — "viewport" has none, and
+    // defaulting it to image 1 drew viewport evidence over the first picture on the page.
+    expect(site).toMatch(/const img = stamped \|\| \(digits \? contentImages\[Number\(digits\) - 1\] : null\)/);
   });
 
   // Snapshots captured before stamping existed must keep working.
@@ -11974,6 +11976,33 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     const draw = anchorsSrc.match(/function pgShowSavedGrounding[\s\S]*?\n\}/)[0];
     expect(draw).toMatch(/if \(!list\.length && answer\)/);
     expect(draw).toMatch(/pgResolveCitationAnchors\(answer\)/);
+  });
+
+  // REGRESSION. `marks` is ONE OBJECT per evidence item — {annotations, region_bbox, geometry, …}
+  // from gv2BuildFindEvidence — not a list. Flattening it as though it were an array yielded
+  // nothing, so Show grounding drew no evidence and looked like the marks were missing.
+  test('evidence marks are read as one object per item, not as a list', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    // Every call site agrees, including the one added for Show grounding.
+    const calls = study.match(/\.map\(item => item\?\.marks\)\.filter\(Boolean\)/g) || [];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(study).not.toMatch(/flatMap\(item => \(Array\.isArray\(item\?\.marks\)/);
+  });
+
+  // REGRESSION. "viewport" has no trailing digits, so `Number(id.match(/(\d+)$/)?.[1] || 1)` gave 1
+  // and every viewport-anchored annotation was drawn over the FIRST picture on the page — a wrong
+  // answer presented as a right one, which a participant cannot tell from a right one.
+  test('unplaceable evidence is skipped and reported, never drawn on a guessed image', () => {
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    const fn = site.match(/function drawEvidenceMarks[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/if \(!id \|\| id === 'viewport'\) \{ skipped\.push/);
+    // No silent default to image 1 when there is no number to read.
+    expect(fn).toMatch(/digits \? contentImages\[Number\(digits\) - 1\] : null/);
+    expect(fn).not.toMatch(/\|\| 1\)/);
+    // An [ev:key] chip with no mark is a broken promise; it is at least logged.
+    expect(fn).toMatch(/could not be placed/);
   });
 
   // Three copies of one rule: the recorder writes the ordinal, the extension replays it, the site
