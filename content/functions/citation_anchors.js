@@ -78,6 +78,49 @@ function _pgAnchorOrdinal(el, tag, text) {
 }
 
 /**
+ * Does this element actually contain the quoted text?
+ *
+ * Compared on a PREFIX for long quotes. A citation's quote is the model's rendering of what it
+ * read, and it can end in an ellipsis or clip a trailing clause, so demanding the whole string
+ * rejects perfectly good matches. 40 characters is long enough that a false agreement is not a
+ * realistic worry.
+ */
+function _pgAnchorHolds(el, quote) {
+  const q = _pgAnchorNormalize(quote);
+  if (!q) return true;                       // nothing to disprove
+  const hay = _pgAnchorNormalize(el.textContent).toLowerCase();
+  const needle = q.toLowerCase();
+  return hay.includes(needle.length > 40 ? needle.slice(0, 40) : needle);
+}
+
+/**
+ * The smallest element that carries this quote, or null.
+ *
+ * The fallback for when the index and the quote disagree. SMALLEST because the <body> contains
+ * every quote on the page: the useful answer is the paragraph, not the document. Elements whose
+ * text is wildly longer than the quote are refused for the same reason a bounded search is used on
+ * the site — "somewhere in this section" looks like a confident answer and is not one.
+ */
+function _pgFindByQuote(quote) {
+  const q = _pgAnchorNormalize(quote);
+  if (q.length < 8) return null;             // too short to identify anything on its own
+  const probe = (q.length > 40 ? q.slice(0, 40) : q).toLowerCase();
+  let best = null;
+  let bestLen = Infinity;
+  const all = document.body ? document.body.getElementsByTagName('*') : [];
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    if (typeof isPageGuideElement === 'function' && isPageGuideElement(el)) continue;
+    const t = _pgAnchorNormalize(el.textContent);
+    if (t.length >= bestLen || !t.toLowerCase().includes(probe)) continue;
+    best = el;
+    bestLen = t.length;
+  }
+  // Refuse a container many times the quote's own size — see above.
+  return best && bestLen <= Math.max(600, q.length * 8) ? best : null;
+}
+
+/**
  * Resolve the citations in an answer to portable locators, using the live index.
  *
  * @param {string} answer  the answer text, with its `[N:"…"]` markers intact
@@ -95,7 +138,20 @@ function pgResolveCitationAnchors(answer) {
 
   const anchors = [];
   for (const cite of cites) {
-    const el = map ? map[String(cite.index)] : null;
+    // THE QUOTE IS THE PROOF, not the number.
+    //
+    // `[70:"Book covers: Isaac Asimov's…"]` means element 70 IN THE RUN THAT WROTE IT. Every ask
+    // renumbers the page (createPageIndex walks the live DOM), so element 70 of a LATER ask is
+    // some other element — and re-deriving through it produces an anchor that resolves cleanly and
+    // points at the wrong paragraph. That is exactly what happened: SVSF-V1's [70] landed on "The
+    // novels are genuinely extraordinary…", which does not contain its own quote anywhere.
+    //
+    // The quote does not renumber. So the index is treated as a HINT that must agree with the
+    // quote, and the quote is what decides.
+    let el = map ? map[String(cite.index)] : null;
+    if (el && el.nodeType === 1 && document.contains(el) && !_pgAnchorHolds(el, cite.text)) el = null;
+    // The index disagreed, or there was none. Find the element that actually carries the quote.
+    if (!el) el = _pgFindByQuote(cite.text);
     // Unresolvable is recorded as such rather than skipped: the site then knows to fall back to
     // text search for THIS citation, instead of assuming an absent locator means an absent citation.
     if (!el || el.nodeType !== 1 || !document.contains(el)) continue;
@@ -216,6 +272,8 @@ function pgShowSavedGrounding(anchors, answer) {
 if (typeof window !== 'undefined') {
   window.pgResolveCitationAnchors = pgResolveCitationAnchors;
   window.pgFindByCitationAnchor = pgFindByCitationAnchor;
+  window._pgAnchorHolds = _pgAnchorHolds;
+  window._pgFindByQuote = _pgFindByQuote;
   window.pgShowSavedGrounding = pgShowSavedGrounding;
   window._pgAnchorNormalize = _pgAnchorNormalize;
   window._pgAnchorTextOf = _pgAnchorTextOf;
@@ -224,5 +282,8 @@ if (typeof window !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { pgResolveCitationAnchors, _pgAnchorNormalize, _pgAnchorTextOf, _pgAnchorOrdinal };
+  module.exports = {
+    pgResolveCitationAnchors, _pgAnchorNormalize, _pgAnchorTextOf, _pgAnchorOrdinal,
+    _pgAnchorHolds, _pgFindByQuote,
+  };
 }

@@ -11998,6 +11998,47 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(study).not.toMatch(/flatMap\(item => \(Array\.isArray\(item\?\.marks\)/);
   });
 
+  // THE INDEX IS A HINT; THE QUOTE IS THE PROOF. `[70:"Book covers: Isaac Asimov's…"]` means element
+  // 70 IN THE RUN THAT WROTE IT, and every ask renumbers the page (createPageIndex walks the live
+  // DOM). So re-deriving through a LATER index produces an anchor that resolves perfectly and points
+  // somewhere else: SVSF-V1's [70] landed on "The novels are genuinely extraordinary…", which does
+  // not contain its own quote anywhere. Verified against the real published row.
+  test('an anchor is only trusted when the element carries its quote', () => {
+    const anchors = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    const fn = anchors.match(/function pgResolveCitationAnchors[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/!_pgAnchorHolds\(el, cite\.text\)\) el = null/);
+    // When the index disagrees, the quote decides — not "no anchor".
+    expect(fn).toMatch(/if \(!el\) el = _pgFindByQuote\(cite\.text\)/);
+
+    // The site checks too: rows published before the recorder validated are already in the
+    // database, and a locator beats every fallback, so an unchecked bad one wins outright.
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    expect(site).toMatch(/function anchorHoldsQuote/);
+    expect(site).toMatch(/if \(located && anchorHoldsQuote\(located, needle\)\)/);
+
+    // Both use the same 40-char prefix rule: a quote may end in an ellipsis or clip a clause.
+    const rule = /q\.length > 40 \? q\.slice\(0, 40\) : q/;
+    expect(site.match(/function anchorHoldsQuote[\s\S]*?\n\}/)[0]).toMatch(rule);
+    expect(anchors.match(/function _pgAnchorHolds[\s\S]*?\n\}/)[0])
+      .toMatch(/needle\.length > 40 \? needle\.slice\(0, 40\) : needle/);
+  });
+
+  // <body> contains every quote on the page, so "smallest" is the whole point — and a container
+  // many times the quote's size is refused, because "somewhere in this section" reads as a
+  // confident answer without being one.
+  test('the quote fallback prefers the smallest element and refuses a huge one', () => {
+    const anchors = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    const fn = anchors.match(/function _pgFindByQuote[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/if \(t\.length >= bestLen/);
+    expect(fn).toMatch(/bestLen <= Math\.max\(600, q\.length \* 8\)/);
+    // Too short to identify anything, and PageGuide's own UI is never a citation target.
+    expect(fn).toMatch(/if \(q\.length < 8\) return null/);
+    expect(fn).toMatch(/isPageGuideElement\(el\)\) continue/);
+  });
+
   // [N] means element N, so two citations sharing an index ARE the same place and must land
   // together. Resolved independently they can disagree, and did: with the anchor missing, each fell
   // back to text search on its own quote — "Foundation series" is short enough to hit an image
