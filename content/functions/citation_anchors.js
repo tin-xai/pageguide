@@ -170,13 +170,24 @@ function pgFindByCitationAnchor(anchor) {
  */
 function pgShowSavedGrounding(anchors, answer) {
   if (typeof clearHighlights === 'function') clearHighlights();
-  let list = Array.isArray(anchors) ? anchors : [];
+
+  // THE LIVE INDEX WINS WHENEVER THERE IS ONE, and the stored locators are only a fallback.
+  //
+  // Deriving only when the record had none left no way to REPAIR a bad set. Anchors resolved
+  // against the wrong tab are still anchors: the record has them, so nothing re-derived, and every
+  // republish sent the same wrong ones back up. Clearing the database did not help either, because
+  // the bad copy lived in chrome.storage.local and was simply uploaded again.
+  //
+  // Re-deriving costs nothing and is authoritative — the caller has already checked this tab is the
+  // page the answer was recorded on, so an index here is BY DEFINITION the right one, while a
+  // stored locator might be from anywhere. That makes this button self-healing.
+  let list = [];
   let derived = false;
-  if (!list.length && answer) {
+  if (answer) {
     const res = pgResolveCitationAnchors(answer);
-    list = res.anchors;
-    derived = list.length > 0;
+    if (res.anchors.length) { list = res.anchors; derived = true; }
   }
+  if (!list.length) list = Array.isArray(anchors) ? anchors : [];
   let shown = 0;
   const misses = [];
   for (const anchor of list) {

@@ -11974,8 +11974,16 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     const anchorsSrc = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
     const draw = anchorsSrc.match(/function pgShowSavedGrounding[\s\S]*?\n\}/)[0];
-    expect(draw).toMatch(/if \(!list\.length && answer\)/);
     expect(draw).toMatch(/pgResolveCitationAnchors\(answer\)/);
+    // REGRESSION. Deriving only when the record had NONE left no way to repair a bad set: anchors
+    // resolved against the wrong tab are still anchors, so nothing re-derived and every republish
+    // sent the same wrong ones back up — clearing the database did not help, because the bad copy
+    // lived in chrome.storage.local and was uploaded again. The live index wins whenever there is
+    // one; the caller has already checked this tab is the right page, so it is authoritative.
+    expect(draw).not.toMatch(/if \(!list\.length && answer\)/);
+    expect(draw).toMatch(/if \(res\.anchors\.length\) \{ list = res\.anchors; derived = true; \}/);
+    // Stored locators remain the fallback for a page with no live index.
+    expect(draw).toMatch(/if \(!list\.length\) list = Array\.isArray\(anchors\)/);
   });
 
   // REGRESSION. `marks` is ONE OBJECT per evidence item — {annotations, region_bbox, geometry, …}
