@@ -11990,6 +11990,35 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(study).not.toMatch(/flatMap\(item => \(Array\.isArray\(item\?\.marks\)/);
   });
 
+  // REGRESSION. Most recorded evidence has NO drawn shapes: the model reports what it saw and
+  // where, which gv2BuildFindEvidence stores as region_bbox + note with `annotations` empty.
+  // PEDANT-V1, MUFC-V1 and TREE-V1 are all {x:0,y:0,w:1,h:1} — "this whole picture" — and filtering
+  // on annotations alone dropped every one, so the [ev:key] chip appeared with nothing on the page
+  // while the extension drew the box and label for the same record.
+  test('evidence with a region but no annotations is still drawn', () => {
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    expect(site).toMatch(/annotations\?\.length \|\| e\?\.marks\?\.region_bbox/);
+    const fn = site.match(/function overlayAnnotations[\s\S]*?\n\}/)[0];
+    // Only when there are no shapes — a region under real annotations would double up.
+    expect(fn).toMatch(/if \(!shapes\.length && region/);
+    // The note IS the evidence for these; a bare box says "look at this picture" and no more.
+    expect(fn).toMatch(/marks\.note/);
+  });
+
+  // The svg is preserveAspectRatio="none" so a normalized bbox lands on any aspect ratio, and that
+  // same stretch distorts glyphs. Survivable for a one-word tag, not for a sentence — and these
+  // notes are sentences. SVG text does not wrap either.
+  test('the region note is HTML, not stretched SVG text', () => {
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    const fn = site.match(/function overlayAnnotations[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/createElement\('div'\)/);
+    expect(fn).toMatch(/pg-annot-note/);
+    // Inside the region when it starts at the top, or the label sits outside the picture.
+    expect(fn).toMatch(/\(region\.y \|\| 0\) > 0\.05 \? 'transform:translateY\(-100%\)' : ''/);
+  });
+
   // REGRESSION. "viewport" has no trailing digits, so `Number(id.match(/(\d+)$/)?.[1] || 1)` gave 1
   // and every viewport-anchored annotation was drawn over the FIRST picture on the page — a wrong
   // answer presented as a right one, which a participant cannot tell from a right one.
