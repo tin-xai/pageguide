@@ -307,6 +307,49 @@ async function _pgInlineInlineStyles(root) {
 }
 
 /**
+ * Stamp the recorder's own anchors onto the live DOM, and hand back a function to remove them.
+ *
+ * WHY THIS EXISTS. A recorded citation is `[69:"Foundation series"]` — element 69 IN THE PAGE INDEX
+ * AT RECORD TIME. That index is exact. Without it the study site can only search the snapshot for
+ * the quoted text, and text search is a guess: it misses when the page splits a phrase across tags
+ * ("*Foundation* series" is not one text node), and it misfires when one quote contains another
+ * ("El pedante" is inside "…Belo's El pedante (1538)"). Both happened.
+ *
+ * Stamping resolves it at the only moment the mapping is known. `data-pg-index` is the citation
+ * target; `data-pg-image-id` is the image an evidence annotation was drawn on, numbered by
+ * gv2BuildFindImageCatalog's rule rather than by anything this file invents.
+ *
+ * The live page is cleaned up afterwards: capturing must not leave attributes behind on a page the
+ * researcher is still using.
+ */
+function _pgStampAnchors() {
+  const stamped = [];
+
+  // Citation targets: window._pageguideIndex is the very index [N:"…"] refers to.
+  const index = (typeof window !== 'undefined' && window._pageguideIndex) || {};
+  Object.keys(index).forEach(key => {
+    const el = index[key];
+    if (!el || el.nodeType !== 1 || !el.isConnected) return;
+    el.setAttribute('data-pg-index', String(key));
+    stamped.push([el, 'data-pg-index']);
+  });
+
+  // Image ids, from the recorder's own catalog so the numbering matches source_image_id exactly.
+  try {
+    if (typeof gv2BuildFindImageCatalog === 'function') {
+      gv2BuildFindImageCatalog('').forEach(cand => {
+        const el = cand?.el;
+        if (!el || el.nodeType !== 1 || !el.isConnected) return;
+        el.setAttribute('data-pg-image-id', cand.id);
+        stamped.push([el, 'data-pg-image-id']);
+      });
+    }
+  } catch (e) { /* best-effort: the text fallback still works */ }
+
+  return () => stamped.forEach(([el, attr]) => el.removeAttribute(attr));
+}
+
+/**
  * Capture the current page as one self-contained HTML string.
  *
  * @returns {Promise<{html: string, bytes: number, url: string, title: string, truncated: boolean}>}
@@ -323,7 +366,11 @@ async function pgCapturePageSnapshot() {
 
   const css = await _pgCollectCss();
 
+  // Stamped BEFORE the clone so the attributes are copied into it, and removed immediately after so
+  // the researcher's live page is left as it was found.
+  const unstamp = _pgStampAnchors();
   const clone = document.documentElement.cloneNode(true);
+  unstamp();
   live.forEach(img => img.removeAttribute('data-pg-current'));
 
   // Scripts go, all of them. A snapshot that could run code could rewrite itself under a
@@ -371,6 +418,7 @@ if (typeof window !== 'undefined') {
   window._pgInlineCssUrls = _pgInlineCssUrls;
   window._pgBestImageUrl = _pgBestImageUrl;
   window._pgShrinkDataUri = _pgShrinkDataUri;
+  window._pgStampAnchors = _pgStampAnchors;
   window.PG_SNAPSHOT_IMG_MAX_WIDTH = PG_SNAPSHOT_IMG_MAX_WIDTH;
   window._pgAbsolute = _pgAbsolute;
   window.PG_SNAPSHOT_MAX_TOTAL_BYTES = PG_SNAPSHOT_MAX_TOTAL_BYTES;

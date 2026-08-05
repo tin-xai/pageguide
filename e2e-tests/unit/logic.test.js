@@ -11695,3 +11695,61 @@ describe('Find participant flow (user_study_website)', () => {
     expect(study).toMatch(/if \(S\.state\.adminReview\) \{[\s\S]{0,400}Review mode/);
   });
 });
+
+// ===== STAMPED ANCHORS =====
+// A recorded citation is `[69:"Foundation series"]` — element 69 IN THE PAGE INDEX AT RECORD TIME.
+// That index is exact. Without it the study site can only search the snapshot for the quoted text,
+// and text search is a guess: it misses when a page splits a phrase across tags ("*Foundation*
+// series" is not one text node) and misfires when one quote contains another ("El pedante" sits
+// inside "…Belo's El pedante (1538)"). Both happened, on real tasks.
+describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
+  const fsa = require('fs');
+  const pa = require('path');
+  const snap = fsa.readFileSync(pa.join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
+  const site = fsa.readFileSync(pa.join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+
+  test('citation targets are stamped from the index the citations refer to', () => {
+    expect(snap).toMatch(/function _pgStampAnchors/);
+    expect(snap).toMatch(/window\._pageguideIndex/);
+    expect(snap).toMatch(/setAttribute\('data-pg-index'/);
+  });
+
+  // Counting images on the site has to guess at the recorder's filtering rule, and guessing put
+  // Tesla's page_image_6 on a different picture. The catalog is the same function that wrote
+  // source_image_id, so the two cannot disagree.
+  test('image ids come from the recorder’s own catalog', () => {
+    expect(snap).toMatch(/gv2BuildFindImageCatalog/);
+    expect(snap).toMatch(/setAttribute\('data-pg-image-id', cand\.id\)/);
+  });
+
+  // Capturing must not leave attributes on a page the researcher is still using.
+  test('the live page is left as it was found', () => {
+    expect(snap).toMatch(/const unstamp = _pgStampAnchors\(\);/);
+    expect(snap).toMatch(/const clone = document\.documentElement\.cloneNode\(true\);\s*\n\s*unstamp\(\);/);
+    expect(snap).toMatch(/stamped\.forEach\(\(\[el, attr\]\) => el\.removeAttribute\(attr\)\)/);
+  });
+
+  test('the site resolves by anchor BEFORE any text search', () => {
+    const fn = site.match(/function markFindCitation[\s\S]*?\n\}/)[0];
+    const anchor = fn.indexOf('data-pg-index');
+    const textSearch = fn.indexOf('markText(doc, needle)');
+    expect(anchor).toBeGreaterThan(-1);
+    expect(anchor).toBeLessThan(textSearch);
+    // An index can be any string; escaping it keeps the selector valid.
+    expect(fn).toMatch(/CSS\.escape/);
+  });
+
+  test('evidence annotations prefer the stamped image', () => {
+    expect(site).toMatch(/data-pg-image-id="\$\{CSS\.escape\(id\)\}/);
+    // Positional counting survives only as the fallback for older snapshots.
+    expect(site).toMatch(/const img = stamped \|\| contentImages\[n - 1\]/);
+  });
+
+  // Snapshots captured before stamping existed must keep working.
+  test('the text search survives as a fallback', () => {
+    const fn = site.match(/function markFindCitation[\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/if \(index != null\)/);
+    expect(fn).toMatch(/markText\(doc, needle\)/);
+    expect(fn).toMatch(/findElementContaining/);
+  });
+});
