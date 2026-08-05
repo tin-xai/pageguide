@@ -157,12 +157,26 @@ function pgFindByCitationAnchor(anchor) {
  * place here, on the real page, it will land in the wrong place on the site — the same locators
  * resolve both. A researcher can see the fault before publishing rather than after.
  *
- * @param {object[]} anchors - citation_anchors from the banked response
- * @returns {{shown: number, missed: number, misses: object[]}}
+ * RESOLVES ITS OWN LOCATORS when the record has none. Requiring them first made this button useless
+ * exactly when it was most wanted — an answer banked before anchoring existed has no locators, and
+ * the only way to get them was to capture the page, so the check could not be run before the thing
+ * it was meant to check. If the answer run's index is still installed, the locators are derived here
+ * and handed back so the caller can bank them; pressing this then anchors an answer without a
+ * capture at all.
+ *
+ * @param {object[]} anchors - citation_anchors from the banked response, possibly empty
+ * @param {string} answer - the raw answer, used to derive locators when there are none
+ * @returns {{shown: number, missed: number, misses: object[], anchors: object[], derived: boolean}}
  */
-function pgShowSavedGrounding(anchors) {
+function pgShowSavedGrounding(anchors, answer) {
   if (typeof clearHighlights === 'function') clearHighlights();
-  const list = Array.isArray(anchors) ? anchors : [];
+  let list = Array.isArray(anchors) ? anchors : [];
+  let derived = false;
+  if (!list.length && answer) {
+    const res = pgResolveCitationAnchors(answer);
+    list = res.anchors;
+    derived = list.length > 0;
+  }
   let shown = 0;
   const misses = [];
   for (const anchor of list) {
@@ -183,7 +197,9 @@ function pgShowSavedGrounding(anchors) {
   // Scrolled to the first hit, because a highlight below the fold reads as no highlight at all.
   const first = list.length ? pgFindByCitationAnchor(list[0]) : null;
   if (first) { try { first.scrollIntoView({ block: 'center' }); } catch (e) { } }
-  return { shown, missed: misses.length, misses };
+  // The locators go back with the result so a caller that derived them can bank them rather than
+  // deriving them again on a page whose index may be gone by then.
+  return { shown, missed: misses.length, misses, anchors: list, derived };
 }
 
 if (typeof window !== 'undefined') {

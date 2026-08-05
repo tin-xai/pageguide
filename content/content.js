@@ -44,7 +44,7 @@ async function handleMessage(request) {
       if (typeof pgShowSavedGrounding !== 'function') {
         return { error: 'citation_anchors.js is not loaded — reload the page and try again' };
       }
-      return pgShowSavedGrounding(request.anchors || []);
+      return pgShowSavedGrounding(request.anchors || [], request.answer || '');
 
     case 'handleQuery':
       if (typeof handleSmartQuery === 'function') {

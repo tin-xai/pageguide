@@ -3139,16 +3139,35 @@ if (typeof window !== 'undefined') {
         const record = await getStudyResponse(task.id, 'grounding');
         if (!record) { note(`No grounded answer is banked for ${task.id} yet.`, 'bad'); return; }
         const anchors = Array.isArray(record.citation_anchors) ? record.citation_anchors : [];
-        if (!anchors.length) {
-          note('That answer has no citation anchors yet, so there is nothing to place. Press '
-            + '💬 Ask PageGuide and then 📄 Capture page on this tab to resolve them.', 'bad');
+        const answer = record.answer_raw || record.answer_display || '';
+        if (!anchors.length && !/\[\d+:"/.test(answer)) {
+          note(`The grounded answer for ${task.id} has no citations in it, so there is nothing to `
+            + 'place on the page.', 'bad');
           return;
         }
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) { note('No active tab to draw on.', 'bad'); return; }
 
-        const res = await chrome.tabs.sendMessage(tab.id, { action: 'showSavedGrounding', anchors });
+        // The answer goes with the anchors: when the record has none — every answer banked before
+        // anchoring existed — the page derives them from its own live index. Refusing instead made
+        // this button useless exactly when it mattered, since the only other way to get locators was
+        // to capture, so the check could not run before the thing it was meant to check.
+        const res = await chrome.tabs.sendMessage(tab.id,
+          { action: 'showSavedGrounding', anchors, answer });
         if (!res || res.error) { note(`Could not draw: ${res?.error || 'no response'}`, 'bad'); return; }
+        if (!res.shown && !res.misses?.length) {
+          note('Nothing could be placed. The answer run\'s page index is gone, so there is nothing '
+            + 'to resolve against — press 💬 Ask PageGuide on this tab first.', 'bad');
+          return;
+        }
+
+        // Derived locators are BANKED here. They were resolved against the live index, which is the
+        // only place they can come from, and it will not survive the next reload — so throwing them
+        // away would mean deriving them again on a page that can no longer do it.
+        if (res.derived && Array.isArray(res.anchors) && res.anchors.length) {
+          record.citation_anchors = res.anchors;
+          await saveStudyResponse(record, { downscale: false });
+        }
 
         // The visual evidence goes up with it: the marks are the other half of what the grounded
         // arm sees, and showing only the text highlights would check only half the stimulus.
@@ -3163,8 +3182,12 @@ if (typeof window !== 'undefined') {
         // Misses are NAMED, not counted. "2 could not be placed" sends a researcher hunting; the
         // quotes say which ones, and a quote that cannot be placed here will be misplaced on the site.
         const miss = (res.misses || []).map(m => `[${m.index}] "${String(m.quote).slice(0, 40)}"`);
-        note(`Drew ${res.shown}/${anchors.length} citation highlight`
-          + `${anchors.length === 1 ? '' : 's'}${marks.length ? ` and ${drawn} evidence mark${drawn === 1 ? '' : 's'}` : ''}`
+        // Counted against what was actually RESOLVED, not against the record's stored list — that
+        // list is empty on the derive path, and "Drew 9/0" is worse than no number at all.
+        const total = res.shown + (res.misses?.length || 0);
+        note(`Drew ${res.shown}/${total} citation highlight${total === 1 ? '' : 's'}`
+          + `${marks.length ? ` and ${drawn} evidence mark${drawn === 1 ? '' : 's'}` : ''}`
+          + (res.derived ? ' (anchors resolved and saved just now)' : '')
           + (miss.length ? `. Could not place: ${miss.join(', ')}` : '. This is what the site will show.'),
           miss.length ? 'bad' : 'ok');
       } catch (e) {

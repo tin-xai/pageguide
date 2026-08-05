@@ -11959,8 +11959,21 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(handler).toMatch(/action: 'showStudyEvidenceMarks'/);
     // Misses are NAMED. A bare count sends a researcher hunting for which quote failed.
     expect(handler).toMatch(/Could not place: /);
-    // Refuses rather than drawing nothing silently when the answer was never anchored.
-    expect(handler).toMatch(/no citation anchors yet/);
+    // REGRESSION. Requiring saved anchors made the button useless exactly when it mattered: an
+    // answer banked before anchoring existed has none, and the only way to get them was to capture
+    // the page — so the check could not be run before the thing it was meant to check. It derives
+    // them from the live index instead, and banks what it derived, since that index does not
+    // survive a reload and deriving twice is not possible.
+    expect(handler).toMatch(/action: 'showSavedGrounding', anchors, answer/);
+    expect(handler).toMatch(/if \(res\.derived && Array\.isArray\(res\.anchors\)/);
+    expect(handler).toMatch(/await saveStudyResponse\(record/);
+    // Counted against what resolved, not against the stored list — "Drew 9/0" on the derive path.
+    expect(handler).toMatch(/const total = res\.shown \+ \(res\.misses\?\.length \|\| 0\)/);
+    const anchorsSrc = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    const draw = anchorsSrc.match(/function pgShowSavedGrounding[\s\S]*?\n\}/)[0];
+    expect(draw).toMatch(/if \(!list\.length && answer\)/);
+    expect(draw).toMatch(/pgResolveCitationAnchors\(answer\)/);
   });
 
   // Three copies of one rule: the recorder writes the ordinal, the extension replays it, the site
