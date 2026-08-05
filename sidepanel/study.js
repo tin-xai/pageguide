@@ -1886,9 +1886,14 @@ if (typeof window !== 'undefined') {
    * Guide and Find go together on purpose: they are one study, and a site with the trajectories but
    * not the Find questions silently runs half of it.
    */
-  async function _buildStimulusBundle(trajectoryRows, half = 'all') {
+  async function _buildStimulusBundle(trajectoryRows, half = 'all', onlyTaskId = null) {
     const now = new Date().toISOString();
-    const wantGuide = half === 'all' || half === 'guide';
+    // One task at a time is for CHECKING, not for the real publish: a ten-page bundle is a slow and
+    // miserable way to discover that the anchors did not land. Narrowing to one keeps the round trip
+    // short enough to iterate on, and every row is still keyed the same way, so a single-task
+    // publish is simply a subset of the full one rather than a different code path.
+    const only = onlyTaskId ? String(onlyTaskId) : null;
+    const wantGuide = !only && (half === 'all' || half === 'guide');
     const wantFind = half === 'all' || half === 'find';
 
     // Only what a participant would actually walk. Exporting an excluded or step-less trajectory
@@ -1930,6 +1935,7 @@ if (typeof window !== 'undefined') {
     } catch (e) {
       if (!e?.skip) console.warn('[Study] could not read tasks.json for export:', e);
     }
+    if (only) tasks = tasks.filter(t => String(t.id) === only);
 
     // The recorded agent answers, one per (task × condition).
     let canned = [];
@@ -1940,6 +1946,7 @@ if (typeof window !== 'undefined') {
       // empty no matter how many were banked. Nothing failed; there was simply never anything to send.
       canned = Object.values(await listStudyResponses() || {})
         .filter(r => r && r.task_id && r.condition)
+        .filter(r => !only || String(r.task_id) === only)
         .map(r => ({
           task_id: r.task_id,
           condition: r.condition,
@@ -1962,6 +1969,7 @@ if (typeof window !== 'undefined') {
     if (wantFind && typeof listStudyGroundTruth === 'function') {
       groundTruth = Object.values(await listStudyGroundTruth() || {})
         .filter(t => t && t.task_id)
+        .filter(t => !only || String(t.task_id) === only)
         .map(t => ({ task_id: t.task_id, hops: t.hops || {}, updated_at: now }));
     }
 
@@ -1976,6 +1984,12 @@ if (typeof window !== 'undefined') {
       const seenUrls = new Set();
       pages = Object.values(await listStudyPages())
         .filter(p => p && p.task_id && p.html)
+        // Narrowed by TASK ID and not by URL, even though a page can be shared between two tasks
+        // (MUFC-V1 and MUFC-V1-TEXT are one article). study_task_pages.task_id is a foreign key
+        // into study_tasks, so shipping the sibling's row in a bundle that does not carry the
+        // sibling's task would be rejected — and re-keying it to this task would quietly create the
+        // second copy the dedupe above exists to prevent.
+        .filter(p => !only || String(p.task_id) === only)
         .filter(p => {
           if (!p.url) return true;               // no URL to dedupe on: keep it
           if (seenUrls.has(p.url)) return false;
@@ -2025,15 +2039,23 @@ if (typeof window !== 'undefined') {
    * @param {(msg: string, tone?: string) => void} note - where to report
    * @param {'all'|'guide'|'find'} half - which half to send
    */
-  async function _publishStimuliVia(trajectoryRows, note, half = 'all') {
-    const bundle = await _buildStimulusBundle(trajectoryRows, half);
+  async function _publishStimuliVia(trajectoryRows, note, half = 'all', onlyTaskId = null) {
+    const bundle = await _buildStimulusBundle(trajectoryRows, half, onlyTaskId);
     const empty = !bundle.study_guide_trajectories.length && !bundle.study_tasks.length
       && !bundle.study_canned_responses.length && !bundle.study_ground_truth.length;
     if (empty) {
-      note(half === 'guide'
-        ? 'Nothing to publish — no included trajectory has steps.'
-        : 'Nothing to publish — no Find tasks or recorded answers were found.', 'bad');
+      note(onlyTaskId
+        ? `Nothing to publish for ${onlyTaskId} — no recorded answer or question was found for it.`
+        : half === 'guide'
+          ? 'Nothing to publish — no included trajectory has steps.'
+          : 'Nothing to publish — no Find tasks or recorded answers were found.', 'bad');
       return;
+    }
+    // Said before the upload, not after: a one-task publish that carries no page is the likely
+    // shape when the page belongs to this task's twin, and it looks like success otherwise.
+    if (onlyTaskId && !bundle.study_task_pages.length) {
+      note(`Publishing ${onlyTaskId} WITHOUT a page — nothing is captured under this task id. `
+        + 'If it shares a page with another task, capture it here or publish that task too.');
     }
     note(`Publishing ${_describeStimulusBundle(bundle)}…`);
 
@@ -2949,6 +2971,11 @@ if (typeof window !== 'undefined') {
                  action nobody runs. -->
             <div class="study-traj-bulk" style="justify-content:flex-end;">
               <button class="study-evidence-clear" id="study-capture-page" title="Freeze this task's page so the study website can show it — the live page cannot be framed or scripted">📄 Capture page</button>
+              <!-- One task, for CHECKING. A ten-page bundle is a slow and miserable way to find out
+                   that the anchors did not land, and it re-uploads nine pages that were already
+                   right. Same rows, same keys, same upsert — just this task's — so what it proves
+                   about one page holds for the full publish. -->
+              <button class="study-evidence-clear" id="study-publish-find-one" title="Publish ONLY this task — its question, recorded answers, ground truth and captured page. For checking one page before sending the lot.">⬆ Publish this find</button>
               <button class="study-evidence-clear" id="study-publish-find" title="Publish the FIND questions, recorded answers, ground truth and captured pages via the local publish helper">⬆ Publish find</button>
             </div>
             <div class="study-llm-answers-note" id="study-find-publish-note"></div>` : ''}
@@ -3040,6 +3067,27 @@ if (typeof window !== 'undefined') {
         findPublish.disabled = false;
       }
     };
+    // Same publisher, narrowed to this task. Deliberately NOT a separate path: a check that ran
+    // different code from the real publish would prove nothing about the real publish.
+    const findPublishOne = $('study-publish-find-one');
+    if (findPublishOne) findPublishOne.onclick = async () => {
+      const note = (msg, tone = '') => {
+        const n = $('study-find-publish-note');
+        if (!n) return;
+        n.textContent = msg || '';
+        n.className = `study-llm-answers-note${tone ? ' study-note-' + tone : ''}`;
+      };
+      findPublishOne.disabled = true;
+      note(`Building the bundle for ${task.id}…`);
+      try {
+        await _publishStimuliVia([], note, 'find', task.id);
+      } catch (e) {
+        note(`Could not publish: ${e?.message || e}`, 'bad');
+      } finally {
+        findPublishOne.disabled = false;
+      }
+    };
+
     const openOnly = $('study-open-only-btn');
     if (openOnly) openOnly.onclick = async () => {
       const note = (msg, tone = '') => {

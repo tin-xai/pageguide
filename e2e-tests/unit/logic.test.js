@@ -11022,7 +11022,10 @@ describe('Publish from either half (sidepanel/study.js)', () => {
   // far worse failure than one that is occasionally redundant.
   test('they call the same publisher rather than each having their own', () => {
     expect(study).toMatch(/async function _publishStimuliVia\(/);
-    expect(study.match(/_publishStimuliVia\(/g)).toHaveLength(3);   // 1 definition + 2 call sites
+    // 1 definition + 3 call sites: publish guide, publish find, publish THIS find. The last is
+    // narrowed by task id rather than being its own implementation — a check that ran different
+    // code from the real publish would prove nothing about the real publish.
+    expect(study.match(/_publishStimuliVia\(/g)).toHaveLength(4);
     // The loopback endpoint is named once, not copied.
     expect(study.match(/127\.0\.0\.1:8790\/publish/g)).toHaveLength(1);
   });
@@ -11888,6 +11891,32 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     const sql = require('fs').readFileSync(
       require('path').join(__dirname, '../../supabase_schema.sql'), 'utf8');
     expect(sql).toMatch(/add column if not exists citation_anchors jsonb/);
+  });
+
+  // A ten-page bundle is a slow way to discover the anchors did not land, and it re-uploads nine
+  // pages that were already right. One task, same rows, same keys, same upsert.
+  test('a single task can be published on its own, through the same publisher', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    expect(study).toMatch(/await _publishStimuliVia\(\[\], note, 'find', task\.id\)/);
+    const build = study.match(/async function _buildStimulusBundle[\s\S]*?\n  \}/)[0];
+    // Every Find table is narrowed, or the "one task" publish quietly ships the other nine.
+    expect(build).toMatch(/tasks = tasks\.filter\(t => String\(t\.id\) === only\)/);
+    expect(build).toMatch(/\.filter\(r => !only \|\| String\(r\.task_id\) === only\)/);
+    expect(build).toMatch(/\.filter\(t => !only \|\| String\(t\.task_id\) === only\)/);
+    expect(build).toMatch(/\.filter\(p => !only \|\| String\(p\.task_id\) === only\)/);
+    // Guide trajectories are not a Find task's business, and would make the "small" upload large.
+    expect(build).toMatch(/const wantGuide = !only &&/);
+  });
+
+  // A page shared between twins (MUFC-V1 / MUFC-V1-TEXT) is stored under ONE task id. Narrowing by
+  // url instead would ship a row whose task_id is a foreign key into a task this bundle lacks.
+  test('a one-task publish says so when it carries no page', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const pub = study.match(/async function _publishStimuliVia[\s\S]*?\n  \}/)[0];
+    expect(pub).toMatch(/onlyTaskId && !bundle\.study_task_pages\.length/);
+    expect(pub).toMatch(/WITHOUT a page/);
   });
 
   // The recorded locator wins over the stamped one, which wins over text search. A stamped anchor
