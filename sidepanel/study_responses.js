@@ -148,19 +148,37 @@ function _buildStudyResponseRecord(ctx) {
  */
 function _buildStudyArmRecord(ctx) {
   const { taskId, condition, url, question, existing, result, text } = ctx || {};
+  const armCondition = String(condition || '');
+  const normalizeArmRecord = (record) => (
+    armCondition === 'nongrounding'
+      ? _stripStudyArmRecord(record)
+      : record
+  );
   if (result) {
-    return _buildStudyResponseRecord({ taskId, condition, url, question, result });
+    return normalizeArmRecord(_buildStudyResponseRecord({ taskId, condition, url, question, result }));
   }
   if (existing) {
-    return _applyStudyResponseEdit(existing, text);
+    return normalizeArmRecord(_applyStudyResponseEdit(existing, text));
   }
-  return _applyStudyResponseEdit(
+  return normalizeArmRecord(_applyStudyResponseEdit(
     _buildStudyResponseRecord({
       taskId, condition, url, question,
       result: { answer: text, findEvidenceShots: [], highlightCount: 0 }
     }),
     text
-  );
+  ));
+}
+
+function _stripStudyArmRecord(record) {
+  const answer = _stripStudyGrounding(record?.answer_raw || record?.answer_display || '');
+  return Object.assign({}, record, {
+    condition: 'nongrounding',
+    answer_raw: answer,
+    answer_display: answer,
+    evidence: [],
+    citation_anchors: null,
+    highlight_count: 0
+  });
 }
 
 /**
@@ -234,7 +252,7 @@ async function _attachCitationAnchors(record, tabId) {
     if (!res || res.error) {
       return { ok: false, resolved: 0, total: 0, reason: res?.error || 'the page did not respond' };
     }
-    record.citation_anchors = res.anchors || [];
+    record.citation_anchors = _mergeStudyCitationAnchors(answer, res.anchors || [], record.citation_anchors);
     return {
       ok: res.hasIndex && res.resolved > 0,
       resolved: res.resolved,
@@ -251,12 +269,79 @@ async function _attachCitationAnchors(record, tabId) {
  * captured, since editing prose must never silently drop a screenshot.
  */
 function _applyStudyResponseEdit(record, newAnswer) {
+  const answer = String(newAnswer == null ? '' : newAnswer);
   return Object.assign({}, record, {
-    answer_raw: String(newAnswer == null ? '' : newAnswer),
-    answer_display: String(newAnswer == null ? '' : newAnswer),
+    answer_raw: answer,
+    answer_display: answer,
+    citation_anchors: _reconcileStudyCitationAnchors(
+      record?.citation_anchors,
+      record?.answer_raw || record?.answer_display || '',
+      answer
+    ),
     edited: true,
     edited_at: new Date().toISOString()
   });
+}
+
+function _studyCitationMarkers(answer) {
+  const markers = [];
+  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, quote) => {
+    markers.push({ index: Number(index), quote, key: `${Number(index)}:${quote}` });
+    return m;
+  });
+  return markers;
+}
+
+function _reconcileStudyCitationAnchors(oldAnchors, oldAnswer, newAnswer) {
+  const nextMarkers = _studyCitationMarkers(newAnswer);
+  if (!nextMarkers.length) return [];
+
+  const previousMarkers = _studyCitationMarkers(oldAnswer);
+  const sameMarkers = previousMarkers.length === nextMarkers.length
+    && previousMarkers.every((marker, i) => marker.key === nextMarkers[i].key);
+  if (sameMarkers) return Array.isArray(oldAnchors) ? oldAnchors : null;
+  if (!Array.isArray(oldAnchors) || !oldAnchors.length) return null;
+
+  const byKey = new Map();
+  oldAnchors.forEach((anchor) => {
+    const key = `${Number(anchor?.index)}:${String(anchor?.quote || '')}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(anchor);
+  });
+
+  const kept = [];
+  nextMarkers.forEach((marker) => {
+    const matches = byKey.get(marker.key);
+    if (matches && matches.length) kept.push(matches.shift());
+  });
+  return kept.length ? kept : null;
+}
+
+function _mergeStudyCitationAnchors(answer, freshAnchors, storedAnchors) {
+  const markers = _studyCitationMarkers(answer);
+  if (!markers.length) return [];
+  const fresh = _studyAnchorQueues(freshAnchors);
+  const stored = _studyAnchorQueues(storedAnchors);
+  const merged = [];
+  markers.forEach((marker) => {
+    const freshMatches = fresh.get(marker.key);
+    const storedMatches = stored.get(marker.key);
+    const anchor = freshMatches?.length
+      ? freshMatches.shift()
+      : (storedMatches?.length ? storedMatches.shift() : null);
+    if (anchor) merged.push(anchor);
+  });
+  return merged;
+}
+
+function _studyAnchorQueues(anchors) {
+  const out = new Map();
+  (Array.isArray(anchors) ? anchors : []).forEach((anchor) => {
+    const key = `${Number(anchor?.index)}:${String(anchor?.quote || '')}`;
+    if (!out.has(key)) out.set(key, []);
+    out.get(key).push(anchor);
+  });
+  return out;
 }
 
 /**
@@ -420,6 +505,7 @@ async function syncStudyResponse(record) {
       answer_raw: record.answer_raw,
       answer_display: record.answer_display,
       evidence: record.evidence,
+      citation_anchors: record.citation_anchors || null,
       highlight_count: record.highlight_count,
       edited: !!record.edited
     });
@@ -688,6 +774,9 @@ if (typeof window !== 'undefined') {
   window._buildStudyResponseRecord = _buildStudyResponseRecord;
   window._buildStudyArmRecord = _buildStudyArmRecord;
   window._applyStudyResponseEdit = _applyStudyResponseEdit;
+  window._studyCitationMarkers = _studyCitationMarkers;
+  window._reconcileStudyCitationAnchors = _reconcileStudyCitationAnchors;
+  window._mergeStudyCitationAnchors = _mergeStudyCitationAnchors;
   window._attachCitationAnchors = _attachCitationAnchors;
   window._sameStudyPage = _sameStudyPage;
   window._shortUrl = _shortUrl;

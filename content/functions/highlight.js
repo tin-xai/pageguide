@@ -197,6 +197,84 @@ function applyAnimatedHighlight(element, color, animation, opts = {}) {
 }
 
 /**
+ * Flatten an element's text into one comparable string, keeping a map from each character back to
+ * the (node, offsetInNode) that produced it. Whitespace runs collapse to one space so minor
+ * formatting differences between a quote and the page don't defeat the match, and any text already
+ * inside a PageGuide highlight/badge is skipped so re-highlighting an element can't fold PageGuide's
+ * own injected text back into the search.
+ *
+ * The map is what makes it possible to locate a match that CROSSES sibling text nodes separated by
+ * an inline tag — a citation reading "near aphelion and in conjunction with the Sun" spans two <a>
+ * links, so no single text node (or even a single descendant element) ever contains the whole
+ * phrase. Without this, that citation fell through every strategy below to "highlight the whole
+ * element", which for a Wikipedia paragraph is not one sentence but the ENTIRE paragraph — including
+ * whatever other citation had already been precisely highlighted inside it.
+ */
+function _pgFlattenTextWithMap(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let text = '';
+  const map = [];
+  let node;
+  let sawSpace = false;
+  while ((node = walker.nextNode())) {
+    if (typeof isPageGuideElement === 'function' && isPageGuideElement(node.parentElement)) continue;
+    const value = node.nodeValue || '';
+    for (let i = 0; i < value.length; i++) {
+      let ch = value[i];
+      if (/\s/.test(ch)) {
+        if (sawSpace) continue;                // collapse this run to the one space already emitted
+        sawSpace = true;
+        ch = ' ';
+      } else {
+        sawSpace = false;
+      }
+      text += ch;
+      map.push({ node, offset: i });
+    }
+  }
+  return { text, map };
+}
+
+/**
+ * Wrap `searchTerm` inside `root` even when it spans sibling text nodes — see
+ * _pgFlattenTextWithMap. Finds the match in the flattened text, then uses the position map to build
+ * a Range across the ACTUAL nodes and surrounds it. Any inline element fully between the two
+ * endpoints (the <a> links in the example above) ends up inside the new highlight span, exactly as
+ * a same-node match would.
+ *
+ * @returns {number} 1 if a highlight was created, 0 otherwise (caller falls back further)
+ */
+function _pgHighlightAcrossNodes(root, searchTerm, color, animation) {
+  const needle = String(searchTerm || '').toLowerCase().trim();
+  if (!needle || !root) return 0;
+  const { text, map } = _pgFlattenTextWithMap(root);
+  if (!map.length) return 0;
+  const hit = text.toLowerCase().indexOf(needle);
+  if (hit < 0) return 0;
+  const startPos = map[hit];
+  const endPos = map[hit + needle.length - 1];
+  if (!startPos || !endPos) return 0;
+  try {
+    const range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset + 1);
+    const span = document.createElement('span');
+    span.className = `pageguide-highlight pageguide-highlight-${animation}`;
+    span.style.setProperty('--pageguide-color', color);
+    span.style.backgroundColor = pageguideHighlightTint(color);
+    span.style.borderRadius = '3px';
+    span.setAttribute('data-pageguide-styled', 'true');
+    range.surroundContents(span);
+    window._pageguideHighlights.push(span);
+    return 1;
+  } catch (e) {
+    // The range partially contained a non-Text node (malformed/overlapping markup) — fall through
+    // to the caller's next strategy rather than leaving the DOM half-modified.
+    return 0;
+  }
+}
+
+/**
  * Highlight specific text within a specific element only
  * Uses LLM-chosen color and animation
  * Strategy: First try to find child elements (links, spans) that match, then fall back to text nodes
@@ -334,6 +412,17 @@ function highlightTextInElement(element, searchText, color = '#ffd93d', animatio
       textNode.parentNode.replaceChild(fragment, textNode);
       window._pageguideHighlights.push(span);
       count++;
+    }
+
+    // Step 2d: The quote's own text node search (2b) failed, and 2a couldn't narrow to a smaller
+    // container either — the usual reason is that the phrase itself crosses an inline tag boundary
+    // (a link, an <em>, ...), so no element or single text node ever holds it whole. Try wrapping it
+    // across nodes before giving up to the block-level fallbacks below, which is what used to tint
+    // an entire Wikipedia paragraph for a citation that only meant one sentence in it.
+    if (count === 0) {
+      for (const variant of searchVariants) {
+        if (_pgHighlightAcrossNodes(targetEl, variant, color, animation)) { count++; break; }
+      }
     }
 
     // Step 2c: Text is split across sibling elements (e.g. a tweet with embedded

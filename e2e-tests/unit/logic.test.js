@@ -5635,6 +5635,78 @@ describe('Highlight styling (content/functions/highlight.js) — one effect, one
   });
 });
 
+describe('highlightTextInElement — quotes that cross an inline tag (content/functions/highlight.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {
+      storage: { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } },
+      runtime: { sendMessage: jest.fn() }
+    };
+    if (!window.isPageGuideElement) loadScript('content/utils.js');
+    if (!window.highlightTextInElement) loadScript('content/functions/highlight.js');
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    // isPageGuideElement (content/utils.js) treats ANY element whose closest ancestor has a
+    // "pageguide"-ish class as PageGuide's own UI and skips it — including document.body itself.
+    // Other suites in this file toggle classes like "pageguide-guide-mode" onto body (sidepanel
+    // panel.js) and don't always reset it, and jest-environment jsdom shares one document across
+    // every describe block in the file. Left dirty, that makes _pgFlattenTextWithMap treat every
+    // text node on the page as PageGuide's own and skip it, so reset explicitly rather than
+    // depending on suite run order.
+    document.body.className = '';
+    window._pageguideHighlights = [];
+  });
+
+  // REGRESSION: a quote spanning a link — "near aphelion and in conjunction with the Sun", where
+  // "aphelion" and "conjunction" are separate <a> elements — matched no single text node (Strategy
+  // 2) and no single descendant element narrower than the paragraph itself, so it fell all the way
+  // to Strategy 3 and tinted the ENTIRE containing paragraph. On a page where several citations
+  // shared one big paragraph as their indexed element, that whole-paragraph tint visually swallowed
+  // every other, precisely-highlighted citation in it too.
+  test('wraps a phrase spanning sibling links instead of highlighting the whole paragraph', () => {
+    const p = document.createElement('p');
+    p.innerHTML = 'The minimum brightness is magnitude +1.86 when the planet is near ' +
+      '<a href="/wiki/Aphelion">aphelion</a> and in <a href="/wiki/Conjunction">conjunction</a> ' +
+      'with the Sun.';
+    document.body.appendChild(p);
+
+    const count = window.highlightTextInElement(
+      p, 'near aphelion and in conjunction with the Sun', '#7857ff', 'soft'
+    );
+
+    expect(count).toBe(1);
+    // A precise wrap, not the whole-element fallback: the paragraph itself must not be the thing
+    // carrying the highlight.
+    expect(p.classList.contains('pageguide-highlight')).toBe(false);
+    expect(p.classList.contains('pageguide-highlight-block')).toBe(false);
+    const mark = p.querySelector('.pageguide-highlight');
+    expect(mark).not.toBeNull();
+    expect(mark.classList.contains('pageguide-highlight-block')).toBe(false);
+    // Both links ended up inside the one wrapping span rather than left outside it.
+    expect(mark.querySelectorAll('a').length).toBe(2);
+    expect(p.textContent).toContain('near aphelion and in conjunction with the Sun');
+  });
+
+  test('leaves an earlier, unrelated highlight in the same paragraph untouched', () => {
+    const p = document.createElement('p');
+    p.innerHTML = 'is second only to <a href="/wiki/Jupiter">Jupiter</a> in brightness. ' +
+      'The minimum brightness is near <a href="/wiki/Aphelion">aphelion</a> and in ' +
+      '<a href="/wiki/Conjunction">conjunction</a> with the Sun.';
+    document.body.appendChild(p);
+
+    window.highlightTextInElement(p, 'Jupiter', '#7857ff', 'soft');
+    const jupiterMark = p.querySelector('a[href="/wiki/Jupiter"]');
+    expect(jupiterMark.classList.contains('pageguide-highlight')).toBe(true);
+
+    window.highlightTextInElement(p, 'near aphelion and in conjunction with the Sun', '#7857ff', 'soft');
+
+    expect(p.classList.contains('pageguide-highlight-block')).toBe(false);
+    // Jupiter's own mark survives the second call untouched.
+    expect(p.querySelector('a[href="/wiki/Jupiter"]').classList.contains('pageguide-highlight')).toBe(true);
+  });
+});
+
 describe('Scroll-to-citation feedback (content/functions/scroll.js) — no flash', () => {
   beforeAll(() => {
     window.chrome = window.chrome || {
@@ -9161,6 +9233,44 @@ describe('Study responses: record building (sidepanel/study_responses.js)', () =
       expect(edited.evidence).toEqual(rec.evidence); // editing prose never drops a screenshot
       expect(rec.answer_raw).toContain('the beard is full'); // original untouched
     });
+
+    test('editing citations keeps anchors for remaining markers in answer order', () => {
+      const rec = window._buildStudyResponseRecord({
+        taskId: 't',
+        condition: 'grounding',
+        result: { answer: 'One [1:"alpha"]. Two [2:"beta"]. Three [3:"gamma"].', findEvidenceShots: [] }
+      });
+      rec.citation_anchors = [
+        { index: 1, quote: 'alpha', tag: 'P', text: 'alpha', ordinal: 0 },
+        { index: 2, quote: 'beta', tag: 'P', text: 'beta', ordinal: 0 },
+        { index: 3, quote: 'gamma', tag: 'P', text: 'gamma', ordinal: 0 },
+      ];
+
+      expect(window._applyStudyResponseEdit(rec, 'Reworded [1:"alpha"].').citation_anchors)
+        .toEqual([rec.citation_anchors[0]]);
+      expect(window._applyStudyResponseEdit(rec, 'Two [2:"beta"]. Three [3:"gamma"].').citation_anchors)
+        .toEqual([rec.citation_anchors[1], rec.citation_anchors[2]]);
+      expect(window._applyStudyResponseEdit(rec, 'Three [3:"gamma"]. Two [2:"beta"].').citation_anchors)
+        .toEqual([rec.citation_anchors[2], rec.citation_anchors[1]]);
+      expect(window._applyStudyResponseEdit(rec, 'Two [2:"changed"]. Three [3:"gamma"].').citation_anchors)
+        .toEqual([rec.citation_anchors[2]]);
+    });
+
+    test('partial anchor resolution merges with existing saved anchors', () => {
+      const answer = 'One [1:"alpha"]. Two [2:"beta"].';
+      const saved = [
+        { index: 1, quote: 'alpha', tag: 'P', text: 'old alpha', ordinal: 0 },
+        { index: 2, quote: 'beta', tag: 'P', text: 'old beta', ordinal: 0 },
+      ];
+      const fresh = [
+        { index: 2, quote: 'beta', tag: 'P', text: 'fresh beta', ordinal: 0 },
+      ];
+
+      expect(window._mergeStudyCitationAnchors(answer, fresh, saved)).toEqual([
+        saved[0],
+        fresh[0],
+      ]);
+    });
   });
 
   describe('storage round trip', () => {
@@ -9406,6 +9516,44 @@ describe('Study responses: record building (sidepanel/study_responses.js)', () =
       expect(html).toContain('data-evidence-num="2"');
       expect(html).toContain('data-evidence-num="3"');
       expect(html).not.toContain('[ev:');
+    });
+
+    test('stripping to non-grounded saves plain text with no hidden citation state', () => {
+      const grounded = window._buildStudyArmRecord({ taskId: 'T', condition: 'grounding', result: RESULT });
+      grounded.citation_anchors = [
+        { index: 517, quote: 'El pedante', tag: 'P', text: 'The play is El pedante.', ordinal: 0 }
+      ];
+
+      const bare = window._buildStudyArmRecord({
+        taskId: 'T',
+        condition: 'nongrounding',
+        text: window._stripStudyGrounding(grounded.answer_raw)
+      });
+
+      expect(bare.answer_raw).toBe('The play is El pedante and the border shows a frieze below the portrait.');
+      expect(bare.answer_raw).not.toMatch(/\[(\d+|ev):/);
+      expect(bare.evidence).toEqual([]);
+      expect(bare.citation_anchors).toBeNull();
+      expect(bare.highlight_count).toBe(0);
+    });
+
+    test('editing a non-grounded record cannot keep stale grounded anchors', () => {
+      const stale = window._buildStudyArmRecord({ taskId: 'T', condition: 'grounding', result: RESULT });
+      stale.condition = 'nongrounding';
+      stale.citation_anchors = [
+        { index: 517, quote: 'El pedante', tag: 'P', text: 'The play is El pedante.', ordinal: 0 }
+      ];
+
+      const edited = window._buildStudyArmRecord({
+        taskId: 'T',
+        condition: 'nongrounding',
+        existing: stale,
+        text: 'Edited [517:"El pedante"] [ev:frieze].'
+      });
+
+      expect(edited.answer_raw).toBe('Edited El pedante.');
+      expect(edited.evidence).toEqual([]);
+      expect(edited.citation_anchors).toBeNull();
     });
 
     // The marks are what an [ev] marker jumps to on the page, so they have to survive the save or
@@ -11732,6 +11880,16 @@ describe('Find participant flow (user_study_website)', () => {
   test('review mode shows no questions and no timer', () => {
     expect(study).toMatch(/if \(S\.state\.adminReview\) \{[\s\S]{0,400}Review mode/);
   });
+
+  test('admin review can jump directly to any task', () => {
+    const css = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/styles/site.css'), 'utf8');
+    expect(study).toMatch(/id="admin-task-jump"/);
+    expect(study).toMatch(/function adminTaskLabel/);
+    expect(study).toMatch(/jump\.onchange = \(\) =>/);
+    expect(study).toMatch(/S\.state\.idx = Math\.max\(0, Math\.min\(\(S\.state\.queue \|\| \[\]\)\.length - 1, idx\)\)/);
+    expect(css).toMatch(/\.admin-task-jump/);
+  });
 });
 
 // ===== STAMPED ANCHORS =====
@@ -11894,10 +12052,33 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   test('the locators are published and the column exists', () => {
     const study = require('fs').readFileSync(
       require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const responses = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study_responses.js'), 'utf8');
     expect(study).toMatch(/citation_anchors: r\.citation_anchors \|\| null/);
+    expect(responses).toMatch(/citation_anchors: record\.citation_anchors \|\| null/);
     const sql = require('fs').readFileSync(
       require('path').join(__dirname, '../../supabase_schema.sql'), 'utf8');
     expect(sql).toMatch(/add column if not exists citation_anchors jsonb/);
+  });
+
+  test('publishing refuses recorded answers with unanchored citation chips', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    expect(study).toMatch(/function _findCannedAnchorGaps/);
+    expect(study).toMatch(/Cannot publish yet/);
+    expect(study).toMatch(/Open each task page, press Show grounding or Capture page/);
+    const pub = study.match(/async function _publishStimuliVia[\s\S]*?\n  \}/)[0];
+    expect(pub).toMatch(/const anchorGaps = _findCannedAnchorGaps/);
+    expect(pub.indexOf('const anchorGaps')).toBeLessThan(pub.indexOf('Publishing ${_describeStimulusBundle'));
+  });
+
+  test('saving a grounded answer tries to anchor it before storage', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const persist = study.match(/async function persist[\s\S]*?\n    \}/)[0];
+    expect(persist).toMatch(/_attachCitationAnchors\(toSave\)/);
+    expect(persist.indexOf('_attachCitationAnchors')).toBeLessThan(persist.indexOf('saveStudyResponse'));
+    expect(persist).toMatch(/Anchored \$\{anchored\.resolved\}\/\$\{anchored\.total\}/);
   });
 
   // A silent wait is indistinguishable from a hang, and both were read as one. Capture inlines an
@@ -11965,29 +12146,71 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(handler).toMatch(/action: 'showStudyEvidenceMarks'/);
     // Misses are NAMED. A bare count sends a researcher hunting for which quote failed.
     expect(handler).toMatch(/Could not place: /);
+    // The placed anchors are named too, and partial derivations are not described as saved.
+    expect(handler).toMatch(/Saved anchors/);
+    expect(handler).toMatch(/Placed anchors/);
+    expect(handler).toMatch(/not saved because some citations could not be placed/);
+    expect(study).toMatch(/function _describeStudyCitationAnchors/);
     // REGRESSION. Requiring saved anchors made the button useless exactly when it mattered: an
     // answer banked before anchoring existed has none, and the only way to get them was to capture
     // the page — so the check could not be run before the thing it was meant to check. It derives
     // them from the live index instead, and banks what it derived, since that index does not
     // survive a reload and deriving twice is not possible.
     expect(handler).toMatch(/action: 'showSavedGrounding', anchors, answer/);
-    expect(handler).toMatch(/if \(res\.derived && Array\.isArray\(res\.anchors\)/);
+    expect(handler).toMatch(/const hasMisses = !!\(res\.misses && res\.misses\.length\)/);
+    expect(handler).toMatch(/if \(res\.derived && !hasMisses && Array\.isArray\(res\.anchors\)/);
     expect(handler).toMatch(/await saveStudyResponse\(record/);
+    expect(handler).not.toMatch(/arms\.grounding\.record\.citation_anchors/);
     // Counted against what resolved, not against the stored list — "Drew 9/0" on the derive path.
     expect(handler).toMatch(/const total = res\.shown \+ \(res\.misses\?\.length \|\| 0\)/);
     const anchorsSrc = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
     const draw = anchorsSrc.match(/function pgShowSavedGrounding[\s\S]*?\n\}/)[0];
     expect(draw).toMatch(/pgResolveCitationAnchors\(answer\)/);
-    // REGRESSION. Deriving only when the record had NONE left no way to repair a bad set: anchors
-    // resolved against the wrong tab are still anchors, so nothing re-derived and every republish
-    // sent the same wrong ones back up — clearing the database did not help, because the bad copy
-    // lived in chrome.storage.local and was uploaded again. The live index wins whenever there is
-    // one; the caller has already checked this tab is the right page, so it is authoritative.
+    // REGRESSION. Deriving only when the record had NONE left no way to repair a bad set. But
+    // replacing the whole stored list with a partial live result lost good anchors too: a Harry
+    // answer with two citations could show and save only one. Fresh anchors win per citation, while
+    // stored anchors fill gaps.
     expect(draw).not.toMatch(/if \(!list\.length && answer\)/);
-    expect(draw).toMatch(/if \(res\.anchors\.length\) \{ list = res\.anchors; derived = true; \}/);
-    // Stored locators remain the fallback for a page with no live index.
-    expect(draw).toMatch(/if \(!list\.length\) list = Array\.isArray\(anchors\)/);
+    expect(draw).toMatch(/_pgMergeCitationAnchors\(answer, res\.anchors, anchors\)/);
+    expect(draw).not.toMatch(/list = res\.anchors/);
+  });
+
+  test('the Grounded tab replays banked highlights onto the page', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const sync = study.match(/const syncPageForArm = \(name\) => \{[\s\S]*?\n    \};/)[0];
+    expect(sync).toMatch(/name === 'grounding'/);
+    expect(sync).toMatch(/action: 'showSavedGrounding', anchors, answer/);
+    expect(sync).toMatch(/name === 'nongrounding'/);
+    expect(sync).toMatch(/action: 'showSavedGrounding', anchors: \[\], answer: ''/);
+  });
+
+  test('clicking a saved grounded citation jumps through its saved anchor', () => {
+    const study = require('fs').readFileSync(
+      require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
+    const handler = study.match(/box\.addEventListener\('click'[\s\S]*?\n    \}\);/)[0];
+    expect(handler).toMatch(/_studyRecordForRenderedCitation\(webCit\)/);
+    expect(handler).toMatch(/_studyArmForRenderedCitation\(webCit\)/);
+    expect(handler).toMatch(/_studyRenderedCitationQuote\(webCit\)/);
+    expect(handler).toMatch(/action: 'scrollToCitationAnchor', anchor/);
+    expect(study).toMatch(/list\.dataset\.studyActiveArm = active/);
+    expect(study).toMatch(/list\._studyArms = arms/);
+    expect(study).toMatch(/list\._studyPlaybackRecord = playbackRecord/);
+    expect(study).toMatch(/function _studyRecordForRenderedCitation/);
+    expect(study).toMatch(/function _studyAnchorForRenderedCitation/);
+    expect(study).toMatch(/Number\(anchor\?\.index\) === markerIndex/);
+    expect(study).toMatch(/String\(anchor\?\.quote \|\| ''\) === markerQuote/);
+
+    const content = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/content.js'), 'utf8');
+    expect(content).toMatch(/case 'scrollToCitationAnchor'/);
+    expect(content).toMatch(/pgScrollToCitationAnchor\(request\.anchor \|\| null\)/);
+
+    const anchors = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    expect(anchors).toMatch(/function pgScrollToCitationAnchor/);
+    expect(anchors).toMatch(/window\.pgScrollToCitationAnchor = pgScrollToCitationAnchor/);
   });
 
   // REGRESSION. `marks` is ONE OBJECT per evidence item — {annotations, region_bbox, geometry, …}
@@ -12059,6 +12282,21 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
       .toMatch(/needle\.length > 40 \? needle\.slice\(0, 40\) : needle/);
   });
 
+  test('semantic-only anchors land on their visible evidence container', () => {
+    const anchors = require('fs').readFileSync(
+      require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
+    const site = require('fs').readFileSync(
+      require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+    expect(anchors).toMatch(/function _pgAnchorSemanticTextOf/);
+    expect(anchors).toMatch(/function _pgAnchorEvidenceElement/);
+    expect(anchors).toMatch(/_pgAnchorEvidenceElement\(el, anchor\?\.quote \|\| ''\)/);
+    expect(site).toMatch(/function semanticTextOf/);
+    expect(site).toMatch(/function citationEvidenceElement/);
+    expect(site).toMatch(/citationEvidenceElement\(el, anchor\?\.quote \|\| ''\)/);
+    expect(site).toMatch(/index = null/);
+    expect(site).toMatch(/findElementBySemanticText\(doc, needle\)/);
+  });
+
   // <body> contains every quote on the page, so "smallest" is the whole point — and a container
   // many times the quote's size is refused, because "somewhere in this section" reads as a
   // confident answer without being one.
@@ -12066,10 +12304,12 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     const anchors = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
     const fn = anchors.match(/function _pgFindByQuote[\s\S]*?\n\}/)[0];
-    expect(fn).toMatch(/if \(t\.length >= bestLen/);
-    expect(fn).toMatch(/bestLen <= Math\.max\(600, q\.length \* 8\)/);
-    // Too short to identify anything, and PageGuide's own UI is never a citation target.
-    expect(fn).toMatch(/if \(q\.length < 8\) return null/);
+    expect(fn).toMatch(/matches\.sort\(\(a, b\) => Number\(b\.exact\) - Number\(a\.exact\) \|\| a\.len - b\.len\)/);
+    expect(fn).toMatch(/t\.length > Math\.max\(600, q\.length \* 8\)/);
+    // Very short text is refused; short names are allowed only as unique exact targets.
+    expect(fn).toMatch(/if \(q\.length < 4\) return null/);
+    expect(fn).toMatch(/if \(short\)/);
+    expect(fn).toMatch(/if \(exact\.length === 1\) return exact\[0\]\.el/);
     expect(fn).toMatch(/isPageGuideElement\(el\)\) continue/);
   });
 

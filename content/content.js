@@ -93,6 +93,15 @@ async function handleMessage(request) {
       return { success: false, error: 'Scroll function not loaded' };
     }
 
+    case 'scrollToCitationAnchor': {
+      const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+      if (nonGrounding) return { success: false, error: 'grounding hidden' };
+      if (typeof pgScrollToCitationAnchor === 'function') {
+        return pgScrollToCitationAnchor(request.anchor || null);
+      }
+      return { success: false, error: 'Citation anchor function not loaded' };
+    }
+
     // Hovering a citation in the side panel: pulse the span it points at, so the reader can see
     // where the click will take them — necessary when the paragraph around it is already tinted.
     case 'previewIndex': {

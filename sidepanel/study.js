@@ -734,19 +734,24 @@ if (typeof window !== 'undefined') {
     };
 
     /**
-     * Make the page match the answer on screen: show or hide the citation highlights for this arm,
-     * and draw its evidence marks.
-     *
-     * The highlights are SHOWN or HIDDEN, never redrawn. Redrawing them means resolving [N] through
-     * window._pageguideIndex, which is rebuilt from the DOM every run — and the highlight spans
-     * themselves change what that walk indexes — so the numbers address different elements
-     * afterwards and the highlights land in the wrong places. The spans the run drew are still
-     * there and still right; only their visibility belongs to the arm.
+     * Make the page match the answer on screen: replay banked Grounded citations, hide them for the
+     * non-grounded arm, and draw the arm's own visual evidence marks.
      */
     const syncPageForArm = (name) => {
       if (typeof sendToContentScript !== 'function') return;
-      sendToContentScript({ action: 'setAnswerHighlightsVisible', visible: name !== 'nongrounding' })
-        .catch(() => {});
+      if (name === 'grounding') {
+        const record = arms.grounding?.record;
+        const answer = record?.answer_raw || record?.answer_display || '';
+        const anchors = Array.isArray(record?.citation_anchors) ? record.citation_anchors : [];
+        if (answer && (anchors.length || /\[\d+:"/.test(answer))) {
+          sendToContentScript({ action: 'showSavedGrounding', anchors, answer }).catch(() => {});
+        }
+      } else if (name === 'nongrounding') {
+        sendToContentScript({ action: 'showSavedGrounding', anchors: [], answer: '' }).catch(() => {});
+        sendToContentScript({ action: 'setAnswerHighlightsVisible', visible: false }).catch(() => {});
+      } else {
+        sendToContentScript({ action: 'setAnswerHighlightsVisible', visible: true }).catch(() => {});
+      }
       syncEvidenceMarks(marksForArm(name));
     };
 
@@ -784,6 +789,8 @@ if (typeof window !== 'undefined') {
     }
 
     function render() {
+      list.dataset.studyActiveArm = active;
+      list._studyArms = arms;
       if (active === 'live') {
         list.innerHTML = hasLive
           ? liveHtml
@@ -831,13 +838,25 @@ if (typeof window !== 'undefined') {
         result: fromParked ? (parked?.result || {}) : null,
         text: _studyArmText(arm)
       });
+      let anchorNote = '';
+      const citationCount = _studyCitationCount(toSave.answer_raw || toSave.answer_display || '');
+      const anchorCount = Array.isArray(toSave.citation_anchors) ? toSave.citation_anchors.length : 0;
+      if (armName === 'grounding' && /\[\d+:"/.test(toSave.answer_raw || toSave.answer_display || '')
+        && anchorCount < citationCount
+        && typeof _attachCitationAnchors === 'function') {
+        const anchored = await _attachCitationAnchors(toSave);
+        anchorNote = anchored.total
+          ? ` Anchored ${anchored.resolved}/${anchored.total} citation${anchored.total === 1 ? '' : 's'}`
+            + `${anchored.reason ? ` (${anchored.reason})` : ''}.`
+          : '';
+      }
       // Only a record built from a fresh result carries crops worth downscaling.
       const res = await saveStudyResponse(toSave, { downscale: fromParked });
       if (!res.saved) { setNote(`Could not save: ${res.error || 'unknown error'}`); return false; }
       arm.record = toSave;
       arm.draft = null;
       arm.dirty = false;
-      setNote(`Saved ${STUDY_ARM_LABELS[armName].toLowerCase()} answer for ${taskId}${res.synced ? ' (synced)' : ' (local)'}.`);
+      setNote(`Saved ${STUDY_ARM_LABELS[armName].toLowerCase()} answer for ${taskId}${res.synced ? ' (synced)' : ' (local)'}.${anchorNote}`);
       return true;
     }
 
@@ -996,10 +1015,22 @@ if (typeof window !== 'undefined') {
       if (webCit) {
         e.stopPropagation();
         const index = parseInt(webCit.dataset.index, 10);
-        if (typeof sendToContentScript === 'function' && Number.isFinite(index)) {
-          // The citation number, so the jump lands on the span this marker created rather than the
-          // paragraph around it — one paragraph often carries several citations.
-          sendToContentScript({ action: 'scrollToIndex', index, citation: webCit.dataset.citation });
+        if (typeof sendToContentScript === 'function') {
+          const activeArm = _studyArmForRenderedCitation(webCit);
+          const record = _studyRecordForRenderedCitation(webCit);
+          const anchor = _studyAnchorForRenderedCitation(
+            record,
+            webCit.dataset.citation,
+            webCit.dataset.index,
+            _studyRenderedCitationQuote(webCit)
+          );
+          if (anchor && activeArm === 'grounding') {
+            sendToContentScript({ action: 'scrollToCitationAnchor', anchor });
+          } else if (Number.isFinite(index)) {
+            // The citation number, so the jump lands on the span this marker created rather than the
+            // paragraph around it — one paragraph often carries several citations.
+            sendToContentScript({ action: 'scrollToIndex', index, citation: webCit.dataset.citation });
+          }
         }
         return;
       }
@@ -2051,6 +2082,13 @@ if (typeof window !== 'undefined') {
           : 'Nothing to publish — no Find tasks or recorded answers were found.', 'bad');
       return;
     }
+    const anchorGaps = _findCannedAnchorGaps(bundle.study_canned_responses);
+    if (anchorGaps.length) {
+      note('Cannot publish yet — these recorded answers have citation chips without saved page '
+        + `anchors: ${anchorGaps.map(g => `${g.task_id}/${g.condition} (${g.anchored}/${g.cited})`).join(', ')}. `
+        + 'Open each task page, press Show grounding or Capture page to repair the anchors, then publish again.', 'bad');
+      return;
+    }
     // Said before the upload, not after: a one-task publish that carries no page is the likely
     // shape when the page belongs to this task's twin, and it looks like success otherwise.
     if (onlyTaskId && !bundle.study_task_pages.length) {
@@ -2116,6 +2154,83 @@ if (typeof window !== 'undefined') {
     }
 
     note(`Published — ${summaries.join(' · ')}.`, 'ok');
+  }
+
+  function _findCannedAnchorGaps(rows) {
+    return (Array.isArray(rows) ? rows : []).map(r => {
+      const cited = _studyUniqueCitationCount(r?.answer_raw || r?.answer_display || '');
+      if (!cited) return null;
+      const anchors = Array.isArray(r?.citation_anchors) ? r.citation_anchors : [];
+      return anchors.length >= cited ? null : {
+        task_id: r.task_id || '?',
+        condition: r.condition || '?',
+        cited,
+        anchored: anchors.length,
+      };
+    }).filter(Boolean);
+  }
+
+  function _studyCitationCount(answer) {
+    let count = 0;
+    String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, () => {
+      count += 1;
+      return '';
+    });
+    return count;
+  }
+
+  function _studyUniqueCitationCount(answer) {
+    const seen = new Set();
+    String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, quote) => {
+      seen.add(`${index}:${quote}`);
+      return m;
+    });
+    return seen.size;
+  }
+
+  function _describeStudyCitationAnchors(anchors) {
+    return (Array.isArray(anchors) ? anchors : []).map((anchor) => {
+      const quote = _studyClip(anchor?.quote || '', 34);
+      const target = _studyClip(anchor?.text || '', 72);
+      const tag = String(anchor?.tag || '?').toLowerCase();
+      return `[${anchor?.index ?? '?'}] "${quote}" -> ${tag} "${target}"`;
+    }).join('; ');
+  }
+
+  function _studyArmForRenderedCitation(webCit) {
+    const list = webCit?.closest?.('#study-llm-answers-list');
+    return list?.dataset?.studyActiveArm || '';
+  }
+
+  function _studyRecordForRenderedCitation(webCit) {
+    const list = webCit?.closest?.('#study-llm-answers-list');
+    if (!list) return null;
+    if (list._studyPlaybackRecord) return list._studyPlaybackRecord;
+    const activeArm = list.dataset?.studyActiveArm || '';
+    return list._studyArms?.[activeArm]?.record || null;
+  }
+
+  function _studyRenderedCitationQuote(webCit) {
+    return webCit?.querySelector?.('.citation-text')?.textContent || '';
+  }
+
+  function _studyAnchorForRenderedCitation(record, renderedCitation, renderedIndex, renderedQuote) {
+    const shown = Number(renderedCitation);
+    if (!Number.isFinite(shown) || shown < 1) return null;
+    const anchors = Array.isArray(record?.citation_anchors) ? record.citation_anchors : [];
+    const markerIndex = Number(renderedIndex);
+    const markerQuote = String(renderedQuote || '');
+    if (Number.isFinite(markerIndex) && markerQuote) {
+      const exact = anchors.find(anchor =>
+        Number(anchor?.index) === markerIndex && String(anchor?.quote || '') === markerQuote);
+      if (exact) return exact;
+    }
+    return anchors[shown - 1] || null;
+  }
+
+  function _studyClip(value, max) {
+    const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+    return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text;
   }
 
   // ── Guide trajectories (Record Guide User Study) ──
@@ -3174,12 +3289,15 @@ if (typeof window !== 'undefined') {
           return;
         }
 
-        // Derived locators are BANKED here. They were resolved against the live index, which is the
-        // only place they can come from, and it will not survive the next reload — so throwing them
-        // away would mean deriving them again on a page that can no longer do it.
-        if (res.derived && Array.isArray(res.anchors) && res.anchors.length) {
+        // Derived locators are BANKED here only when every citation resolved. A partial set is useful
+        // to inspect, but saving it reads as if the grounding is complete while one marker still has
+        // no place to land.
+        const hasMisses = !!(res.misses && res.misses.length);
+        let savedDerived = false;
+        if (res.derived && !hasMisses && Array.isArray(res.anchors) && res.anchors.length) {
           record.citation_anchors = res.anchors;
           await saveStudyResponse(record, { downscale: false });
+          savedDerived = true;
         }
 
         // The visual evidence goes up with it: the marks are the other half of what the grounded
@@ -3198,12 +3316,16 @@ if (typeof window !== 'undefined') {
         // Misses are NAMED, not counted. "2 could not be placed" sends a researcher hunting; the
         // quotes say which ones, and a quote that cannot be placed here will be misplaced on the site.
         const miss = (res.misses || []).map(m => `[${m.index}] "${String(m.quote).slice(0, 40)}"`);
+        const placed = _describeStudyCitationAnchors(res.anchors || []);
+        const placedLabel = savedDerived ? 'Saved anchors' : 'Placed anchors';
         // Counted against what was actually RESOLVED, not against the record's stored list — that
         // list is empty on the derive path, and "Drew 9/0" is worse than no number at all.
         const total = res.shown + (res.misses?.length || 0);
         note(`Drew ${res.shown}/${total} citation highlight${total === 1 ? '' : 's'}`
           + `${marks.length ? ` and ${drawn} evidence mark${drawn === 1 ? '' : 's'}` : ''}`
-          + (res.derived ? ' (anchors resolved and saved just now)' : '')
+          + (savedDerived ? ' (anchors resolved and saved just now)'
+            : (res.derived && hasMisses ? ' (not saved because some citations could not be placed)' : ''))
+          + (placed ? `. ${placedLabel}: ${placed}` : '')
           + (miss.length ? `. Could not place: ${miss.join(', ')}` : '. This is what the site will show.'),
           miss.length ? 'bad' : 'ok');
       } catch (e) {
@@ -3600,6 +3722,11 @@ if (typeof window !== 'undefined') {
     bindStudyTaskNav(() => { if (answerTimerInterval) clearInterval(answerTimerInterval); });
     bindStudyLlmAnswerLinks(llmAnswersSnapshot);
     if (playbackRecord) {
+      const list = $('study-llm-answers-list');
+      if (list) {
+        list.dataset.studyActiveArm = playbackRecord.condition || s.arm || '';
+        list._studyPlaybackRecord = playbackRecord;
+      }
       // The answer on screen is this record's, so the page shows this record's evidence.
       const marks = (Array.isArray(playbackRecord.evidence) ? playbackRecord.evidence : [])
         .map(item => item?.marks).filter(Boolean);

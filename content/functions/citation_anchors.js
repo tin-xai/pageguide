@@ -57,7 +57,38 @@ function _pgAnchorNormalize(v) {
 
 /** The comparable text of one element: flattened, collapsed, capped. */
 function _pgAnchorTextOf(el) {
-  return _pgAnchorNormalize(el.textContent).slice(0, PG_ANCHOR_TEXT_MAX);
+  const ownText = _pgAnchorNormalize(el.textContent);
+  return (ownText || _pgAnchorSemanticTextOf(el)).slice(0, PG_ANCHOR_TEXT_MAX);
+}
+
+function _pgAnchorSemanticTextOf(el) {
+  if (!el || el.nodeType !== 1) return '';
+  const bits = [_pgAnchorNormalize(el.textContent)];
+  const attrs = ['aria-label', 'title', 'alt'];
+  const addAttrs = (node) => attrs.forEach((name) => {
+    const value = node.getAttribute?.(name);
+    if (value) bits.push(_pgAnchorNormalize(value));
+  });
+  addAttrs(el);
+  el.querySelectorAll?.('[aria-label], [title], [alt]').forEach(addAttrs);
+  return _pgAnchorNormalize(bits.filter(Boolean).join(' '));
+}
+
+function _pgAnchorEvidenceElement(el, quote) {
+  if (!el || el.nodeType !== 1) return el;
+  if (_pgAnchorNormalize(el.textContent)) return el;
+  let cur = el.parentElement;
+  let best = el;
+  while (cur && cur !== document.body) {
+    if (!_pgAnchorHolds(cur, quote)) break;
+    const text = _pgAnchorNormalize(cur.textContent);
+    if (text && text.length <= 600) {
+      best = cur;
+      if (/^(TD|TH|LI|P|FIGCAPTION|FIGURE|TR)$/.test(cur.tagName)) return cur;
+    }
+    cur = cur.parentElement;
+  }
+  return best;
 }
 
 /**
@@ -88,7 +119,7 @@ function _pgAnchorOrdinal(el, tag, text) {
 function _pgAnchorHolds(el, quote) {
   const q = _pgAnchorNormalize(quote);
   if (!q) return true;                       // nothing to disprove
-  const hay = _pgAnchorNormalize(el.textContent).toLowerCase();
+  const hay = _pgAnchorSemanticTextOf(el).toLowerCase();
   const needle = q.toLowerCase();
   return hay.includes(needle.length > 40 ? needle.slice(0, 40) : needle);
 }
@@ -103,21 +134,30 @@ function _pgAnchorHolds(el, quote) {
  */
 function _pgFindByQuote(quote) {
   const q = _pgAnchorNormalize(quote);
-  if (q.length < 8) return null;             // too short to identify anything on its own
+  if (q.length < 4) return null;             // too short to identify anything on its own
   const probe = (q.length > 40 ? q.slice(0, 40) : q).toLowerCase();
-  let best = null;
-  let bestLen = Infinity;
+  const matches = [];
   const all = document.body ? document.body.getElementsByTagName('*') : [];
   for (let i = 0; i < all.length; i++) {
     const el = all[i];
     if (typeof isPageGuideElement === 'function' && isPageGuideElement(el)) continue;
-    const t = _pgAnchorNormalize(el.textContent);
-    if (t.length >= bestLen || !t.toLowerCase().includes(probe)) continue;
-    best = el;
-    bestLen = t.length;
+    const t = _pgAnchorSemanticTextOf(el);
+    const lower = t.toLowerCase();
+    if (!lower.includes(probe)) continue;
+    const exact = lower === probe;
+    if (!exact && t.length > Math.max(600, q.length * 8)) continue;
+    matches.push({ el, len: t.length, exact });
   }
+  matches.sort((a, b) => Number(b.exact) - Number(a.exact) || a.len - b.len);
+  const short = q.length < 8;
+  if (short) {
+    const exact = matches.filter(m => m.exact);
+    if (exact.length === 1) return exact[0].el;
+    if (exact.length > 1) return null;
+  }
+  const best = matches[0];
   // Refuse a container many times the quote's own size — see above.
-  return best && bestLen <= Math.max(600, q.length * 8) ? best : null;
+  return best ? best.el : null;
 }
 
 /**
@@ -128,13 +168,7 @@ function _pgFindByQuote(quote) {
  */
 function pgResolveCitationAnchors(answer) {
   const map = (typeof pageguideExistingIndexMap === 'function') ? pageguideExistingIndexMap() : null;
-  const seen = new Set();
-  const cites = [];
-  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, text) => {
-    const key = `${index}:${text}`;
-    if (!seen.has(key)) { seen.add(key); cites.push({ index: Number(index), text }); }
-    return m;
-  });
+  const cites = _pgAnswerCitations(answer);
 
   const anchors = [];
   for (const cite of cites) {
@@ -155,6 +189,7 @@ function pgResolveCitationAnchors(answer) {
     // Unresolvable is recorded as such rather than skipped: the site then knows to fall back to
     // text search for THIS citation, instead of assuming an absent locator means an absent citation.
     if (!el || el.nodeType !== 1 || !document.contains(el)) continue;
+    el = _pgAnchorEvidenceElement(el, cite.text);
     const tag = el.tagName;
     const text = _pgAnchorTextOf(el);
     if (!text) continue;
@@ -166,7 +201,7 @@ function pgResolveCitationAnchors(answer) {
       ordinal: _pgAnchorOrdinal(el, tag, text),
       // Whether `text` is the whole element or was cut. A truncated locator still matches on
       // prefix, and the site needs to know which comparison it is allowed to make.
-      truncated: _pgAnchorNormalize(el.textContent).length > PG_ANCHOR_TEXT_MAX,
+      truncated: (_pgAnchorNormalize(el.textContent) || _pgAnchorSemanticTextOf(el)).length > PG_ANCHOR_TEXT_MAX,
     });
   }
 
@@ -178,6 +213,50 @@ function pgResolveCitationAnchors(answer) {
     // page that has since navigated. The caller says so rather than banking silent text-search bait.
     hasIndex: !!map,
   };
+}
+
+function _pgCitationKey(index, quote) {
+  return `${Number(index)}:${String(quote || '')}`;
+}
+
+function _pgAnswerCitations(answer) {
+  const seen = new Set();
+  const cites = [];
+  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, text) => {
+    const key = _pgCitationKey(index, text);
+    if (!seen.has(key)) { seen.add(key); cites.push({ index: Number(index), text, key }); }
+    return m;
+  });
+  return cites;
+}
+
+function _pgAnchorKey(anchor) {
+  return _pgCitationKey(anchor?.index, anchor?.quote);
+}
+
+function _pgMergeCitationAnchors(answer, freshAnchors, storedAnchors) {
+  const cites = _pgAnswerCitations(answer);
+  if (!cites.length) return [];
+  const fresh = _pgAnchorQueues(freshAnchors);
+  const stored = _pgAnchorQueues(storedAnchors);
+  const merged = [];
+  for (const cite of cites) {
+    const nextFresh = fresh.get(cite.key);
+    const nextStored = stored.get(cite.key);
+    const anchor = nextFresh?.length ? nextFresh.shift() : (nextStored?.length ? nextStored.shift() : null);
+    if (anchor) merged.push(anchor);
+  }
+  return merged;
+}
+
+function _pgAnchorQueues(anchors) {
+  const out = new Map();
+  (Array.isArray(anchors) ? anchors : []).forEach((anchor) => {
+    const key = _pgAnchorKey(anchor);
+    if (!out.has(key)) out.set(key, []);
+    out.get(key).push(anchor);
+  });
+  return out;
 }
 
 /**
@@ -194,11 +273,12 @@ function pgFindByCitationAnchor(anchor) {
   const all = document.getElementsByTagName(anchor.tag);
   const matches = [];
   for (let i = 0; i < all.length; i++) {
-    const t = _pgAnchorNormalize(all[i].textContent);
+    const t = _pgAnchorTextOf(all[i]);
     if (anchor.truncated ? t.startsWith(want) : t === want) matches.push(all[i]);
   }
   if (!matches.length) return null;
-  return matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
+  const el = matches[anchor.ordinal] || (matches.length === 1 ? matches[0] : null);
+  return el ? _pgAnchorEvidenceElement(el, anchor?.quote || '') : null;
 }
 
 /**
@@ -227,25 +307,30 @@ function pgFindByCitationAnchor(anchor) {
 function pgShowSavedGrounding(anchors, answer) {
   if (typeof clearHighlights === 'function') clearHighlights();
 
-  // THE LIVE INDEX WINS WHENEVER THERE IS ONE, and the stored locators are only a fallback.
+  // THE LIVE INDEX WINS PER CITATION WHENEVER IT CAN, and stored locators fill the gaps.
   //
   // Deriving only when the record had none left no way to REPAIR a bad set. Anchors resolved
   // against the wrong tab are still anchors: the record has them, so nothing re-derived, and every
   // republish sent the same wrong ones back up. Clearing the database did not help either, because
   // the bad copy lived in chrome.storage.local and was simply uploaded again.
   //
-  // Re-deriving costs nothing and is authoritative — the caller has already checked this tab is the
-  // page the answer was recorded on, so an index here is BY DEFINITION the right one, while a
-  // stored locator might be from anywhere. That makes this button self-healing.
-  let list = [];
+  // Re-deriving costs nothing and is authoritative for the citations it resolves. But a PARTIAL
+  // derive must not throw away saved locators for the rest — that is exactly how a two-citation
+  // answer could bank and show only one highlight.
+  let list = Array.isArray(anchors) ? anchors : [];
   let derived = false;
   if (answer) {
     const res = pgResolveCitationAnchors(answer);
-    if (res.anchors.length) { list = res.anchors; derived = true; }
+    const merged = _pgMergeCitationAnchors(answer, res.anchors, anchors);
+    if (res.anchors.length || merged.length !== list.length) {
+      list = merged;
+      derived = !!res.anchors.length;
+    }
   }
-  if (!list.length) list = Array.isArray(anchors) ? anchors : [];
   let shown = 0;
   const misses = [];
+  const missing = _pgMissingCitations(answer, list);
+  missing.forEach(cite => misses.push({ index: cite.index, quote: cite.text }));
   for (const anchor of list) {
     const el = pgFindByCitationAnchor(anchor);
     if (!el) { misses.push({ index: anchor?.index, quote: anchor?.quote || '' }); continue; }
@@ -269,9 +354,33 @@ function pgShowSavedGrounding(anchors, answer) {
   return { shown, missed: misses.length, misses, anchors: list, derived };
 }
 
+function _pgMissingCitations(answer, anchors) {
+  const anchored = new Set((Array.isArray(anchors) ? anchors : []).map(_pgAnchorKey));
+  return _pgAnswerCitations(answer).filter(cite => !anchored.has(cite.key));
+}
+
+function pgScrollToCitationAnchor(anchor) {
+  const el = pgFindByCitationAnchor(anchor);
+  if (!el) return { success: false, error: 'anchor not found' };
+  try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {
+    try { el.scrollIntoView({ block: 'center' }); } catch (ignored) {}
+  }
+  const quote = String(anchor?.quote || '').trim();
+  const n = (quote && typeof highlightTextInElement === 'function')
+    ? highlightTextInElement(el, quote, '#ffd93d', 'soft')
+    : 0;
+  if (!n && typeof applyAnimatedHighlight === 'function') {
+    applyAnimatedHighlight(el, '#ffd93d', 'soft', { block: true });
+    if (Array.isArray(window._pageguideHighlights)) window._pageguideHighlights.push(el);
+  }
+  return { success: true };
+}
+
 if (typeof window !== 'undefined') {
   window.pgResolveCitationAnchors = pgResolveCitationAnchors;
   window.pgFindByCitationAnchor = pgFindByCitationAnchor;
+  window.pgScrollToCitationAnchor = pgScrollToCitationAnchor;
+  window._pgMergeCitationAnchors = _pgMergeCitationAnchors;
   window._pgAnchorHolds = _pgAnchorHolds;
   window._pgFindByQuote = _pgFindByQuote;
   window.pgShowSavedGrounding = pgShowSavedGrounding;
