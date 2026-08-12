@@ -14,7 +14,7 @@ html, body {
 body {
   display: flex;
   flex-direction: column;
-  background: #f4f4f8;
+  background: #f8f6f4;
   color: #111;
   font: 400 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
@@ -58,7 +58,7 @@ body {
   margin-top: 12px;
   font-size: 12px;
   font-weight: 700;
-  color: #5b3fd6;
+  color: #d6863f;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -120,8 +120,8 @@ body {
 }
 
 .tv-state-btn:hover {
-  border-color: rgba(120, 87, 255, 0.5);
-  background: rgba(120, 87, 255, 0.04);
+  border-color: rgba(255, 166, 87, 0.5);
+  background: rgba(255, 166, 87, 0.04);
 }
 
 /* A state the run never recorded says so, rather than vanishing — an absent card and an absent
@@ -140,7 +140,7 @@ body {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #5b3fd6;
+  color: #d6863f;
 }
 
 .tv-state-btn.is-empty .tv-state-kicker { color: rgba(0, 0, 0, 0.35); }
@@ -203,7 +203,7 @@ body {
 
 /* Only a row that can show you something behaves like it can. */
 .tv-journey-row.is-shot { cursor: pointer; }
-.tv-journey-row.is-shot:hover { background: rgba(120, 87, 255, 0.08); }
+.tv-journey-row.is-shot:hover { background: rgba(255, 166, 87, 0.08); }
 
 /* The connecting line, as in the live timeline. */
 .tv-journey-row:not(:last-child)::before {
@@ -225,7 +225,7 @@ body {
   z-index: 1;
 }
 
-.tv-journey-row.is-shot .tv-dot { background: #a99bf0; }
+.tv-journey-row.is-shot .tv-dot { background: #f0c29b; }
 
 .tv-journey-text {
   font-size: 15px;
@@ -239,10 +239,10 @@ body {
   justify-self: end;
   align-self: center;
   font-size: 14px;
-  color: rgba(120, 87, 255, 0.55);
+  color: rgba(255, 166, 87, 0.55);
 }
 
-.tv-journey-row.is-shot:hover .tv-peek { color: #5b3fd6; }
+.tv-journey-row.is-shot:hover .tv-peek { color: #d6863f; }
 
 .tv-warn {
   margin: 10px 6px 0;
@@ -259,7 +259,7 @@ body {
   display: inline-block;
   min-width: 16px;
   margin-right: 4px;
-  color: #5b3fd6;
+  color: #d6863f;
   font-weight: 700;
 }
 
@@ -276,25 +276,25 @@ body {
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #5b3fd6;
+  color: #d6863f;
 }
 
 .tv-info {
   width: 16px;
   height: 16px;
   padding: 0;
-  border: 1px solid rgba(91, 63, 214, 0.45);
+  border: 1px solid rgba(214, 134, 63, 0.45);
   border-radius: 999px;
   background: transparent;
-  color: #5b3fd6;
+  color: #d6863f;
   font: 700 10px/1 Georgia, 'Times New Roman', serif;
   cursor: pointer;
 }
 
 .tv-info:hover,
 .tv-info.is-open {
-  background: #5b3fd6;
-  border-color: #5b3fd6;
+  background: #d6863f;
+  border-color: #d6863f;
   color: #fff;
 }
 
@@ -303,8 +303,8 @@ body {
   grid-column: 1 / -1;
   margin-top: 6px;
   padding: 9px 12px;
-  background: rgba(120, 87, 255, 0.07);
-  border-left: 2px solid rgba(120, 87, 255, 0.45);
+  background: rgba(255, 166, 87, 0.07);
+  border-left: 2px solid rgba(255, 166, 87, 0.45);
   border-radius: 0 8px 8px 0;
   color: rgba(0, 0, 0, 0.72);
   font: 400 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -330,19 +330,19 @@ body {
 /* The linked phrase, underlined where it sits — mirrors .pageguide-answer-summary-ref in the chat.
    A number at the end of a sentence says evidence exists; the underline says which words it backs. */
 .tv-ref {
-  color: #4a2fc0;
+  color: #c0732f;
   font-weight: 600;
   text-decoration: underline;
   text-decoration-thickness: 1px;
-  text-decoration-color: rgba(120, 87, 255, 0.5);
+  text-decoration-color: rgba(255, 166, 87, 0.5);
   text-underline-offset: 3px;
   cursor: pointer;
 }
 
 .tv-ref:hover {
   text-decoration-thickness: 2px;
-  text-decoration-color: #5b3fd6;
-  background: rgba(120, 87, 255, 0.08);
+  text-decoration-color: #d6863f;
+  background: rgba(255, 166, 87, 0.08);
   border-radius: 3px;
 }
 
@@ -356,15 +356,15 @@ body {
   margin: 0 2px;
   padding: 0 5px;
   vertical-align: 1px;
-  background: rgba(120, 87, 255, 0.12);
-  border: 1px solid rgba(120, 87, 255, 0.35);
+  background: rgba(255, 166, 87, 0.12);
+  border: 1px solid rgba(255, 166, 87, 0.35);
   border-radius: 6px;
-  color: #4a2fc0;
+  color: #c0732f;
   font: 700 11px/1 inherit;
   cursor: pointer;
 }
 
-.tv-chip:hover { background: rgba(120, 87, 255, 0.24); }
+.tv-chip:hover { background: rgba(255, 166, 87, 0.24); }
 
 /* ── The hover card ──────────────────────────────────────────────────────── */
 .tv-pop {
@@ -391,7 +391,7 @@ body {
   margin-top: 8px;
   font-size: 12px;
   font-weight: 700;
-  color: #5b3fd6;
+  color: #d6863f;
 }
 
 .tv-pop-note {

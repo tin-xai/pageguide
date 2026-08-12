@@ -2150,17 +2150,17 @@ async function gv2CaptureRegion(screenshotBase64, options = {}) {
   return out;
 }
 
-// Marker accent colors: purple for the action target ("region of action"), pink for the separate
+// Marker accent colors: orange for the action target ("region of action"), pink for the separate
 // visual-evidence region that justifies the action.
-const GV2_ACTION_MARKER_COLOR = '#7857ff';
-const GV2_ACTION_MARKER_FILL = 'rgba(120,87,255,0.16)';
+const GV2_ACTION_MARKER_COLOR = '#ffa657';
+const GV2_ACTION_MARKER_FILL = 'rgba(255,166,87,0.16)';
 const GV2_EVIDENCE_MARKER_COLOR = '#ff2d78';
 const GV2_EVIDENCE_MARKER_FILL = 'rgba(255,45,120,0.16)';
 
 // Bake a SoM marker (box + optional number badge) onto a canvas 2D context so the "region of
 // action" is visible in the screenshot pixels themselves. `marker` is a normalized { x, y, w, h }
 // rect (fractions of the canvas). No-op when marker is missing. `color`/`fill` accent the box
-// (defaults to the purple action color; pass the evidence color for visual-evidence crops).
+// (defaults to the orange action color; pass the evidence color for visual-evidence crops).
 function _gv2DrawMarkerOnCanvas(ctx, canvas, marker, number, color = GV2_ACTION_MARKER_COLOR, fill = GV2_ACTION_MARKER_FILL) {
   if (!ctx || !canvas || !marker) return;
   try {

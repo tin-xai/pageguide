@@ -262,7 +262,7 @@ function _savedAnnotationsPreviewHtml(meta, rec) {
 
 function _tabChipFallbackIcon() {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#7857ff"/><path d="M7 7h10v10H7z" fill="white" opacity=".9"/></svg>'
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ffa657"/><path d="M7 7h10v10H7z" fill="white" opacity=".9"/></svg>'
   );
 }
 
@@ -1832,8 +1832,8 @@ function renderGoalTimeline(current, total) {
 }
 
 const CONF_CHART_SPECS = {
-  full: { label: 'Full (G·loop·progress)', color: '#7857ff' },
-  reduced: { label: 'No-progress (G·loop)', color: '#ff8a3d' },
+  full: { label: 'Full (G·loop·progress)', color: '#ffa657' },
+  reduced: { label: 'No-progress (G·loop)', color: '#ff2d78' },
   noloop: { label: 'No-loop (G·progress)', color: '#1bbf9c' }
 };
 let confChartVisibleVersions = { full: true, reduced: true, noloop: true };

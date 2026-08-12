@@ -6,10 +6,10 @@
  */
 if (typeof PDF_CONFIG === 'undefined') {
   var PDF_CONFIG = {
-    // Same purple family and same flat treatment as the web highlight (content/content.css) —
+    // Same orange family and same flat treatment as the web highlight (content/content.css) —
     // it used to be yellow and pulse three times, so a PDF answer looked like a different feature.
-    highlightColor: 'rgba(120, 87, 255, 0.16)',
-    highlightBorder: '1px solid rgba(120, 87, 255, 0.35)',
+    highlightColor: 'rgba(255, 166, 87, 0.16)',
+    highlightBorder: '1px solid rgba(255, 166, 87, 0.35)',
     scrollPadding: 100  // px padding when scrolling to highlight
   };
 }
@@ -448,7 +448,7 @@ function injectPdfHighlightStyles() {
     
     .pageguide-pdf-highlight:hover {
       opacity: 0.8;
-      box-shadow: 0 0 0 4px rgba(120, 87, 255, 0.14), 0 12px 32px rgba(120, 87, 255, 0.22);
+      box-shadow: 0 0 0 4px rgba(255, 166, 87, 0.14), 0 12px 32px rgba(255, 166, 87, 0.22);
     }
     
     .pageguide-pdf-highlight-tooltip {
@@ -462,9 +462,9 @@ function injectPdfHighlightStyles() {
       z-index: 1000;
       pointer-events: none;
       white-space: pre-wrap;
-      border: 1px solid rgba(155, 132, 255, 0.36);
-      box-shadow: 0 14px 34px rgba(50, 35, 100, 0.25);
-      background-image: radial-gradient(circle at 13px 50%, transparent 0 3px, #b89cff 3px 5px, transparent 5px);
+      border: 1px solid rgba(255, 190, 132, 0.36);
+      box-shadow: 0 14px 34px rgba(98, 65, 34, 0.25);
+      background-image: radial-gradient(circle at 13px 50%, transparent 0 3px, #ffce9c 3px 5px, transparent 5px);
     }
   `;
   

@@ -46,15 +46,15 @@ function getPageBackground() {
  * *per citation*, so a single answer lit the page up in several colors moving in several
  * different ways at once. One answer now reads as one thing — a single accent, a single calm
  * effect (see .pageguide-highlight in content/content.css). The only variation left is page
- * background: a lighter purple on dark pages so the tint stays legible.
+ * background: a lighter orange on dark pages so the tint stays legible.
  *
  * @param {boolean} isDarkPage - from getPageBackground().isDark
  * @returns {{color: string, animation: string}} accent color + effect name
  */
 function getRandomHighlightStyle(isDarkPage = false) {
-  // Keep PageGuide highlights in the same purple family as the side panel.
+  // Keep PageGuide highlights in the same orange family as the side panel.
   return {
-    color: isDarkPage ? '#b89cff' : '#7857ff',
+    color: isDarkPage ? '#ffce9c' : '#ffa657',
     animation: 'soft'
   };
 }
@@ -708,7 +708,7 @@ function cleanupSom() {
  * @param {string} color - accent color for the box/label.
  * @returns {HTMLElement|null} the container to pass to gv2RemoveDomMarker() after capture.
  */
-function gv2DrawDomMarker(target, number, color = '#7857ff') {
+function gv2DrawDomMarker(target, number, color = '#ffa657') {
   try {
     const rects = [];
     if (target && typeof target.getClientRects === 'function') {
@@ -1011,7 +1011,7 @@ function pageguideShowEvidenceAnnotations(items) {
   dismiss.type = 'button';
   dismiss.textContent = '× Clear evidence marks';
   dismiss.style.cssText = 'position:fixed;right:16px;bottom:16px;pointer-events:auto;background:rgba(32,26,55,.96);' +
-    'color:#fff;border:1px solid rgba(155,132,255,.4);border-radius:999px;padding:8px 14px;' +
+    'color:#fff;border:1px solid rgba(255, 190, 132,.4);border-radius:999px;padding:8px 14px;' +
     'font:700 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;z-index:2147483646;';
   dismiss.addEventListener('click', (e) => { e.stopPropagation(); pageguideClearEvidenceAnnotations(); });
   container.appendChild(dismiss);

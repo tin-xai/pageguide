@@ -7,8 +7,8 @@
   flex-direction: column;
   gap: 5px;
   padding: 6px 10px 7px;
-  background: linear-gradient(90deg, rgba(155, 132, 255, 0.18) 0%, rgba(184, 156, 255, 0.1) 100%);
-  border-bottom: 1px solid rgba(155, 132, 255, 0.28);
+  background: linear-gradient(90deg, rgba(255, 190, 132, 0.18) 0%, rgba(255, 206, 156, 0.1) 100%);
+  border-bottom: 1px solid rgba(255, 190, 132, 0.28);
   flex-shrink: 0;
   z-index: 500;
 }
@@ -24,7 +24,7 @@
 .study-mini-label {
   font-size: 10px;
   font-weight: 700;
-  color: #b89cff;
+  color: #ffce9c;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -33,7 +33,7 @@
   font-size: 1.1rem;
   font-weight: 700;
   font-family: 'Courier New', monospace;
-  color: #b89cff;
+  color: #ffce9c;
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
@@ -84,7 +84,7 @@
 .study-mini-copy-btn:hover { background: rgba(255, 255, 255, 0.18); }
 
 .study-mini-done-btn {
-  background: linear-gradient(135deg, #7357ff 0%, #b89cff 100%);
+  background: linear-gradient(135deg, #ffa457 0%, #ffce9c 100%);
   border: none;
   border-radius: 8px;
   color: #fff;
@@ -100,12 +100,12 @@
 
 /* Light mode */
 body.light-mode .study-mini-bar {
-  background: linear-gradient(90deg, rgba(120, 87, 255, 0.1) 0%, rgba(154, 109, 255, 0.07) 100%);
-  border-color: rgba(120, 87, 255, 0.22);
+  background: linear-gradient(90deg, rgba(255, 166, 87, 0.1) 0%, rgba(255, 184, 109, 0.07) 100%);
+  border-color: rgba(255, 166, 87, 0.22);
 }
-body.light-mode .study-mini-label { color: #7857ff; }
+body.light-mode .study-mini-label { color: #ffa657; }
 body.light-mode .study-mini-q     { color: #111; }
-body.light-mode .study-mini-timer { color: #7857ff; }
+body.light-mode .study-mini-timer { color: #ffa657; }
 body.light-mode .study-mini-copy-btn {
   background: rgba(0,0,0,0.06);
   border-color: rgba(0,0,0,0.15);
@@ -140,14 +140,14 @@ body.light-mode .study-mini-copy-btn {
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px 8px;
-  border-bottom: 1px solid rgba(155, 132, 255, 0.18);
+  border-bottom: 1px solid rgba(255, 190, 132, 0.18);
   flex-shrink: 0;
 }
 
 .study-title {
   font-size: 15px;
   font-weight: 700;
-  color: #b89cff;
+  color: #ffce9c;
   letter-spacing: 0.02em;
 }
 
@@ -204,7 +204,7 @@ body.light-mode .study-mini-copy-btn {
 
 .study-input {
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(155, 132, 255, 0.28);
+  border: 1px solid rgba(255, 190, 132, 0.28);
   border-radius: 8px;
   color: #fff;
   font-size: 14px;
@@ -213,8 +213,8 @@ body.light-mode .study-mini-copy-btn {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .study-input:focus {
-  border-color: #9b84ff;
-  box-shadow: 0 0 0 3px rgba(155, 132, 255, 0.14);
+  border-color: #ffbe84;
+  box-shadow: 0 0 0 3px rgba(255, 190, 132, 0.14);
 }
 .study-input::placeholder { color: rgba(255, 255, 255, 0.3); }
 
@@ -240,12 +240,12 @@ body.light-mode .study-mini-copy-btn {
 .study-btn:active { transform: scale(0.97); }
 
 .study-btn-primary {
-  background: linear-gradient(135deg, #7357ff 0%, #b89cff 100%);
+  background: linear-gradient(135deg, #ffa457 0%, #ffce9c 100%);
   color: #fff;
 }
 
 .study-btn-done {
-  background: linear-gradient(135deg, #7c5cff 0%, #ff8a1d 100%);
+  background: linear-gradient(135deg, #ffa95c 0%, #ff8a1d 100%);
   color: #fff;
 }
 
@@ -258,7 +258,7 @@ body.light-mode .study-mini-copy-btn {
 /* Condition card */
 .study-condition-card {
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(155, 132, 255, 0.18);
+  border: 1px solid rgba(255, 190, 132, 0.18);
   border-radius: 12px;
   padding: 14px;
   display: flex;
@@ -289,7 +289,7 @@ body.light-mode .study-mini-copy-btn {
   font-weight: 700;
   padding: 4px 10px;
 }
-.study-tag-ext  { background: rgba(155, 132, 255, 0.16); color: #b89cff; border: 1px solid rgba(155, 132, 255, 0.32); }
+.study-tag-ext  { background: rgba(255, 190, 132, 0.16); color: #ffce9c; border: 1px solid rgba(255, 190, 132, 0.32); }
 
 /* Task preview pills */
 .study-task-preview {
@@ -311,14 +311,14 @@ body.light-mode .study-mini-copy-btn {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.7);
   padding: 4px 0;
-  border-left: 2px solid rgba(155, 132, 255, 0.46);
+  border-left: 2px solid rgba(255, 190, 132, 0.46);
   padding-left: 8px;
 }
 
 /* Task card */
 .study-task-card {
-  background: rgba(155, 132, 255, 0.07);
-  border: 1px solid rgba(155, 132, 255, 0.22);
+  background: rgba(255, 190, 132, 0.07);
+  border: 1px solid rgba(255, 190, 132, 0.22);
   border-radius: 12px;
   padding: 14px;
   display: flex;
@@ -332,7 +332,7 @@ body.light-mode .study-mini-copy-btn {
 .study-task-type-badge {
   font-size: 11px;
   font-weight: 700;
-  color: #b89cff;
+  color: #ffce9c;
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
@@ -378,18 +378,18 @@ body.light-mode .study-mini-copy-btn {
   font-size: 2rem;
   font-weight: 700;
   font-family: 'Courier New', monospace;
-  color: #b89cff;
+  color: #ffce9c;
   letter-spacing: 0.05em;
 }
 .study-timer-stopped {
-  color: #9b84ff;
+  color: #ffbe84;
 }
 .study-answer-timer-display {
-  background: rgba(155, 132, 255, 0.07);
-  border: 1px solid rgba(155, 132, 255, 0.18);
+  background: rgba(255, 190, 132, 0.07);
+  border: 1px solid rgba(255, 190, 132, 0.18);
 }
 .study-answer-timer {
-  color: #c8b8ff;
+  color: #ffdab8;
 }
 
 /* Radio group */
@@ -420,26 +420,26 @@ body.light-mode .study-mini-copy-btn {
   transition: background 0.15s, border-color 0.15s;
 }
 .study-radio-btn:hover {
-  background: rgba(155, 132, 255, 0.1);
-  border-color: rgba(155, 132, 255, 0.34);
+  background: rgba(255, 190, 132, 0.1);
+  border-color: rgba(255, 190, 132, 0.34);
 }
 .study-radio-btn input[type="radio"] {
-  accent-color: #9b84ff;
+  accent-color: #ffbe84;
   width: 15px;
   height: 15px;
   cursor: pointer;
   flex-shrink: 0;
 }
 .study-radio-btn:has(input:checked) {
-  background: rgba(155, 132, 255, 0.16);
-  border-color: #9b84ff;
+  background: rgba(255, 190, 132, 0.16);
+  border-color: #ffbe84;
   color: #fff;
 }
 
 /* Find task — inline citation passage */
 .study-citation-block {
-  background: rgba(155, 132, 255, 0.07);
-  border: 1px solid rgba(155, 132, 255, 0.22);
+  background: rgba(255, 190, 132, 0.07);
+  border: 1px solid rgba(255, 190, 132, 0.22);
   border-radius: 10px;
   overflow: hidden;
 }
@@ -449,7 +449,7 @@ body.light-mode .study-mini-copy-btn {
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 700;
-  color: #b89cff;
+  color: #ffce9c;
   list-style: none;
   display: flex;
   align-items: center;
@@ -483,10 +483,10 @@ body.light-mode .study-mini-copy-btn {
 }
 
 body.light-mode .study-citation-block {
-  background: rgba(120, 87, 255, 0.06);
-  border-color: rgba(120, 87, 255, 0.2);
+  background: rgba(255, 166, 87, 0.06);
+  border-color: rgba(255, 166, 87, 0.2);
 }
-body.light-mode .study-citation-summary { color: #7857ff; }
+body.light-mode .study-citation-summary { color: #ffa657; }
 body.light-mode .study-citation-hint    { color: rgba(0,0,0,0.35); }
 body.light-mode .study-citation-text    { color: rgba(0,0,0,0.65); }
 body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color: #7a5c00; }
@@ -509,7 +509,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 }
 .study-notes-textarea:focus,
 .study-mini-notes:focus {
-  border-color: rgba(155, 132, 255, 0.55);
+  border-color: rgba(255, 190, 132, 0.55);
 }
 .study-notes-textarea { margin-bottom: 10px; }
 .study-mini-notes {
@@ -541,8 +541,8 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 }
 
 .study-llm-answers {
-  background: rgba(155, 132, 255, 0.07);
-  border: 1px solid rgba(155, 132, 255, 0.24);
+  background: rgba(255, 190, 132, 0.07);
+  border: 1px solid rgba(255, 190, 132, 0.24);
   border-radius: 10px;
   padding: 10px 12px;
   margin-bottom: 12px;
@@ -557,7 +557,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 .study-llm-answers-title {
   font-size: 11px;
   font-weight: 800;
-  color: #b89cff;
+  color: #ffce9c;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -581,8 +581,8 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   cursor: pointer;
 }
 .study-arm-btn-active {
-  background: rgba(155, 132, 255, 0.28);
-  color: #e6ddff;
+  background: rgba(255, 190, 132, 0.28);
+  color: #ffeedd;
 }
 /* • saved · ✎ unsaved draft · – nothing yet */
 .study-arm-badge {
@@ -616,12 +616,12 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   color: #fff;
 }
 .study-act-primary {
-  background: rgba(155, 132, 255, 0.25);
-  border-color: rgba(155, 132, 255, 0.45);
-  color: #e6ddff;
+  background: rgba(255, 190, 132, 0.25);
+  border-color: rgba(255, 190, 132, 0.45);
+  color: #ffeedd;
 }
 .study-act-primary:hover {
-  background: rgba(155, 132, 255, 0.38);
+  background: rgba(255, 190, 132, 0.38);
 }
 .study-llm-answers-note:empty {
   display: none;
@@ -676,9 +676,9 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   color: rgba(255, 255, 255, 0.4);
 }
 .study-saved-answers-btn {
-  background: rgba(155, 132, 255, 0.12);
-  border: 1px solid rgba(155, 132, 255, 0.3);
-  color: #c8b8ff;
+  background: rgba(255, 190, 132, 0.12);
+  border: 1px solid rgba(255, 190, 132, 0.3);
+  color: #ffdab8;
   border-radius: 999px;
   padding: 4px 12px;
   font-size: 12px;
@@ -686,7 +686,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   cursor: pointer;
 }
 .study-saved-answers-btn:hover {
-  background: rgba(155, 132, 255, 0.22);
+  background: rgba(255, 190, 132, 0.22);
 }
 .study-saved-answers-note {
   flex-basis: 100%;
@@ -696,7 +696,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 
 .study-evidence-section {
   background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(155, 132, 255, 0.18);
+  border: 1px solid rgba(255, 190, 132, 0.18);
   border-radius: 10px;
   padding: 10px 12px;
   margin-top: 4px;
@@ -704,7 +704,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 .study-evidence-title {
   font-size: 11px;
   font-weight: 800;
-  color: #b89cff;
+  color: #ffce9c;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 8px;
@@ -755,9 +755,9 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 .study-evidence-annotate,
 .study-evidence-clear {
   border-radius: 999px;
-  border: 1px solid rgba(120, 87, 255, 0.35);
-  background: rgba(120, 87, 255, 0.1);
-  color: #4a2fc0;
+  border: 1px solid rgba(255, 166, 87, 0.35);
+  background: rgba(255, 166, 87, 0.1);
+  color: #c0732f;
   font-size: 12px;
   font-weight: 700;
   padding: 5px 12px;
@@ -765,12 +765,12 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
 }
 .study-evidence-annotate:hover,
 .study-evidence-clear:hover {
-  background: rgba(120, 87, 255, 0.2);
+  background: rgba(255, 166, 87, 0.2);
 }
 /* Picking is happening on the page right now — the panel says which hop is waiting for it. */
 .study-evidence-annotate.is-picking {
-  background: #7857ff;
-  border-color: #7857ff;
+  background: #ffa657;
+  border-color: #ffa657;
   color: #fff;
 }
 .study-evidence-clear {
@@ -793,17 +793,17 @@ body.light-mode .study-notes-display {
 body.light-mode .study-notes-display-label { color: rgba(120, 90, 0, 0.8); }
 body.light-mode .study-notes-display-text  { color: rgba(0,0,0,0.75); }
 body.light-mode .study-llm-answers {
-  background: rgba(120, 87, 255, 0.06);
-  border-color: rgba(120, 87, 255, 0.22);
+  background: rgba(255, 166, 87, 0.06);
+  border-color: rgba(255, 166, 87, 0.22);
 }
-body.light-mode .study-llm-answers-title { color: #7857ff; }
+body.light-mode .study-llm-answers-title { color: #ffa657; }
 body.light-mode .study-llm-answer-message { color: rgba(0,0,0,0.78); }
 body.light-mode .study-llm-answer-plain { background: rgba(0,0,0,0.035); }
 body.light-mode .study-evidence-section {
-  background: rgba(120, 87, 255, 0.045);
-  border-color: rgba(120, 87, 255, 0.18);
+  background: rgba(255, 166, 87, 0.045);
+  border-color: rgba(255, 166, 87, 0.18);
 }
-body.light-mode .study-evidence-title { color: #7857ff; }
+body.light-mode .study-evidence-title { color: #ffa657; }
 body.light-mode .study-evidence-label { color: rgba(0,0,0,0.72); }
 
 /* Results table */
@@ -830,8 +830,8 @@ body.light-mode .study-evidence-label { color: rgba(0,0,0,0.72); }
 
 /* Complete screen */
 .study-complete-msg {
-  background: rgba(155, 132, 255, 0.07);
-  border: 1px solid rgba(155, 132, 255, 0.22);
+  background: rgba(255, 190, 132, 0.07);
+  border: 1px solid rgba(255, 190, 132, 0.22);
   border-radius: 12px;
   padding: 16px;
   text-align: center;
@@ -841,52 +841,52 @@ body.light-mode .study-evidence-label { color: rgba(0,0,0,0.72); }
 }
 .study-complete-emoji { font-size: 2.5rem; }
 .study-complete-msg p { font-size: 13px; color: rgba(255,255,255,0.8); margin: 0; }
-.study-save-status  { color: #b89cff; font-size: 12px; }
+.study-save-status  { color: #ffce9c; font-size: 12px; }
 .study-save-notice  { color: #ffb45c; font-size: 12px; }
 
 /* Light mode overrides */
 body.light-mode .study-overlay {
   background: linear-gradient(160deg, #f0f4f8 0%, #e8eef5 100%);
 }
-body.light-mode .study-title { color: #7857ff; }
+body.light-mode .study-title { color: #ffa657; }
 body.light-mode .study-intro { color: rgba(0,0,0,0.7); }
 body.light-mode .study-label { color: rgba(0,0,0,0.5); }
 body.light-mode .study-input {
   background: rgba(0,0,0,0.05);
-  border-color: rgba(120, 87, 255, 0.3);
+  border-color: rgba(255, 166, 87, 0.3);
   color: #111;
 }
 body.light-mode .study-input::placeholder { color: rgba(0,0,0,0.35); }
 body.light-mode .study-condition-card {
   background: rgba(0,0,0,0.04);
-  border-color: rgba(120, 87, 255, 0.2);
+  border-color: rgba(255, 166, 87, 0.2);
 }
 body.light-mode .study-condition-label { color: rgba(0,0,0,0.4); }
 body.light-mode .study-condition-note { color: rgba(0,0,0,0.7); }
 body.light-mode .study-task-preview  { background: rgba(0,0,0,0.03); }
-body.light-mode .study-task-pill     { color: rgba(0,0,0,0.6); border-color: rgba(120, 87, 255, 0.4); }
-body.light-mode .study-task-card     { background: rgba(120, 87, 255, 0.06); border-color: rgba(120, 87, 255, 0.2); }
+body.light-mode .study-task-pill     { color: rgba(0,0,0,0.6); border-color: rgba(255, 166, 87, 0.4); }
+body.light-mode .study-task-card     { background: rgba(255, 166, 87, 0.06); border-color: rgba(255, 166, 87, 0.2); }
 body.light-mode .study-task-card-running { background: rgba(255,140,0,0.05); border-color: rgba(255,140,0,0.3); }
-body.light-mode .study-task-type-badge { color: #7857ff; }
+body.light-mode .study-task-type-badge { color: #ffa657; }
 body.light-mode .study-task-desc     { color: rgba(0,0,0,0.45); }
 body.light-mode .study-task-question { color: #111; }
 body.light-mode .study-timer-display { background: rgba(0,0,0,0.04); }
 body.light-mode .study-timer-label   { color: rgba(0,0,0,0.62); }
-body.light-mode .study-timer         { color: #7857ff; }
-body.light-mode .study-timer-stopped { color: #6757e8; }
+body.light-mode .study-timer         { color: #ffa657; }
+body.light-mode .study-timer-stopped { color: #e89657; }
 body.light-mode .study-question-text { color: rgba(0,0,0,0.8); }
 body.light-mode .study-radio-btn     { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.12); color: rgba(0,0,0,0.75); }
-body.light-mode .study-radio-btn:hover { background: rgba(120, 87, 255, 0.08); border-color: rgba(120, 87, 255, 0.35); }
-body.light-mode .study-radio-btn:has(input:checked) { background: rgba(120, 87, 255, 0.12); border-color: #7857ff; color: #111; }
+body.light-mode .study-radio-btn:hover { background: rgba(255, 166, 87, 0.08); border-color: rgba(255, 166, 87, 0.35); }
+body.light-mode .study-radio-btn:has(input:checked) { background: rgba(255, 166, 87, 0.12); border-color: #ffa657; color: #111; }
 body.light-mode .study-results-table th { color: rgba(0,0,0,0.4); border-color: rgba(0,0,0,0.1); }
 body.light-mode .study-results-table td { color: rgba(0,0,0,0.75); border-color: rgba(0,0,0,0.06); }
-body.light-mode .study-complete-msg  { background: rgba(120, 87, 255, 0.06); border-color: rgba(120, 87, 255, 0.2); }
+body.light-mode .study-complete-msg  { background: rgba(255, 166, 87, 0.06); border-color: rgba(255, 166, 87, 0.2); }
 body.light-mode .study-complete-msg p { color: rgba(0,0,0,0.8); }
 body.light-mode .study-progress      { color: rgba(0,0,0,0.4); }
 body.light-mode .study-btn-secondary { background: rgba(0,0,0,0.06); border-color: rgba(0,0,0,0.15); color: rgba(0,0,0,0.65); }
 body.light-mode .study-close-btn     { color: rgba(0,0,0,0.4); }
 body.light-mode .study-close-btn:hover { color: #111; background: rgba(0,0,0,0.06); }
-body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
+body.light-mode .study-header        { border-color: rgba(255, 166, 87, 0.16); }
 
 /* ═══════════════════════════════════════════════════════
    THE ANSWER, READ AS A DOCUMENT
@@ -896,10 +896,10 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
    ═══════════════════════════════════════════════════════ */
 
 .study-llm-answers {
-  background: #f4f2ff;
-  border-color: rgba(120, 87, 255, 0.3);
+  background: #fff8f2;
+  border-color: rgba(255, 166, 87, 0.3);
 }
-.study-llm-answers-title { color: #5b3fd6; }
+.study-llm-answers-title { color: #d6863f; }
 .study-llm-answers-list  { max-height: 340px; }
 .study-llm-answer-message {
   color: #111;
@@ -918,17 +918,17 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
    toggles .citations-expanded, which is what turns each [N] into the sentence it points at. */
 .study-llm-answers .pageguide-citation,
 .study-llm-answers .pageguide-citation-idx {
-  color: #4a2fc0;
-  background: rgba(120, 87, 255, 0.13);
-  border-bottom-color: rgba(120, 87, 255, 0.55);
+  color: #c0732f;
+  background: rgba(255, 166, 87, 0.13);
+  border-bottom-color: rgba(255, 166, 87, 0.55);
 }
 .study-llm-answers .pageguide-citation:hover,
 .study-llm-answers .pageguide-citation-idx:hover {
-  background: rgba(120, 87, 255, 0.26);
-  color: #1c1030;
+  background: rgba(255, 166, 87, 0.26);
+  color: #322311;
 }
 .study-llm-answers .citations-expanded .pageguide-citation-idx .citation-text {
-  color: #1c1030;
+  color: #322311;
 }
 .study-llm-answers .pageguide-clickable.citations-expanded::after {
   display: block;
@@ -939,42 +939,42 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
 .study-llm-answers .pageguide-clickable:hover::after { color: rgba(0, 0, 0, 0.45); }
 
 /* The arm switch sits on the light card now. */
-.study-answer-arm-switch { background: rgba(120, 87, 255, 0.1); }
+.study-answer-arm-switch { background: rgba(255, 166, 87, 0.1); }
 .study-arm-btn { color: rgba(0, 0, 0, 0.5); }
 .study-arm-btn-active {
-  background: #7857ff;
+  background: #ffa657;
   color: #fff;
 }
 .study-act-btn {
-  background: rgba(120, 87, 255, 0.1);
-  border-color: rgba(120, 87, 255, 0.3);
-  color: #4a2fc0;
+  background: rgba(255, 166, 87, 0.1);
+  border-color: rgba(255, 166, 87, 0.3);
+  color: #c0732f;
 }
 .study-act-btn:hover {
-  background: rgba(120, 87, 255, 0.2);
-  color: #1c1030;
+  background: rgba(255, 166, 87, 0.2);
+  color: #322311;
 }
 .study-act-primary {
-  background: #7857ff;
-  border-color: #7857ff;
+  background: #ffa657;
+  border-color: #ffa657;
   color: #fff;
 }
 .study-act-primary:hover {
-  background: #6645e8;
+  background: #e89245;
   color: #fff;
 }
 
 /* Supporting evidence sits beside it and reads the same way. */
 .study-evidence-section {
-  background: #f7f6ff;
-  border-color: rgba(120, 87, 255, 0.26);
+  background: #fffaf6;
+  border-color: rgba(255, 166, 87, 0.26);
 }
-.study-evidence-title { color: #5b3fd6; }
+.study-evidence-title { color: #d6863f; }
 .study-evidence-label { color: rgba(0, 0, 0, 0.78); }
 
 /* Picking which of several live answers gets banked (debug mode, and only when there IS a choice). */
 .study-live-answer {
-  border-top: 1px solid rgba(120, 87, 255, 0.16);
+  border-top: 1px solid rgba(255, 166, 87, 0.16);
   padding-top: 8px;
 }
 .study-live-answer:first-child {
@@ -991,8 +991,8 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   cursor: pointer;
   margin-bottom: 4px;
 }
-.study-live-pick input { accent-color: #7857ff; margin: 0; }
-.study-live-answer:has(input:checked) .study-live-pick { color: #4a2fc0; }
+.study-live-pick input { accent-color: #ffa657; margin: 0; }
+.study-live-answer:has(input:checked) .study-live-pick { color: #c0732f; }
 
 /* ═══════════════════════════════════════════════════════
    GROUND TRUTH (researcher-only)
@@ -1121,16 +1121,16 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   margin-left: auto;
 }
 .study-task-nav-btn {
-  background: rgba(120, 87, 255, 0.1);
-  border: 1px solid rgba(120, 87, 255, 0.3);
+  background: rgba(255, 166, 87, 0.1);
+  border: 1px solid rgba(255, 166, 87, 0.3);
   border-radius: 6px;
-  color: #4a2fc0;
+  color: #c0732f;
   cursor: pointer;
   font-size: 11px;
   line-height: 1;
   padding: 4px 7px;
 }
-.study-task-nav-btn:hover:not(:disabled) { background: rgba(120, 87, 255, 0.2); }
+.study-task-nav-btn:hover:not(:disabled) { background: rgba(255, 166, 87, 0.2); }
 .study-task-nav-btn:disabled { opacity: 0.35; cursor: default; }
 .study-task-nav-select {
   background: #fff;
@@ -1149,12 +1149,12 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   cursor: pointer;
   text-decoration: underline;
   text-decoration-style: dotted;
-  text-decoration-color: rgba(120, 87, 255, 0.5);
+  text-decoration-color: rgba(255, 166, 87, 0.5);
   text-underline-offset: 3px;
 }
 .study-evidence-picked-locatable:hover,
 .study-truth-item-locatable:hover {
-  background: rgba(120, 87, 255, 0.07);
+  background: rgba(255, 166, 87, 0.07);
 }
 
 /* A per-task hint under a supporting question: where on THIS page the answer sits. Quieter than the
@@ -1243,7 +1243,7 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
 .study-traj-step-n {
   font-size: 11px;
   font-weight: 800;
-  color: #5b3fd6;
+  color: #d6863f;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -1302,8 +1302,8 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
 .study-field::placeholder { color: rgba(0, 0, 0, 0.32); }
 .study-field:hover { border-color: rgba(0, 0, 0, 0.26); }
 .study-field:focus {
-  border-color: #7857ff;
-  box-shadow: 0 0 0 3px rgba(120, 87, 255, 0.16);
+  border-color: #ffa657;
+  box-shadow: 0 0 0 3px rgba(255, 166, 87, 0.16);
 }
 .study-field-small { max-width: 220px; }
 .study-field-tiny  { max-width: 64px; text-align: center; }
@@ -1315,7 +1315,7 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   margin: 14px 0 6px;
   font-size: 11px;
   font-weight: 800;
-  color: #5b3fd6;
+  color: #d6863f;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -1351,8 +1351,8 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
 }
 .study-traj-filter:hover { border-color: rgba(0, 0, 0, 0.3); color: rgba(0, 0, 0, 0.8); }
 .study-traj-filter-on {
-  background: #7857ff;
-  border-color: #7857ff;
+  background: #ffa657;
+  border-color: #ffa657;
   color: #fff;
 }
 .study-traj-filter-n {
@@ -1376,7 +1376,7 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   padding-right: 8px;
   cursor: pointer;
 }
-.study-traj-pick input { width: 15px; height: 15px; accent-color: #7857ff; cursor: pointer; }
+.study-traj-pick input { width: 15px; height: 15px; accent-color: #ffa657; cursor: pointer; }
 .study-traj-pick input:disabled { cursor: not-allowed; }
 
 /* The service-role key entry, folded away until publishing is asked for. A privileged key on
@@ -1402,7 +1402,7 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   letter-spacing: 0.03em;
   border: 1px solid transparent;
 }
-.study-traj-tag-visual { background: rgba(120, 87, 255, 0.12); color: #5b3fd6; }
+.study-traj-tag-visual { background: rgba(255, 166, 87, 0.12); color: #d6863f; }
 .study-traj-tag-text   { background: rgba(0, 0, 0, 0.07);      color: rgba(0, 0, 0, 0.62); }
 .study-traj-tag-none   { background: transparent; color: rgba(0, 0, 0, 0.45); border-color: rgba(0, 0, 0, 0.18); border-style: dashed; }
 .study-traj-tag-ok     { background: rgba(22, 143, 90, 0.12);  color: #0f6b43; }
@@ -1499,10 +1499,10 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   color: rgba(0, 0, 0, 0.6);
   cursor: pointer;
 }
-.study-step-chip:hover { border-color: #7857ff; color: #5b3fd6; }
+.study-step-chip:hover { border-color: #ffa657; color: #d6863f; }
 .study-step-chip-on {
-  background: #7857ff;
-  border-color: #7857ff;
+  background: #ffa657;
+  border-color: #ffa657;
   color: #fff;
 }
 
@@ -1547,7 +1547,7 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
 }
 .study-question-badge {
   flex: 0 0 auto;
-  background: #7857ff;
+  background: #ffa657;
   color: #fff;
   border-radius: 6px;
   font: 800 10px/18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -1572,16 +1572,16 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   line-height: 1.45;
 }
 .study-question-card .study-radio-btn:hover {
-  background: rgba(120, 87, 255, 0.05);
-  border-color: rgba(120, 87, 255, 0.4);
+  background: rgba(255, 166, 87, 0.05);
+  border-color: rgba(255, 166, 87, 0.4);
 }
 .study-question-card .study-radio-btn:has(input:checked) {
-  background: rgba(120, 87, 255, 0.09);
-  border-color: #7857ff;
-  box-shadow: inset 0 0 0 1px #7857ff;
+  background: rgba(255, 166, 87, 0.09);
+  border-color: #ffa657;
+  box-shadow: inset 0 0 0 1px #ffa657;
   color: #111;
 }
-.study-question-card .study-radio-btn input { accent-color: #7857ff; }
+.study-question-card .study-radio-btn input { accent-color: #ffa657; }
 
 /* An error type is a name plus an explanation, not one long sentence. */
 .study-error-opt { align-items: flex-start; }
@@ -1590,8 +1590,8 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: rgba(120, 87, 255, 0.14);
-  color: #4a2fc0;
+  background: rgba(255, 166, 87, 0.14);
+  color: #c0732f;
   font: 700 11px/18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   text-align: center;
   margin-top: 1px;
@@ -1611,7 +1611,7 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   gap: 8px;
   margin: 6px 0 2px 14px;
   padding-left: 12px;
-  border-left: 2px solid rgba(120, 87, 255, 0.3);
+  border-left: 2px solid rgba(255, 166, 87, 0.3);
 }
 .study-error-steps .study-evidence-label { margin: 0; white-space: nowrap; }
 .study-error-steps .study-field { margin: 0; }
@@ -1636,7 +1636,7 @@ body.light-mode .study-header        { border-color: rgba(120, 87, 255, 0.16); }
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 
-.study-step-pick:hover { border-color: rgba(155, 132, 255, 0.6); }
+.study-step-pick:hover { border-color: rgba(255, 190, 132, 0.6); }
 
 body.light-mode .study-step-pick {
   background: rgba(0, 0, 0, 0.04);
@@ -1650,16 +1650,16 @@ body.light-mode .study-step-pick {
    unselected one is worse than no selected state: it reads as the button having vanished. */
 .study-step-pick.is-on,
 body.light-mode .study-step-pick.is-on {
-  background: #6d4aff;
-  border-color: #5a37e8;
+  background: #ff9f4a;
+  border-color: #e88b37;
   color: #fff;
-  box-shadow: 0 0 0 3px rgba(109, 74, 255, 0.22);
+  box-shadow: 0 0 0 3px rgba(255, 159, 74, 0.22);
 }
 
 .study-step-pick.is-on:hover,
 body.light-mode .study-step-pick.is-on:hover {
-  background: #5c3ae0;
-  border-color: #4a2cc9;
+  background: #e0893a;
+  border-color: #c9762c;
 }
 
 /* Exclusive of the three above it, so it does not read as a fourth error. */

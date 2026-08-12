@@ -626,7 +626,7 @@
   }
 
   // Confidence line colors, shared by the chart + legends.
-  const CONF_COLORS = { full: '#7857ff', reduced: '#ff8a3d', noloop: '#1bbf9c' };
+  const CONF_COLORS = { full: '#ffa657', reduced: '#ff2d78', noloop: '#1bbf9c' };
   const CONF_LABELS = {
     full: 'Full (G·loop·progress)',
     reduced: 'No-progress (G·loop)',

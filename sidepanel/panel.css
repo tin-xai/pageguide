@@ -320,8 +320,8 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-new-chat-btn:hover {
-  background: rgba(124, 92, 255, 0.2);
-  color: #9d82ff;
+  background: rgba(255, 169, 92, 0.2);
+  color: #ffbe82;
 }
 
 .pageguide-settings-btn:hover {
@@ -573,11 +573,11 @@ body.light-mode .pageguide-history-load-btn:hover {
 /* Guide message */
 .pageguide-message.guide {
   align-self: flex-start;
-  background: linear-gradient(135deg, rgba(110, 72, 255, 0.15), rgba(59, 130, 246, 0.15));
+  background: linear-gradient(135deg, rgba(255, 159, 72, 0.15), rgba(59, 130, 246, 0.15));
   color: #e0e0e0;
   padding: 16px;
   border-radius: 12px;
-  border: 1px solid rgba(110, 72, 255, 0.3);
+  border: 1px solid rgba(255, 159, 72, 0.3);
   max-width: 90%;
 }
 
@@ -588,7 +588,7 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-step-badge {
-  background: linear-gradient(135deg, #6e48ff, #3b82f6);
+  background: linear-gradient(135deg, #ff9f48, #3b82f6);
   color: white;
   padding: 4px 10px;
   border-radius: 12px;
@@ -661,39 +661,39 @@ body.light-mode .pageguide-history-load-btn:hover {
   position: relative;
 }
 
-/* Clickable citations in answers. Accent purple, like every other evidence affordance (the
+/* Clickable citations in answers. Accent orange, like every other evidence affordance (the
    on-page highlight, the evidence chips, the marker overlays) — these used to be cyan/green,
    which read as a separate feature from the evidence they point at. */
 .pageguide-citation {
   display: inline;
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 14%, transparent);
-  color: var(--pg-som, #7857ff);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 14%, transparent);
+  color: var(--pg-som, #ffa657);
   padding: 2px 4px;
   border-radius: 3px;
   cursor: pointer;
   transition: background-color 0.2s ease, color 0.2s ease, border-bottom-color 0.2s ease;
-  border-bottom: 1px dashed color-mix(in srgb, var(--pg-som, #7857ff) 50%, transparent);
+  border-bottom: 1px dashed color-mix(in srgb, var(--pg-som, #ffa657) 50%, transparent);
 }
 
 .pageguide-citation:hover {
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 26%, transparent);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 26%, transparent);
   color: #fff;
-  border-bottom-color: var(--pg-som, #7857ff);
+  border-bottom-color: var(--pg-som, #ffa657);
 }
 
 /* Citation with toggleable text (web citations) */
 .pageguide-citation-idx {
   display: inline;
-  color: var(--pg-som, #7857ff);
+  color: var(--pg-som, #ffa657);
   cursor: pointer;
   padding: 1px 4px;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 10%, transparent);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 10%, transparent);
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .pageguide-citation-idx:hover {
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 24%, transparent);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 24%, transparent);
   color: #fff;
 }
 
@@ -739,14 +739,14 @@ body.light-mode .pageguide-history-load-btn:hover {
   padding: 0;
   border: none;
   border-bottom: none;
-  color: var(--pg-som, #7857ff);
+  color: var(--pg-som, #ffa657);
   font-size: 10px;
   vertical-align: super;
 }
 
 .pageguide-citation-sup:hover {
   background: none;
-  color: color-mix(in srgb, var(--pg-som, #7857ff) 70%, #fff);
+  color: color-mix(in srgb, var(--pg-som, #ffa657) 70%, #fff);
 }
 
 /* PDF Page Citations - Index style [1], [2], [3] */
@@ -801,19 +801,19 @@ body.light-mode .pageguide-history-load-btn:hover {
   gap: 9px;
   max-width: min(520px, calc(100% - 40px));
   padding: 9px 12px;
-  background: color-mix(in srgb, var(--pg-accent, #7857ff) 8%, var(--pg-surface, #fff));
-  border: 1px solid color-mix(in srgb, var(--pg-accent, #7857ff) 18%, transparent);
+  background: color-mix(in srgb, var(--pg-accent, #ffa657) 8%, var(--pg-surface, #fff));
+  border: 1px solid color-mix(in srgb, var(--pg-accent, #ffa657) 18%, transparent);
   border-radius: 10px;
   align-self: flex-start;
   color: var(--pg-text);
-  box-shadow: 0 6px 16px rgba(120, 87, 255, 0.07);
+  box-shadow: 0 6px 16px rgba(255, 166, 87, 0.07);
 }
 
 .pageguide-typing-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid color-mix(in srgb, var(--pg-accent, #7857ff) 20%, transparent);
-  border-top-color: var(--pg-accent, #7857ff);
+  border: 2px solid color-mix(in srgb, var(--pg-accent, #ffa657) 20%, transparent);
+  border-top-color: var(--pg-accent, #ffa657);
   border-radius: 50%;
   animation: typing-spin 0.8s linear infinite;
   flex: 0 0 auto;
@@ -965,15 +965,15 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-pdf-reader-btn {
-  background: linear-gradient(135deg, rgba(124, 92, 255, 0.2), rgba(180, 100, 255, 0.2));
-  border-color: rgba(124, 92, 255, 0.4);
-  color: #b088ff;
+  background: linear-gradient(135deg, rgba(255, 169, 92, 0.2), rgba(255, 193, 100, 0.2));
+  border-color: rgba(255, 169, 92, 0.4);
+  color: #ffc788;
 }
 
 .pageguide-pdf-reader-btn:hover {
-  background: linear-gradient(135deg, rgba(124, 92, 255, 0.35), rgba(180, 100, 255, 0.35));
-  border-color: rgba(124, 92, 255, 0.6);
-  color: #d0b0ff;
+  background: linear-gradient(135deg, rgba(255, 169, 92, 0.35), rgba(255, 193, 100, 0.35));
+  border-color: rgba(255, 169, 92, 0.6);
+  color: #ffdcb0;
 }
 
 /* Image Preview Area */
@@ -983,8 +983,8 @@ body.light-mode .pageguide-history-load-btn:hover {
   gap: 6px;
   padding: 10px 12px;
   margin-bottom: 12px;
-  background: linear-gradient(135deg, rgba(138, 43, 226, 0.15), rgba(0, 217, 255, 0.1));
-  border: 1px solid rgba(138, 43, 226, 0.3);
+  background: linear-gradient(135deg, rgba(226, 153, 43, 0.15), rgba(0, 217, 255, 0.1));
+  border: 1px solid rgba(226, 153, 43, 0.3);
   border-radius: 12px;
   animation: image-preview-in 0.3s ease-out;
 }
@@ -1021,7 +1021,7 @@ body.light-mode .pageguide-history-load-btn:hover {
   height: 64px;
   object-fit: cover;
   border-radius: 8px;
-  border: 2px solid rgba(138, 43, 226, 0.5);
+  border: 2px solid rgba(226, 153, 43, 0.5);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   transition: all 0.3s ease;
 }
@@ -1098,7 +1098,7 @@ body.light-mode .pageguide-history-load-btn:hover {
 .pageguide-image-label {
   flex: 1;
   font-size: 12px;
-  color: #b388ff;
+  color: #ffc888;
   font-weight: 500;
 }
 
@@ -1118,8 +1118,8 @@ body.light-mode .pageguide-history-load-btn:hover {
   max-width: 100%;
   padding: 6px 8px 6px 6px;
   border-radius: 12px;
-  background: linear-gradient(135deg, rgba(138, 43, 226, 0.14), rgba(0, 217, 255, 0.08));
-  border: 1px solid rgba(138, 43, 226, 0.30);
+  background: linear-gradient(135deg, rgba(226, 153, 43, 0.14), rgba(0, 217, 255, 0.08));
+  border: 1px solid rgba(226, 153, 43, 0.30);
   box-sizing: border-box;
   animation: image-preview-in 0.25s ease-out;
 }
@@ -1142,7 +1142,7 @@ body.light-mode .pageguide-history-load-btn:hover {
 .pageguide-chip-name {
   font-size: 12px;
   font-weight: 600;
-  color: #cbb4ff;
+  color: #ffdbb4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1150,7 +1150,7 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 .pageguide-chip-meta {
   font-size: 10px;
-  color: rgba(203, 180, 255, 0.7);
+  color: rgba(255, 219, 180, 0.7);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1182,14 +1182,14 @@ body.light-mode .pageguide-history-load-btn:hover {
 .pageguide-chip-file .pageguide-chip-name { color: #00e096; }
 .pageguide-chip-file .pageguide-chip-meta { color: rgba(0, 224, 150, 0.7); }
 
-/* Selected-text chip — violet language */
+/* Selected-text chip — accent-orange language */
 .pageguide-chip-text {
-  background: rgba(120, 87, 255, 0.08);
-  border-color: rgba(120, 87, 255, 0.28);
+  background: rgba(255, 166, 87, 0.08);
+  border-color: rgba(255, 166, 87, 0.28);
 }
-.pageguide-chip-text .pageguide-chip-name { color: #9c86ff; }
-.pageguide-chip-text .pageguide-chip-meta { color: rgba(156, 134, 255, 0.7); }
-.pageguide-chip-text .pageguide-chip-icon svg { stroke: #9c86ff; }
+.pageguide-chip-text .pageguide-chip-name { color: #ffbe86; }
+.pageguide-chip-text .pageguide-chip-meta { color: rgba(255, 190, 134, 0.7); }
+.pageguide-chip-text .pageguide-chip-icon svg { stroke: #ffbe86; }
 
 /* The remove ✕ sits flush-right in each chip */
 .pageguide-attachment-chip .pageguide-remove-image {
@@ -1227,8 +1227,8 @@ body.light-mode .pageguide-history-load-btn:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(120, 87, 255, 0.08);
-  border: 1px solid rgba(120, 87, 255, 0.22);
+  background: rgba(255, 166, 87, 0.08);
+  border: 1px solid rgba(255, 166, 87, 0.22);
   border-radius: 8px;
   padding: 6px 10px;
   margin-bottom: 8px;
@@ -1247,7 +1247,7 @@ body.light-mode .pageguide-history-load-btn:hover {
   gap: 6px;
   flex: 1;
   font-size: 12px;
-  color: #7857ff;
+  color: #ffa657;
   font-weight: 500;
   min-width: 0;
 }
@@ -1291,15 +1291,15 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-upload-btn:hover {
-  background: rgba(138, 43, 226, 0.2);
-  border-color: rgba(138, 43, 226, 0.5);
+  background: rgba(226, 153, 43, 0.2);
+  border-color: rgba(226, 153, 43, 0.5);
   transform: scale(1.05);
 }
 
 .pageguide-upload-btn.has-image {
-  background: linear-gradient(135deg, rgba(138, 43, 226, 0.3), rgba(0, 217, 255, 0.2));
-  border-color: rgba(138, 43, 226, 0.6);
-  box-shadow: 0 0 12px rgba(138, 43, 226, 0.3);
+  background: linear-gradient(135deg, rgba(226, 153, 43, 0.3), rgba(0, 217, 255, 0.2));
+  border-color: rgba(226, 153, 43, 0.6);
+  box-shadow: 0 0 12px rgba(226, 153, 43, 0.3);
 }
 
 /* Verification pause prompt (Slice 3) */
@@ -1327,8 +1327,8 @@ body.light-mode .pageguide-history-load-btn:hover {
 .pageguide-steer,
 .pageguide-extract {
   position: relative;
-  background: rgba(108, 92, 231, 0.12);
-  border: 1px solid rgba(108, 92, 231, 0.35);
+  background: rgba(231, 153, 92, 0.12);
+  border: 1px solid rgba(231, 153, 92, 0.35);
   border-radius: 12px;
   padding: 12px 14px;
   margin: 8px 0;
@@ -1399,7 +1399,7 @@ body.light-mode .pageguide-history-load-btn:hover {
 
 /* Steer button inside the timeline step preview — distinct from "Inspect more". */
 .pageguide-goal-step-preview button.pageguide-goal-step-steer {
-  background: var(--pg-accent, #7857ff);
+  background: var(--pg-accent, #ffa657);
   color: #fff;
 }
 .pageguide-goal-step-preview button.pageguide-goal-step-steer.is-flagged {
@@ -1427,14 +1427,14 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-mode-btn:hover {
-  background: rgba(138, 43, 226, 0.2);
-  border-color: rgba(138, 43, 226, 0.5);
+  background: rgba(226, 153, 43, 0.2);
+  border-color: rgba(226, 153, 43, 0.5);
 }
 
 .pageguide-mode-btn.pageguide-mode-auto {
-  background: linear-gradient(135deg, rgba(138, 43, 226, 0.35), rgba(0, 217, 255, 0.25));
-  border-color: rgba(138, 43, 226, 0.6);
-  box-shadow: 0 0 12px rgba(138, 43, 226, 0.25);
+  background: linear-gradient(135deg, rgba(226, 153, 43, 0.35), rgba(0, 217, 255, 0.25));
+  border-color: rgba(226, 153, 43, 0.6);
+  box-shadow: 0 0 12px rgba(226, 153, 43, 0.25);
 }
 
 .pageguide-chat-input {
@@ -1490,9 +1490,9 @@ body.light-mode .pageguide-history-load-btn:hover {
 }
 
 .pageguide-guide-pause-btn {
-  border: 1px solid rgba(120, 87, 255, 0.35);
+  border: 1px solid rgba(255, 166, 87, 0.35);
   border-radius: 999px;
-  background: rgba(120, 87, 255, 0.12);
+  background: rgba(255, 166, 87, 0.12);
   color: var(--pg-text, #252b3f);
   height: 32px;
   padding: 0 12px;
@@ -1501,7 +1501,7 @@ body.light-mode .pageguide-history-load-btn:hover {
   flex-shrink: 0;
 }
 .pageguide-guide-pause-btn:hover {
-  background: rgba(120, 87, 255, 0.18);
+  background: rgba(255, 166, 87, 0.18);
 }
 .pageguide-guide-pause-btn.is-resume {
   border-color: rgba(34, 197, 94, 0.42);
@@ -1779,9 +1779,9 @@ body.light-mode .pageguide-message.action {
 }
 
 body.light-mode .pageguide-message.guide {
-  background: linear-gradient(135deg, rgba(100, 60, 220, 0.08), rgba(50, 100, 220, 0.08));
+  background: linear-gradient(135deg, rgba(220, 139, 60, 0.08), rgba(50, 100, 220, 0.08));
   color: #2a2a40;
-  border: 1px solid rgba(100, 60, 220, 0.2);
+  border: 1px solid rgba(220, 139, 60, 0.2);
 }
 
 body.light-mode .pageguide-guide-waiting {
@@ -1817,13 +1817,13 @@ body.light-mode .pageguide-clickable:hover::after {
 /* Light mode keeps the same accent; only the hover text colour differs (dark text on a light
    tint reads better than white). */
 body.light-mode .pageguide-citation {
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 12%, transparent);
-  color: var(--pg-som, #7857ff);
-  border-bottom: 1px dashed color-mix(in srgb, var(--pg-som, #7857ff) 50%, transparent);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 12%, transparent);
+  color: var(--pg-som, #ffa657);
+  border-bottom: 1px dashed color-mix(in srgb, var(--pg-som, #ffa657) 50%, transparent);
 }
 
 body.light-mode .pageguide-citation:hover {
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 24%, transparent);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 24%, transparent);
   color: #1a1a2e;
 }
 
@@ -1839,17 +1839,17 @@ body.light-mode .pageguide-markdown-link:hover {
 }
 
 body.light-mode .pageguide-citation-idx {
-  color: var(--pg-som, #7857ff);
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 10%, transparent);
+  color: var(--pg-som, #ffa657);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 10%, transparent);
 }
 
 body.light-mode .pageguide-citation-idx:hover {
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 22%, transparent);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 22%, transparent);
   color: #1a1a2e;
 }
 
 body.light-mode .pageguide-citation-sup {
-  color: var(--pg-som, #7857ff);
+  color: var(--pg-som, #ffa657);
 }
 
 body.light-mode .pageguide-pdf-citation {
@@ -1863,13 +1863,13 @@ body.light-mode .pageguide-pdf-citation:hover {
 }
 
 body.light-mode .pageguide-typing {
-  background: color-mix(in srgb, var(--pg-accent, #7857ff) 8%, #fff);
-  border-color: color-mix(in srgb, var(--pg-accent, #7857ff) 20%, transparent);
+  background: color-mix(in srgb, var(--pg-accent, #ffa657) 8%, #fff);
+  border-color: color-mix(in srgb, var(--pg-accent, #ffa657) 20%, transparent);
 }
 
 body.light-mode .pageguide-typing-spinner {
-  border-color: color-mix(in srgb, var(--pg-accent, #7857ff) 20%, transparent);
-  border-top-color: var(--pg-accent, #7857ff);
+  border-color: color-mix(in srgb, var(--pg-accent, #ffa657) 20%, transparent);
+  border-top-color: var(--pg-accent, #ffa657);
 }
 
 body.light-mode .pageguide-step-next-btn {
@@ -1934,24 +1934,24 @@ body.light-mode .pageguide-quick-btn--active:hover {
 }
 
 body.light-mode .pageguide-pdf-reader-btn {
-  background: linear-gradient(135deg, rgba(100, 60, 220, 0.1), rgba(150, 80, 220, 0.1));
-  border-color: rgba(100, 60, 220, 0.3);
-  color: #6040bb;
+  background: linear-gradient(135deg, rgba(220, 139, 60, 0.1), rgba(220, 163, 80, 0.1));
+  border-color: rgba(220, 139, 60, 0.3);
+  color: #bb7d40;
 }
 
 body.light-mode .pageguide-pdf-reader-btn:hover {
-  background: linear-gradient(135deg, rgba(100, 60, 220, 0.18), rgba(150, 80, 220, 0.18));
-  border-color: rgba(100, 60, 220, 0.5);
-  color: #4d30aa;
+  background: linear-gradient(135deg, rgba(220, 139, 60, 0.18), rgba(220, 163, 80, 0.18));
+  border-color: rgba(220, 139, 60, 0.5);
+  color: #aa6c30;
 }
 
 body.light-mode .pageguide-image-preview {
-  background: linear-gradient(135deg, rgba(100, 30, 200, 0.07), rgba(0, 140, 200, 0.05));
-  border: 1px solid rgba(100, 30, 200, 0.18);
+  background: linear-gradient(135deg, rgba(200, 125, 30, 0.07), rgba(0, 140, 200, 0.05));
+  border: 1px solid rgba(200, 125, 30, 0.18);
 }
 
 body.light-mode .pageguide-image-label {
-  color: #6040bb;
+  color: #bb7d40;
 }
 
 body.light-mode .pageguide-file-preview {
@@ -1975,11 +1975,11 @@ body.light-mode .pageguide-remove-image:hover {
 
 /* Attachment chips — light mode */
 body.light-mode .pageguide-attachment-chip {
-  background: linear-gradient(135deg, rgba(100, 30, 200, 0.07), rgba(0, 140, 200, 0.05));
-  border-color: rgba(100, 30, 200, 0.20);
+  background: linear-gradient(135deg, rgba(200, 125, 30, 0.07), rgba(0, 140, 200, 0.05));
+  border-color: rgba(200, 125, 30, 0.20);
 }
-body.light-mode .pageguide-chip-name { color: #6040bb; }
-body.light-mode .pageguide-chip-meta { color: rgba(96, 64, 187, 0.7); }
+body.light-mode .pageguide-chip-name { color: #bb7d40; }
+body.light-mode .pageguide-chip-meta { color: rgba(187, 125, 64, 0.7); }
 body.light-mode .pageguide-chip-file {
   background: rgba(0, 160, 90, 0.07);
   border-color: rgba(0, 160, 90, 0.25);
@@ -1987,12 +1987,12 @@ body.light-mode .pageguide-chip-file {
 body.light-mode .pageguide-chip-file .pageguide-chip-name { color: #007a50; }
 body.light-mode .pageguide-chip-file .pageguide-chip-meta { color: rgba(0, 122, 80, 0.7); }
 body.light-mode .pageguide-chip-text {
-  background: rgba(120, 87, 255, 0.08);
-  border-color: rgba(120, 87, 255, 0.22);
+  background: rgba(255, 166, 87, 0.08);
+  border-color: rgba(255, 166, 87, 0.22);
 }
-body.light-mode .pageguide-chip-text .pageguide-chip-name { color: #5b3fd6; }
-body.light-mode .pageguide-chip-text .pageguide-chip-meta { color: rgba(91, 63, 214, 0.7); }
-body.light-mode .pageguide-chip-text .pageguide-chip-icon svg { stroke: #5b3fd6; }
+body.light-mode .pageguide-chip-text .pageguide-chip-name { color: #d6863f; }
+body.light-mode .pageguide-chip-text .pageguide-chip-meta { color: rgba(214, 134, 63, 0.7); }
+body.light-mode .pageguide-chip-text .pageguide-chip-icon svg { stroke: #d6863f; }
 
 body.light-mode .pageguide-upload-btn {
   background: rgba(0, 0, 0, 0.06);
@@ -2000,8 +2000,8 @@ body.light-mode .pageguide-upload-btn {
 }
 
 body.light-mode .pageguide-upload-btn:hover {
-  background: rgba(100, 30, 200, 0.1);
-  border-color: rgba(100, 30, 200, 0.4);
+  background: rgba(200, 125, 30, 0.1);
+  border-color: rgba(200, 125, 30, 0.4);
 }
 
 body.light-mode .pageguide-chat-input {
@@ -2077,9 +2077,9 @@ body.light-mode .pageguide-slash-item .slash-desc {
   --pg-surface-strong: rgba(255, 255, 255, 0.085);
   --pg-hover: rgba(255, 255, 255, 0.1);
   --pg-border: rgba(255, 255, 255, 0.12);
-  --pg-text: #f3f3fa;
-  --pg-muted: rgba(243, 243, 250, 0.62);
-  --pg-accent: #8d7cff;
+  --pg-text: #faf6f3;
+  --pg-muted: rgba(250, 246, 243, 0.62);
+  --pg-accent: #ffb67c;
   --pg-accent-2: #38d9c5;
   --pg-danger: #ff5a72;
   --pg-radius: 8px;
@@ -2093,7 +2093,7 @@ body.light-mode {
   --pg-border: rgba(20, 28, 45, 0.12);
   --pg-text: #202538;
   --pg-muted: rgba(32, 37, 56, 0.62);
-  --pg-accent: #6757e8;
+  --pg-accent: #e89657;
   --pg-accent-2: #008f7d;
 }
 
@@ -2170,8 +2170,8 @@ body.light-mode .pageguide-history-overlay {
 }
 
 .pageguide-route-tab.active {
-  background: rgba(141, 124, 255, 0.18);
-  border-color: rgba(141, 124, 255, 0.45);
+  background: rgba(255, 182, 124, 0.18);
+  border-color: rgba(255, 182, 124, 0.45);
   color: var(--pg-text);
 }
 
@@ -2247,8 +2247,8 @@ body.light-mode .pageguide-history-overlay {
 
 .pageguide-step-card {
   position: relative;
-  border: 1px solid rgba(141, 124, 255, 0.32);
-  background: rgba(141, 124, 255, 0.1);
+  border: 1px solid rgba(255, 182, 124, 0.32);
+  background: rgba(255, 182, 124, 0.1);
   border-radius: var(--pg-radius);
   padding: 12px;
 }
@@ -2285,8 +2285,8 @@ body.light-mode .pageguide-history-overlay {
   margin: 10px 0;
   padding: 10px;
   border-radius: 8px;
-  border: 1px solid rgba(120, 87, 255, 0.22);
-  background: rgba(120, 87, 255, 0.08);
+  border: 1px solid rgba(255, 166, 87, 0.22);
+  background: rgba(255, 166, 87, 0.08);
 }
 .pageguide-guide-resume-text {
   font: 600 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2357,8 +2357,8 @@ body.light-mode .pageguide-history-overlay {
   margin: 6px 0 0;
   padding: 7px 10px 7px 20px;
   border-radius: 8px;
-  background: rgba(120, 87, 255, 0.06);
-  border: 1px solid rgba(120, 87, 255, 0.16);
+  background: rgba(255, 166, 87, 0.06);
+  border: 1px solid rgba(255, 166, 87, 0.16);
 }
 .pageguide-steer-restore-details li {
   word-break: break-word;
@@ -2376,7 +2376,7 @@ body.light-mode .pageguide-history-overlay {
   font-size: 11px;
   opacity: 0.7;
   padding: 5px 8px;
-  background: rgba(120, 87, 255, 0.08);
+  background: rgba(255, 166, 87, 0.08);
 }
 .pageguide-steer-restore-target img {
   display: block;
@@ -2444,8 +2444,8 @@ body.light-mode .pageguide-history-overlay {
 .pageguide-steer-compare-card {
   padding: 9px 10px;
   border-radius: 9px;
-  border: 1px solid rgba(120, 87, 255, 0.22);
-  background: rgba(120, 87, 255, 0.07);
+  border: 1px solid rgba(255, 166, 87, 0.22);
+  background: rgba(255, 166, 87, 0.07);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -2495,7 +2495,7 @@ body.light-mode .pageguide-history-overlay {
 .pageguide-steer-compare-rec {
   margin-top: 7px;
   padding-top: 7px;
-  border-top: 1px solid rgba(120, 87, 255, 0.16);
+  border-top: 1px solid rgba(255, 166, 87, 0.16);
 }
 .pageguide-steer-restore-fixbox { margin-top: 8px; }
 .pageguide-steer-restore-fix-input {
@@ -2709,12 +2709,12 @@ body.light-mode .pageguide-info-pop {
   --pg-bg: #f5f6fa;
   --pg-panel: #ffffff;
   --pg-surface: #ffffff;
-  --pg-surface-strong: #f4f1ff;
-  --pg-hover: #f3f1ff;
-  --pg-border: #e8e5f7;
+  --pg-surface-strong: #fff8f1;
+  --pg-hover: #fff7f1;
+  --pg-border: #f7ede5;
   --pg-text: #282d3f;
   --pg-muted: #7a8194;
-  --pg-accent: #7857ff;
+  --pg-accent: #ffa657;
   --pg-accent-2: #ff8a1d;
   --pg-success: #22c55e;
   --pg-danger: #ff526a;
@@ -2781,7 +2781,7 @@ body {
   width: 36px;
   height: 36px;
   border-radius: 11px;
-  background: #f5f1ff;
+  background: #fff8f1;
   color: var(--pg-accent);
   font-size: 22px;
 }
@@ -2812,7 +2812,7 @@ body {
   height: 22px;
   border: none;
   border-radius: 6px;
-  background: var(--pg-hover, rgba(120,87,255,.10));
+  background: var(--pg-hover, rgba(255, 166, 87,.10));
   color: var(--pg-muted, #71788c);
   font-size: 12px;
   line-height: 1;
@@ -2834,7 +2834,7 @@ body {
   width: 100%;
   text-align: left;
   padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, var(--pg-border, #d9dce8) 88%, var(--pg-som, #7857ff));
+  border: 1px solid color-mix(in srgb, var(--pg-border, #d9dce8) 88%, var(--pg-som, #ffa657));
   border-radius: 16px;
   background: var(--pg-card, #fff);
   color: var(--pg-text, #202538);
@@ -2843,8 +2843,8 @@ body {
   transition: border-color .15s, box-shadow .15s, transform .1s;
 }
 .pageguide-journey-recall-btn:hover {
-  border-color: var(--pg-accent, #7857ff);
-  box-shadow: 0 10px 24px rgba(120,87,255,.14);
+  border-color: var(--pg-accent, #ffa657);
+  box-shadow: 0 10px 24px rgba(255, 166, 87,.14);
 }
 .pageguide-journey-recall-btn:active { transform: scale(.99); }
 .pageguide-journey-recall-ico {
@@ -2854,8 +2854,8 @@ body {
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--pg-som, #7857ff) 12%, transparent);
-  color: var(--pg-som, #7857ff);
+  background: color-mix(in srgb, var(--pg-som, #ffa657) 12%, transparent);
+  color: var(--pg-som, #ffa657);
   font-size: 24px;
   font-weight: 700;
 }
@@ -2905,7 +2905,7 @@ body {
 }
 
 .pageguide-plan-row.current {
-  color: var(--pg-accent, #7857ff);
+  color: var(--pg-accent, #ffa657);
 }
 
 .pageguide-plan-num {
@@ -2976,7 +2976,7 @@ body {
 }
 
 .pageguide-goal-row:hover {
-  background: var(--pg-hover, rgba(120,87,255,.08));
+  background: var(--pg-hover, rgba(255, 166, 87,.08));
 }
 
 /* Connecting vertical line between dots, like the reference "show thinking" timelines. */
@@ -3005,8 +3005,8 @@ body {
 }
 
 .pageguide-goal-row-dot.current {
-  background: var(--pg-accent, #7857ff);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pg-accent, #7857ff) 22%, transparent);
+  background: var(--pg-accent, #ffa657);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pg-accent, #ffa657) 22%, transparent);
   animation: pageguide-working-pulse 1.25s ease-in-out infinite;
 }
 
@@ -3221,7 +3221,7 @@ body {
 }
 .pageguide-goal-step-expandable summary {
   cursor: pointer;
-  color: var(--pg-accent, #7c5cff);
+  color: var(--pg-accent, #ffa95c);
   font-weight: 700;
   list-style-position: inside;
 }
@@ -3384,7 +3384,7 @@ body {
   padding: 10px 12px;
   font: 700 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--pg-text, #202436);
-  border-bottom: 1px solid var(--pg-border, rgba(120, 87, 255, 0.18));
+  border-bottom: 1px solid var(--pg-border, rgba(255, 166, 87, 0.18));
 }
 
 .pageguide-memory-shot-close {
@@ -3400,8 +3400,8 @@ body {
 }
 
 .pageguide-memory-shot-close:hover {
-  background: rgba(120, 87, 255, 0.1);
-  color: var(--pg-accent, #7857ff);
+  background: rgba(255, 166, 87, 0.1);
+  color: var(--pg-accent, #ffa657);
 }
 
 .pageguide-memory-shot-dialog img {
@@ -3420,11 +3420,11 @@ body {
 }
 
 .pageguide-step-card {
-  border: 1px solid #d8cffd;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfaff 100%);
+  border: 1px solid #fde5cf;
+  background: linear-gradient(180deg, #ffffff 0%, #fffcfa 100%);
   border-radius: 12px;
   padding: 12px 14px;
-  box-shadow: 0 8px 22px rgba(120, 87, 255, 0.06);
+  box-shadow: 0 8px 22px rgba(255, 166, 87, 0.06);
 }
 
 .pageguide-guide-step {
@@ -3437,10 +3437,10 @@ body {
   width: max-content;
   padding: 5px 9px;
   border-radius: 999px;
-  background: linear-gradient(135deg, #6e55ff, #8f62ff);
+  background: linear-gradient(135deg, #ffa255, #ffb262);
   color: #fff;
   font-size: 11px;
-  box-shadow: 0 8px 18px rgba(120, 87, 255, 0.26);
+  box-shadow: 0 8px 18px rgba(255, 166, 87, 0.26);
 }
 
 .pageguide-step-text {
@@ -3495,7 +3495,7 @@ body {
 }
 
 .pageguide-step-next-btn {
-  background: linear-gradient(135deg, #7255ff, #8d5cff);
+  background: linear-gradient(135deg, #ffa355, #ffb05c);
   border: 0;
   color: #fff;
   min-width: 86px;
@@ -3573,9 +3573,9 @@ body {
   margin-top: 8px;
   padding: 8px 9px;
   border-radius: 9px;
-  background: rgba(120, 87, 255, 0.12);
-  border: 1px solid rgba(120, 87, 255, 0.26);
-  color: #5b3df6;
+  background: rgba(255, 166, 87, 0.12);
+  border: 1px solid rgba(255, 166, 87, 0.26);
+  color: #f6923d;
   font-size: 11px;
   line-height: 1.35;
 }
@@ -3617,8 +3617,8 @@ body {
   margin-top: 8px;
   padding: 8px 9px;
   border-radius: 9px;
-  background: #f7f3ff;
-  color: #5d4b9b;
+  background: #fff9f3;
+  color: #9b724b;
   font-size: 11px;
   line-height: 1.35;
 }
@@ -3662,7 +3662,7 @@ body {
   min-height: 30px;
   border: 0;
   border-radius: 8px;
-  background: #f3efff;
+  background: #fff7ef;
   color: var(--pg-accent);
   font-weight: 760;
   cursor: pointer;
@@ -3794,8 +3794,8 @@ body {
 }
 
 .pageguide-mode-btn.pageguide-mode-auto {
-  background: #f3efff;
-  border-color: #d8cffd;
+  background: #fff7ef;
+  border-color: #fde5cf;
   color: var(--pg-accent);
 }
 
@@ -3810,10 +3810,10 @@ body {
   height: 36px;
   border-radius: 50%;
   border: 0;
-  background: linear-gradient(135deg, #7255ff, #8d5cff);
+  background: linear-gradient(135deg, #ffa355, #ffb05c);
   color: #fff;
   font-size: 15px;
-  box-shadow: 0 10px 24px rgba(120, 87, 255, 0.28);
+  box-shadow: 0 10px 24px rgba(255, 166, 87, 0.28);
 }
 
 .pageguide-footer {
@@ -3861,19 +3861,19 @@ body.light-mode .pageguide-chat-messages {
 }
 
 .pageguide-icon-btn:hover {
-  background: #f2f0ff;
+  background: #fff7f0;
   color: var(--pg-accent);
 }
 
 .pageguide-goal {
   margin: 4px 8px 0;
   padding: 9px 11px;
-  border-color: #ebe7ff;
+  border-color: #fff2e7;
   background:
-    linear-gradient(135deg, rgba(120, 87, 255, 0.1), rgba(171, 130, 255, 0.035) 58%, rgba(255, 255, 255, 0.96)),
+    linear-gradient(135deg, rgba(255, 166, 87, 0.1), rgba(255, 196, 130, 0.035) 58%, rgba(255, 255, 255, 0.96)),
     #fff;
   border-radius: 14px;
-  box-shadow: 0 8px 22px rgba(77, 65, 140, 0.08);
+  box-shadow: 0 8px 22px rgba(140, 99, 65, 0.08);
 }
 
 .pageguide-goal-icon {
@@ -3906,7 +3906,7 @@ body.light-mode .pageguide-chat-messages {
 .pageguide-goal-dots::before {
   left: 12px;
   right: 12px;
-  background: #dfddec;
+  background: #ece4dd;
 }
 
 .pageguide-step-panel {
@@ -3916,9 +3916,9 @@ body.light-mode .pageguide-chat-messages {
 .pageguide-step-card {
   padding: 9px 10px;
   border-radius: 10px;
-  border-color: #d9d0ff;
-  background: linear-gradient(180deg, #fff 0%, #fcfbff 100%);
-  box-shadow: 0 6px 18px rgba(120, 87, 255, 0.055);
+  border-color: #ffe6d0;
+  background: linear-gradient(180deg, #fff 0%, #fffdfb 100%);
+  box-shadow: 0 6px 18px rgba(255, 166, 87, 0.055);
 }
 
 .pageguide-guide-step {
@@ -4025,9 +4025,9 @@ body.light-mode .pageguide-chat-messages {
 }
 
 .pageguide-message.user {
-  background: linear-gradient(135deg, #7657ff 0%, #9a6dff 100%);
+  background: linear-gradient(135deg, #ffa557 0%, #ffb86d 100%);
   color: #fff;
-  box-shadow: 0 8px 20px rgba(120, 87, 255, 0.18);
+  box-shadow: 0 8px 20px rgba(255, 166, 87, 0.18);
 }
 
 .pageguide-action-bar {
@@ -4073,18 +4073,18 @@ body:not(.pageguide-guide-mode) .pageguide-guide-only-action {
 
 .pageguide-upload-btn:hover,
 .pageguide-mode-btn:hover {
-  background: #f5f3ff;
-  border-color: #d8d0ff;
+  background: #fff9f3;
+  border-color: #ffe6d0;
   color: var(--pg-accent);
 }
 
 .pageguide-send-btn {
-  background: linear-gradient(135deg, #7357ff, #9464ff);
-  box-shadow: 0 9px 22px rgba(120, 87, 255, 0.26);
+  background: linear-gradient(135deg, #ffa457, #ffb464);
+  box-shadow: 0 9px 22px rgba(255, 166, 87, 0.26);
 }
 
 .pageguide-goal-step-preview button {
-  background: linear-gradient(135deg, #7357ff, #9464ff);
+  background: linear-gradient(135deg, #ffa457, #ffb464);
   color: #fff;
 }
 
@@ -4094,13 +4094,13 @@ body.light-mode {
   --pg-panel: #ffffff;
   --pg-surface: #ffffff;
   --pg-composer-bg: rgba(248, 250, 255, 0.72);
-  --pg-surface-strong: #f6f3ff;
-  --pg-hover: #f5f3ff;
+  --pg-surface-strong: #fff9f3;
+  --pg-hover: #fff9f3;
   --pg-border: #e3e6f0;
   --pg-text: #202538;
   --pg-muted: #8b93a6;
-  --pg-accent: #7857ff;
-  --pg-accent-2: #9a6dff;
+  --pg-accent: #ffa657;
+  --pg-accent-2: #ffb86d;
   --pg-shadow: none;
 }
 
@@ -4112,10 +4112,10 @@ body:not(.light-mode) {
   --pg-surface-strong: #252538;
   --pg-hover: #282842;
   --pg-border: rgba(255, 255, 255, 0.12);
-  --pg-text: #f4f3ff;
+  --pg-text: #fff8f3;
   --pg-muted: #a4a8bd;
-  --pg-accent: #9b84ff;
-  --pg-accent-2: #b89cff;
+  --pg-accent: #ffbe84;
+  --pg-accent-2: #ffce9c;
   --pg-shadow: none;
 }
 
@@ -4189,7 +4189,7 @@ body:not(.light-mode) .pageguide-input-shell {
   background: var(--pg-composer-bg);
   backdrop-filter: blur(18px) saturate(1.25);
   -webkit-backdrop-filter: blur(18px) saturate(1.25);
-  box-shadow: 0 16px 40px rgba(68, 61, 112, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  box-shadow: 0 16px 40px rgba(112, 84, 61, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 body:not(.light-mode) .pageguide-input-shell {
@@ -4272,21 +4272,21 @@ body:not(.light-mode) .pageguide-mode-btn {
   padding: 0 11px;
   border-radius: 999px;
   color: var(--pg-accent);
-  background: #f5f1ff;
-  border-color: #dfd7ff;
+  background: #fff8f1;
+  border-color: #ffead7;
 }
 
 body:not(.light-mode) .pageguide-mode-btn {
-  background: rgba(155, 132, 255, 0.14);
-  border-color: rgba(155, 132, 255, 0.34);
-  color: #c4b5ff;
+  background: rgba(255, 190, 132, 0.14);
+  border-color: rgba(255, 190, 132, 0.34);
+  color: #ffd8b5;
 }
 
 .pageguide-upload-btn:hover,
 .pageguide-quick-btn:hover,
 .pageguide-mode-btn:hover {
   background: var(--pg-hover);
-  border-color: #d8d0ff;
+  border-color: #ffe6d0;
   color: var(--pg-accent);
 }
 
@@ -4303,7 +4303,7 @@ body:not(.light-mode) .pageguide-mode-btn {
   justify-self: end;
   width: 38px;
   height: 38px;
-  background: linear-gradient(135deg, #7357ff, #9363ff);
+  background: linear-gradient(135deg, #ffa457, #ffb463);
   color: #fff;
 }
 
@@ -4333,9 +4333,9 @@ body:not(.light-mode) .pageguide-goal-step-preview-title {
 }
 
 body:not(.light-mode) .pageguide-goal-step-evidence {
-  background: rgba(120, 87, 255, 0.18);
-  border-color: rgba(160, 139, 255, 0.34);
-  color: #c7bbff;
+  background: rgba(255, 166, 87, 0.18);
+  border-color: rgba(255, 193, 139, 0.34);
+  color: #ffdbbb;
 }
 
 body:not(.light-mode) .pageguide-goal-step-evidence span {
@@ -4477,11 +4477,11 @@ body:not(.light-mode) .pageguide-more-btn {
 .pageguide-mode-btn,
 body.light-mode .pageguide-mode-btn,
 body:not(.light-mode) .pageguide-mode-btn {
-  border-color: #dfd7ff;
+  border-color: #ffead7;
 }
 
 body:not(.light-mode) .pageguide-mode-btn {
-  border-color: rgba(155, 132, 255, 0.34);
+  border-color: rgba(255, 190, 132, 0.34);
 }
 
 .pageguide-send-btn,
@@ -4546,8 +4546,8 @@ body:not(.light-mode) .pageguide-send-btn {
 }
 
 .pageguide-card-export-btn:hover {
-  background: var(--pg-hover, rgba(120,87,255,.10));
-  color: var(--pg-accent, #7857ff);
+  background: var(--pg-hover, rgba(255, 166, 87,.10));
+  color: var(--pg-accent, #ffa657);
 }
 
 /* The "⋯ More" menu now lives permanently in the bottom chat toolbar (next to the
@@ -4664,7 +4664,7 @@ body:not(.light-mode) .pageguide-icon-btn,
 
 /* ---- Composer border and restored more menu ---- */
 body.light-mode .pageguide-input-shell {
-  border: 1px solid rgba(120, 87, 255, 0.14) !important;
+  border: 1px solid rgba(255, 166, 87, 0.14) !important;
 }
 
 body.light-mode .pageguide-chat-input,
@@ -4770,8 +4770,8 @@ body:not(.light-mode) .pageguide-tab-chip {
   margin: 0 0 7px;
   padding: 6px 8px;
   border-radius: 10px;
-  background: rgba(120, 87, 255, 0.08);
-  border: 1px solid rgba(120, 87, 255, 0.14);
+  background: rgba(255, 166, 87, 0.08);
+  border: 1px solid rgba(255, 166, 87, 0.14);
   color: var(--pg-text);
 }
 
@@ -4808,13 +4808,13 @@ body:not(.light-mode) .pageguide-tab-chip {
 .pageguide-tab-chip.is-working,
 body.light-mode .pageguide-tab-chip.is-working,
 body:not(.light-mode) .pageguide-tab-chip.is-working {
-  background: color-mix(in srgb, var(--pg-accent, #7857ff) 9%, var(--pg-surface));
-  border-color: color-mix(in srgb, var(--pg-accent, #7857ff) 26%, var(--pg-border));
+  background: color-mix(in srgb, var(--pg-accent, #ffa657) 9%, var(--pg-surface));
+  border-color: color-mix(in srgb, var(--pg-accent, #ffa657) 26%, var(--pg-border));
 }
 
 @keyframes pageguide-working-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pg-accent, #7857ff) 24%, transparent); }
-  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--pg-accent, #7857ff) 10%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pg-accent, #ffa657) 24%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--pg-accent, #ffa657) 10%, transparent); }
 }
 
 .pageguide-tab-chip-close {
@@ -4831,13 +4831,13 @@ body:not(.light-mode) .pageguide-tab-chip.is-working {
 }
 
 .pageguide-tab-chip-close:hover {
-  background: rgba(120, 87, 255, 0.12);
+  background: rgba(255, 166, 87, 0.12);
   color: var(--pg-accent);
 }
 
 body:not(.light-mode) .pageguide-tab-chip {
-  background: rgba(154, 132, 255, 0.1);
-  border-color: rgba(154, 132, 255, 0.18);
+  background: rgba(255, 189, 132, 0.1);
+  border-color: rgba(255, 189, 132, 0.18);
 }
 
 /* Green "done" state — the guide finished on this specific tab. Per-tab, so switching tabs
@@ -4953,8 +4953,8 @@ body:not(.light-mode) .pg-tree-zoom-controls {
   transition: all 0.15s;
 }
 .pg-zoom-btn:hover {
-  background: var(--pg-hover, rgba(120, 87, 255, 0.1));
-  color: var(--pg-accent, #7857ff);
+  background: var(--pg-hover, rgba(255, 166, 87, 0.1));
+  color: var(--pg-accent, #ffa657);
 }
 .pg-zoom-label {
   font-size: 11px;
@@ -4975,8 +4975,8 @@ body:not(.light-mode) .pg-tree-zoom-controls {
   transition: all 0.2s;
 }
 .pageguide-branch-close-btn:hover {
-  background: var(--pg-hover, rgba(120, 87, 255, 0.1));
-  color: var(--pg-accent, #7857ff);
+  background: var(--pg-hover, rgba(255, 166, 87, 0.1));
+  color: var(--pg-accent, #ffa657);
 }
 
 .pageguide-branch-body {
@@ -5026,8 +5026,8 @@ body:not(.light-mode) .pg-tree-node {
 }
 
 .pg-tree-node:hover {
-  border-color: var(--pg-accent, #7857ff);
-  box-shadow: 0 6px 20px rgba(120, 87, 255, 0.18);
+  border-color: var(--pg-accent, #ffa657);
+  box-shadow: 0 6px 20px rgba(255, 166, 87, 0.18);
   transform: translateY(-2px);
 }
 
@@ -5048,13 +5048,13 @@ body:not(.light-mode) .pg-tree-node.original-path {
 }
 
 .pg-tree-node.diverted-path {
-  border-color: #a855f7; /* Beautiful Purple for branches */
+  border-color: #f7b655; /* Accent amber for branches */
 }
 body.light-mode .pg-tree-node.diverted-path {
-  background: rgba(168, 85, 247, 0.02);
+  background: rgba(247, 182, 85, 0.02);
 }
 body:not(.light-mode) .pg-tree-node.diverted-path {
-  background: rgba(168, 85, 247, 0.05);
+  background: rgba(247, 182, 85, 0.05);
 }
 
 .pg-tree-branch-badge {
@@ -5062,8 +5062,8 @@ body:not(.light-mode) .pg-tree-node.diverted-path {
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
-  background: rgba(168, 85, 247, 0.15);
-  color: #a855f7;
+  background: rgba(247, 182, 85, 0.15);
+  color: #f7b655;
   margin-top: 3px;
   width: max-content;
   white-space: nowrap;
@@ -5072,8 +5072,8 @@ body:not(.light-mode) .pg-tree-node.diverted-path {
   max-width: 140px;
 }
 body:not(.light-mode) .pg-tree-branch-badge {
-  background: rgba(168, 85, 247, 0.25);
-  color: #c084fc;
+  background: rgba(247, 182, 85, 0.25);
+  color: #fccb84;
 }
 
 .pg-tree-node-label {
@@ -5317,8 +5317,8 @@ body:not(.light-mode) .pg-tree-hovercard-badge.conf-med {
 
 /* Recent branch badge styling with pulse animation */
 .pg-tree-branch-badge.recent-branch {
-  border: 1px solid rgba(168, 85, 247, 0.4);
-  box-shadow: 0 0 8px rgba(168, 85, 247, 0.25);
+  border: 1px solid rgba(247, 182, 85, 0.4);
+  box-shadow: 0 0 8px rgba(247, 182, 85, 0.25);
   animation: pgPulseBadge 2s infinite ease-in-out;
 }
 @keyframes pgPulseBadge {
@@ -5329,24 +5329,24 @@ body:not(.light-mode) .pg-tree-hovercard-badge.conf-med {
 
 /* Show branch button in chat action bar styling */
 #pageguide-show-branch-btn {
-  background: rgba(120, 87, 255, 0.1);
-  border-color: rgba(120, 87, 255, 0.2);
-  color: #c5b8ff;
+  background: rgba(255, 166, 87, 0.1);
+  border-color: rgba(255, 166, 87, 0.2);
+  color: #ffd9b8;
 }
 #pageguide-show-branch-btn:hover {
-  background: rgba(120, 87, 255, 0.25);
-  border-color: rgba(120, 87, 255, 0.5);
-  color: #e3ddff;
+  background: rgba(255, 166, 87, 0.25);
+  border-color: rgba(255, 166, 87, 0.5);
+  color: #ffeddd;
 }
 body.light-mode #pageguide-show-branch-btn {
-  background: rgba(120, 87, 255, 0.08);
-  border-color: rgba(120, 87, 255, 0.2);
-  color: #7857ff;
+  background: rgba(255, 166, 87, 0.08);
+  border-color: rgba(255, 166, 87, 0.2);
+  color: #ffa657;
 }
 body.light-mode #pageguide-show-branch-btn:hover {
-  background: rgba(120, 87, 255, 0.15);
-  border-color: rgba(120, 87, 255, 0.4);
-  color: #603feb;
+  background: rgba(255, 166, 87, 0.15);
+  border-color: rgba(255, 166, 87, 0.4);
+  color: #eb903f;
 }
 
 /* "View journey" recall button in dark mode — black text on white background */
@@ -5422,12 +5422,12 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 }
 
 /* ===== End-of-task Visual Recap (theme-aware via --pg-* variables) ===== */
-/* --pg-som is the exact purple baked into the screenshot's SoM marker (guidev2.js), so the inline
+/* --pg-som is the exact orange baked into the screenshot's SoM marker (guidev2.js), so the inline
    links, checkpoint cards and marker overlay all match the marker in the image. */
 .pageguide-recap-message .pageguide-recap,
 .pageguide-recap-evidence-pop,
 .pageguide-memory-shot-dialog.pageguide-recap-detail {
-  --pg-som: #7857ff;
+  --pg-som: #ffa657;
 }
 .pageguide-recap-message .pageguide-recap {
   display: flex;
@@ -6304,7 +6304,7 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 .pageguide-study-save-chip:hover,
 .pageguide-study-edit-chip:hover {
   color: var(--pg-text);
-  border-color: var(--pg-som, #7857ff);
+  border-color: var(--pg-som, #ffa657);
 }
 
 .pageguide-study-save-body {
@@ -6363,7 +6363,7 @@ body:not(.light-mode) .pageguide-journey-recall-btn:hover {
 
 .pageguide-study-save-confirm,
 .pageguide-study-edit-apply {
-  background: var(--pg-som, #7857ff);
+  background: var(--pg-som, #ffa657);
   color: #fff;
   border: 0;
   border-radius: 999px;

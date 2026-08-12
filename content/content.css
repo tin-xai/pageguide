@@ -20,7 +20,7 @@
 .pageguide-highlight-shimmer,
 .pageguide-highlight-shimmer-block,
 .pageguide-highlight-glow {
-  background-color: color-mix(in srgb, var(--pageguide-color, #7857ff) 16%, transparent);
+  background-color: color-mix(in srgb, var(--pageguide-color, #ffa657) 16%, transparent);
   border-radius: 3px;
   padding: 1px 3px;
   margin: 0 1px;
@@ -33,7 +33,7 @@
 /* Whole-element highlights sit *behind* cited phrases, so they stay lighter — otherwise the
    paragraph tint and the phrase tint read as the same block of color. */
 .pageguide-highlight-block {
-  background-color: color-mix(in srgb, var(--pageguide-color, #7857ff) 8%, transparent);
+  background-color: color-mix(in srgb, var(--pageguide-color, #ffa657) 8%, transparent);
   padding: 2px 4px;
   margin: 0;
 }
@@ -49,8 +49,8 @@ html.pageguide-evidence-capture .pageguide-highlight {
 }
 
 html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active {
-  background-color: color-mix(in srgb, var(--pageguide-color, #7857ff) 38%, transparent) !important;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pageguide-color, #7857ff) 55%, transparent) !important;
+  background-color: color-mix(in srgb, var(--pageguide-color, #ffa657) 38%, transparent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pageguide-color, #ffa657) 55%, transparent) !important;
   border-radius: 3px;
 }
 
@@ -60,8 +60,8 @@ html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active 
 
 [data-pageguide-styled]:hover,
 .pageguide-preview-target {
-  outline-color: #7857ff !important;
-  box-shadow: 0 0 0 4px rgba(120, 87, 255, 0.14), 0 12px 32px rgba(120, 87, 255, 0.22) !important;
+  outline-color: #ffa657 !important;
+  box-shadow: 0 0 0 4px rgba(255, 166, 87, 0.14), 0 12px 32px rgba(255, 166, 87, 0.22) !important;
 }
 
 /* The same badge the page already shows on a highlight, raised from the side panel: hovering a
@@ -75,13 +75,13 @@ html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active 
   bottom: calc(100% + 8px);
   z-index: 2147483647;
   padding: 6px 9px 6px 24px;
-  border: 1px solid rgba(155, 132, 255, 0.36);
+  border: 1px solid rgba(255, 190, 132, 0.36);
   border-radius: 999px;
   background:
-    radial-gradient(circle at 12px 50%, transparent 0 3px, #b89cff 3px 5px, transparent 5px),
+    radial-gradient(circle at 12px 50%, transparent 0 3px, #ffce9c 3px 5px, transparent 5px),
     rgba(32, 26, 55, 0.96);
   color: #fff;
-  box-shadow: 0 14px 34px rgba(50, 35, 100, 0.25);
+  box-shadow: 0 14px 34px rgba(98, 65, 34, 0.25);
   font: 700 11px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   white-space: nowrap;
   pointer-events: none;
@@ -148,9 +148,9 @@ html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active 
 
 .pageguide-study-pick-box {
   position: absolute;
-  border: 2px solid #7857ff;
+  border: 2px solid #ffa657;
   border-radius: 3px;
-  background: rgba(120, 87, 255, 0.14);
+  background: rgba(255, 166, 87, 0.14);
   pointer-events: none;
   box-sizing: border-box;
 }
@@ -203,9 +203,9 @@ html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active 
 .pageguide-study-pick-bar button {
   flex: 0 0 auto;
   border-radius: 999px;
-  border: 1px solid rgba(120, 87, 255, 0.35);
-  background: rgba(120, 87, 255, 0.1);
-  color: #4a2fc0;
+  border: 1px solid rgba(255, 166, 87, 0.35);
+  background: rgba(255, 166, 87, 0.1);
+  color: #c0732f;
   font-size: 12px;
   font-weight: 700;
   padding: 5px 12px;
@@ -227,7 +227,7 @@ html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active 
 
 .pageguide-preview-target {
   position: relative;
-  outline: 2px solid #7857ff !important;
+  outline: 2px solid #ffa657 !important;
   outline-offset: 2px;
   border-radius: 3px;
 }

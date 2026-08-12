@@ -59,7 +59,7 @@ function scrollToIndex(index, applyFlash = true, citation) {
   const isDark = typeof getPageBackground === 'function' ? getPageBackground().isDark : false;
   const style = typeof getRandomHighlightStyle === 'function'
     ? getRandomHighlightStyle(isDark)
-    : { color: '#7857ff', animation: 'soft' };
+    : { color: '#ffa657', animation: 'soft' };
 
   if (typeof applyAnimatedHighlight === 'function') {
     applyAnimatedHighlight(element, style.color, style.animation, { block: true });
