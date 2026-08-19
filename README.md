@@ -1,3 +1,8 @@
+> **Note:** This is a temporary, anonymized copy of the README prepared for
+> double-blind review. Author names, affiliations, personal and institutional
+> URLs, the Chrome Web Store listing, the GitHub repository, and dataset
+> account handles have been removed for the review period.
+
 <p align="center">
   <img src="icons/icon128.png" alt="PageGuide" width="80">
 </p>
@@ -5,20 +10,13 @@
 # 🍊 PageGuide: Browser Extension to Assist Users in Navigating a Webpage and Locating Information
 
 <p align="center">
-  by <a href="https://tin-xai.github.io/">Tin Nguyen</a><sup>*†1</sup>, <a href="https://truongthoithang.com/">Thang T. Truong</a><sup>*1</sup>, <a href="https://datascience.virginia.edu/people/miles-zhou">Runtao Zhou</a><sup>*2</sup>, <a href="#">Trung Bui</a>, <a href="https://chirag-agarwall.github.io/">Chirag Agarwal</a><sup>2</sup>, <a href="https://anhnguyen.me/">Anh Totti Nguyen</a><sup>1</sup>
+  <em>Author names and affiliations omitted for anonymous review.</em>
 </p>
 
 <p align="center">
-  <sup>*</sup>Equal contribution &nbsp;&nbsp; <sup>†</sup>Project lead<br>
-  <sup>1</sup>Auburn University &nbsp;&nbsp; <sup>2</sup>University of Virginia
-</p>
-
-<p align="center">
-  <a href="https://pageguide.github.io/"><img alt="Project Page" src="https://img.shields.io/badge/Project_Page-pageguide.github.io-4285F4?style=flat-square&logoColor=white"></a>
+  <img alt="Project Page" src="https://img.shields.io/badge/Project_Page-anonymized-4285F4?style=flat-square&logoColor=white">
   &nbsp;
-  <a href="https://arxiv.org/abs/2604.23772"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2604.23772-B31B1B?style=flat-square"></a>
-  &nbsp;
-  <a href="https://huggingface.co/papers/2604.23772"><img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging_Face-Paper-FFD21E?style=flat-square"></a>
+  <img alt="Paper" src="https://img.shields.io/badge/Paper-under_review-B31B1B?style=flat-square">
   &nbsp;
   <img alt="License" src="https://img.shields.io/badge/Code_License-MIT-4CAF50?style=flat-square">
 </p>
@@ -179,7 +177,7 @@ Get PageGuide up and running in seconds. No configuration needed to start explor
 Click the button below to install PageGuide directly to your browser:
 
 <p align="center">
-  <a href="https://chromewebstore.google.com/detail/pageguide/jjamnggpgpgfjehkcmabopcjkichjgip?authuser=0&hl=en" style="display: inline-block; padding: 12px 24px; background-color: #4285F4; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">📥 Add to Chrome</a>
+  <em>Chrome Web Store link withheld during anonymous review — please use the manual installation instructions below.</em>
 </p>
 
 The extension will automatically download and install. You'll see a confirmation notification in your browser.
@@ -247,7 +245,7 @@ Before you can start using PageGuide, configure your LLM provider:
 
 1. **Download**
 
-- Download the [latest zip](https://github.com/tin-xai/pageguide/releases/download/pageguide/pageguide-master.zip) file this repo (`master` branch: https://github.com/tin-xai/pageguide).
+- Download the latest zip file from the anonymized supplementary material (`master` branch).
 
 2. **Install**
 
@@ -276,7 +274,7 @@ Before you can start using PageGuide, configure your LLM provider:
 
 3. **Upgrading**
 
-- Download the [latest zip](https://github.com/tin-xai/pageguide/releases/download/pageguide/pageguide-master.zip) file
+- Download the latest zip file from the anonymized supplementary material
 - Unzip and replace the existing `pageguide` folder.
 - Reload the extension in `chrome://extensions/` by clicking the reload button on the extension card.
 
@@ -362,12 +360,12 @@ Each participant completed all three task types in both conditions. Condition or
 
 - **Purpose:** Raw interaction logs from the user study — completion times, chat transcripts, correctness labels, paired statistical results, and post-study survey responses.
 - **Used in:** Section 5 (User Study / Evaluation)
-- **Download:** [🤗 ttn0011/pageguide_userstudy](https://huggingface.co/datasets/ttn0011/pageguide_userstudy)
+- **Download:** 🤗 `pageguide_userstudy` — released upon acceptance
 
 ```python
 from datasets import load_dataset
-tasks  = load_dataset("ttn0011/pageguide_userstudy", data_files="tasks.csv", split="train").to_pandas()
-paired = load_dataset("ttn0011/pageguide_userstudy", data_files="paired_times.csv", split="train").to_pandas()
+tasks  = load_dataset("anonymous-authors/pageguide_userstudy", data_files="tasks.csv", split="train").to_pandas()
+paired = load_dataset("anonymous-authors/pageguide_userstudy", data_files="paired_times.csv", split="train").to_pandas()
 ```
 
 ---
@@ -376,10 +374,10 @@ paired = load_dataset("ttn0011/pageguide_userstudy", data_files="paired_times.cs
 
 - **Purpose:** Task stimuli for the **Find** condition — 10 real webpages (NASA, Wikipedia, Cleveland Clinic, WWF, Britannica, JMLR) each annotated with up to 2 factual questions, ground-truth answers, and supporting evidence spans.
 - **Used in:** Section 5.1 (Find Task Setup)
-- **Download:** [🤗 ttn0011/pageguide_find_data](https://huggingface.co/datasets/ttn0011/pageguide_find_data)
+- **Download:** 🤗 `pageguide_find_data` — released upon acceptance
 
 ```python
-find_tasks = load_dataset("ttn0011/pageguide_find_data", split="train").to_pandas()
+find_tasks = load_dataset("anonymous-authors/pageguide_find_data", split="train").to_pandas()
 ```
 
 ---
@@ -388,22 +386,22 @@ find_tasks = load_dataset("ttn0011/pageguide_find_data", split="train").to_panda
 
 - **Purpose:** Task stimuli for the **Guide** condition — 7 procedural tasks across 6 platforms (Google Sheets, Google Docs, Google Slides, Coda, TradingView, Scratch), labelled Easy or Medium difficulty.
 - **Used in:** Section 5.2 (Guide Task Setup)
-- **Download:** [🤗 ttn0011/pageguide_guide_data](https://huggingface.co/datasets/ttn0011/pageguide_guide_data)
+- **Download:** 🤗 `pageguide_guide_data` — released upon acceptance
 
 ```python
-guide_tasks = load_dataset("ttn0011/pageguide_guide_data", split="train").to_pandas()
+guide_tasks = load_dataset("anonymous-authors/pageguide_guide_data", split="train").to_pandas()
 ```
 
 ---
 
 **`pageguide_hide_data`**
 
-- **Purpose:** Task stimuli for the **Hide** condition — 37 annotated webpage snapshots (Amazon, Netflix, TechCrunch, Allrecipes, Spotify, Yelp, and more) with `(user_goal, hide_query, difficulty, hidden_elements)` annotations and ground-truth CSS selectors. HTML snapshots available on [Google Drive](https://drive.google.com/drive/folders/1tid8Hec_WIGGWdpZUVkE47qFH5flBC2z?usp=sharing).
+- **Purpose:** Task stimuli for the **Hide** condition — 37 annotated webpage snapshots (Amazon, Netflix, TechCrunch, Allrecipes, Spotify, Yelp, and more) with `(user_goal, hide_query, difficulty, hidden_elements)` annotations and ground-truth CSS selectors. HTML snapshots available on an anonymized file-sharing link provided with the submission.
 - **Used in:** Section 5.3 (Hide Task Setup)
-- **Download:** [🤗 ttn0011/pageguide_hide_data](https://huggingface.co/datasets/ttn0011/pageguide_hide_data)
+- **Download:** 🤗 `pageguide_hide_data` — released upon acceptance
 
 ```python
-hide_tasks = load_dataset("ttn0011/pageguide_hide_data", split="train").to_pandas()
+hide_tasks = load_dataset("anonymous-authors/pageguide_hide_data", split="train").to_pandas()
 ```
 
 ---
@@ -417,7 +415,7 @@ Contributions are welcome! To get started:
 3. Ensure all tests pass: `npm run ci`
 4. Submit a pull request with a clear description of what and why
 
-Please follow the rules in [CLAUDE.md](CLAUDE.md) and open an issue first for larger changes so we can align on the approach.
+Please follow the rules in [CLAUDE.md](CLAUDE.md); open an issue first for larger changes so we can align on the approach.
 
 ### 🧪 End-to-End Tests
 
@@ -442,6 +440,3 @@ PageGuide is built on top of some great open-source tools and APIs:
 
 ---
 
-## ⭐ Star this repo if you find PageGuide helpful!
-
-If PageGuide saves you time or makes your browsing better, consider giving it a star — it helps others discover the project.

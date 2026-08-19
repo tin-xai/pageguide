@@ -34,3 +34,7 @@ CODEX.md
 
 # Scripts
 scripts/
+# Local secrets / non-anonymous files
+.env
+sidepanel/supabase_config.js
+.private/
