@@ -96,3 +96,4 @@ button, input, select, textarea { font: inherit; }
   .an-cols { grid-template-columns: 1fr; }
   .an-side-sticky { position: static; }
 }
+[hidden] { display: none !important; }

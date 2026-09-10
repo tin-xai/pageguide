@@ -59,3 +59,4 @@ content/tasks/guide.js.stale
 
 # Annotator website config
 annotate/supabase_config.js
+annotate/annotation_trajectories.json

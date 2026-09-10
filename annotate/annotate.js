@@ -56,6 +56,13 @@
       s.trajectories = await res.json();
     } else {
       s.trajectories = lsGet(LS_TRAJECTORIES, []);
+      // Local mode: a bundle dropped beside the site is picked up without the file dialog.
+      if (!s.trajectories.length) {
+        try {
+          const res = await fetch('annotation_trajectories.json', { cache: 'no-store' });
+          if (res.ok) importBundle(await res.json(), { cache: false });
+        } catch (e) { /* none there; the Load button still works */ }
+      }
     }
   }
 
@@ -98,7 +105,7 @@
     return { ok: true, where: 'Supabase' };
   }
 
-  function importBundle(json) {
+  function importBundle(json, { cache = true } = {}) {
     const list = Array.isArray(json?.trajectories) ? json.trajectories : (Array.isArray(json) ? json : []);
     const byId = new Map(s.trajectories.map(t => [t.id, t]));
     list.forEach(t => {
@@ -108,7 +115,18 @@
     s.trajectories = [...byId.values()].sort((a, b) => (a.task_index || 0) - (b.task_index || 0));
     // Screenshots make the cache large; keep it anyway so a reload does not lose the file, and
     // fall back silently when the quota says no.
-    lsSet(LS_TRAJECTORIES, s.trajectories);
+    if (cache) lsSet(LS_TRAJECTORIES, s.trajectories);
+  }
+
+  /**
+   * A usable <img> src. The extension banks screenshots as data URLs, but the V2 study rows store
+   * bare base64 (JPEG mostly, PNG sometimes), so the prefix is put back from the first bytes.
+   */
+  function imageSrc(raw) {
+    const v = String(raw || '');
+    if (!v || /^(data:|https?:|blob:)/i.test(v)) return v;
+    const mime = v.startsWith('iVBOR') ? 'image/png' : (v.startsWith('R0lGOD') ? 'image/gif' : (v.startsWith('UklGR') ? 'image/webp' : 'image/jpeg'));
+    return `data:${mime};base64,${v}`;
   }
 
   // ── views ──────────────────────────────────────────────────────────────────
@@ -177,7 +195,7 @@
     $('an-goal').textContent = t.goal || t.title || t.id;
     $('an-task-meta').textContent = `${steps.length} steps · ${t.url || ''}`;
 
-    const shot = (src, alt) => src ? `<img class="an-shot" src="${esc(src)}" alt="${esc(alt)}" data-zoom>` : '<div class="an-noshot">no screenshot</div>';
+    const shot = (src, alt) => src ? `<img class="an-shot" src="${esc(imageSrc(src))}" alt="${esc(alt)}" data-zoom>` : '<div class="an-noshot">no screenshot</div>';
     const labelFor = (n) => s.draft.step_labels.find(l => l.step === n) || (s.draft.step_labels.push({ step: n, correct: null, error_type: '', note: '' }), s.draft.step_labels[s.draft.step_labels.length - 1]);
 
     $('an-stage').innerHTML = `
