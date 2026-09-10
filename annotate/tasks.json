@@ -1,0 +1,16 @@
+{
+  "guide": [
+    { "id": "annot-01", "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Special:Search", "task": "Search for 'World Wide Web' and open the article's 'History' section." },
+    { "id": "annot-02", "name": "Wikipedia", "url": "https://en.wikipedia.org", "task": "Switch the site's language to Spanish (Español) using the language list on the main page." },
+    { "id": "annot-03", "name": "MDN Web Docs", "url": "https://developer.mozilla.org/en-US/", "task": "Find the documentation page for the JavaScript Array.prototype.map() method." },
+    { "id": "annot-04", "name": "Python docs", "url": "https://docs.python.org/3/", "task": "Open the documentation for the datetime module and find the table of strftime() format codes." },
+    { "id": "annot-05", "name": "arXiv", "url": "https://arxiv.org/", "task": "Search for the paper 'Attention Is All You Need' and open its abstract page." },
+    { "id": "annot-06", "name": "GitHub", "url": "https://github.com/microsoft/vscode", "task": "Open the Issues tab and filter the list to issues labelled 'bug'." },
+    { "id": "annot-07", "name": "OpenStreetMap", "url": "https://www.openstreetmap.org/", "task": "Search for 'Eiffel Tower' and open the first search result on the map." },
+    { "id": "annot-08", "name": "Wikivoyage", "url": "https://en.wikivoyage.org/", "task": "Open the Tokyo travel guide and go to its 'Get around' section." },
+    { "id": "annot-09", "name": "Hacker News", "url": "https://news.ycombinator.com/", "task": "Open the 'Ask' page and open the comments of the first post listed." },
+    { "id": "annot-10", "name": "Internet Archive", "url": "https://archive.org/", "task": "Search for 'Alice in Wonderland' and narrow the results to media type 'Texts'." },
+    { "id": "annot-11", "name": "npm", "url": "https://www.npmjs.com/", "task": "Search for the package 'lodash' and open its 'Versions' tab." },
+    { "id": "annot-12", "name": "Project Gutenberg", "url": "https://www.gutenberg.org/", "task": "Find 'Pride and Prejudice' by Jane Austen and open the 'Read now' online (HTML) version." }
+  ]
+}

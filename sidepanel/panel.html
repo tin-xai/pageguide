@@ -231,6 +231,9 @@
               <!-- Authoring (debug-only): edit the guide trajectories captured from live runs, and
                    the questions asked about them. -->
               <button class="pageguide-menu-item pageguide-record-study-item" id="pageguide-record-guide-study" title="Edit the captured guide trajectories the study will show" style="display:none;"><span class="pageguide-inline-icon">🧭</span>Record Guide User Study</button>
+              <!-- Authoring (debug-only): the guide trajectories captured for the annotator website
+                   (annotate/), published as-is for step-level grading. -->
+              <button class="pageguide-menu-item pageguide-record-study-item" id="pageguide-record-annotation" title="Publish the captured guide trajectories to the annotator website" style="display:none;"><span class="pageguide-inline-icon">📝</span>Record Annotation Trajectories</button>
             </div>
           </div>
 
@@ -267,5 +270,8 @@
        supabaseInsert lives. -->
   <script src="study_responses.js"></script>
   <script src="guide_trajectories.js"></script>
+  <!-- The annotator-website bank and its publisher. After guide_trajectories.js (it reuses
+       _downscaleGuideTrajectory) and after study_v2_publish.js (same project, password, headers). -->
+  <script src="annotation_trajectories.js"></script>
 </body>
 </html>

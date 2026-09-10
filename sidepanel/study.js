@@ -2245,6 +2245,103 @@ if (typeof window !== 'undefined') {
   // job it exists for: working through the unassigned ones).
   let _guideTrajFilter = 'all';
 
+  // ── Record Annotation Trajectories ──
+  // The annotator-website bank (sidepanel/annotation_trajectories.js). Deliberately a much smaller
+  // screen than the guide recorder above: nothing here is edited, because the annotators grade the
+  // run as it happened. Tick what to publish, publish or export, delete what was a false start.
+  async function renderAnnotationTrajectoryList() {
+    const all = await listAnnotationTrajectories();
+    const rows = Object.values(all).sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')));
+    const ticked = rows.filter(t => t.in_annotation !== false).length;
+    const configured = typeof window._v2Configured === 'function' && window._v2Configured();
+
+    setHTML(`
+      <div class="study-screen">
+        <div class="study-header">
+          <span class="study-title">📝 Record Annotation Trajectories</span>
+          <button class="study-close-btn" id="study-close">✕</button>
+        </div>
+        <div class="study-body">
+          <p class="study-intro">${rows.length
+            ? `Guide runs captured for the annotator website. <strong>${ticked} of ${rows.length}</strong> ticked.
+               Publishing upserts them into <code>pageguide_annotation_trajectories</code>
+               (see <code>supabase_schema_annotation.sql</code>)${configured ? '' : ' — V2 Supabase is not configured, so use Export'}.`
+            : 'Nothing captured yet. Run a guide task, then press 📝 on its journey card to capture it.'}</p>
+          ${rows.length ? `
+          <div class="study-traj-bulk">
+            <button class="study-evidence-clear" data-annot-bulk="in">Select all</button>
+            <button class="study-evidence-clear" data-annot-bulk="out">Deselect all</button>
+            <button class="study-evidence-clear" id="study-annot-publish" ${configured ? '' : 'disabled'}
+              title="Upsert every ticked trajectory into pageguide_annotation_trajectories">⬆ Publish → Supabase</button>
+            <button class="study-evidence-clear" id="study-annot-export"
+              title="Save the ticked trajectories as a JSON file the annotator website can load directly">⬇ Export JSON</button>
+          </div>
+          <div class="study-llm-answers-note" id="study-annot-note"></div>
+          <div id="study-annot-list">
+            ${rows.map(t => {
+              const steps = t.arms?.grounding?.steps || [];
+              const shots = steps.filter(st => st.screenshot).length;
+              const on = t.in_annotation !== false;
+              return `
+              <div class="study-traj-row${on ? '' : ' study-traj-row-out'}" data-annot-id="${escapeAttr(t.id)}">
+                <input type="checkbox" class="study-annot-tick" data-annot-tick="${escapeAttr(t.id)}" ${on ? 'checked' : ''}
+                  title="Include in the annotators' queue">
+                <div class="study-traj-main">
+                  <div class="study-traj-title">${escapeHTML(t.title || t.goal || t.id)}</div>
+                  <div class="study-traj-meta">${steps.length} step${steps.length === 1 ? '' : 's'} · ${shots} screenshot${shots === 1 ? '' : 's'}
+                    · ${t.arms?.grounding?.answer ? 'answer recorded' : 'no answer'}
+                    · ${escapeHTML(String(t.captured_at || '').slice(0, 16).replace('T', ' '))}</div>
+                </div>
+                <button class="study-evidence-clear" data-annot-delete="${escapeAttr(t.id)}" title="Remove from this bank">🗑</button>
+              </div>`;
+            }).join('')}
+          </div>` : ''}
+        </div>
+      </div>
+    `);
+    $('study-close').onclick = closeStudyPanel;
+    if (!rows.length) return;
+
+    const note = (msg) => { const el = $('study-annot-note'); if (el) el.textContent = msg; };
+    const setTick = async (id, on) => {
+      const rec = await getAnnotationTrajectory(id);
+      if (!rec) return;
+      rec.in_annotation = !!on;
+      await saveAnnotationTrajectory(rec, { downscale: false });
+    };
+    overlay.querySelectorAll('[data-annot-tick]').forEach(cb => {
+      cb.onchange = async () => { await setTick(cb.dataset.annotTick, cb.checked); renderAnnotationTrajectoryList(); };
+    });
+    overlay.querySelectorAll('[data-annot-bulk]').forEach(btn => {
+      btn.onclick = async () => {
+        for (const t of rows) await setTick(t.id, btn.dataset.annotBulk === 'in');
+        renderAnnotationTrajectoryList();
+      };
+    });
+    overlay.querySelectorAll('[data-annot-delete]').forEach(btn => {
+      btn.onclick = async () => { await deleteAnnotationTrajectory(btn.dataset.annotDelete); renderAnnotationTrajectoryList(); };
+    });
+    const pub = $('study-annot-publish');
+    if (pub) pub.onclick = async () => {
+      pub.disabled = true;
+      note('Publishing…');
+      const res = await publishAnnotationTrajectories(rows);
+      note(res.ok ? describeAnnotationPublish(res.rows) : `Could not publish: ${res.error}`);
+      pub.disabled = false;
+    };
+    const exp = $('study-annot-export');
+    if (exp) exp.onclick = () => {
+      const bundle = buildAnnotationBundle(rows);
+      const blob = new Blob([JSON.stringify(bundle)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'annotation_trajectories.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      note(`Exported ${bundle.trajectories.length} trajectories. Load the file on the annotator website (annotate/).`);
+    };
+  }
+
   async function renderGuideTrajectoryList() {
     const all = await listGuideTrajectories();
     const rows = Object.values(all).sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')));
@@ -4234,7 +4331,7 @@ if (typeof window !== 'undefined') {
   window.openStudyPanel = async function openStudyPanel(mode) {
     if (s.open) return;
     s.open = true;
-    s.mode = (mode === 'study' || mode === 'record-guide') ? mode : 'record';
+    s.mode = (mode === 'study' || mode === 'record-guide' || mode === 'record-annotation') ? mode : 'record';
     overlay = document.getElementById('study-overlay');
     miniBar = document.getElementById('study-mini-bar');
     if (!overlay || !miniBar) {
@@ -4245,6 +4342,10 @@ if (typeof window !== 'undefined') {
     overlay.style.display = 'flex';
     if (s.mode === 'record-guide') {
       renderGuideTrajectoryList();
+      return;
+    }
+    if (s.mode === 'record-annotation') {
+      renderAnnotationTrajectoryList();
       return;
     }
     s.queue = await loadTasks();

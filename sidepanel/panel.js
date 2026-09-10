@@ -2020,6 +2020,7 @@ function ensureGoalCardMessage() {
             </span>
           </button>
           <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-study" title="Capture this trajectory for the user study" style="display:none;">🎬</button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-annotation" title="Capture this trajectory for the annotator website" style="display:none;">📝</button>
           <span class="pageguide-journey-cost" id="pageguide-card-cost"></span>
         </div>
       </div>
@@ -2033,6 +2034,7 @@ function ensureGoalCardMessage() {
   document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => exportJourneyPdf());
   document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => saveTrajectoryToRepo());
   document.getElementById('pageguide-card-capture-study')?.addEventListener('click', () => captureTrajectoryForStudy());
+  document.getElementById('pageguide-card-capture-annotation')?.addEventListener('click', () => captureTrajectoryForAnnotation());
   const captureBtn = document.getElementById('pageguide-card-capture-study');
   if (captureBtn) captureBtn.style.display = window.__pgDebugEnabled ? '' : 'none';
   updateJourneyCostChip(card);
@@ -2448,6 +2450,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('pageguide-record-guide-study')?.addEventListener('click', () => {
     hideMoreMenu();
     if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-guide');
+  });
+  document.getElementById('pageguide-record-annotation')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-annotation');
   });
   // Export PDF / Save trajectory now live on the dynamically-created "View Journey" chat
   // bubble (see ensureGoalCardMessage), which attaches their click listeners itself at
@@ -5469,6 +5475,37 @@ async function captureTrajectoryForStudy() {
   }
 }
 window.captureTrajectoryForStudy = captureTrajectoryForStudy;
+
+/**
+ * The annotator-website twin of captureTrajectoryForStudy: same run, same shape, different bank.
+ * The study copy gets edited into a stimulus; this copy is published as-is, because the annotators
+ * are grading what the agent actually did (sidepanel/annotation_trajectories.js).
+ */
+async function captureTrajectoryForAnnotation() {
+  const sid = typeof getActiveSessionId === 'function' ? getActiveSessionId() : currentGuideSessionId;
+  if (!sid) { addMessage('⚠️ No guide run to capture — run a guide task first.', 'error'); return; }
+  if (typeof saveAnnotationTrajectory !== 'function') {
+    addMessage('❌ Annotation bank is not loaded (annotation_trajectories.js).', 'error');
+    return;
+  }
+  try {
+    const trajectory = await readTrajectoryFromSession(sid);
+    if (!trajectory) { addMessage('⚠️ That run has no steps to capture.', 'error'); return; }
+    const res = await saveAnnotationTrajectory(trajectory);
+    if (!res.saved) { addMessage(`❌ Could not capture: ${res.error || 'unknown error'}`, 'error'); return; }
+    const steps = trajectory.arms.grounding.steps;
+    const shots = steps.filter(st => st.screenshot).length;
+    addMessage(
+      `📝 Captured **${trajectory.title}** for annotation — ${steps.length} step(s), ${shots} screenshot(s)` +
+      `${trajectory.arms.grounding.answer ? '' : ', no final answer recorded'}. ` +
+      'Publish it under ⋯ → Record Annotation Trajectories.',
+      'system'
+    );
+  } catch (e) {
+    addMessage(`❌ Could not capture: ${e?.message || e}`, 'error');
+  }
+}
+window.captureTrajectoryForAnnotation = captureTrajectoryForAnnotation;
 
 /** Human-readable byte size for chip labels. */
 function _fmtBytes(bytes) {

@@ -12564,3 +12564,136 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(snap).toMatch(/marked\.forEach\(el => el\.removeAttribute\('data-pg-drop'\)\)/);
   });
 });
+
+describe('Annotation trajectories (sidepanel/annotation_trajectories.js)', () => {
+  const A = require('../../sidepanel/annotation_trajectories.js');
+
+  const banked = (over = {}) => Object.assign({
+    id: 'rw session:42',
+    goal: 'Open the History section',
+    title: 'Wikipedia',
+    captured_at: '2026-09-10T10:00:00.000Z',
+    arms: { grounding: {
+      initial_state: { url: 'https://en.wikipedia.org', screenshot: null },
+      answer: 'Opened it.',
+      steps: [
+        { n: 1, instruction: 'Click search', action: 'click', target_text: 'Search', url: 'https://en.wikipedia.org', screenshot: 'data:image/png;base64,AAA' },
+        { n: 2, instruction: 'Type query', action: 'type', target_text: '', url: 'https://en.wikipedia.org/w', screenshot: null },
+      ],
+    } },
+  }, over);
+
+  test('_annotationId is deterministic and RPC-safe', () => {
+    expect(A._annotationId('rw session:42')).toBe('rw-session-42');
+    expect(A._annotationId('rw session:42')).toBe(A._annotationId('rw session:42'));
+    expect(A._annotationId('!!')).toMatch(/^annot-/);
+    expect(A._annotationId('x'.repeat(200)).length).toBeLessThanOrEqual(80);
+  });
+
+  test('task_style reads off the screenshots', () => {
+    expect(A._annotationTaskStyle(banked())).toBe('guide_visual');
+    const text = banked();
+    text.arms.grounding.steps.forEach(st => { st.screenshot = null; });
+    expect(A._annotationTaskStyle(text)).toBe('guide_text');
+  });
+
+  test('buildAnnotationTask mirrors the guide V2 payload without the study-only columns', () => {
+    const p = A.buildAnnotationTask(banked(), 3);
+    expect(p.id).toBe('rw-session-42');
+    expect(p.source_trajectory_id).toBe('rw session:42');
+    expect(p.url).toBe('https://en.wikipedia.org');
+    expect(p.goal).toBe('Open the History section');
+    expect(p.agent_answer).toBe('Opened it.');
+    expect(p.trajectory).toHaveLength(2);
+    expect(p.trajectory[1]).toEqual({ n: 2, instruction: 'Type query', action: 'type', target_text: '', url: 'https://en.wikipedia.org/w', screenshot: null });
+    expect(p.task_index).toBe(3);
+    expect(p.in_annotation).toBe(true);
+    expect(p).not.toHaveProperty('answer_variants');
+    expect(p).not.toHaveProperty('guide_ground_truth');
+  });
+
+  test('an unticked or empty trajectory is not live', () => {
+    expect(A.buildAnnotationTask(banked({ in_annotation: false })).in_annotation).toBe(false);
+    const empty = banked(); empty.arms.grounding.steps = [];
+    expect(A.buildAnnotationTask(empty).in_annotation).toBe(false);
+  });
+
+  test('buildAnnotationBundle keeps capture order and drops unticked runs', () => {
+    const b = A.buildAnnotationBundle([
+      banked({ id: 'run-b', captured_at: '2026-09-10T12:00:00Z' }),
+      banked({ id: 'run-c', captured_at: '2026-09-10T13:00:00Z', in_annotation: false }),
+      banked({ id: 'run-a', captured_at: '2026-09-10T11:00:00Z' }),
+    ]);
+    expect(b.trajectories.map(t => t.id)).toEqual(['run-a', 'run-b']);
+    expect(b.trajectories.map(t => t.task_index)).toEqual([0, 1]);
+  });
+});
+
+describe('Annotator site logic (annotate/annotate_logic.js)', () => {
+  const L = require('../../annotate/annotate_logic.js');
+
+  const ann = (who, tid, corrects, answer, extra = {}) => Object.assign({
+    trajectory_id: tid, annotator_id: who, answer_correct: answer,
+    step_labels: corrects.map((c, i) => ({ step: i + 1, correct: c })),
+  }, extra);
+
+  test('normalizeAnnotation drops the error type on a correct step and problems on a correct answer', () => {
+    const n = L.normalizeAnnotation({
+      trajectory_id: ' t1 ', annotator_id: 'A',
+      step_labels: [{ step: '2', correct: true, error_type: 'loop' }, { step: 1, correct: false, error_type: 'loop' }, { step: 0, correct: true }],
+      answer_correct: true, answer_problems: ['incomplete'], duration_ms: '1200.6',
+    });
+    expect(n.trajectory_id).toBe('t1');
+    expect(n.step_labels.map(l => l.step)).toEqual([1, 2]);
+    expect(n.step_labels[0].error_type).toBe('loop');
+    expect(n.step_labels[1].error_type).toBe('');
+    expect(n.answer_problems).toEqual([]);
+    expect(n.duration_ms).toBe(1201);
+  });
+
+  test('annotationProblem names the missing pieces in order', () => {
+    expect(L.annotationProblem({ annotator_id: '' }, 2)).toMatch(/annotator ID/);
+    expect(L.annotationProblem(ann('A', 't', [true, null], true), 2)).toMatch(/Step 2/);
+    expect(L.annotationProblem(ann('A', 't', [true, true], null), 2)).toMatch(/final answer/);
+    expect(L.annotationProblem(ann('A', 't', [true, true], false), 2)).toMatch(/problem/);
+    expect(L.annotationProblem(ann('A', 't', [true, true], false, { answer_problems: ['incomplete'] }), 2)).toBeNull();
+  });
+
+  test('cohensKappa: perfect, chance, and undefined', () => {
+    expect(L.cohensKappa([true, false, true], [true, false, true])).toBe(1);
+    expect(L.cohensKappa([true, true, false, false], [true, false, true, false])).toBeCloseTo(0);
+    expect(L.cohensKappa([true, true], [true, true])).toBeNull();   // expected agreement = 1
+    expect(L.cohensKappa([], [])).toBeNull();
+    expect(L.percentAgreement([true, false], [true, true])).toBe(0.5);
+  });
+
+  test('pairStepLabels compares only the steps both annotators graded', () => {
+    const pairs = L.pairStepLabels(ann('A', 't', [true, false, null], true), ann('B', 't', [true, true, true], true));
+    expect(pairs.map(p => p.step)).toEqual([1, 2]);
+  });
+
+  test('agreementReport separates step-level from answer-level', () => {
+    const trajectories = [{ id: 't1', title: 'One', step_count: 3 }, { id: 't2', title: 'Two', step_count: 2 }];
+    const results = [
+      ann('A', 't1', [true, false, true], false, { answer_problems: ['incomplete'] }),
+      ann('B', 't1', [true, true, true], true),
+      ann('A', 't2', [true, true], true),
+      // B never graded t2
+    ];
+    const rep = L.agreementReport(trajectories, results, 'A', 'B');
+    expect(rep.perTrajectory[0].steps_compared).toBe(3);
+    expect(rep.perTrajectory[0].step_agreement).toBeCloseTo(2 / 3);
+    expect(rep.perTrajectory[0].disagreeing_steps).toEqual([2]);
+    expect(rep.perTrajectory[0].answer_agree).toBe(false);
+    expect(rep.perTrajectory[1].has_b).toBe(false);
+    expect(rep.perTrajectory[1].answer_agree).toBeNull();
+    expect(rep.overall.trajectories_both).toBe(1);
+    expect(rep.overall.steps_compared).toBe(3);
+    expect(rep.overall.answers_compared).toBe(1);
+    expect(rep.overall.answer_agreement).toBe(0);
+    expect(L.listAnnotators(results)).toEqual(['A', 'B']);
+    const csv = L.agreementCsv(rep);
+    expect(csv.split('\n')).toHaveLength(3);
+    expect(csv).toContain('"t1","One","3","3","0.667"');
+  });
+});

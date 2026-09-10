@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PageGuide — Trajectory Annotation</title>
+  <link rel="stylesheet" href="annotate.css">
+</head>
+<body>
+  <!--
+    The annotator website. Two annotators grade each recorded Guide run — every step correct or
+    not, the final answer correct or not — and the Agreement tab compares them.
+
+    Trajectories come from Supabase (pageguide_annotation_trajectories, published from the
+    extension's ⋯ → Record Annotation Trajectories) or from a JSON file exported by the same
+    screen. Annotations go to Supabase (save_pageguide_annotation) or, without it, stay in this
+    browser and can be downloaded.
+  -->
+  <header class="an-head">
+    <div class="an-brand">📝 PageGuide Annotation</div>
+    <nav class="an-nav">
+      <button class="an-tab an-tab-on" data-tab="queue">Queue</button>
+      <button class="an-tab" data-tab="agreement">Agreement</button>
+    </nav>
+    <div class="an-who">
+      <label for="an-annotator">Annotator ID</label>
+      <input id="an-annotator" placeholder="e.g. A1" maxlength="80">
+      <span class="an-source" id="an-source"></span>
+    </div>
+  </header>
+
+  <main class="an-main">
+    <section id="an-queue" class="an-view">
+      <div class="an-toolbar">
+        <p class="an-intro">Pick a trajectory. Grade each step, then the final answer. Your progress is saved when you press <strong>Submit</strong>.</p>
+        <label class="an-file">⬇ Load exported JSON <input type="file" id="an-file" accept="application/json" multiple hidden></label>
+      </div>
+      <div id="an-queue-list" class="an-list"></div>
+    </section>
+
+    <section id="an-task" class="an-view" hidden>
+      <div class="an-task-head">
+        <button class="an-btn an-btn-quiet" id="an-back">← Queue</button>
+        <div class="an-task-title">
+          <div class="an-kicker">Task</div>
+          <h1 id="an-goal"></h1>
+          <div class="an-meta" id="an-task-meta"></div>
+        </div>
+      </div>
+      <div class="an-cols">
+        <div class="an-stage" id="an-stage"></div>
+        <aside class="an-side">
+          <div class="an-side-sticky">
+            <div class="an-progress" id="an-progress"></div>
+            <div class="an-note" id="an-note"></div>
+            <button class="an-btn an-btn-primary" id="an-submit">Submit</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="an-agreement" class="an-view" hidden>
+      <div class="an-toolbar">
+        <label>Annotator A <select id="an-rater-a"></select></label>
+        <label>Annotator B <select id="an-rater-b"></select></label>
+        <button class="an-btn" id="an-refresh">⟳ Refresh</button>
+        <button class="an-btn" id="an-csv">⬇ CSV</button>
+        <button class="an-btn" id="an-download-local" title="Download annotations saved only in this browser">⬇ Local annotations</button>
+      </div>
+      <div id="an-overall" class="an-overall"></div>
+      <div class="an-table-wrap"><table class="an-table" id="an-agree-table"></table></div>
+    </section>
+  </main>
+
+  <div class="an-lightbox" id="an-lightbox" hidden><img id="an-lightbox-img" alt=""></div>
+
+  <!-- Optional, gitignored: defines SUPABASE_ANNOT_URL / SUPABASE_ANNOT_ANON_KEY. -->
+  <script src="supabase_config.js"></script>
+  <script src="annotate_logic.js"></script>
+  <script src="annotate.js"></script>
+</body>
+</html>
