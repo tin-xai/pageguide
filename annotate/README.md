@@ -11,6 +11,10 @@ the final answer (correct / incorrect + problem type) — and the **Agreement** 
    (or **⬇ Export JSON** when Supabase is not configured).
 
 ## Supabase
+The 12 runs are already recorded for the user study — run
+`supabase_seed_annotation_from_guide_v2.sql` after the schema to copy them into the annotation
+table instead of re-recording them.
+
 Run `supabase_schema_annotation.sql` in the same project as `supabase_schema_v2.sql` (it reuses
 that admin password). Then copy `supabase_config.example.js` to `supabase_config.js` and fill it in.
 

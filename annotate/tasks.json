@@ -1,28 +1,88 @@
 {
   "guide": [
-    { "id": "annot-01", "name": "Delish", "url": "https://www.delish.com/cooking/recipe-ideas/a58393/marry-me-chicken-recipe/",
-      "task": "Open the original Marry Me Chicken recipe, then add two of its ingredients to an Amazon cart." },
-    { "id": "annot-02", "name": "Auburn campus map", "url": "https://map.auburn.edu/",
-      "task": "Find the closest parking to Samford Hall and to the RBD Library on the Auburn campus map." },
-    { "id": "annot-03", "name": "Booking.com", "url": "https://www.booking.com/",
-      "task": "Find three 4-star hotels in Austin and two pet-friendly 3-star hotels in Austin." },
-    { "id": "annot-04", "name": "Booking.com Attractions", "url": "https://www.booking.com/attractions/",
-      "task": "Find three highly rated New York attractions that offer free cancellation and have morning start times." },
-    { "id": "annot-05", "name": "Quora Business", "url": "https://www.quora.com/spaces",
-      "task": "Find and summarize the three highest-engagement posts in the Business space and in the Movies space." },
-    { "id": "annot-06", "name": "Metropolitan Museum map", "url": "https://maps.metmuseum.org/",
-      "task": "Count how many restrooms and how many water fountains are on the second floor of the Metropolitan Museum map." },
-    { "id": "annot-07", "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Scarlett_Johansson",
-      "task": "Identify the dress and necklace Scarlett Johansson is wearing in her Wikipedia infobox photo, then find similar items on Amazon." },
-    { "id": "annot-08", "name": "Fandom", "url": "https://matrix.fandom.com/wiki/Trinity",
-      "task": "Find Trinity from The Matrix on Fandom, identify her clothing, and add matching items to an Amazon cart." },
-    { "id": "annot-09", "name": "Stanford University", "url": "https://explorecourses.stanford.edu/",
-      "task": "Find two graduate-level chemistry courses that meet on Monday in Winter 2023." },
-    { "id": "annot-10", "name": "Google Calendar", "url": "https://calendar.google.com/",
-      "task": "Determine whether the Sportplex event can be reached after the Friday Meditation event ends." },
-    { "id": "annot-11", "name": "Google Calendar → Walmart", "url": "https://calendar.google.com/",
-      "task": "Find a free slot on Wednesday in the calendar, then find the cheapest pink and the cheapest green pickleball paddles at Walmart." },
-    { "id": "annot-12", "name": "UC Berkeley", "url": "https://classes.berkeley.edu/",
-      "task": "Find graduate computer science courses meeting on Tuesdays from 2:00–6:00 PM in Fall 2023." }
+    {
+      "id": "annot-01",
+      "name": "Delish",
+      "url": "https://www.delish.com/",
+      "task": "Find me the recipe for Original Marry Me Chicken and add for me 2 ingredients for this recipe into my Amazon cart",
+      "v2_task_id": "gv2-ms9j3200-u0i9nm"
+    },
+    {
+      "id": "annot-02",
+      "name": "Auburn campus map",
+      "url": "https://map.auburn.edu/",
+      "task": "I need to park near two places on campus.\n1. Find the closest parking spot to **Samford Hall**.\n2. Find the closest parking spot to the **RBD Library**.",
+      "v2_task_id": "gv2-msf0vpxs-qucehj"
+    },
+    {
+      "id": "annot-03",
+      "name": "Booking.com",
+      "url": "https://www.booking.com/",
+      "task": "Find me three 4-star hotels in Austin and two 3-star hotels with pet friendly",
+      "v2_task_id": "gv2-ed05972e-i5fi3b"
+    },
+    {
+      "id": "annot-04",
+      "name": "Booking.com Attractions",
+      "url": "https://www.booking.com/attractions/",
+      "task": "Find me top 3 attractions for New York with free cancellation and start before 12:00 PM with review score of 4.5 and up.",
+      "v2_task_id": "gv2-ed05a7b6-kk24zp"
+    },
+    {
+      "id": "annot-05",
+      "name": "Quora",
+      "url": "https://www.quora.com/",
+      "task": "Search the Business and Movies spaces. For each space, find the 3 posts with the highest engagement and summarize them.",
+      "v2_task_id": "gv2-ed35d549-ct71ub-bm"
+    },
+    {
+      "id": "annot-06",
+      "name": "Metropolitan Museum map",
+      "url": "https://maps.metmuseum.org/?floor=1&lang=en-GB",
+      "task": "I need to know what is on the **second floor**.\n1. Find the total number of restrooms on that floor.\n2. Find the total number of water fountains on that floor.",
+      "v2_task_id": "gv2-mthpps9o-zalawk"
+    },
+    {
+      "id": "annot-07",
+      "name": "Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Scarlett_Johansson",
+      "task": "Identify the dress and necklace that Scarlett Johansson wore to the premiere of Girl with a Pearl Earring. Then add 2 similar dresses and 2 necklaces on Amazon, which deliver by tomorrow.",
+      "v2_task_id": "gv2-mthq47ka-g4axhj"
+    },
+    {
+      "id": "annot-08",
+      "name": "Fandom",
+      "url": "https://www.fandom.com/",
+      "task": "Find a photo related to Trinity in The Matrix Wiki community and add the clothes she is wearing to Amazon cart.",
+      "v2_task_id": "gv2-mthrk3fe-is8ciy"
+    },
+    {
+      "id": "annot-09",
+      "name": "Stanford University",
+      "url": "https://www.stanford.edu/",
+      "task": "Browse the class schedule of graduate-level chemistry courses in winter 2023 and tell me 2 courses meet on Monday.",
+      "v2_task_id": "gv2-mtk8cxb0-itrcxy"
+    },
+    {
+      "id": "annot-10",
+      "name": "Google Calendar",
+      "url": "https://calendar.google.com/",
+      "task": "I want to go to Sportplex after Meditation on Friday.\n1. On recwellness.auburn.edu, check what time **Meditation on Friday** ends.\n2. Tell me whether I can still make it to Sportplex after that.",
+      "v2_task_id": "gv2-mtkdnzau-y0qghc"
+    },
+    {
+      "id": "annot-11",
+      "name": "Google Calendar → Walmart",
+      "url": "https://calendar.google.com/",
+      "task": "I need to buy a pickleball paddle.\n1. Check what time I am free on **Wednesday** to go to Walmart.\n2. On the Walmart website, find:\nA. The cheapest pink pickleball paddle\nB. The cheapest green pickleball paddle",
+      "v2_task_id": "gv2-mtlo1j6u-5eo35d"
+    },
+    {
+      "id": "annot-12",
+      "name": "UC Berkeley",
+      "url": "https://www.berkeley.edu/",
+      "task": "Please find graduate-level computer science courses scheduled on Tuesdays starting time from 2:00 to 6:00 PM in the Fall 2023 semester.",
+      "v2_task_id": "gv2-mtufb07j-mrj4tz"
+    }
   ]
 }
