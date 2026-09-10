@@ -2249,11 +2249,37 @@ if (typeof window !== 'undefined') {
   // The annotator-website bank (sidepanel/annotation_trajectories.js). Deliberately a much smaller
   // screen than the guide recorder above: nothing here is edited, because the annotators grade the
   // run as it happened. Tick what to publish, publish or export, delete what was a false start.
+  /** The 12 tasks the annotation trajectories are recorded for (annotate/tasks.json). */
+  async function loadAnnotationTasks() {
+    try {
+      const data = await fetch(chrome.runtime.getURL('annotate/tasks.json')).then(r => r.json());
+      return Array.isArray(data?.guide) ? data.guide : [];
+    } catch (e) {
+      console.warn('[Study] Could not load annotate/tasks.json:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Start one task: navigate the tab to its starting site, put the instruction in the chat box,
+   * and remember which task is running so the 📝 capture can tag the trajectory with it.
+   */
+  async function startAnnotationTask(task) {
+    await chrome.storage.local.set({ pageguide_annotation_current_task: { id: task.id, name: task.name, task: task.task, url: task.url } });
+    await openTaskPage(task.url);
+    closeStudyPanel();
+    const chatInput = document.getElementById('pageguide-input');
+    if (chatInput) { chatInput.value = task.task; chatInput.focus(); }
+  }
+
   async function renderAnnotationTrajectoryList() {
     const all = await listAnnotationTrajectories();
     const rows = Object.values(all).sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')));
     const ticked = rows.filter(t => t.in_annotation !== false).length;
     const configured = typeof window._v2Configured === 'function' && window._v2Configured();
+    const tasks = await loadAnnotationTasks();
+    const current = (await chrome.storage.local.get('pageguide_annotation_current_task')).pageguide_annotation_current_task || null;
+    const capturedFor = (id) => rows.filter(t => t.task_id === id).length;
 
     setHTML(`
       <div class="study-screen">
@@ -2262,6 +2288,26 @@ if (typeof window !== 'undefined') {
           <button class="study-close-btn" id="study-close">✕</button>
         </div>
         <div class="study-body">
+          ${tasks.length ? `
+          <div class="study-traj-group-head" title="Press ▶ to open the starting site with the instruction in the chat box. Run Guide, then press 📝 on the journey card.">
+            Tasks to record <span class="study-traj-filter-n">${tasks.length}</span>
+          </div>
+          <div id="study-annot-tasks">
+            ${tasks.map((t, i) => {
+              const n = capturedFor(t.id);
+              return `
+              <div class="study-traj-row${n ? ' study-traj-row-out' : ''}${current?.id === t.id ? ' study-annot-task-current' : ''}">
+                <span class="study-traj-step-n">${i + 1}</span>
+                <div class="study-traj-main">
+                  <div class="study-traj-title">${escapeHTML(t.name)}${current?.id === t.id ? ' <span class="study-traj-filter-n">running</span>' : ''}</div>
+                  <div class="study-traj-meta">${escapeHTML(t.task)}</div>
+                  <div class="study-traj-meta">${escapeHTML(t.url)}${n ? ` · ${n} captured` : ''}</div>
+                </div>
+                <button class="study-evidence-clear" data-annot-start="${escapeAttr(t.id)}" title="Open the site and put the task in the chat box">▶</button>
+              </div>`;
+            }).join('')}
+          </div>
+          <div class="study-traj-group-head">Captured runs <span class="study-traj-filter-n">${rows.length}</span></div>` : ''}
           <p class="study-intro">${rows.length
             ? `Guide runs captured for the annotator website. <strong>${ticked} of ${rows.length}</strong> ticked.
                Publishing upserts them into <code>pageguide_annotation_trajectories</code>
@@ -2287,7 +2333,7 @@ if (typeof window !== 'undefined') {
                 <input type="checkbox" class="study-annot-tick" data-annot-tick="${escapeAttr(t.id)}" ${on ? 'checked' : ''}
                   title="Include in the annotators' queue">
                 <div class="study-traj-main">
-                  <div class="study-traj-title">${escapeHTML(t.title || t.goal || t.id)}</div>
+                  <div class="study-traj-title">${t.task_name ? `<span class="study-traj-filter-n">${escapeHTML(t.task_name)}</span> ` : ''}${escapeHTML(t.title || t.goal || t.id)}</div>
                   <div class="study-traj-meta">${steps.length} step${steps.length === 1 ? '' : 's'} · ${shots} screenshot${shots === 1 ? '' : 's'}
                     · ${t.arms?.grounding?.answer ? 'answer recorded' : 'no answer'}
                     · ${escapeHTML(String(t.captured_at || '').slice(0, 16).replace('T', ' '))}</div>
@@ -2300,6 +2346,9 @@ if (typeof window !== 'undefined') {
       </div>
     `);
     $('study-close').onclick = closeStudyPanel;
+    overlay.querySelectorAll('[data-annot-start]').forEach(btn => {
+      btn.onclick = () => { const t = tasks.find(x => x.id === btn.dataset.annotStart); if (t) startAnnotationTask(t); };
+    });
     if (!rows.length) return;
 
     const note = (msg) => { const el = $('study-annot-note'); if (el) el.textContent = msg; };

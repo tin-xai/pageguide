@@ -5491,6 +5491,12 @@ async function captureTrajectoryForAnnotation() {
   try {
     const trajectory = await readTrajectoryFromSession(sid);
     if (!trajectory) { addMessage('⚠️ That run has no steps to capture.', 'error'); return; }
+    // Tag the capture with the task it was started from (▶ in Record Annotation Trajectories), so
+    // the bank and the annotator site can group runs by task.
+    try {
+      const cur = (await chrome.storage.local.get('pageguide_annotation_current_task')).pageguide_annotation_current_task;
+      if (cur?.id) { trajectory.task_id = cur.id; trajectory.task_name = cur.name || ''; }
+    } catch (e) { /* untagged is fine */ }
     const res = await saveAnnotationTrajectory(trajectory);
     if (!res.saved) { addMessage(`❌ Could not capture: ${res.error || 'unknown error'}`, 'error'); return; }
     const steps = trajectory.arms.grounding.steps;

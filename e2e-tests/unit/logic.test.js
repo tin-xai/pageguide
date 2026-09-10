@@ -12612,6 +12612,11 @@ describe('Annotation trajectories (sidepanel/annotation_trajectories.js)', () =>
     expect(p).not.toHaveProperty('guide_ground_truth');
   });
 
+  test('a run started from the task launcher carries its task id', () => {
+    expect(A.buildAnnotationTask(banked({ task_id: 'annot-03', task_name: 'Booking.com' })).source_task_id).toBe('annot-03');
+    expect(A.buildAnnotationTask(banked()).source_task_id).toBe('');
+  });
+
   test('an unticked or empty trajectory is not live', () => {
     expect(A.buildAnnotationTask(banked({ in_annotation: false })).in_annotation).toBe(false);
     const empty = banked(); empty.arms.grounding.steps = [];

@@ -1692,3 +1692,5 @@ body.light-mode .study-step-pick.is-on:hover {
   gap: 8px;
 }
 .study-open-row .study-btn { flex: 1; margin: 0; }
+/* Record Annotation Trajectories: the task currently being run */
+.study-annot-task-current { border-color: #d6863f; box-shadow: 0 0 0 2px rgba(214, 134, 63, 0.25); }
