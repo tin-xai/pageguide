@@ -149,10 +149,10 @@
             </div>
           </div>
 
-          <!-- Non-grounding baseline mode: always visible (not debug-only) — a user-study A/B
-               toggle. Same routing/answers, but no on-page highlighting, marker overlays, or
-               visual-highlight screenshots when set to Non-grounding. -->
-          <div class="pageguide-mode-wrap pageguide-nongrounding-wrap">
+          <!-- Non-grounding baseline mode (debug-only): a user-study A/B toggle the RESEARCHER
+               sets, not the participant. Same routing/answers, but no on-page highlighting, marker
+               overlays, or visual-highlight screenshots when set to Non-grounding. -->
+          <div class="pageguide-mode-wrap pageguide-nongrounding-wrap" style="display:none;">
             <button class="pageguide-mode-btn" id="pageguide-nongrounding-toggle" title="Toggle the Non-grounding baseline (no on-page highlighting)"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h4Z"/><path d="M13 5h4a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-4Z"/><path d="M13 5v16"/></svg></span>Grounding: On ▾</button>
             <div class="pageguide-mode-menu" id="pageguide-nongrounding-menu" style="display:none;">
               <button class="pageguide-mode-option" data-nongrounding="off">
@@ -179,9 +179,10 @@
             </div>
           </div>
 
-          <!-- Evidence mode: the user-study A/B axis for how evidence is SHOWN back to the user.
-               Independent of Grounding above — all four combinations are valid. -->
-          <div class="pageguide-mode-wrap pageguide-evidencemode-wrap">
+          <!-- Evidence mode (debug-only): the user-study A/B axis for how evidence is SHOWN back
+               to the user, set by the researcher. Independent of Grounding above — all four
+               combinations are valid. -->
+          <div class="pageguide-mode-wrap pageguide-evidencemode-wrap" style="display:none;">
             <button class="pageguide-mode-btn" id="pageguide-evidencemode-toggle" title="Show evidence as screenshots (Visual) or as text (Text)"><span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>Evidence: Visual ▾</button>
             <div class="pageguide-mode-menu" id="pageguide-evidencemode-menu" style="display:none;">
               <button class="pageguide-mode-option" data-evidencemode="visual">
@@ -234,6 +235,11 @@
               <!-- Authoring (debug-only): the guide trajectories captured for the annotator website
                    (annotate/), published as-is for step-level grading. -->
               <button class="pageguide-menu-item pageguide-record-study-item" id="pageguide-record-annotation" title="Publish the captured guide trajectories to the annotator website" style="display:none;"><span class="pageguide-inline-icon">📝</span>Record Annotation Trajectories</button>
+              <!-- Authoring (debug-only): the same 12 tasks run per model, captured with what each run
+                   cost, for the model-performance table. -->
+              <button class="pageguide-menu-item pageguide-record-study-item" id="pageguide-record-model-performance" title="Capture and publish guide runs per model, with their cost" style="display:none;"><span class="pageguide-inline-icon">📈</span>Record Model Performance</button>
+              <!-- Read-only (debug-only): the annotation baseline vs. every model run, per task. -->
+              <button class="pageguide-menu-item pageguide-record-study-item" id="pageguide-model-comparison" title="Compare the annotation runs with the model-performance runs, task by task" style="display:none;"><span class="pageguide-inline-icon">📊</span>Model Comparison</button>
             </div>
           </div>
 
@@ -269,9 +275,21 @@
   <!-- Pre-recorded study answers (Save/Edit on an answer). Loads after study.js, which is where
        supabaseInsert lives. -->
   <script src="study_responses.js"></script>
+  <!-- Publishing a Find item into the V2 four-variant schema. After study_responses.js (the four
+       cells) and study.js (the page snapshots), both of which it reads. -->
+  <script src="study_v2_publish.js"></script>
   <script src="guide_trajectories.js"></script>
+  <!-- Publishing a captured Guide trajectory into the V2 schema. After guide_trajectories.js
+       (it reads _guideGroundTruthProblem / _inferGuideCondition) and after study_v2_publish.js
+       (it shares that file's admin password and headers). -->
+  <script src="guide_v2_publish.js"></script>
   <!-- The annotator-website bank and its publisher. After guide_trajectories.js (it reuses
        _downscaleGuideTrajectory) and after study_v2_publish.js (same project, password, headers). -->
   <script src="annotation_trajectories.js"></script>
+  <!-- The model-performance bank and its publisher. Same dependencies as annotation_trajectories.js,
+       plus the cost ledger readers in content/utils.js. -->
+  <script src="model_performance_trajectories.js"></script>
+  <!-- LLM-as-a-judge for Model Comparison: the prompt, the parser and the P/R/F1 arithmetic. -->
+  <script src="llm_judge.js"></script>
 </body>
 </html>

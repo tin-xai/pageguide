@@ -581,9 +581,9 @@ function applyHighlightsFromCitations(answer) {
   window._pageguideHighlights = [];
   
   // Normalize curly/smart quotes to straight quotes
-  const normalizedAnswer = answer
+  const normalizedAnswer = normalizeCitationMarkers(answer
     .replace(/[""]/g, '"')
-    .replace(/['']/g, "'");
+    .replace(/['']/g, "'"));
   
   // Find all citation patterns:
   // [N:"text"] or [N:'text'] - with quotes (text may contain apostrophes/quotes)

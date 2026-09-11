@@ -101,7 +101,8 @@
       "url": "https://www.berkeley.edu/",
       "task": "Please find graduate-level computer science courses scheduled on Tuesdays starting time from 2:00 to 6:00 PM in the Fall 2023 semester.",
       "v2_task_id": "gv2-mtufb07j-mrj4tz",
-      "status": "correct"
+      "status": "rerun",
+      "rerun_reason": "replaced by a fresh run (the kept study run is retired)"
     }
   ]
 }

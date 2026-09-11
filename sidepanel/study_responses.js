@@ -45,8 +45,83 @@ const STUDY_RESPONSE_SHOT_MAX_WIDTH = 1024;
 const STUDY_GROUNDED_LEGACY_KEYS = ['grounding-visual', 'grounding-text'];
 
 /**
+ * The four V2 cells. Every Find item carries all of them, because V2 counterbalances on TWO axes —
+ * correctness and grounding — and deals one cell per participant from their assignment slot. See
+ * the header of supabase_schema_v2.sql; these names are the jsonb keys of `answer_variants` and
+ * the allowed values of `variant_key`, so they are spelt the schema's way and not renamed.
+ *
+ * They are also the `condition` of a banked record. The local bank is keyed "taskId::condition"
+ * and does not care what the condition says, so the four ride the existing storage unchanged.
+ */
+const STUDY_V2_VARIANTS = [
+  'correct_grounding',
+  'correct_nongrounding',
+  'incorrect_grounding',
+  'incorrect_nongrounding'
+];
+
+/** What each cell is called in the panel. Spelt once, so the tabs and the notices agree. */
+const V2_VARIANT_LABELS = {
+  correct_grounding: 'Correct \u00b7 Grounded',
+  correct_nongrounding: 'Correct \u00b7 Bare',
+  incorrect_grounding: 'Incorrect \u00b7 Grounded',
+  incorrect_nongrounding: 'Incorrect \u00b7 Bare'
+};
+
+/**
+ * Where else to look when a slot is empty. BIDIRECTIONAL on purpose.
+ *
+ * V1 banked two answers per question, both correct, under 'grounding' and 'nongrounding' — exactly
+ * the two correct V2 cells. So a V2 read finds a V1 recording, and, just as importantly, a V1 read
+ * finds a V2 one: the participant-facing playback (study.js, panel.js) still asks for 's.arm',
+ * which is a V1 name, and would otherwise have gone blank for every question recorded after this
+ * change. Neither direction rewrites anything — a bank migrated in place goes wrong once, silently.
+ */
+const STUDY_RESPONSE_ALIASES = {
+  correct_grounding: ['grounding', ...STUDY_GROUNDED_LEGACY_KEYS],
+  correct_nongrounding: ['nongrounding'],
+  grounding: ['correct_grounding', ...STUDY_GROUNDED_LEGACY_KEYS],
+  nongrounding: ['correct_nongrounding']
+};
+
+/**
+ * Does this cell keep its citation and evidence markers?
+ *
+ * Accepts the V1 arm names too. The bare V1 name is 'nongrounding' with no prefix, so a plain
+ * endsWith('_nongrounding') read it as GROUNDED — and _buildStudyArmRecord, which asks this
+ * question to decide whether to strip, then banked the V1 non-grounded arm with all its markers
+ * still in it. Anything still passing a V1 name has to keep working.
+ */
+function _variantIsGrounded(variant) {
+  const v = String(variant || '');
+  return !(v === 'nongrounding' || v.endsWith('_nongrounding'));
+}
+
+/** 'correct' | 'incorrect' — which side of the correctness axis this cell sits on. */
+function _variantCorrectness(variant) {
+  return String(variant || '').startsWith('incorrect') ? 'incorrect' : 'correct';
+}
+
+/**
+ * The bare cell that a grounded one strips into. Stripping must stay on its own row of the 2x2:
+ * a wrong answer stripped of its citations is still a wrong answer, and landing it in
+ * `correct_nongrounding` would file it as the right one.
+ */
+function _bareTwinOf(variant) {
+  return `${_variantCorrectness(variant)}_nongrounding`;
+}
+
+/** The grounded cell of the same correctness. Inverse of _bareTwinOf. */
+function _groundedTwinOf(variant) {
+  return `${_variantCorrectness(variant)}_grounding`;
+}
+
+/**
  * The condition a record belongs to. Two arms, one per question: what the participant reads either
  * carries its grounding markers or it does not.
+ *
+ * Kept on the V1 names because it answers a question about the PANEL — whether the live run was
+ * made in the non-grounding arm — which is unchanged by V2. Recording picks its cell explicitly.
  *
  * @param {boolean} nonGrounding - _isPanelNonGrounding()
  * @returns {'nongrounding'|'grounding'}
@@ -149,10 +224,12 @@ function _buildStudyResponseRecord(ctx) {
 function _buildStudyArmRecord(ctx) {
   const { taskId, condition, url, question, existing, result, text } = ctx || {};
   const armCondition = String(condition || '');
+  // Grounded-ness, not the literal name: 'incorrect_nongrounding' has to strip too, and reading
+  // the name for 'nongrounding' exactly would have left it holding markers.
   const normalizeArmRecord = (record) => (
-    armCondition === 'nongrounding'
-      ? _stripStudyArmRecord(record)
-      : record
+    _variantIsGrounded(armCondition)
+      ? record
+      : _stripStudyArmRecord(record, armCondition)
   );
   if (result) {
     return normalizeArmRecord(_buildStudyResponseRecord({ taskId, condition, url, question, result }));
@@ -169,10 +246,16 @@ function _buildStudyArmRecord(ctx) {
   ));
 }
 
-function _stripStudyArmRecord(record) {
+/**
+ * The bare version of a record, filed under the bare cell of the SAME correctness.
+ *
+ * @param {object} record
+ * @param {string} [variant] - the target cell; defaults to the V1 'nongrounding' arm
+ */
+function _stripStudyArmRecord(record, variant) {
   const answer = _stripStudyGrounding(record?.answer_raw || record?.answer_display || '');
   return Object.assign({}, record, {
-    condition: 'nongrounding',
+    condition: variant || 'nongrounding',
     answer_raw: answer,
     answer_display: answer,
     evidence: [],
@@ -285,7 +368,11 @@ function _applyStudyResponseEdit(record, newAnswer) {
 
 function _studyCitationMarkers(answer) {
   const markers = [];
-  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, quote) => {
+  // Same repair as the resolver, or a compound bracket banks zero markers for an answer that
+  // visibly carries two citations — and the reconcile below would then drop its anchors.
+  const text = (typeof normalizeCitationMarkers === 'function')
+    ? normalizeCitationMarkers(answer) : String(answer || '');
+  String(text).replace(/\[(\d+):"([^"]*)"\]/g, (m, index, quote) => {
     markers.push({ index: Number(index), quote, key: `${Number(index)}:${quote}` });
     return m;
   });
@@ -407,18 +494,19 @@ async function listStudyResponses() {
 }
 
 /**
- * The record for one (task, condition), or null. A 'grounding' read falls back to the pre-collapse
- * per-evidence-mode slots, so recordings made before the arms were merged stay visible.
+ * The record for one (task, condition), or null.
+ *
+ * Falls back through STUDY_RESPONSE_ALIASES, which maps the V1 arm names and the V2 correct cells
+ * onto each other in both directions, with the pre-collapse per-evidence-mode slots behind them.
+ * Read-only: nothing is rewritten under another key until it is saved again.
  */
 async function getStudyResponse(taskId, condition) {
   const all = await listStudyResponses();
   const hit = all[_studyResponseKey(taskId, condition)];
   if (hit) return hit;
-  if (condition === 'grounding') {
-    for (const legacy of STUDY_GROUNDED_LEGACY_KEYS) {
-      const old = all[_studyResponseKey(taskId, legacy)];
-      if (old) return old;
-    }
+  for (const alias of (STUDY_RESPONSE_ALIASES[condition] || [])) {
+    const old = all[_studyResponseKey(taskId, alias)];
+    if (old) return old;
   }
   return null;
 }
@@ -752,6 +840,139 @@ async function pruneStudyGroundTruth(validTaskIds) {
   }
 }
 
+// ===== FIND QUESTION EDITS =====
+//
+// tasks.json ships inside the extension, so it is read-only at runtime: a question can only be
+// changed by editing the file and reloading. That was survivable while a Find question was
+// answered from a fixed list of four options, because the question and its options were authored
+// together in one pass. It is not survivable now. V2 asks the participant to VERIFY an answer
+// instead of picking one, so a question that ends "...which of the following?" — or any wording
+// that leans on options the participant can no longer see — has to be reworded against the live
+// page, which is exactly when the researcher is standing in front of the page and not the file.
+//
+// So edits live here: an OVERLAY keyed by task id, holding only what was changed. tasks.json stays
+// the authoring source (a task deleted there still disappears, and its edit is pruned with it),
+// and the overlay is applied everywhere the bank is read — the runner, the recorder, and the
+// publish bundle — so a participant, the researcher and the analysis all see one wording.
+const PAGEGUIDE_STUDY_TASK_EDITS_KEY = 'pageguide_study_task_edits';
+
+/** The fields an edit may carry. `answer` is the string the study grades a Yes/No verdict against. */
+const STUDY_TASK_EDIT_FIELDS = ['question', 'answer'];
+
+/**
+ * Build one edit record. Pure.
+ *
+ * Only fields that DIFFER from the shipped task are stored: an edit that reverts a question to its
+ * tasks.json wording is not an edit, and keeping it would pin the old wording forever — the file
+ * could then be corrected and the overlay would silently undo it on every load.
+ *
+ * @param {object} task - the task as it comes out of tasks.json
+ * @param {{question?: string, answer?: string}} next - the edited values
+ * @returns {{task_id: string, fields: object, updated_at: string}|null} null when nothing differs
+ */
+function _buildStudyTaskEdit(task, next) {
+  const taskId = String(task?.id || '').trim();
+  if (!taskId) return null;
+  const fields = {};
+  STUDY_TASK_EDIT_FIELDS.forEach(key => {
+    if (!next || next[key] === undefined) return;
+    const value = String(next[key] == null ? '' : next[key]).trim();
+    if (!value) return;                                  // blanking a question is never the intent
+    if (value === String(task?.[key] == null ? '' : task[key]).trim()) return;
+    fields[key] = value;
+  });
+  if (!Object.keys(fields).length) return null;
+  return { task_id: taskId, fields, updated_at: new Date().toISOString() };
+}
+
+/**
+ * Lay the edits over one task. Pure, and returns the SAME object when there is nothing to apply so
+ * an unedited bank is not needlessly copied.
+ *
+ * `edited_fields` rides along on the result so the recorder can mark what it is showing without
+ * having to re-read the bank, and so a publish row can say the question was reworded.
+ */
+function _applyStudyTaskEdit(task, edit) {
+  const fields = edit?.fields;
+  if (!task || !fields || !Object.keys(fields).length) return task;
+  const out = Object.assign({}, task);
+  const applied = [];
+  STUDY_TASK_EDIT_FIELDS.forEach(key => {
+    if (typeof fields[key] !== 'string' || !fields[key]) return;
+    out[key] = fields[key];
+    applied.push(key);
+  });
+  if (!applied.length) return task;
+  out.edited_fields = applied;
+  return out;
+}
+
+/** Lay the whole overlay over a { find, guide } bank. Pure. Guide tasks are not editable here. */
+function _applyStudyTaskEdits(tasksData, edits) {
+  const all = (edits && typeof edits === 'object') ? edits : {};
+  if (!Object.keys(all).length) return tasksData;
+  const find = (tasksData?.find || []).map(t => _applyStudyTaskEdit(t, all[String(t?.id || '').trim()]));
+  return Object.assign({}, tasksData, { find });
+}
+
+async function listStudyTaskEdits() {
+  try {
+    const data = await chrome.storage.local.get(PAGEGUIDE_STUDY_TASK_EDITS_KEY);
+    const all = data[PAGEGUIDE_STUDY_TASK_EDITS_KEY];
+    return (all && typeof all === 'object') ? all : {};
+  } catch (e) {
+    console.warn('[StudyTaskEdits] read failed:', e);
+    return {};
+  }
+}
+
+async function getStudyTaskEdit(taskId) {
+  const all = await listStudyTaskEdits();
+  return all[String(taskId || '').trim()] || null;
+}
+
+/**
+ * Save one task's edit, or clear it when `record` is null / carries no changed field.
+ *
+ * Local only, deliberately: the edited question reaches Supabase through the normal publish, as
+ * part of the study_tasks row it belongs to. Writing it here as well would give the site two
+ * sources for one question and let them drift — the drift tasks.json's own comment warns about.
+ */
+async function saveStudyTaskEdit(taskId, record) {
+  const id = String(taskId || '').trim();
+  if (!id) return { saved: false, error: 'no task id' };
+  try {
+    const all = await listStudyTaskEdits();
+    if (record && record.fields && Object.keys(record.fields).length) all[id] = record;
+    else delete all[id];
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_TASK_EDITS_KEY]: all });
+    return { saved: true, cleared: !all[id] };
+  } catch (e) {
+    console.error('[StudyTaskEdits] local save failed:', e);
+    return { saved: false, error: e?.message || 'local save failed' };
+  }
+}
+
+/** Same orphan rule as the response and ground-truth banks. */
+async function pruneStudyTaskEdits(validTaskIds) {
+  const keep = new Set((Array.isArray(validTaskIds) ? validTaskIds : [])
+    .map(id => String(id || '').trim())
+    .filter(Boolean));
+  if (!keep.size) return [];
+  try {
+    const all = await listStudyTaskEdits();
+    const orphaned = Object.keys(all).filter(taskId => !keep.has(taskId));
+    if (!orphaned.length) return [];
+    orphaned.forEach(taskId => { delete all[taskId]; });
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_TASK_EDITS_KEY]: all });
+    console.log(`[StudyTaskEdits] pruned ${orphaned.length} edit(s) for deleted tasks:`, orphaned);
+    return orphaned;
+  } catch (e) {
+    console.warn('[StudyTaskEdits] prune failed:', e);
+    return [];
+  }
+}
+
 /** Download the whole bank as JSON, so it can be committed beside user_study_data/tasks.json. */
 async function exportStudyResponses() {
   const all = await listStudyResponses();
@@ -767,6 +988,13 @@ async function exportStudyResponses() {
 
 if (typeof window !== 'undefined') {
   window.PAGEGUIDE_STUDY_RESPONSES_KEY = PAGEGUIDE_STUDY_RESPONSES_KEY;
+  window.STUDY_V2_VARIANTS = STUDY_V2_VARIANTS;
+  window.V2_VARIANT_LABELS = V2_VARIANT_LABELS;
+  window._variantIsGrounded = _variantIsGrounded;
+  window._variantCorrectness = _variantCorrectness;
+  window._bareTwinOf = _bareTwinOf;
+  window._groundedTwinOf = _groundedTwinOf;
+  window._stripStudyArmRecord = _stripStudyArmRecord;
   window._studyResponseCondition = _studyResponseCondition;
   window._studyResponseKey = _studyResponseKey;
   window._stripStudyGrounding = _stripStudyGrounding;
@@ -791,6 +1019,15 @@ if (typeof window !== 'undefined') {
   window.getStudyGroundTruth = getStudyGroundTruth;
   window.saveStudyGroundTruth = saveStudyGroundTruth;
   window.pruneStudyGroundTruth = pruneStudyGroundTruth;
+  window.PAGEGUIDE_STUDY_TASK_EDITS_KEY = PAGEGUIDE_STUDY_TASK_EDITS_KEY;
+  window.STUDY_TASK_EDIT_FIELDS = STUDY_TASK_EDIT_FIELDS;
+  window._buildStudyTaskEdit = _buildStudyTaskEdit;
+  window._applyStudyTaskEdit = _applyStudyTaskEdit;
+  window._applyStudyTaskEdits = _applyStudyTaskEdits;
+  window.listStudyTaskEdits = listStudyTaskEdits;
+  window.getStudyTaskEdit = getStudyTaskEdit;
+  window.saveStudyTaskEdit = saveStudyTaskEdit;
+  window.pruneStudyTaskEdits = pruneStudyTaskEdits;
   window.syncStudyResponse = syncStudyResponse;
   window.openStudyResponsePreview = openStudyResponsePreview;
   window.exportStudyResponses = exportStudyResponses;

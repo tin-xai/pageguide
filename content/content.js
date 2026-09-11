@@ -27,7 +27,7 @@ async function handleMessage(request) {
       if (typeof pgCapturePageSnapshot !== 'function') {
         return { error: 'page_snapshot.js is not loaded — reload the page and try again' };
       }
-      return await pgCapturePageSnapshot();
+      return await pgCapturePageSnapshot(request.options || null);
 
     // Resolve an answer's citations to locators the study site can use, while the index that
     // issued their numbers is still installed. See content/functions/citation_anchors.js — this

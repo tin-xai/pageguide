@@ -1338,6 +1338,52 @@ describe('gv2BuildAnswerEvidence (content/utils.js)', () => {
     expect(out[0].key).toBe('a');
   });
 
+  test('a free-text [ev:Name With Spaces] marker resolves to the confirmation item of that name', () => {
+    expect(window.gv2ParseEvidenceRefs('ends at 7 [ev:meditation_cal_time]. Open until 9 [ev:Sportsplex Hours 4:00pm - 9:00pm].'))
+      .toEqual(['meditation_cal_time', 'sportsplex_hours_4_00pm_-_9_00pm']);
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'Ends at 7 [ev:meditation_cal_time]. Open until 9 [ev:Sportsplex Hours 4:00pm - 9:00pm].',
+      scratchpad: [scratch('meditation_cal_time', 1)],
+      confirmation: [{ step: 4, key: 'Sportsplex Hours 4:00pm - 9:00pm', note: 'Hours panel shows 4–9 PM' }],
+      fallbackStep: { step: 4 }
+    });
+    expect(out.map(i => [i.source, i.key])).toEqual([['cited', 'meditation_cal_time'], ['confirmation', 'sportsplex_hours_4_00pm_-_9_00pm']]);
+    expect(window.gv2SelectFinishConfirmationItems([{ name: 'Sportsplex Hours 4:00pm - 9:00pm' }], 'Open [ev:Sportsplex Hours 4:00pm - 9:00pm]', ['meditation_cal_time'], true)).toHaveLength(1);
+  });
+
+  test('confirmation evidence the answer cites by SoM index survives alongside saved evidence', () => {
+    // Regression: "…[ev:marry_me_chicken_ingredients]. Both ingredients — X [ev:97] and Y [ev:100] —
+    // were added to your cart." dropped 97 and 100 because one saved item existed, leaving two
+    // markers in the answer with no picture behind them.
+    const out = window.gv2BuildAnswerEvidence({
+      finalAnswer: 'Ingredients [ev:marry_me_chicken_ingredients]. Added X [ev:97] and Y [ev:100] to the cart.',
+      scratchpad: [scratch('marry_me_chicken_ingredients', 3)],
+      confirmation: [
+        { step: 8, key: '97', region_bbox: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 }, note: 'Sun-dried tomatoes in cart' },
+        { step: 8, key: '100', region_bbox: { x: 0.1, y: 0.4, w: 0.3, h: 0.1 }, note: 'Chicken fillets in cart' },
+        { step: 8, key: '55', region_bbox: null, note: 'Uncited — stays suppressed' },
+      ],
+      fallbackStep: { step: 8 }
+    });
+    expect(out.map(i => [i.source, i.key, i.step])).toEqual([
+      ['cited', 'marry_me_chicken_ingredients', 3],
+      ['confirmation', '97', 8],
+      ['confirmation', '100', 8],
+    ]);
+  });
+
+  test('gv2SelectFinishConfirmationItems keeps only the cited items once saved evidence exists', () => {
+    const items = [{ index: 97, reason: 'tomatoes in cart' }, { index: 100, reason: 'chicken in cart' }, { index: 55, reason: 'uncited' }, { name: 'ingredients', index: 12 }];
+    const answer = 'Ingredients [ev:ingredients]. Added X [ev:97] and Y [ev:100].';
+    // No saved evidence: everything is captured, as before.
+    expect(window.gv2SelectFinishConfirmationItems(items, answer, [], false)).toEqual(items);
+    // Saved evidence: cited 97 and 100 survive; the uncited 55 and the already-saved "ingredients" do not.
+    expect(window.gv2SelectFinishConfirmationItems(items, answer, ['ingredients'], true))
+      .toEqual([{ index: 97, reason: 'tomatoes in cart' }, { index: 100, reason: 'chicken in cart' }]);
+    expect(window.gv2SelectFinishConfirmationItems(items, 'No markers at all.', ['ingredients'], true)).toEqual([]);
+    expect(window.gv2SelectFinishConfirmationItems(null, answer, [], true)).toEqual([]);
+  });
+
   test('uncited saved evidence still suppresses finish confirmation evidence', () => {
     const out = window.gv2BuildAnswerEvidence({
       finalAnswer: 'I found the answer.',
@@ -2658,6 +2704,229 @@ describe('_gv2BuildSteerQuestion (content/tasks/guidev2.js)', () => {
   });
 });
 
+// Regression: a run only survives a page load when the stored state carries pendingResume — both
+// resume gates (_gv2HandleSwMessage, _gv2CheckSessionStorageFallback) bail without it, silently.
+// The flag used to be armed for click steps alone, so a `type` that submitted (Enter in a search
+// box) or a manual goto_url navigated away with it false and the guide died on the new page.
+describe('navigation-surviving steps (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  test('arms the resume for every action that can end in a page load', () => {
+    for (const action of ['click', 'type', 'clear_text', 'goto_url', 'drag_drop']) {
+      expect(window._gv2ActionExpectsNavigation(action)).toBe(true);
+    }
+  });
+
+  test('leaves it disarmed for actions that stay on the page', () => {
+    for (const action of ['scroll_down', 'scroll_up', 'find', 'watch_video', 'highlight', 'finish']) {
+      expect(window._gv2ActionExpectsNavigation(action)).toBe(false);
+    }
+  });
+
+  test('is case-insensitive and safe on junk', () => {
+    expect(window._gv2ActionExpectsNavigation('TYPE')).toBe(true);
+    expect(window._gv2ActionExpectsNavigation('Goto_Url')).toBe(true);
+    expect(window._gv2ActionExpectsNavigation(null)).toBe(false);
+    expect(window._gv2ActionExpectsNavigation(undefined)).toBe(false);
+    expect(window._gv2ActionExpectsNavigation('')).toBe(false);
+  });
+
+  // The arm/disarm pair: the step arms it before the edit, and the in-page continuation — which
+  // only runs when the edit did NOT navigate — takes it back down.
+  test('the field-edit continuation disarms the resume before generating the next step', () => {
+    const fn = window._gv2ContinueAfterFormEdit.toString();
+    expect(fn).toMatch(/_gv2SetState\(false\)/);
+    expect(fn.indexOf('_gv2SetState(false)')).toBeLessThan(fn.indexOf('gv2GenerateNextStep'));
+  });
+});
+
+// Regression: `type` used to fill the field and stop there. A search box that was never submitted
+// left the page unchanged, so the next step was generated from the same screenshot and proposed the
+// same "type X and press Enter" — over and over until the loop guard paused the run.
+describe('type steps that must submit (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    // jsdom has no PointerEvent; the click path dispatches the full pointer sequence.
+    if (typeof global.PointerEvent === 'undefined') {
+      global.PointerEvent = class PointerEvent extends MouseEvent {};
+      window.PointerEvent = global.PointerEvent;
+    }
+    loadScript('content/utils.js');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  describe('_gv2ShouldSubmitAfterType', () => {
+    test('honors an explicit submit flag in both directions', () => {
+      expect(window._gv2ShouldSubmitAfterType({ submit: true })).toBe(true);
+      expect(window._gv2ShouldSubmitAfterType({ submit: false, instruction: 'type it and press Enter' })).toBe(false);
+    });
+
+    test('reads the intent out of the instruction, which is where models actually put it', () => {
+      const phrasings = [
+        "Type 'black Adidas shoes' into the search bar and press Enter.",
+        'Type the query into the search bar and press Enter to find the shoes.',
+        'Enter the query, then press the Return key.',
+        'Type your search and hit Enter.'
+      ];
+      for (const instruction of phrasings) {
+        expect(window._gv2ShouldSubmitAfterType({ instruction })).toBe(true);
+      }
+    });
+
+    test('leaves an ordinary field fill alone', () => {
+      expect(window._gv2ShouldSubmitAfterType({ instruction: 'Type your first name into the Name field.' })).toBe(false);
+      expect(window._gv2ShouldSubmitAfterType({ instruction: 'Enter the shipping address.' })).toBe(false);
+      expect(window._gv2ShouldSubmitAfterType({})).toBe(false);
+      expect(window._gv2ShouldSubmitAfterType(null)).toBe(false);
+    });
+  });
+
+  describe('_gv2PressEnter', () => {
+    afterEach(() => { document.body.innerHTML = ''; });
+
+    test('dispatches a real Enter key sequence with keyCode 13', () => {
+      document.body.innerHTML = '<input id="q">';
+      const input = document.getElementById('q');
+      const seen = [];
+      for (const type of ['keydown', 'keypress', 'keyup']) {
+        input.addEventListener(type, (e) => seen.push([e.type, e.key, e.keyCode]));
+      }
+      window._gv2PressEnter(input);
+      expect(seen).toEqual([
+        ['keydown', 'Enter', 13],
+        ['keypress', 'Enter', 13],
+        ['keyup', 'Enter', 13]
+      ]);
+    });
+
+    // A synthetic keydown never triggers the browser's implicit form submission, so the search box
+    // that started this bug would swallow the key and do nothing.
+    test('submits the containing form the browser would have submitted', () => {
+      document.body.innerHTML = '<form id="f"><input id="q"><button type="submit">Search</button></form>';
+      const form = document.getElementById('f');
+      form.requestSubmit = jest.fn();
+      expect(window._gv2PressEnter(document.getElementById('q'))).toBe(true);
+      expect(form.requestSubmit).toHaveBeenCalledTimes(1);
+    });
+
+    test('does not submit when the page handled Enter itself', () => {
+      document.body.innerHTML = '<form id="f"><input id="q"></form>';
+      const form = document.getElementById('f');
+      form.requestSubmit = jest.fn();
+      document.getElementById('q').addEventListener('keydown', (e) => e.preventDefault());
+      expect(window._gv2PressEnter(document.getElementById('q'))).toBe(true);
+      expect(form.requestSubmit).not.toHaveBeenCalled();
+    });
+
+    // Walmart's search bar: an input and a magnifier button, no <form> anywhere.
+    test('clicks the search button when there is no form to submit', () => {
+      document.body.innerHTML = `
+        <div role="search"><input id="q"><button id="go" aria-label="Search"></button></div>`;
+      const clicked = jest.fn();
+      document.getElementById('go').addEventListener('click', clicked);
+      expect(window._gv2PressEnter(document.getElementById('q'))).toBe(true);
+      expect(clicked).toHaveBeenCalledTimes(1);
+    });
+
+    test('reports failure rather than throwing when there is nothing to submit', () => {
+      document.body.innerHTML = '<div><input id="q"></div>';
+      expect(window._gv2PressEnter(document.getElementById('q'))).toBe(false);
+      expect(window._gv2PressEnter(null)).toBe(false);
+    });
+  });
+});
+
+// The annotator's shapes belong on the real page too, not only in the evidence crop.
+describe('on-page evidence marks (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    loadScript('content/utils.js');
+    loadScript('content/tasks/guidev2.js');
+  });
+
+  describe('_gv2MarksFromCapture', () => {
+    test('carries the shapes and the geometry that places them in the document', () => {
+      const geometry = { x: 0, y: 400, w: 1024, h: 768 };
+      const marks = window._gv2MarksFromCapture({
+        key: 'nearest_restroom',
+        note: 'restroom is in the American Wing',
+        annotations: [{ type: 'box', bbox: { x: 0.6, y: 0.3, w: 0.2, h: 0.1 }, label: 'Restroom' }],
+        region_bbox: { x: 0.5, y: 0.2, w: 0.3, h: 0.3 },
+        annotationGeometry: geometry
+      }, 2);
+      expect(marks.annotations).toHaveLength(1);
+      expect(marks.region_bbox).toEqual({ x: 0.5, y: 0.2, w: 0.3, h: 0.3 });
+      // Both names are read by the renderer; neither may be dropped or the shapes land at the
+      // top of the document instead of where the screenshot was taken.
+      expect(marks.annotationGeometry).toEqual(geometry);
+      expect(marks.captureGeometry).toEqual(geometry);
+      expect(marks.evidenceNumber).toBe(2);
+    });
+
+    test('prefers the annotator region over the pre-annotation rect', () => {
+      const marks = window._gv2MarksFromCapture({
+        annotationRegionBbox: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 },
+        region_bbox: { x: 0.9, y: 0.9, w: 0.05, h: 0.05 },
+        annotations: []
+      });
+      expect(marks.region_bbox).toEqual({ x: 0.1, y: 0.1, w: 0.1, h: 0.1 });
+    });
+
+    test('passes an item that already carries a marks bag straight through', () => {
+      const marks = { annotations: [], region_bbox: { x: 0, y: 0, w: 1, h: 1 } };
+      expect(window._gv2MarksFromCapture({ marks })).toBe(marks);
+      // ...but an empty bag is still nothing to draw.
+      expect(window._gv2MarksFromCapture({ marks: { annotations: [], region_bbox: null } })).toBe(null);
+    });
+
+    test('returns null when there is nothing to draw', () => {
+      expect(window._gv2MarksFromCapture({ annotations: [], region_bbox: null })).toBe(null);
+      expect(window._gv2MarksFromCapture(null)).toBe(null);
+    });
+  });
+
+  describe('gv2DrawEvidenceMarksOnPage', () => {
+    afterEach(() => { delete window.pageguideShowEvidenceAnnotations; });
+
+    test('hands every drawable item to the on-page renderer', () => {
+      const drawn = jest.fn(() => 3);
+      window.pageguideShowEvidenceAnnotations = drawn;
+      const result = window.gv2DrawEvidenceMarksOnPage([
+        { annotations: [{ type: 'box', bbox: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 } }], annotationGeometry: { x: 0, y: 0, w: 800, h: 600 } },
+        { annotations: [], region_bbox: null },   // nothing to draw — skipped
+        { region_bbox: { x: 0.2, y: 0.2, w: 0.2, h: 0.2 } }
+      ]);
+      expect(result).toBe(3);
+      expect(drawn).toHaveBeenCalledTimes(1);
+      expect(drawn.mock.calls[0][0]).toHaveLength(2);
+      expect(drawn.mock.calls[0][0].map(m => m.evidenceNumber)).toEqual([1, 3]);
+    });
+
+    test('draws nothing, and never throws, when there is no evidence or no renderer', () => {
+      window.pageguideShowEvidenceAnnotations = jest.fn();
+      expect(window.gv2DrawEvidenceMarksOnPage([])).toBe(0);
+      expect(window.gv2DrawEvidenceMarksOnPage(null)).toBe(0);
+      expect(window.pageguideShowEvidenceAnnotations).not.toHaveBeenCalled();
+      delete window.pageguideShowEvidenceAnnotations;
+      expect(window.gv2DrawEvidenceMarksOnPage([{ region_bbox: { x: 0, y: 0, w: 1, h: 1 } }])).toBe(0);
+    });
+
+    test('a renderer that throws does not take the answer down with it', () => {
+      window.pageguideShowEvidenceAnnotations = () => { throw new Error('overlay blew up'); };
+      expect(window.gv2DrawEvidenceMarksOnPage([{ region_bbox: { x: 0, y: 0, w: 1, h: 1 } }])).toBe(0);
+    });
+  });
+
+  // Mid-run drawing would land in the screenshot the NEXT step is generated from, and the renderer
+  // scrolls to its first mark — which would move the page out from under the agent.
+  test('the guide only draws on the page once the run has reached its answer', () => {
+    const fn = window.gv2CaptureStepRecord.toString();
+    expect(fn).toMatch(/data\.isLastStep \|\| data\.action === 'finish'/);
+    expect(fn).toMatch(/gv2DrawEvidenceMarksOnPage/);
+  });
+});
+
 describe('guide evidence annotator JSON repair (content/tasks/guidev2.js)', () => {
   beforeAll(() => {
     loadScript('content/utils.js');
@@ -2716,6 +2985,45 @@ describe('guide evidence annotator JSON repair (content/tasks/guidev2.js)', () =
     };
     const coerced = window._gv2CoerceAnnotatorResult(raw, { width: 2000, height: 1000 });
     expect(coerced.region_bbox).toEqual({ x: 0.6, y: 0.05, w: 0.225, h: 0.15 });
+  });
+
+  // Regression: the annotator prompt documents a batch {"items":[...]} shape as well as the bare
+  // one, and the model sometimes answers a SINGLE-item request in the batch shape. Coercing the
+  // wrapper found no coordinates, so the item got zero annotations and the crop was drawn bare.
+  describe('_gv2UnwrapAnnotatorItem', () => {
+    const batch = {
+      items: [
+        { key: 'other_key', region_bbox: { x: 1, y: 1, w: 1, h: 1 }, annotations: [] },
+        { key: 'nearest_restroom', region_bbox: { x: 600, y: 330, w: 250, h: 350 }, annotations: [{ type: 'box', bbox: { x: 613, y: 340, w: 190, h: 110 }, label: 'American Wing' }] }
+      ]
+    };
+
+    test('pulls out the item matching the requested evidence key', () => {
+      const unwrapped = window._gv2UnwrapAnnotatorItem(batch, 'nearest_restroom');
+      expect(unwrapped.region_bbox).toEqual({ x: 600, y: 330, w: 250, h: 350 });
+      expect(unwrapped.annotations).toHaveLength(1);
+    });
+
+    test('coercion then finds the coordinates the wrapper used to hide', () => {
+      const coerced = window._gv2CoerceAnnotatorResult(
+        window._gv2UnwrapAnnotatorItem(batch, 'nearest_restroom'),
+        { width: 1034, height: 774 }
+      );
+      expect(coerced.__coordinateDebug.coercedAnnotations).toHaveLength(1);
+      expect(coerced.annotations[0].bbox).toEqual({ x: 0.613, y: 0.34, w: 0.19, h: 0.11 });
+    });
+
+    test('falls back to the first item when no key matches', () => {
+      expect(window._gv2UnwrapAnnotatorItem(batch, 'unknown_key').key).toBe('other_key');
+      expect(window._gv2UnwrapAnnotatorItem(batch, '').key).toBe('other_key');
+    });
+
+    test('leaves a bare (non-batch) reply and junk alone', () => {
+      const bare = { region_bbox: { x: 1, y: 2, w: 3, h: 4 }, annotations: [] };
+      expect(window._gv2UnwrapAnnotatorItem(bare, 'k')).toBe(bare);
+      expect(window._gv2UnwrapAnnotatorItem({ items: [] }, 'k')).toEqual({ items: [] });
+      expect(window._gv2UnwrapAnnotatorItem(null, 'k')).toBe(null);
+    });
   });
 
   test('does not overwrite page evidence rect with a bbox from a separate page image', () => {
@@ -2817,6 +3125,285 @@ describe('_gv2VerifyResumeMatch (content/tasks/guidev2.js)', () => {
 // Pause→Resume regression. A paused run outlives navigations, but window._guidev2 does not: every
 // page the agent opens is a fresh document. Resume therefore rebuilds the run from a saved copy —
 // and both copies could be unreachable at once, which is what made Pause a one-way door.
+// The two model pickers are the only list of models in the extension — the panel reads back
+// whatever the picker stored — so a model missing from one of them cannot be selected at all.
+describe('model picker (options/options.html)', () => {
+  const html = () => fs.readFileSync(path.join(__dirname, '../../options/options.html'), 'utf8');
+  const optionsIn = (selectId) => {
+    const s = html();
+    const start = s.indexOf(`id="${selectId}"`);
+    return s.slice(start, s.indexOf('</select>', start));
+  };
+
+  test('the Gemini picker offers 3.6 and 3.7 Flash', () => {
+    const block = optionsIn('geminiModel');
+    expect(block).toContain('<option value="gemini-3.6-flash">Gemini 3.6 Flash</option>');
+    expect(block).toContain('<option value="gemini-3.7-flash">Gemini 3.7 Flash</option>');
+  });
+
+  // OpenRouter takes the same models under a vendor-prefixed slug.
+  test('the OpenRouter picker offers them under google/', () => {
+    const block = optionsIn('openrouterModel');
+    expect(block).toContain('<option value="google/gemini-3.6-flash">Gemini 3.6 Flash</option>');
+    expect(block).toContain('<option value="google/gemini-3.7-flash">Gemini 3.7 Flash</option>');
+  });
+
+  // Authoring a WRONG answer for a V2 item means running the same question on a second model, so
+  // "which models can be picked" is now a study variable rather than a convenience.
+  test('the OpenRouter picker offers the Qwen, DeepSeek and Kimi models that read images', () => {
+    const block = optionsIn('openrouterModel');
+    for (const id of ['qwen/qwen3.8-max', 'qwen/qwen3.8-flash', 'qwen/qwen3-vl-235b-a22b-instruct',
+                      'deepseek/deepseek-v4-flash-vision-exp', 'moonshotai/kimi-k3',
+                      'moonshotai/kimi-k2.6']) {
+      expect(block).toContain(`<option value="${id}">`);
+    }
+  });
+
+  // The list in options.js is what warns; the labels are what a researcher reads. They have to
+  // agree, or a model is quietly text-only in one place and not the other.
+  test('every text-only model is offered, and is labelled as text only', () => {
+    const block = optionsIn('openrouterModel');
+    const js = fs.readFileSync(path.join(__dirname, '../../options/options.js'), 'utf8');
+    const listed = js.slice(js.indexOf('const TEXT_ONLY_OPENROUTER_MODELS'));
+    const ids = listed.slice(0, listed.indexOf('];')).match(/'([^']+\/[^']+)'/g).map(q => q.slice(1, -1));
+
+    expect(ids).toHaveLength(5);
+    for (const id of ids) {
+      expect(block).toContain(`<option value="${id}">`);
+      const label = block.slice(block.indexOf(`<option value="${id}">`));
+      expect(label.slice(0, label.indexOf('</option>'))).toContain('(text only)');
+    }
+  });
+
+  // Grouping is not cosmetic here: the list crossed 25 entries when the three vendors were added.
+  test('the OpenRouter picker groups its options by vendor', () => {
+    const block = optionsIn('openrouterModel');
+    for (const label of ['Anthropic', 'OpenAI', 'Google', 'Qwen', 'DeepSeek', 'Moonshot',
+                         'Mistral']) {
+      expect(block).toContain(`<optgroup label="${label}">`);
+    }
+  });
+
+  // The cheap tiers are what a study can afford to run over every item, so they have to be
+  // pickable. All of these read images, which is why none of them carry the "(text only)" label.
+  test('the OpenRouter picker offers the cheap Anthropic, OpenAI and Mistral tiers', () => {
+    const block = optionsIn('openrouterModel');
+    for (const id of ['anthropic/claude-haiku-4.5', 'anthropic/claude-3-haiku',
+                      'openai/gpt-5.4-mini', 'openai/gpt-5.4-nano', 'openai/gpt-4.1-mini',
+                      'openai/gpt-4.1-nano', 'mistralai/mistral-small-3.2-24b-instruct',
+                      'mistralai/ministral-8b-2512', 'mistralai/ministral-3b-2512',
+                      'mistralai/mistral-medium-3.1']) {
+      expect(block).toContain(`<option value="${id}">`);
+      const label = block.slice(block.indexOf(`<option value="${id}">`));
+      expect(label.slice(0, label.indexOf('</option>'))).not.toContain('(text only)');
+    }
+  });
+
+  // Regression: these four were offered but had no endpoint on OpenRouter, so picking one failed
+  // with "No endpoints found for <slug>" only once a run was already going.
+  test('the retired slugs that had no OpenRouter endpoint are gone', () => {
+    const block = optionsIn('openrouterModel');
+    for (const id of ['anthropic/claude-3.5-haiku', 'openai/gpt-5.2-mini',
+                      'google/gemini-3-pro-preview', 'mistralai/pixtral-12b']) {
+      expect(block).not.toContain(`<option value="${id}">`);
+    }
+  });
+
+  // The direct OpenAI provider has its own list, and it takes dated snapshot ids where OpenRouter
+  // takes floating ones — a slug copied across from the group above would 404 at the API.
+  test('the OpenAI picker offers the cheap OpenAI tiers', () => {
+    const block = optionsIn('openaiModel');
+    for (const id of ['gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-4.1-mini-2025-04-14',
+                      'gpt-4.1-nano-2025-04-14']) {
+      expect(block).toContain(`<option value="${id}">`);
+    }
+  });
+});
+
+// A text-only model with Vision on is the one combination that fails, and it fails at the API with
+// a message that does not say "this model cannot see" — so the picker has to say it first.
+describe('openrouterVisionWarning (options/options.js)', () => {
+  beforeAll(() => {
+    loadScript('options/options.js');
+  });
+
+  test('warns when a text-only model is picked while Vision is on', () => {
+    const msg = window.openrouterVisionWarning('deepseek/deepseek-v4-pro', true);
+    expect(msg).toContain('deepseek/deepseek-v4-pro');
+    expect(msg).toMatch(/text only/i);
+  });
+
+  test('says nothing when Vision is off — a text-only model is a fine choice then', () => {
+    expect(window.openrouterVisionWarning('deepseek/deepseek-v4-pro', false)).toBe('');
+  });
+
+  test('says nothing for a model that reads images', () => {
+    expect(window.openrouterVisionWarning('moonshotai/kimi-k3', true)).toBe('');
+    expect(window.openrouterVisionWarning('qwen/qwen3.8-max', true)).toBe('');
+  });
+
+  // An unknown id is not evidence of anything: it may be a model added to the picker later, or one
+  // typed into storage by hand. Guessing it is text-only would cry wolf on every new model.
+  test('says nothing for a model it has never heard of', () => {
+    expect(window.openrouterVisionWarning('someone/brand-new-model', true)).toBe('');
+    expect(window.openrouterVisionWarning('', true)).toBe('');
+  });
+});
+
+// Regression: "it works the first time, then the second run dies after it navigates."
+//
+// Stopping a run and starting the next one are unordered async writes: _gv2StopInternal fires the
+// stop tombstone and the state clears WITHOUT awaiting them (it is called from a synchronous stop).
+// A tombstone or a clear belonging to the finished run could therefore land after the new run had
+// registered, and the new run then died on its first navigation — suppressed as "stopped", or with
+// its saved state deleted out from under it. Both now name the run they belong to.
+describe('one run must not kill the next (content/tasks/guidev2.js)', () => {
+  const RUN_A = 'gv2-aaaa';
+  const RUN_B = 'gv2-bbbb';
+  let store;
+
+  beforeAll(() => {
+    if (!window._gv2IsStopMarked) {
+      window.chrome = {
+        runtime: {
+          connect: jest.fn(() => ({ onMessage: { addListener: jest.fn() }, onDisconnect: { addListener: jest.fn() } })),
+          sendMessage: jest.fn()
+        },
+        storage: {
+          session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) },
+          local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) }
+        }
+      };
+      loadScript('content/tasks/guidev2.js');
+    }
+  });
+
+  // A tiny real store, so a mark written by one call is read back by the next.
+  beforeEach(() => {
+    store = {};
+    window.chrome.storage.session = {
+      get: jest.fn(async (key) => (store[key] !== undefined ? { [key]: store[key] } : {})),
+      set: jest.fn(async (obj) => { Object.assign(store, obj); }),
+      remove: jest.fn(async (key) => { delete store[key]; })
+    };
+  });
+
+  describe('the stop tombstone', () => {
+    test('suppresses the run it names', async () => {
+      await window._gv2MarkStopped(RUN_A);
+      expect(await window._gv2IsStopMarked(RUN_A)).toBe(true);
+    });
+
+    // The race, defused by identity instead of ordering.
+    test('a mark left by the previous run does not suppress the next one', async () => {
+      await window._gv2MarkStopped(RUN_A);
+      expect(await window._gv2IsStopMarked(RUN_B)).toBe(false);
+    });
+
+    test('an unattributed mark still suppresses everything', async () => {
+      await window._gv2MarkStopped(null);
+      expect(await window._gv2IsStopMarked(RUN_B)).toBe(true);
+      // ...including the old number-only shape left over from a previous version.
+      store.pageguideGuidanceV2Stopped = Date.now();
+      expect(await window._gv2IsStopMarked(RUN_B)).toBe(true);
+    });
+
+    test('no mark suppresses nothing, and unreadable storage never blocks a run', async () => {
+      expect(await window._gv2IsStopMarked(RUN_A)).toBe(false);
+      window.chrome.storage.session.get = jest.fn(async () => { throw new Error('no access'); });
+      expect(await window._gv2IsStopMarked(RUN_A)).toBe(false);
+    });
+  });
+
+  describe('gv2ClearFallback', () => {
+    beforeEach(() => { store.pageguideGuidanceV2 = { active: true, sessionId: RUN_B }; });
+
+    test('a late clear from the finished run leaves the new run alone', async () => {
+      await window.gv2ClearFallback(RUN_A);
+      expect(store.pageguideGuidanceV2).toBeTruthy();
+    });
+
+    test('clears the run it names', async () => {
+      await window.gv2ClearFallback(RUN_B);
+      expect(store.pageguideGuidanceV2).toBeUndefined();
+    });
+
+    test('an unscoped clear means "whatever is there" — that is what a reset wants', async () => {
+      await window.gv2ClearFallback();
+      expect(store.pageguideGuidanceV2).toBeUndefined();
+    });
+  });
+
+  // The service worker holds the other copy, and takes the same care with it.
+  test('the worker ignores a clear from a session the tab is no longer running', () => {
+    const sw = fs.readFileSync(path.join(__dirname, '../../background/service-worker.js'), 'utf8');
+    expect(sw).toMatch(/const staleClear = [\s\S]*?String\(liveSession\.sessionId\) !== clearingSession/);
+    expect(sw).toMatch(/if \(staleClear\) \{[\s\S]*?return false;/);
+  });
+
+  test('the stop and the clear both hand over the session they are ending', () => {
+    const guide = fs.readFileSync(path.join(__dirname, '../../content/tasks/guidev2.js'), 'utf8');
+    expect(guide).toContain('_gv2MarkStopped(stoppedSessionId)');
+    expect(guide).toContain("chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', sessionId })");
+    expect(guide).toContain('gv2ClearFallback(sessionId)');
+  });
+});
+
+// Regression: a run that navigated and then failed its FIRST read of the new page was destroyed —
+// window._guidev2, the worker's session and session storage all cleared — so it stopped midway and
+// every later Resume answered "Guide not active". The same failure on the same page has always been
+// survivable, and now this one is too.
+describe('_gv2ResumeFailureDisposition (content/tasks/guidev2.js)', () => {
+  beforeAll(() => {
+    if (!window._gv2ResumeFailureDisposition) {
+      window.chrome = {
+        runtime: {
+          connect: jest.fn(() => ({ onMessage: { addListener: jest.fn() }, onDisconnect: { addListener: jest.fn() } })),
+          sendMessage: jest.fn()
+        },
+        storage: {
+          session: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}), remove: jest.fn(async () => {}) },
+          local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) }
+        }
+      };
+      loadScript('content/tasks/guidev2.js');
+    }
+  });
+
+  test('parks the run — never ends it — for a bad first read of the new page', () => {
+    const hiccups = [
+      'Could not capture the page',
+      'LLM request failed: 429',
+      'Screenshot capture failed',
+      'Network error',
+      ''            // no error text at all
+    ];
+    for (const error of hiccups) {
+      expect(window._gv2ResumeFailureDisposition({ success: false, error })).toBe('park');
+    }
+    expect(window._gv2ResumeFailureDisposition(null)).toBe('park');
+  });
+
+  test('ends the run only for the outcomes that mean to', () => {
+    expect(window._gv2ResumeFailureDisposition({ stoppedByMaxSteps: true })).toBe('terminal');
+    expect(window._gv2ResumeFailureDisposition({ error: 'Guide stopped' })).toBe('terminal');
+  });
+
+  test('leaves a paused run paused, and retries a malformed step in place', () => {
+    expect(window._gv2ResumeFailureDisposition({ error: 'Guide paused' })).toBe('paused');
+    expect(window._gv2ResumeFailureDisposition({ error: 'Could not parse step JSON' })).toBe('retry');
+  });
+
+  // The park branch has to leave the run findable AND tell the panel to offer Resume.
+  test('the parked run stays active and the panel is told it is paused', () => {
+    const fn = window._gv2ResumeFromState.toString();
+    expect(fn).toMatch(/window\._guidev2\.active = true;\s*\n\s*window\._guidev2\.paused = true;/);
+    expect(fn).toMatch(/action: 'guidePaused'/);
+    // The clear that used to run here is gone.
+    expect(fn).not.toMatch(/window\._guidev2\.active = false/);
+  });
+});
+
 describe('_gv2LoadResumableState (content/tasks/guidev2.js) — where a paused run is recovered from', () => {
   const RUN = { active: true, paused: true, question: 'add an orange', sessionId: 'gv2-x', timestamp: Date.now() };
 
@@ -2879,6 +3466,33 @@ describe('_gv2LoadResumableState (content/tasks/guidev2.js) — where a paused r
   test('a worker that cannot answer leaves the caller to report "not active"', async () => {
     window.safeSendMessage = jest.fn(async () => { throw new Error('Receiving end does not exist'); });
     expect(await window._gv2LoadResumableState()).toBeNull();
+  });
+
+  // A paused run is read minutes later, by a person who went off to look at the page first. The age
+  // limit belongs to the AUTOMATIC resume — it exists so a forgotten run cannot wake up by itself —
+  // and it used to DELETE the state it judged stale, which took the parked run with it.
+  describe('the age limit does not reach an explicit Resume', () => {
+    const ELEVEN_MINUTES_AGO = Date.now() - 11 * 60 * 1000;
+    const OLD_RUN = { active: true, paused: true, question: 'add an orange', sessionId: 'gv2-x', timestamp: ELEVEN_MINUTES_AGO };
+
+    test('an explicit Resume still finds a run parked for longer than the limit', async () => {
+      window.chrome.storage.session.get = jest.fn(async () => ({ pageguideGuidanceV2: OLD_RUN }));
+      const state = await window._gv2LoadResumableState();
+      expect(state?.question).toBe('add an orange');
+    });
+
+    test('the automatic path still ignores a stale run', async () => {
+      window.chrome.storage.session.get = jest.fn(async () => ({ pageguideGuidanceV2: OLD_RUN }));
+      expect(await window.gv2LoadFallback()).toBeNull();
+      expect(await window.gv2LoadFallback({ maxAge: Infinity })).toBeTruthy();
+    });
+
+    // Deleting on a stale read destroyed the only copy of a run the user could still have resumed.
+    test('reading a stale run never deletes it', async () => {
+      window.chrome.storage.session.get = jest.fn(async () => ({ pageguideGuidanceV2: OLD_RUN }));
+      await window.gv2LoadFallback();
+      expect(window.chrome.storage.session.remove).not.toHaveBeenCalled();
+    });
   });
 
   // The grant is invisible at runtime — without it every session-storage call from a content script
@@ -3221,9 +3835,13 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
     }
   });
 
-  test('loop score at or above 0.3 pauses before action', async () => {
+  // One over-threshold step is a coincidence, not a loop: the streak has to reach the configured
+  // threshold (default 6) before the run is paused. Set to 1 here to exercise the pause itself.
+  test('a loop streak that reaches the threshold pauses before action', async () => {
     const originalCompute = window.gv2ComputeMechanicalConfidence;
+    const originalGet = window.chrome.storage.local.get;
     window.gv2ComputeMechanicalConfidence = () => ({ confidence: 0.95, grounding: 0.95, loop: 0.31, loopMatches: 4 });
+    window.chrome.storage.local.get = jest.fn(async () => ({ guideLoopStepThreshold: 1 }));
     try {
       const stepJson = JSON.stringify({
         step: 1,
@@ -3236,6 +3854,27 @@ describe('gv2ProcessResponse pause/handover conditions (content/tasks/guidev2.js
       await window.gv2ProcessResponse(stepJson);
       expect(window._guidev2.paused).toBe(true);
       expect(getPauseMessage()).toBe('Page Guide paused: loop score 0.31 is above the 0.3 threshold. Review and resume when ready.');
+    } finally {
+      window.gv2ComputeMechanicalConfidence = originalCompute;
+      window.chrome.storage.local.get = originalGet;
+    }
+  });
+
+  // At the shipped default the same single looping step runs: the run keeps going.
+  test('a single looping step does not pause at the default threshold', async () => {
+    const originalCompute = window.gv2ComputeMechanicalConfidence;
+    window.gv2ComputeMechanicalConfidence = () => ({ confidence: 0.95, grounding: 0.95, loop: 0.31, loopMatches: 4 });
+    window._guidev2.paused = false;
+    window._guidev2.loopStepCount = 0;
+    try {
+      await window.gv2ProcessResponse(JSON.stringify({
+        step: 1,
+        thought: 'Potential loop',
+        instruction: 'Click the same menu again',
+        element: { name: null, index: 2, text: 'Languages' },
+        action: 'click'
+      }));
+      expect(window._guidev2.paused).toBe(false);
     } finally {
       window.gv2ComputeMechanicalConfidence = originalCompute;
     }
@@ -3975,6 +4614,36 @@ describe('_doCaptureScreenshot active-tab guard (background/service-worker.js)',
     const result = await window._doCaptureScreenshot(7, 1);
     expect(result.error).toMatch(/Screenshot failed/);
   });
+
+  describe('_truncatedOutputError (max_tokens truncation)', () => {
+    test('reports finish_reason=length as an error instead of returning a cut-off step', () => {
+      // A guide step cut off by max_tokens is unparseable JSON; previously it was handed back as
+      // content and surfaced downstream as the misleading "Could not parse step JSON".
+      const data = { choices: [{ finish_reason: 'length', message: { content: '{"thought": "The user wa' } }] };
+      const err = window._truncatedOutputError(data, 'OpenRouter');
+      expect(err).toEqual({ error: expect.stringMatching(/OpenRouter response was truncated \(max_tokens reached\)/) });
+    });
+
+    test('reasoning_effort is only sent to OpenAI reasoning families', () => {
+      expect(window._openaiReasoningParams('gpt-5.4-mini')).toEqual({ reasoning_effort: 'low' });
+      expect(window._openaiReasoningParams('o4-mini')).toEqual({ reasoning_effort: 'low' });
+      expect(window._openaiReasoningParams('gpt-4o')).toEqual({});
+    });
+
+    test('_applyModelOverride pins provider/model for one call without touching keys', () => {
+      const base = { provider: 'gemini', geminiModel: 'g', openrouterModel: 'o', openrouterApiKey: 'k' };
+      expect(window._applyModelOverride(base, { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.5' }))
+        .toEqual({ provider: 'openrouter', geminiModel: 'g', openrouterModel: 'anthropic/claude-sonnet-4.5', openrouterApiKey: 'k' });
+      expect(window._applyModelOverride(base, { provider: 'bogus', model: 'x' })).toEqual(base);
+      expect(window._applyModelOverride(base, null)).toEqual(base);
+    });
+
+    test('passes complete responses through', () => {
+      expect(window._truncatedOutputError({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] }, 'OpenAI')).toBeNull();
+      expect(window._truncatedOutputError({}, 'OpenAI')).toBeNull();
+      expect(window._truncatedOutputError(null, 'OpenAI')).toBeNull();
+    });
+  });
 });
 
 describe('Save Chat captures every answer type (sidepanel/panel.js)', () => {
@@ -4138,14 +4807,6 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
     });
   });
 
-  describe('_shuffleStudyOptions', () => {
-    test('is a pure permutation (same elements, injectable RNG for determinism)', () => {
-      const input = ['a', 'b', 'c', 'd'];
-      const shuffled = window._shuffleStudyOptions(input, () => 0.999); // deterministic RNG
-      expect(shuffled.slice().sort()).toEqual(input.slice().sort());
-      expect(input).toEqual(['a', 'b', 'c', 'd']); // does not mutate the input
-    });
-  });
 
   describe('_studyEvidencePrompts', () => {
     test('falls back to the generic pair for a task with no type', () => {
@@ -4232,6 +4893,60 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
   });
 
   describe('_buildStudyResultRecord', () => {
+    // V2 Find is a VERDICT on the answer shown. Grading it against a fixed property of the question
+    // would mark half the study backwards, because the same question is dealt correct to one
+    // participant and incorrect to the next.
+    describe('a V2 find verdict', () => {
+      const verdict = (answer, variantKey) => window._buildStudyResultRecord({
+        participantId: 'P07', sessionId: 42, taskIndex: 0, blockIndex: 0, questionIndex: 0,
+        totalTasks: 4, taskType: 'find',
+        task: { id: 'MARS-v1', type: 'FIND x TEXT', question: 'What is the sum?', answer: '20' },
+        condition: 'grounding', elapsedMs: 1000, answer, variantKey,
+        claimTextSnapshot: 'The value is 15.',
+        evidenceResponses: [], chatSnapshot: null, behaviorData: null,
+      });
+
+      test('is graded against the cell that was shown, not the task answer', () => {
+        // "15" is the wrong answer for MARS-v1, and the participant correctly said so.
+        expect(verdict('no', 'incorrect_grounding').answer_correct).toBe(true);
+        expect(verdict('yes', 'incorrect_grounding').answer_correct).toBe(false);
+        // The identical question dealt the other way round grades the opposite way.
+        expect(verdict('yes', 'correct_grounding').answer_correct).toBe(true);
+        expect(verdict('no', 'correct_grounding').answer_correct).toBe(false);
+      });
+
+      test('records the verdict, the cell and the wording that was judged', () => {
+        const r = verdict('no', 'incorrect_nongrounding');
+        expect(r.participant_verdict).toBe(false);
+        expect(r.variant_key).toBe('incorrect_nongrounding');
+        expect(r.claim_text_snapshot).toBe('The value is 15.');
+        expect(r.answer).toBe('no');
+      });
+
+      // study_task_results has no column for the assignment, so it has to survive inside task_data
+      // or a V1 row becomes uninterpretable.
+      test('the assignment survives inside task_data for the V1 table', () => {
+        const r = verdict('yes', 'correct_grounding');
+        expect(r.task_data.variant_key).toBe('correct_grounding');
+        expect(r.task_data.participant_verdict).toBe(true);
+        expect(r.task_data.id).toBe('MARS-v1');   // the task itself is still there
+      });
+
+      // A bank replayed without an assignment has nothing to score a verdict against; grading 'yes'
+      // as a wrong option string would silently fill the column with falses.
+      test('with no cell dealt it falls back to the V1 option grading', () => {
+        const r = window._buildStudyResultRecord({
+          participantId: 'P07', taskIndex: 0, questionIndex: 0, totalTasks: 1, taskType: 'find',
+          task: { id: 'MARS-v1', question: 'q', answer: '20' },
+          condition: 'grounding', elapsedMs: 1, answer: '20',
+          evidenceResponses: [], chatSnapshot: null, behaviorData: null,
+        });
+        expect(r.answer_correct).toBe(true);
+        expect(r.variant_key).toBeNull();
+        expect(r.participant_verdict).toBeNull();
+      });
+    });
+
     test('grades a find task and fills in interaction/chat counts', () => {
       const record = window._buildStudyResultRecord({
         participantId: 'P07',
@@ -4402,7 +5117,7 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       ]);
       const lines = csv.split('\n');
       expect(lines[0]).toBe(
-        'tool,participant_id,session_id,condition,block_index,task_index,question_index,task_id,task_type,question_or_task,url,time_ms,notes_time_ms,answer_time_ms,answer_multiple_choice_ms,find_supporting_answer_ms,evidence_responses,guide_answer_correct,guide_answer_problems,guide_answer_problem,guide_errors,score_verdict_correct,score_problem_precision,score_problem_recall,score_problem_exact,score_type_precision,score_type_recall,score_step_precision,score_step_recall,score_step_exact,score_no_error_agreement,answer,answer_correct,confidence,helpfulness,chat_turn_count,scroll_user_count,scroll_agent_count,ctrl_f_count,text_select_count,click_count,mouse_move_px,agent_think_ms,page_visit_count,page_visit_urls,completed_at'
+        'tool,participant_id,session_id,condition,block_index,task_index,question_index,task_id,task_type,question_or_task,url,time_ms,notes_time_ms,answer_time_ms,answer_multiple_choice_ms,find_supporting_answer_ms,evidence_responses,guide_answer_correct,guide_answer_problems,guide_answer_problem,guide_errors,score_verdict_correct,score_problem_precision,score_problem_recall,score_problem_exact,score_type_precision,score_type_recall,score_step_precision,score_step_recall,score_step_exact,score_no_error_agreement,answer,answer_correct,variant_key,participant_verdict,confidence,helpfulness,chat_turn_count,scroll_user_count,scroll_agent_count,ctrl_f_count,text_select_count,click_count,mouse_move_px,agent_think_ms,page_visit_count,page_visit_urls,completed_at'
       );
       expect(lines[1]).toContain('"a, b"');
       // page_visit_urls is an array — JSON-stringified, then CSV-quoted since that JSON contains
@@ -5247,7 +5962,9 @@ describe('Per-tab guide session isolation (background/service-worker.js)', () =>
         onConnect: { addListener: jest.fn() },
         onMessage: { addListener: jest.fn() },
         sendMessage: jest.fn(),
-        getPlatformInfo: jest.fn()
+        getPlatformInfo: jest.fn(),
+        // OpenRouter calls set HTTP-Referer from this; without it every OpenRouter path throws.
+        getURL: () => 'chrome-extension://pageguide-test/'
       },
       tabs: {
         onCreated: { addListener: jest.fn() },
@@ -5306,35 +6023,122 @@ describe('Per-tab guide session isolation (background/service-worker.js)', () =>
     expect(send('guidanceV2_isOwner', {}, { tab: { id: 2 } })).toEqual({ isOwner: true });
   });
 
-  test('image selector falls back to OpenRouter when direct Gemini rejects the key', async () => {
-    window.chrome.storage.sync.get.mockResolvedValue({
-      geminiApiKey: 'bad-gemini-key',
-      openrouterApiKey: 'valid-openrouter-key'
-    });
-    const originalFetch = window.fetch;
-    window.fetch = jest.fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        json: async () => ({ error: { message: 'API key not valid. Please pass a valid API key.' } })
-      })
-      .mockResolvedValueOnce({
+  // Switching the model in Settings has to switch it for the WHOLE Find run. These two helpers
+  // used to be pinned to Gemini 2.5 Flash / Flash Lite, so a run on an OpenRouter model still sent
+  // its routing and its image-selection prompts to Gemini — a second vendor, a second key, and a
+  // study record that named the wrong model.
+  describe('every Find step runs on the selected model', () => {
+    const openrouterSettings = {
+      provider: 'openrouter',
+      openrouterApiKey: 'valid-openrouter-key',
+      openrouterModel: 'mistralai/ministral-8b-2512'
+    };
+
+    test('the image selector calls the selected provider with the selected model', async () => {
+      window.chrome.storage.sync.get.mockResolvedValue(openrouterSettings);
+      const originalFetch = window.fetch;
+      window.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: async () => ({ choices: [{ message: { content: '{"selected_image_ids":["page_image_1"]}' } }] })
       });
 
-    try {
-      const out = await window.callImageSelectionLLM([{ role: 'user', content: 'Question\n- page_image_1: title' }], 'select');
+      try {
+        const out = await window.callImageSelectionLLM(
+          [{ role: 'user', content: 'Question\n- page_image_1: title' }], 'select');
 
-      expect(out).toMatchObject({
-        content: '{"selected_image_ids":["page_image_1"]}',
-        provider: 'openrouter',
-        model: 'google/gemini-2.5-flash-lite'
+        expect(out).toMatchObject({
+          content: '{"selected_image_ids":["page_image_1"]}',
+          provider: 'openrouter',
+          model: 'mistralai/ministral-8b-2512'
+        });
+        expect(window.fetch).toHaveBeenCalledTimes(1);
+        const [url, init] = window.fetch.mock.calls[0];
+        expect(url).toContain('openrouter.ai');
+        expect(init.headers.Authorization).toBe('Bearer valid-openrouter-key');
+        expect(JSON.parse(init.body).model).toBe('mistralai/ministral-8b-2512');
+      } finally {
+        window.fetch = originalFetch;
+      }
+    });
+
+    test('the router calls the selected provider with the selected model', async () => {
+      window.chrome.storage.sync.get.mockResolvedValue(openrouterSettings);
+      const originalFetch = window.fetch;
+      window.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'FIND' } }] })
       });
-      expect(window.fetch).toHaveBeenCalledTimes(2);
-      expect(window.fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer valid-openrouter-key');
-    } finally {
-      window.fetch = originalFetch;
-    }
+
+      try {
+        const out = await window.callRouterLLM([{ role: 'user', content: 'where is X' }], 'route');
+
+        expect(out).toMatchObject({
+          content: 'FIND',
+          provider: 'openrouter',
+          model: 'mistralai/ministral-8b-2512'
+        });
+        expect(JSON.parse(window.fetch.mock.calls[0][1].body).model)
+          .toBe('mistralai/ministral-8b-2512');
+      } finally {
+        window.fetch = originalFetch;
+      }
+    });
+
+    test('neither helper reaches for Gemini when Gemini is not the selected provider', async () => {
+      window.chrome.storage.sync.get.mockResolvedValue({
+        ...openrouterSettings,
+        geminiApiKey: 'a-gemini-key-that-must-not-be-used'
+      });
+      const originalFetch = window.fetch;
+      window.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] })
+      });
+
+      try {
+        await window.callRouterLLM([{ role: 'user', content: 'q' }], '');
+        await window.callImageSelectionLLM([{ role: 'user', content: 'q' }], '');
+        for (const [url] of window.fetch.mock.calls) {
+          expect(String(url)).not.toContain('generativelanguage.googleapis.com');
+        }
+      } finally {
+        window.fetch = originalFetch;
+      }
+    });
+
+    test('an error from the selected provider is passed through unannotated', async () => {
+      window.chrome.storage.sync.get.mockResolvedValue(openrouterSettings);
+      const originalFetch = window.fetch;
+      window.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ error: { message: 'No endpoints found for mistralai/nope' } })
+      });
+
+      try {
+        const out = await window.callImageSelectionLLM([{ role: 'user', content: 'q' }], '');
+        expect(out.error).toContain('No endpoints found');
+        expect(out.content).toBeUndefined();
+      } finally {
+        window.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe('selectedProviderModel (background/service-worker.js)', () => {
+    test('reads the picked model for each provider', () => {
+      expect(window.selectedProviderModel({ provider: 'openai', openaiModel: 'gpt-5.4-mini' }))
+        .toEqual({ provider: 'openai', model: 'gpt-5.4-mini' });
+      expect(window.selectedProviderModel({ provider: 'gemini', geminiModel: 'gemini-3.7-flash' }))
+        .toEqual({ provider: 'gemini', model: 'gemini-3.7-flash' });
+      // A model belonging to another provider is never borrowed.
+      expect(window.selectedProviderModel({ provider: 'openrouter', geminiModel: 'gemini-3.7-flash' }).model)
+        .not.toBe('gemini-3.7-flash');
+    });
+
+    test('falls back to the provider default when nothing is picked', () => {
+      const out = window.selectedProviderModel({ provider: 'gemini' });
+      expect(out.model).toBeTruthy();
+    });
   });
 
   test('REGRESSION: clearing one tab (e.g. Stop, or the panel resetting a DIFFERENT tab it just switched to) does not clear another tab\'s active guide', () => {
@@ -5502,8 +6306,10 @@ describe('loop step threshold (content/tasks/guidev2.js)', () => {
   });
 
   describe('_gv2LoopStepThreshold', () => {
-    test('defaults to 1 — what the guard did before it was configurable', async () => {
-      expect(await window._gv2LoopStepThreshold()).toBe(1);
+    // Was 1 — stop on the first repeat-looking step — which paused runs that were still making
+    // progress (a search box that had not submitted yet scores as a loop). Six in a row is a loop.
+    test('defaults to 6', async () => {
+      expect(await window._gv2LoopStepThreshold()).toBe(6);
     });
 
     test('reads the stored setting', async () => {
@@ -5522,12 +6328,21 @@ describe('loop step threshold (content/tasks/guidev2.js)', () => {
       window.chrome.storage.local.get = jest.fn(async () => ({ guideLoopStepThreshold: 2.6 }));
       expect(await window._gv2LoopStepThreshold()).toBe(3);
       window.chrome.storage.local.get = jest.fn(async () => ({ guideLoopStepThreshold: 'lots' }));
-      expect(await window._gv2LoopStepThreshold()).toBe(1);
+      expect(await window._gv2LoopStepThreshold()).toBe(6);
     });
 
-    test('falls back to 1 when storage is unreadable', async () => {
+    test('falls back to the default when storage is unreadable', async () => {
       window.chrome.storage.local.get = jest.fn(async () => { throw new Error('no access'); });
-      expect(await window._gv2LoopStepThreshold()).toBe(1);
+      expect(await window._gv2LoopStepThreshold()).toBe(6);
+    });
+
+    // Both dials sit in the Guide section of Options, not behind the debug code.
+    test('the loop threshold and the step cap are both editable without debug mode', () => {
+      const html = fs.readFileSync(path.join(__dirname, '../../options/options.html'), 'utf8');
+      const debugGroupAt = html.indexOf('id="debugToggleGroup"');
+      expect(debugGroupAt).toBeGreaterThan(-1);
+      expect(html.indexOf('id="guideLoopStepThreshold"')).toBeLessThan(debugGroupAt);
+      expect(html.indexOf('id="maxSteps"')).toBeLessThan(debugGroupAt);
     });
   });
 
@@ -5544,12 +6359,14 @@ describe('loop step threshold (content/tasks/guidev2.js)', () => {
     expect(stopsAt([0.4, 0.4, 0.1, 0.4, 0.4], 3)).toBe(-1);   // the clean step reset it
   });
 
-  test('the setting is offered in Debug Mode, with a handler that stores it', () => {
+  test('the setting is offered in the Guide section, with a handler that stores it', () => {
     const html = fs.readFileSync(path.join(__dirname, '../../options/options.html'), 'utf8');
     const js = fs.readFileSync(path.join(__dirname, '../../options/options.js'), 'utf8');
-    // Inside debugToggleGroup — this is a researcher's dial, not a general preference.
+    // Out of debugToggleGroup: how much repetition is normal is a property of the SITE, so the
+    // person running the guide has to be able to answer it without a debug code.
     const debugBlock = html.slice(html.indexOf('id="debugToggleGroup"'));
-    expect(debugBlock).toContain('id="guideLoopStepThreshold"');
+    expect(debugBlock).not.toContain('id="guideLoopStepThreshold"');
+    expect(html).toContain('id="guideLoopStepThreshold"');
     expect(js).toContain('guideLoopStepThreshold: value');
   });
 });
@@ -6280,6 +7097,9 @@ describe('Citation numbering for evidence crops (content/tasks/ask.js)', () => {
 
 describe('parseCitations malformed placeholder citations (sidepanel/panel.js)', () => {
   beforeAll(() => {
+    // The marker repair lives in content/utils.js — the one file both the panel and the content
+    // scripts load — so the panel is not tested against a normaliser it would not have at runtime.
+    if (!window.normalizeCitationMarkers) loadScript('content/utils.js');
     if (!window.parseCitations) loadScript('sidepanel/panel.js');
   });
 
@@ -6297,6 +7117,83 @@ describe('parseCitations malformed placeholder citations (sidepanel/panel.js)', 
 
     expect(html).not.toContain('[N:');
     expect(html).toContain('a dead top and a flattened crown.');
+  });
+
+  // REGRESSION: a model that copies the [N:"text"] template literally writes the letter where the
+  // number goes and the number where the quote goes — [N:195]. The citation pattern requires the
+  // bracket to start with digits, so the marker rendered as raw text and the reader lost the link
+  // to the evidence entirely. The index is present, so it is repaired rather than dropped.
+  test('a placeholder citation carrying a real index still becomes a link', () => {
+    const html = window.parseCitations("The last letter is 'm' from 'Malachowsky' [N:195].");
+
+    expect(html).not.toContain('[N:');
+    expect(html).toContain('data-index="195"');
+    expect(html).toContain('citation-index');
+  });
+
+  describe('_normalizePlaceholderCitationIndices', () => {
+    const norm = (t) => window._normalizePlaceholderCitationIndices(t);
+
+    test('rewrites the shapes a model reaches for when it means "index"', () => {
+      expect(norm('[N:195]')).toBe('[195]');
+      expect(norm('[n = 195, 197]')).toBe('[195, 197]');
+      expect(norm('[#195]')).toBe('[195]');
+      // Letter, number AND quote — everything is there, just in the wrong order.
+      expect(norm('[N:195:"Malachowsky"]')).toBe('[195:"Malachowsky"]');
+    });
+
+    test('leaves well-formed citations exactly as they are', () => {
+      expect(norm('[195]')).toBe('[195]');
+      expect(norm('[195:"ok"]')).toBe('[195:"ok"]');
+      expect(norm('a sentence with no citation')).toBe('a sentence with no citation');
+    });
+
+    // [idx:…] is a real format of its own (element ranges), parsed further up. Rewriting it would
+    // turn a range citation into a broken index one.
+    test('never touches [idx:…] range citations', () => {
+      expect(norm('[idx:1-2, 38-42]')).toBe('[idx:1-2, 38-42]');
+    });
+
+    // No index means nothing to link to: this one stays for the stripper to deal with.
+    test('leaves an index-less placeholder alone', () => {
+      expect(norm('[N:"Malachowsky"]')).toBe('[N:"Malachowsky"]');
+    });
+  });
+
+  // REGRESSION: a model citing two elements for one claim packs them into one bracket. The panel's
+  // pattern took the first index and swallowed the rest as the quote — one chip reading
+  // `"approach", 766:"Oxford University"` — and the anchor resolver, which needs the bracket to
+  // close after the quote, matched neither and highlighted nothing.
+  describe('_splitCompoundCitations', () => {
+    const split = (t) => window._splitCompoundCitations(t);
+
+    test('splits a bracket holding several index:"quote" pairs', () => {
+      expect(split('[281:"approach", 766:"Oxford University"]'))
+        .toBe('[281:"approach"][766:"Oxford University"]');
+      expect(split('[1:"x", 2:"y", 3:"z"]')).toBe('[1:"x"][2:"y"][3:"z"]');
+      expect(split("[1:'x', 2:'y']")).toBe('[1:"x"][2:"y"]');
+    });
+
+    // A quote of its own may contain a comma; splitting on the comma would tear it in half.
+    test('a single citation is left alone, comma in the quote included', () => {
+      expect(split('[94:"a, b"]')).toBe('[94:"a, b"]');
+      expect(split('[281:"approach"]')).toBe('[281:"approach"]');
+    });
+
+    test('brackets that are not citations are untouched', () => {
+      expect(split('[idx:1-2, 38-42]')).toBe('[idx:1-2, 38-42]');
+      expect(split('[12]')).toBe('[12]');
+      expect(split('[ev:portrait_beard]')).toBe('[ev:portrait_beard]');
+    });
+  });
+
+  test('both citations in a compound bracket become their own chip', () => {
+    const html = window.parseCitations('The difference is 8 [281:"approach", 766:"Oxford University"].');
+
+    expect(html).toContain('data-index="281"');
+    expect(html).toContain('data-index="766"');
+    // The second index must not end up inside the first chip's quote.
+    expect(html).not.toContain('766:');
   });
 });
 
@@ -6955,6 +7852,131 @@ describe('Per-answer debug chip (sidepanel/panel.js)', () => {
   });
 
   afterEach(() => { window.__pgDebugEnabled = false; });
+
+  // Loop / Plan / the model's own element text are researcher instrumentation: a participant sees
+  // only Grounding and the DOM text of what was acted on.
+  // The participant's step card is a plain record of what happened — screenshot, which step, what
+  // it did. Anything that grades the step (confidence, scores, review status) or re-runs it
+  // ("Inspect more", "Restore here") is researcher instrumentation.
+  // The composer a participant sees carries no researcher controls: the prompt viewer, the branch
+  // tree, and the two user-study A/B toggles (Grounding, Evidence) are the researcher's, and the
+  // run's arm must not be changeable from the composer mid-session.
+  describe('updateDebugButtonVisibility', () => {
+    const COMPOSER = `
+      <button id="pageguide-debug-prompt-btn" style="display:none;"></button>
+      <button id="pageguide-show-branch-btn" style="display:none;"></button>
+      <div class="pageguide-mode-wrap pageguide-nongrounding-wrap" style="display:none;"></div>
+      <div class="pageguide-mode-wrap pageguide-evidencemode-wrap" style="display:none;"></div>
+      <button class="pageguide-quick-btn pageguide-save-trajectory-btn" style="display:none;"></button>
+      <button class="pageguide-capture-study-btn" style="display:none;"></button>
+      <span class="pageguide-cost-chip">💰 $0.0213</span>`;
+    const shown = (selector) => document.querySelector(selector).style.display !== 'none';
+
+    beforeEach(() => { document.body.innerHTML = COMPOSER; });
+    afterAll(() => { document.body.innerHTML = ''; });
+
+    test('hides every researcher control when debug is off', () => {
+      window.updateDebugButtonVisibility(true);
+      window.updateDebugButtonVisibility(false);
+      for (const sel of [
+        '#pageguide-debug-prompt-btn',
+        '#pageguide-show-branch-btn',
+        '.pageguide-nongrounding-wrap',
+        '.pageguide-evidencemode-wrap',
+        '.pageguide-save-trajectory-btn',
+        '.pageguide-capture-study-btn',
+        '.pageguide-cost-chip'
+      ]) {
+        expect([sel, shown(sel)]).toEqual([sel, false]);
+      }
+      expect(document.querySelector('.pageguide-cost-chip').textContent).toBe('');
+    });
+
+    test('brings the study toggles back with debug on', () => {
+      window.updateDebugButtonVisibility(true);
+      expect(shown('#pageguide-debug-prompt-btn')).toBe(true);
+      expect(shown('.pageguide-nongrounding-wrap')).toBe(true);
+      expect(shown('.pageguide-evidencemode-wrap')).toBe(true);
+      expect(shown('.pageguide-save-trajectory-btn')).toBe(true);
+    });
+
+    // The options checkbox used to force the prompt viewer into a participant's composer.
+    test('the alwaysShowPromptBtn option cannot force the prompt viewer past the debug gate', () => {
+      window.updateDebugButtonVisibility(false, true);
+      expect(shown('#pageguide-debug-prompt-btn')).toBe(false);
+    });
+  });
+
+  describe('_buildGoalTimelineRow', () => {
+    const doneStep = { status: 'done', verify: 'success' };
+    const highConfidence = { confidence: 0.92 };
+
+    test('the status dot carries no grade outside debug mode', () => {
+      window.__pgDebugEnabled = false;
+      const dot = window._buildGoalTimelineRow(2, 'Click Search', doneStep, highConfidence, false)
+        .querySelector('.pageguide-goal-row-dot');
+      expect(dot.classList.contains('simple')).toBe(true);
+      expect(dot.classList.contains('done')).toBe(true);
+      expect(dot.classList.contains('conf-high')).toBe(false);
+      expect(dot.classList.contains('conf-med')).toBe(false);
+      expect(dot.classList.contains('review')).toBe(false);
+      expect(dot.classList.contains('verify-success')).toBe(false);
+    });
+
+    test('debug mode gets the confidence, review and verify rings back', () => {
+      window.__pgDebugEnabled = true;
+      const dot = window._buildGoalTimelineRow(2, 'Click Search', doneStep, highConfidence, false)
+        .querySelector('.pageguide-goal-row-dot');
+      expect(dot.classList.contains('simple')).toBe(false);
+      expect(dot.classList.contains('conf-high')).toBe(true);
+      expect(dot.classList.contains('verify-success')).toBe(true);
+    });
+
+    // A step that scored badly must not shout at a participant either.
+    test('a misgrounded step still reads neutral outside debug mode', () => {
+      window.__pgDebugEnabled = false;
+      const row = window._buildGoalTimelineRow(3, 'Type query', { status: 'done' }, { confidence: 0.4, mechGrounding: 0.2 }, false);
+      const dot = row.querySelector('.pageguide-goal-row-dot');
+      expect(dot.classList.contains('review')).toBe(false);
+      expect(dot.classList.contains('conf-med')).toBe(false);
+      expect(row.title).toBe('Type query'); // no "— Misgrounded" suffix
+    });
+  });
+
+  describe('_guideStepScoresHtml', () => {
+    const rec = {
+      action: 'click',
+      mechGrounding: 0.81,
+      mechLoop: 0,
+      loopMatches: 0,
+      planCompleted: 1,
+      planTotal: 3,
+      llmElementText: 'Search',
+      domElementText: 'Search'
+    };
+
+    test('renders nothing outside debug mode', () => {
+      window.__pgDebugEnabled = false;
+      expect(window._guideStepScoresHtml(rec, false, 3)).toBe('');
+    });
+
+    test('shows the full breakdown in debug mode', () => {
+      window.__pgDebugEnabled = true;
+      const html = window._guideStepScoresHtml(rec, false, 3);
+      expect(html).toContain('Grounding:');
+      expect(html).toContain('Loop:');
+      expect(html).toContain('(0/10 matches)');
+      expect(html).toContain('1/3');
+      expect(html).toContain('LLM text:');
+      expect(html).toContain('DOM text:');
+    });
+
+    test('renders nothing for the initial-state node or a scoreless action', () => {
+      window.__pgDebugEnabled = true;
+      expect(window._guideStepScoresHtml(rec, true, 3)).toBe('');
+      expect(window._guideStepScoresHtml({ action: 'navigate', mechGrounding: 0.8 }, false, 3)).toBe('');
+    });
+  });
 
   describe('_debugRangeForAnswer', () => {
     const entries = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
@@ -9083,6 +10105,478 @@ describe('Guide trajectories (sidepanel/guide_trajectories.js)', () => {
   });
 });
 
+// ===== V2 FIND: TWO GROUPS, FOUR CELLS, ONE YES/NO VERDICT =====
+// V1 asked the participant to find the answer and pick it from four options. V2 shows them an agent
+// answer and asks only whether it is right — so the thing that has to be fair is WHICH answer they
+// are shown, which is what the assignment below decides.
+describe('V2 Find assignment (sidepanel/study.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {};
+    window.chrome.storage = window.chrome.storage || { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } };
+    loadScript('sidepanel/study.js');
+  });
+
+  // The two files spell the four cells separately (study.js loads first and cannot reach the
+  // other's constant at load time), so they are pinned to each other here.
+  test('the deal order is the same four cells the response bank uses', () => {
+    loadScript('sidepanel/study_responses.js');
+    expect(window.STUDY_FIND_CELLS).toEqual(window.STUDY_V2_VARIANTS);
+  });
+
+  test('groups alternate by slot — 1st A, 2nd B, 3rd A', () => {
+    expect([0, 1, 2, 3, 4].map(window._studyGroupForSlot)).toEqual(['A', 'B', 'A', 'B', 'A']);
+  });
+
+  test('group A is the text questions and group B the visual ones', () => {
+    expect(window.STUDY_FIND_GROUPS.A.taskStyle).toBe('find_text');
+    expect(window.STUDY_FIND_GROUPS.B.taskStyle).toBe('find_visual');
+  });
+
+  // tasks.json writes "FIND X VISUAL" and "FIND x TEXT" — matching case-sensitively would put every
+  // visual question into the text group and empty the visual one.
+  test('task style survives the inconsistent casing in tasks.json', () => {
+    expect(window._findTaskStyle({ type: 'FIND X VISUAL' })).toBe('find_visual');
+    expect(window._findTaskStyle({ type: 'FIND x TEXT' })).toBe('find_text');
+    expect(window._findTaskStyle({})).toBe('find_text');
+  });
+
+  describe('_dealFindVariants', () => {
+    test('a four-question sitting covers every cell exactly once', () => {
+      const dealt = window._dealFindVariants(4, 0);
+      expect(dealt.slice().sort()).toEqual(window.STUDY_FIND_CELLS.slice().sort());
+    });
+
+    // THE property the design rests on: half the answers a participant judges are wrong. If they
+    // were mostly right, "said yes" and "was correct" stop being distinguishable.
+    test('every full sitting is half correct and half incorrect, half grounded and half bare', () => {
+      for (const slot of [0, 1, 2, 3, 7, 12]) {
+        for (const count of [4, 8, 12]) {
+          const dealt = window._dealFindVariants(count, slot);
+          expect(dealt.filter(v => v.startsWith('correct')).length).toBe(count / 2);
+          expect(dealt.filter(v => v.endsWith('_grounding')).length).toBe(count / 2);
+        }
+      }
+    });
+
+    test('the starting cell rotates with the slot, so no question is always the wrong one', () => {
+      expect(window._dealFindVariants(4, 0)[0]).toBe('correct_grounding');
+      expect(window._dealFindVariants(4, 1)[0]).toBe('correct_nongrounding');
+      expect(window._dealFindVariants(4, 2)[0]).toBe('incorrect_grounding');
+      expect(window._dealFindVariants(4, 3)[0]).toBe('incorrect_nongrounding');
+      expect(window._dealFindVariants(4, 4)[0]).toBe('correct_grounding');
+    });
+  });
+
+  // Six questions dealt round robin would be four correct and two incorrect. A lopsided sitting is
+  // worse than a shorter one, so the remainder is held back rather than run.
+  describe('_balancedFindCount', () => {
+    test('keeps only whole four-cell rounds', () => {
+      expect(window._balancedFindCount(6)).toBe(4);
+      expect(window._balancedFindCount(4)).toBe(4);
+      expect(window._balancedFindCount(8)).toBe(8);
+      expect(window._balancedFindCount(3)).toBe(0);
+      expect(window._balancedFindCount(0)).toBe(0);
+    });
+  });
+
+  describe('_assignFindSession', () => {
+    const bank = [
+      { id: 'T1', type: 'FIND x TEXT' }, { id: 'T2', type: 'FIND x TEXT' },
+      { id: 'T3', type: 'FIND x TEXT' }, { id: 'T4', type: 'FIND x TEXT' },
+      { id: 'T5', type: 'FIND x TEXT' }, { id: 'T6', type: 'FIND x TEXT' },
+      { id: 'V1', type: 'FIND X VISUAL' }, { id: 'V2', type: 'FIND X VISUAL' },
+      { id: 'V3', type: 'FIND X VISUAL' }, { id: 'V4', type: 'FIND X VISUAL' },
+      { id: 'V5', type: 'FIND X VISUAL' }, { id: 'V6', type: 'FIND X VISUAL' },
+    ];
+
+    test('a participant does ONE task style, never both', () => {
+      const a = window._assignFindSession(bank, 0);
+      expect(a.group).toBe('A');
+      expect(a.tasks.every(t => t.type.toLowerCase().includes('text'))).toBe(true);
+
+      const b = window._assignFindSession(bank, 1);
+      expect(b.group).toBe('B');
+      expect(b.tasks.every(t => t.type.toLowerCase().includes('visual'))).toBe(true);
+    });
+
+    test('a six-question bank runs four and says two were held back', () => {
+      const a = window._assignFindSession(bank, 0);
+      expect(a.tasks).toHaveLength(4);
+      expect(a.variants).toHaveLength(4);
+      expect(a.heldBack).toBe(2);
+    });
+
+    test('two participants in the same group do not get the same four questions', () => {
+      const first = window._assignFindSession(bank, 0).tasks.map(t => t.id);
+      const third = window._assignFindSession(bank, 2).tasks.map(t => t.id);
+      expect(first).not.toEqual(third);
+    });
+
+    test('an empty bank yields an empty sitting rather than a broken one', () => {
+      const none = window._assignFindSession([], 0);
+      expect(none.tasks).toEqual([]);
+      expect(none.variants).toEqual([]);
+    });
+  });
+
+  // Scored against what was SHOWN. The same question is correct for one participant and incorrect
+  // for the next, so grading against a fixed property of the question would mark half the study
+  // backwards.
+  describe('_gradeFindVerdict', () => {
+    test('saying yes to a correct answer is right; saying no to it is wrong', () => {
+      expect(window._gradeFindVerdict(true, 'correct_grounding')).toBe(true);
+      expect(window._gradeFindVerdict(false, 'correct_grounding')).toBe(false);
+      expect(window._gradeFindVerdict(true, 'correct_nongrounding')).toBe(true);
+    });
+
+    test('saying no to an incorrect answer is right; saying yes to it is wrong', () => {
+      expect(window._gradeFindVerdict(false, 'incorrect_grounding')).toBe(true);
+      expect(window._gradeFindVerdict(true, 'incorrect_grounding')).toBe(false);
+      expect(window._gradeFindVerdict(false, 'incorrect_nongrounding')).toBe(true);
+    });
+
+    test('grounding does not affect the grade — only correctness does', () => {
+      for (const cell of ['correct_grounding', 'correct_nongrounding']) {
+        expect(window._gradeFindVerdict(true, cell)).toBe(true);
+      }
+      for (const cell of ['incorrect_grounding', 'incorrect_nongrounding']) {
+        expect(window._gradeFindVerdict(true, cell)).toBe(false);
+      }
+    });
+  });
+});
+
+// The V2 results table records a JUDGEMENT — what was shown, what the participant said, whether
+// that was right — where V1 recorded a produced answer. So this is a mapping, not a copy.
+describe('_buildFindV2ResultRow (sidepanel/study.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {};
+    window.chrome.storage = window.chrome.storage || { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } };
+    loadScript('sidepanel/study.js');
+  });
+
+  const row = (over = {}) => window._buildFindV2ResultRow(Object.assign({
+    participant_id: 'P07',
+    task_id: 'MARS-v1',
+    task_index: 2,
+    question_index: 2,
+    condition: 'grounding',
+    variant_key: 'incorrect_grounding',
+    question_or_task: 'What is the sum?',
+    claim_text_snapshot: 'The value is 15.',
+    participant_verdict: false,
+    answer_correct: true,
+    answer_time_ms: 41000,
+    answer_multiple_choice_ms: 20000,
+    find_supporting_answer_ms: 21000,
+    evidence_responses: [{ hop: 1 }],
+    confidence: 'high',
+    helpfulness: 'somewhat',
+    scroll_user_count: 12,
+    click_count: 3,
+    task_data: { type: 'FIND x TEXT' },
+  }, over), { sessionId: 9, clientRunId: 'run1' });
+
+  // What the item WAS is read off the cell, never off the question — the same question is correct
+  // for one participant and incorrect for the next.
+  test('claim_correct_snapshot comes from the cell that was shown', () => {
+    expect(row({ variant_key: 'incorrect_grounding' }).claim_correct_snapshot).toBe(false);
+    expect(row({ variant_key: 'incorrect_nongrounding' }).claim_correct_snapshot).toBe(false);
+    expect(row({ variant_key: 'correct_grounding' }).claim_correct_snapshot).toBe(true);
+    expect(row({ variant_key: 'correct_nongrounding' }).claim_correct_snapshot).toBe(true);
+  });
+
+  test('the verdict and its grade ride across unchanged', () => {
+    const r = row();
+    expect(r.participant_verdict).toBe(false);
+    expect(r.verdict_correct).toBe(true);      // said "no" to an incorrect answer
+    expect(r.variant_key).toBe('incorrect_grounding');
+    expect(r.claim_text_snapshot).toBe('The value is 15.');
+  });
+
+  test('the two timing halves land in their own columns', () => {
+    const r = row();
+    expect(r.answer_time_ms).toBe(41000);
+    expect(r.verdict_time_ms).toBe(20000);
+    expect(r.evidence_time_ms).toBe(21000);
+  });
+
+  test('task_style is derived from the task, not assumed', () => {
+    expect(row({ task_data: { type: 'FIND x TEXT' } }).task_style).toBe('find_text');
+    expect(row({ task_data: { type: 'FIND X VISUAL' } }).task_style).toBe('find_visual');
+  });
+
+  // The schema is explicit that these are nullable and not defaulted to zero: a row whose
+  // instrumentation never started observed nothing, and a 0 would average in as a participant who
+  // sat perfectly still.
+  test('missing interaction counters stay null rather than becoming zero', () => {
+    const r = row({ scroll_user_count: undefined, click_count: undefined });
+    expect(r.scroll_user_count).toBeNull();
+    expect(r.click_count).toBeNull();
+    expect(row().scroll_user_count).toBe(12);
+  });
+
+  // Granted anon UPDATE for exactly this reason: a retry after a dropped connection must land on
+  // the same row instead of counting the participant twice.
+  test('result_key is stable for the same attempt and distinct across tasks', () => {
+    expect(row().result_key).toBe(row().result_key);
+    expect(row({ task_id: 'EDU-v1', task_index: 3 }).result_key).not.toBe(row().result_key);
+  });
+});
+
+// ===== V2: FOUR AUTHORED ANSWERS PER ITEM =====
+// V1 authored one answer per question, always correct, in two grounding flavours. V2 counterbalances
+// correctness TOO, so every item carries four — and the thing that goes wrong quietly is a wrong
+// answer being filed as the right one, which no participant and no later query can detect.
+describe('V2 answer variants (sidepanel/study_responses.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {};
+    window.chrome.storage = window.chrome.storage || { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } };
+    loadScript('sidepanel/study_responses.js');
+  });
+
+  test('the four cells are named exactly as the schema names them', () => {
+    // These strings are jsonb keys in answer_variants and values of the variant_key CHECK
+    // constraint. Renaming one here silently stops matching the column.
+    expect(window.STUDY_V2_VARIANTS).toEqual([
+      'correct_grounding', 'correct_nongrounding',
+      'incorrect_grounding', 'incorrect_nongrounding'
+    ]);
+  });
+
+  test('grounded-ness and correctness read off the cell name', () => {
+    expect(window._variantIsGrounded('correct_grounding')).toBe(true);
+    expect(window._variantIsGrounded('incorrect_grounding')).toBe(true);
+    expect(window._variantIsGrounded('correct_nongrounding')).toBe(false);
+    expect(window._variantIsGrounded('incorrect_nongrounding')).toBe(false);
+
+    expect(window._variantCorrectness('correct_grounding')).toBe('correct');
+    expect(window._variantCorrectness('correct_nongrounding')).toBe('correct');
+    expect(window._variantCorrectness('incorrect_grounding')).toBe('incorrect');
+    expect(window._variantCorrectness('incorrect_nongrounding')).toBe('incorrect');
+  });
+
+  // REGRESSION: the first cut asked endsWith('_nongrounding'), and the V1 bare name has no prefix —
+  // so 'nongrounding' read as GROUNDED, and _buildStudyArmRecord, which asks this to decide whether
+  // to strip, banked the whole V1 non-grounding arm with its citations still in it.
+  test('the V1 arm names are still read correctly', () => {
+    expect(window._variantIsGrounded('nongrounding')).toBe(false);
+    expect(window._variantIsGrounded('grounding')).toBe(true);
+  });
+
+  // THE point of _bareTwinOf: stripping stays on its own row of the 2x2.
+  test('stripping a cell stays on its own correctness row', () => {
+    expect(window._bareTwinOf('correct_grounding')).toBe('correct_nongrounding');
+    expect(window._bareTwinOf('incorrect_grounding')).toBe('incorrect_nongrounding');
+    expect(window._groundedTwinOf('incorrect_nongrounding')).toBe('incorrect_grounding');
+  });
+
+  // REGRESSION shape: _stripStudyArmRecord used to hardcode condition: 'nongrounding', so stripping
+  // the incorrect answer filed it as the CORRECT arm's bare version — a wrong answer served as the
+  // right one, scored against the wrong key, and invisible in the data.
+  test('a stripped incorrect answer is filed as incorrect, bare, with nothing left over', () => {
+    const stripped = window._stripStudyArmRecord({
+      task_id: 'MARS-v1',
+      condition: 'incorrect_grounding',
+      answer_raw: 'The value is 15 [4:"the third letter"] and the caption [ev:cap] agrees.',
+      answer_display: 'The value is 15 [4:"the third letter"] and the caption [ev:cap] agrees.',
+      evidence: [{ key: 'cap', marks: {} }],
+      citation_anchors: [{ index: 4, quote: 'the third letter' }],
+      highlight_count: 2
+    }, 'incorrect_nongrounding');
+
+    expect(stripped.condition).toBe('incorrect_nongrounding');
+    expect(stripped.answer_raw).not.toMatch(/\[\d+:"/);
+    expect(stripped.answer_raw).not.toContain('[ev:');
+    expect(stripped.evidence).toEqual([]);
+    expect(stripped.citation_anchors).toBeNull();
+    expect(stripped.highlight_count).toBe(0);
+  });
+
+  test('with no target named it still behaves as the V1 arm did', () => {
+    const stripped = window._stripStudyArmRecord({ answer_raw: 'Bare [1:"x"] text.' });
+    expect(stripped.condition).toBe('nongrounding');
+  });
+
+  // _buildStudyArmRecord decides "strip or not" from the cell. Reading the name for 'nongrounding'
+  // exactly would have left the incorrect bare cell holding its markers.
+  test('building the incorrect bare cell strips, and the grounded one does not', () => {
+    const result = { answer: 'Because [7:"the panel"] shows it.', findEvidenceShots: [], highlightCount: 1 };
+
+    const bare = window._buildStudyArmRecord({
+      taskId: 'T1', condition: 'incorrect_nongrounding', result
+    });
+    expect(bare.answer_raw).not.toContain('[7:');
+
+    const grounded = window._buildStudyArmRecord({
+      taskId: 'T1', condition: 'incorrect_grounding', result
+    });
+    expect(grounded.answer_raw).toContain('[7:"the panel"]');
+  });
+
+  // The two banks have to see each other, in BOTH directions: a V1 recording has to show up in the
+  // correct V2 cell, and — the half that is easy to miss — the participant-facing screens still ask
+  // for the V1 arm name, so they must find a V2 recording or they go blank for every new question.
+  describe('reading across the V1 and V2 names', () => {
+    const bankOf = (bank) => {
+      window.chrome.storage.local.get = jest.fn(async () => ({ pageguide_study_responses: bank }));
+    };
+
+    test('a V1 grounding recording answers a correct_grounding read', async () => {
+      bankOf({ 'TREE-V1::grounding': { task_id: 'TREE-V1', answer_raw: 'A fly.' } });
+      expect((await window.getStudyResponse('TREE-V1', 'correct_grounding')).answer_raw).toBe('A fly.');
+      expect((await window.getStudyResponse('TREE-V1', 'incorrect_grounding'))).toBeNull();
+    });
+
+    test('a V2 correct_grounding recording answers the V1 playback read', async () => {
+      bankOf({ 'TREE-V1::correct_grounding': { task_id: 'TREE-V1', answer_raw: 'A fly.' } });
+      expect((await window.getStudyResponse('TREE-V1', 'grounding')).answer_raw).toBe('A fly.');
+      expect((await window.getStudyResponse('TREE-V1', 'nongrounding'))).toBeNull();
+    });
+
+    test('an exact hit always wins over an alias', async () => {
+      bankOf({
+        'TREE-V1::grounding': { answer_raw: 'the V1 one' },
+        'TREE-V1::correct_grounding': { answer_raw: 'the V2 one' }
+      });
+      expect((await window.getStudyResponse('TREE-V1', 'correct_grounding')).answer_raw).toBe('the V2 one');
+      expect((await window.getStudyResponse('TREE-V1', 'grounding')).answer_raw).toBe('the V1 one');
+    });
+
+    // The incorrect cells have no V1 ancestor, so nothing may leak into them.
+    test('nothing aliases into the incorrect cells', async () => {
+      bankOf({
+        'TREE-V1::grounding': { answer_raw: 'A fly.' },
+        'TREE-V1::nongrounding': { answer_raw: 'A fly.' }
+      });
+      expect(await window.getStudyResponse('TREE-V1', 'incorrect_grounding')).toBeNull();
+      expect(await window.getStudyResponse('TREE-V1', 'incorrect_nongrounding')).toBeNull();
+    });
+  });
+});
+
+// The mapping from what a researcher banked locally onto the row the V2 RPC upserts. Pure, so it is
+// tested here rather than against a project.
+describe('buildFindV2Claim (sidepanel/study_v2_publish.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {};
+    window.chrome.storage = window.chrome.storage || { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } };
+    loadScript('sidepanel/study_responses.js');
+    loadScript('sidepanel/study_v2_publish.js');
+  });
+
+  const TASK = {
+    id: 'TREE-V1',
+    type: 'FIND X VISUAL',
+    title: 'How to decode the archive inside ancient tree rings',
+    url: 'https://aeon.co/essays/how-to-decode-the-archive-inside-ancient-tree-rings',
+    question: 'Look at the nearby painting. What is on the sill?'
+  };
+  const rec = (text, extra = {}) => Object.assign({ answer_raw: text }, extra);
+  const allFour = {
+    correct_grounding: rec('A fly [3:"the sill"].', { citation_anchors: [{ index: 3 }], evidence: [{ key: 'f' }] }),
+    correct_nongrounding: rec('A fly.'),
+    incorrect_grounding: rec('A beetle [3:"the sill"].'),
+    incorrect_nongrounding: rec('A beetle.')
+  };
+  const PAGE = { task_id: 'TREE-V1', url: TASK.url, title: 'Tree rings', html: '<html>…</html>' };
+
+  test('all four keys are present even when nothing is banked', () => {
+    const claim = window.buildFindV2Claim({ task: TASK, records: {} });
+    expect(Object.keys(claim.answer_variants).sort()).toEqual([
+      'correct_grounding', 'correct_nongrounding',
+      'incorrect_grounding', 'incorrect_nongrounding'
+    ]);
+    for (const cell of Object.values(claim.answer_variants)) {
+      expect(cell).toEqual({ answer_text: '', citation_anchors: [], evidence: [] });
+    }
+  });
+
+  // answer_raw, never answer_display: raw is the copy that still has the markers the site rebuilds
+  // every clickable citation out of.
+  test('a grounded cell keeps its markers, anchors and evidence', () => {
+    const claim = window.buildFindV2Claim({ task: TASK, records: allFour, page: PAGE });
+    expect(claim.answer_variants.correct_grounding.answer_text).toContain('[3:"the sill"]');
+    expect(claim.answer_variants.correct_grounding.citation_anchors).toEqual([{ index: 3 }]);
+    expect(claim.answer_variants.correct_grounding.evidence).toEqual([{ key: 'f' }]);
+  });
+
+  // tasks.json writes "FIND X VISUAL" and "FIND x TEXT" — a case-sensitive test would have filed
+  // every visual task as text, changing what the participant is asked to point at.
+  test('task_style survives the inconsistent casing in tasks.json', () => {
+    expect(window._taskStyleOf({ type: 'FIND X VISUAL' })).toBe('find_visual');
+    expect(window._taskStyleOf({ type: 'FIND x TEXT' })).toBe('find_text');
+    expect(window._taskStyleOf({ type: 'find x visual' })).toBe('find_visual');
+    expect(window._taskStyleOf({})).toBe('find_text');
+  });
+
+  test('an item with all four cells and a captured page goes live', () => {
+    const claim = window.buildFindV2Claim({ task: TASK, taskIndex: 2, records: allFour, page: PAGE });
+    expect(claim.in_study).toBe(true);
+    expect(claim._missing).toEqual([]);
+    expect(claim.correctness_mode).toBe('balanced');
+    expect(claim.task_index).toBe(2);
+    expect(claim.source_task_id).toBe('TREE-V1');
+    expect(claim.page_html).toBe('<html>…</html>');
+  });
+
+  // Held back rather than served: a live item with a blank cell shows a participant an empty answer,
+  // and one with no page HTML shows them a blank page. The RPC refuses both; this names them first.
+  test('a missing cell keeps it off the queue, and says which cell', () => {
+    const short = Object.assign({}, allFour);
+    delete short.incorrect_nongrounding;
+    const claim = window.buildFindV2Claim({ task: TASK, records: short, page: PAGE });
+    expect(claim.in_study).toBe(false);
+    expect(claim._missing).toEqual(['incorrect_nongrounding']);
+  });
+
+  test('a missing page snapshot keeps it off the queue too', () => {
+    const claim = window.buildFindV2Claim({ task: TASK, records: allFour, page: null });
+    expect(claim.in_study).toBe(false);
+    expect(claim._missing).toContain('page snapshot');
+  });
+
+  // Half-authored is the normal state mid-session, and pinning lets it run on the axis it has
+  // rather than blocking the queue.
+  test('only the correct cells authored pins the correctness axis', () => {
+    const claim = window.buildFindV2Claim({
+      task: TASK, page: PAGE,
+      records: { correct_grounding: allFour.correct_grounding, correct_nongrounding: allFour.correct_nongrounding }
+    });
+    expect(claim.correctness_mode).toBe('always_correct');
+  });
+
+  test('only the incorrect cells authored pins the other way', () => {
+    const claim = window.buildFindV2Claim({
+      task: TASK, page: PAGE,
+      records: { incorrect_grounding: allFour.incorrect_grounding, incorrect_nongrounding: allFour.incorrect_nongrounding }
+    });
+    expect(claim.correctness_mode).toBe('always_incorrect');
+  });
+
+  // Where the evidence IS does not change with which answer was shown, so it lives once on the item
+  // rather than per cell.
+  test('the accepted-sentence ground truth rides along', () => {
+    const hops = { 1: [{ text: 'the oak panel', index: 12 }] };
+    const claim = window.buildFindV2Claim({ task: TASK, records: allFour, page: PAGE, groundTruth: { hops } });
+    expect(claim.evidence_ground_truth).toEqual(hops);
+
+    const none = window.buildFindV2Claim({ task: TASK, records: allFour, page: PAGE, groundTruth: null });
+    expect(none.evidence_ground_truth).toEqual({});
+  });
+
+  test('the report distinguishes live, draft and failed', () => {
+    const lines = window.describeFindV2Publish([
+      { id: 'A', ok: true, in_study: true, bytes: 2048 },
+      { id: 'B', ok: true, in_study: false, missing: ['incorrect_grounding'] },
+      { id: 'C', ok: false, error: 'bad password' }
+    ]).split('\n');
+    expect(lines[0]).toContain('live');
+    expect(lines[1]).toContain('incorrect_grounding');
+    expect(lines[2]).toContain('bad password');
+  });
+});
+
 // ===== PRE-RECORDED STUDY RESPONSES =====
 // The study shows every participant the same agent answer per (task × condition). A record that
 // lost its [N:"text"] / [ev:key] markers cannot reproduce a grounding answer at all, so that is the
@@ -9561,6 +11055,157 @@ describe('Study responses: record building (sidepanel/study_responses.js)', () =
     test('every entry keeps the marks its [ev] marker scrolls to', () => {
       const rec = window._buildStudyResponseRecord({ taskId: 'T', condition: 'grounding', result: RESULT });
       expect(rec.evidence.map(e => e.marks?.evidenceNumber)).toEqual([2, 3]);
+    });
+  });
+
+  // ===== CAPTURE SIZE =====
+  // A page has to be small enough to be WRITTEN: two Find items failed to publish with Postgres's
+  // statement timeout while the rest went up at 3–5 MB. The budget is per capture rather than a new
+  // default, because a Find question can turn on a detail inside an engraving.
+  describe('_pgCaptureLimits (content/functions/page_snapshot.js)', () => {
+    beforeAll(() => {
+      if (!window._pgCaptureLimits) loadScript('content/functions/page_snapshot.js');
+    });
+
+    test('no options means the shipped defaults', () => {
+      expect(window._pgCaptureLimits(null)).toEqual({ imgMaxWidth: 1600, imgQuality: 0.82 });
+      expect(window._pgCaptureLimits({})).toEqual({ imgMaxWidth: 1600, imgQuality: 0.82 });
+    });
+
+    test('a smaller budget is taken as asked', () => {
+      expect(window._pgCaptureLimits({ imgMaxWidth: 1200, imgQuality: 0.7 }))
+        .toEqual({ imgMaxWidth: 1200, imgQuality: 0.7 });
+    });
+
+    // The defaults are the CAP: this control exists to shrink a page, never to inflate one past the
+    // budget the snapshot was designed around.
+    test('a larger budget cannot exceed the defaults', () => {
+      expect(window._pgCaptureLimits({ imgMaxWidth: 4000, imgQuality: 1 }))
+        .toEqual({ imgMaxWidth: 1600, imgQuality: 0.82 });
+    });
+
+    // Below the min width the floor in _pgShrinkDataUri wins anyway, so the setting would look like
+    // it did something and do nothing.
+    test('an absurdly small budget is clamped to something still readable', () => {
+      const out = window._pgCaptureLimits({ imgMaxWidth: 10, imgQuality: 0.01 });
+      expect(out.imgMaxWidth).toBe(900);
+      expect(out.imgQuality).toBe(0.3);
+    });
+
+    test('junk is ignored rather than propagated as NaN', () => {
+      expect(window._pgCaptureLimits({ imgMaxWidth: 'wide', imgQuality: null }))
+        .toEqual({ imgMaxWidth: 1600, imgQuality: 0.82 });
+      expect(window._pgCaptureLimits({ imgMaxWidth: -5, imgQuality: 0 }))
+        .toEqual({ imgMaxWidth: 1600, imgQuality: 0.82 });
+    });
+  });
+
+  // ===== FIND QUESTION EDITS =====
+  // tasks.json is packaged inside the extension, so a question can only be reworded by editing the
+  // file and reloading. V2 dropped the options list, which left questions that referred to it
+  // ("...which of the following?") dangling, so rewording has to be possible from the recorder,
+  // against the live page. Stored as an overlay: only what changed, keyed by task id.
+  describe('find question edits', () => {
+    const SHIPPED = {
+      id: 'NVIDA-V1',
+      question: 'Take the first letter of that employer. Which word that contains those letters in the following?',
+      answer: 'Sugar'
+    };
+
+    beforeEach(() => {
+      const store = {};
+      window.chrome.storage.local.get = jest.fn(async (k) => (store[k] !== undefined ? { [k]: store[k] } : {}));
+      window.chrome.storage.local.set = jest.fn(async (obj) => { Object.assign(store, obj); });
+    });
+
+    describe('_buildStudyTaskEdit', () => {
+      test('stores only the fields that differ from the shipped task', () => {
+        const rec = window._buildStudyTaskEdit(SHIPPED, {
+          question: 'Which word on this page contains both of those letters?',
+          answer: 'Sugar'
+        });
+        expect(rec.task_id).toBe('NVIDA-V1');
+        expect(rec.fields).toEqual({ question: 'Which word on this page contains both of those letters?' });
+        expect(typeof rec.updated_at).toBe('string');
+      });
+
+      // Otherwise the overlay pins the old wording: the file could be corrected and every load
+      // would quietly undo it.
+      test('an edit typed back to the shipped wording is not an edit', () => {
+        expect(window._buildStudyTaskEdit(SHIPPED, { question: SHIPPED.question, answer: SHIPPED.answer }))
+          .toBeNull();
+      });
+
+      test('a blank value is ignored rather than stored', () => {
+        expect(window._buildStudyTaskEdit(SHIPPED, { question: '   ' })).toBeNull();
+      });
+
+      test('a task with no id cannot be edited', () => {
+        expect(window._buildStudyTaskEdit({ question: 'q' }, { question: 'r' })).toBeNull();
+      });
+
+      test('both fields can be edited at once', () => {
+        const rec = window._buildStudyTaskEdit(SHIPPED, { question: 'New question?', answer: 'Marmalade' });
+        expect(rec.fields).toEqual({ question: 'New question?', answer: 'Marmalade' });
+      });
+    });
+
+    describe('_applyStudyTaskEdit / _applyStudyTaskEdits', () => {
+      test('the edited wording replaces the shipped one, and says which fields it replaced', () => {
+        const rec = window._buildStudyTaskEdit(SHIPPED, { answer: 'Marmalade' });
+        const out = window._applyStudyTaskEdit(SHIPPED, rec);
+        expect(out.answer).toBe('Marmalade');
+        expect(out.question).toBe(SHIPPED.question);
+        expect(out.edited_fields).toEqual(['answer']);
+        expect(SHIPPED.answer).toBe('Sugar');  // the shipped task is never mutated
+      });
+
+      test('an unedited task comes back untouched, identity included', () => {
+        expect(window._applyStudyTaskEdit(SHIPPED, null)).toBe(SHIPPED);
+        expect(window._applyStudyTaskEdit(SHIPPED, { fields: {} })).toBe(SHIPPED);
+      });
+
+      test('the overlay applies across the bank and leaves unedited questions alone', () => {
+        const bank = { find: [SHIPPED, { id: 'EDU-v1', question: 'Old?', answer: '1' }], guide: [] };
+        const out = window._applyStudyTaskEdits(bank, {
+          'EDU-v1': { task_id: 'EDU-v1', fields: { answer: '2' } }
+        });
+        expect(out.find[0]).toBe(SHIPPED);
+        expect(out.find[1].answer).toBe('2');
+        expect(out.guide).toEqual([]);
+      });
+
+      test('an empty overlay is a no-op', () => {
+        const bank = { find: [SHIPPED] };
+        expect(window._applyStudyTaskEdits(bank, {})).toBe(bank);
+      });
+    });
+
+    describe('the store', () => {
+      test('saves, reads back, and clears when the edit is dropped', async () => {
+        const rec = window._buildStudyTaskEdit(SHIPPED, { answer: 'Marmalade' });
+        expect((await window.saveStudyTaskEdit('NVIDA-V1', rec)).saved).toBe(true);
+        expect((await window.getStudyTaskEdit('NVIDA-V1')).fields).toEqual({ answer: 'Marmalade' });
+
+        await window.saveStudyTaskEdit('NVIDA-V1', null);
+        expect(await window.getStudyTaskEdit('NVIDA-V1')).toBeNull();
+      });
+
+      // Same orphan rule as the response and ground-truth banks: tasks.json decides what exists.
+      test('an edit for a task deleted from tasks.json is pruned', async () => {
+        await window.saveStudyTaskEdit('NVIDA-V1', window._buildStudyTaskEdit(SHIPPED, { answer: 'X' }));
+        await window.saveStudyTaskEdit('GONE-V1', { task_id: 'GONE-V1', fields: { answer: 'Y' } });
+
+        expect(await window.pruneStudyTaskEdits(['NVIDA-V1'])).toEqual(['GONE-V1']);
+        expect(await window.getStudyTaskEdit('NVIDA-V1')).not.toBeNull();
+        expect(await window.getStudyTaskEdit('GONE-V1')).toBeNull();
+      });
+
+      test('an empty valid-id list never prunes — a failed load must not empty the store', async () => {
+        await window.saveStudyTaskEdit('NVIDA-V1', window._buildStudyTaskEdit(SHIPPED, { answer: 'X' }));
+        expect(await window.pruneStudyTaskEdits([])).toEqual([]);
+        expect(await window.getStudyTaskEdit('NVIDA-V1')).not.toBeNull();
+      });
     });
   });
 
@@ -11679,7 +13324,7 @@ describe('Snapshot size control (content/functions/page_snapshot.js)', () => {
     // Layout does not survive cloneNode, so the drawn width is stamped on the live page first.
     expect(snap).toMatch(/img\.setAttribute\('data-pg-w', String\(w\)\)/);
     expect(snap).toMatch(/getBoundingClientRect\(\)\.width/);
-    expect(snap).toMatch(/_pgShrinkDataUri\(await _pgFetchAsDataUri\(abs\), drawnWidth\)/);
+    expect(snap).toMatch(/_pgShrinkDataUri\(await _pgFetchAsDataUri\(abs\), drawnWidth, limits\)/);
     // ...and is cleaned off it afterwards, like every other capture-time attribute.
     expect(snap).toMatch(/removeAttribute\('data-pg-w'\)/);
   });
@@ -12086,7 +13731,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   test('capture reports progress per image', () => {
     const snap = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
-    expect(snap).toMatch(/async function _pgInlineImages\(root, onProgress\)/);
+    expect(snap).toMatch(/async function _pgInlineImages\(root, onProgress, limits = null\)/);
     expect(snap).toMatch(/action: 'captureProgress', done, total/);
     const study = require('fs').readFileSync(
       require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
@@ -12176,14 +13821,19 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
     expect(draw).not.toMatch(/list = res\.anchors/);
   });
 
-  test('the Grounded tab replays banked highlights onto the page', () => {
+  test('a grounded tab replays banked highlights onto the page, and a bare one clears them', () => {
     const study = require('fs').readFileSync(
       require('path').join(__dirname, '../../sidepanel/study.js'), 'utf8');
     const sync = study.match(/const syncPageForArm = \(name\) => \{[\s\S]*?\n    \};/)[0];
-    expect(sync).toMatch(/name === 'grounding'/);
+    // Branches on grounded-ness, NOT on the literal 'grounding'. V2 has two grounded cells —
+    // correct and incorrect — and a name match would have replayed only the correct one, showing
+    // the incorrect arm bare and so making the two arms differ in more than their correctness.
+    expect(sync).toMatch(/_variantIsGrounded\(name\)/);
+    expect(sync).not.toMatch(/name === 'grounding'/);
     expect(sync).toMatch(/action: 'showSavedGrounding', anchors, answer/);
-    expect(sync).toMatch(/name === 'nongrounding'/);
     expect(sync).toMatch(/action: 'showSavedGrounding', anchors: \[\], answer: ''/);
+    // Live is still its own case: it shows the run's own live highlights rather than a banked set.
+    expect(sync).toMatch(/setAnswerHighlightsVisible', visible: true/);
   });
 
   test('clicking a saved grounded citation jumps through its saved anchor', () => {
@@ -12565,6 +14215,348 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   });
 });
 
+// The mapping from a banked guide trajectory onto the row the V2 guide RPC upserts. Pure, so it is
+// tested here rather than against a project. The correctness pin is the part worth guarding: the
+// recorder only ever authors ONE correctness side, and which side it is comes from the researcher's
+// verdict — writing a failed run's answer into a `correct_*` cell would score every participant
+// wrong, silently.
+describe('buildGuideV2Task (sidepanel/guide_v2_publish.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {};
+    window.chrome.storage = window.chrome.storage
+      || { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } };
+    loadScript('sidepanel/guide_trajectories.js');
+    loadScript('sidepanel/guide_v2_publish.js');
+  });
+
+  const step = (n, extra = {}) => Object.assign({
+    n, instruction: `Do thing ${n}`, action: 'click', target_text: 'Add to cart',
+    url: 'https://example.com/p', screenshot: `data:image/png;base64,shot${n}`
+  }, extra);
+
+  /** A complete, publishable trajectory: both arms authored, a scoreable verdict, steps. */
+  const complete = (over = {}) => Object.assign({
+    id: 'guide-1756',
+    title: 'Add the dress to the cart',
+    goal: 'Add the dress Trinity wears to the Amazon cart',
+    condition: 'visual',
+    in_study: true,
+    ground_truth: {
+      correctness: 'success',
+      problems: [],
+      errors: [{ type: 'wrong_target', steps: [2, 3] }],
+      no_error: false
+    },
+    arms: {
+      grounding: {
+        initial_state: { url: 'https://example.com/start', screenshot: 'data:image/png;base64,a' },
+        steps: [step(1), step(2), step(3)],
+        answer: 'I added the dress [ev:12].',
+        answer_evidence: [{ key: '12', screenshot: 'data:image/png;base64,ev' }]
+      },
+      nongrounding: {
+        steps: [step(1, { screenshot: null }), step(2, { screenshot: null }), step(3, { screenshot: null })],
+        answer: 'I added the dress.',
+        answer_evidence: []
+      }
+    }
+  }, over);
+
+  test('a complete successful run publishes live, pinned to the correct cells', () => {
+    const out = window.buildGuideV2Task({ record: complete(), taskIndex: 4 });
+    expect(out.in_study).toBe(true);
+    expect(out._missing).toEqual([]);
+    expect(out.correctness_mode).toBe('always_correct');
+    expect(out.answer_variants.correct_grounding.answer_text).toBe('I added the dress [ev:12].');
+    expect(out.answer_variants.correct_nongrounding.answer_text).toBe('I added the dress.');
+    // The unauthored side is still present and still empty — the RPC normalizes all four keys, and
+    // an item that pretended to have them would go live with a blank answer in it.
+    expect(out.answer_variants.incorrect_grounding.answer_text).toBe('');
+    expect(out.answer_variants.incorrect_nongrounding.answer_text).toBe('');
+    expect(out.task_index).toBe(4);
+    expect(out.source_task_id).toBe('guide-1756');
+  });
+
+  test('a failed run goes into the incorrect cells, not the correct ones', () => {
+    const record = complete();
+    record.ground_truth = {
+      correctness: 'failure', problems: ['incomplete'],
+      errors: [{ type: 'loop', steps: [2] }], no_error: false
+    };
+    const out = window.buildGuideV2Task({ record });
+    expect(out.correctness_mode).toBe('always_incorrect');
+    expect(out.answer_variants.incorrect_grounding.answer_text).toBe('I added the dress [ev:12].');
+    expect(out.answer_variants.incorrect_nongrounding.answer_text).toBe('I added the dress.');
+    expect(out.answer_variants.correct_grounding.answer_text).toBe('');
+    expect(out.in_study).toBe(true);
+  });
+
+  test('the stimulus is `arms`, carrying both copies of the run and the bookends', () => {
+    const out = window.buildGuideV2Task({ record: complete() });
+    // What the site renders. The bookends have no column of their own, so losing them here is how
+    // a participant loses the only evidence of whether the task finished.
+    expect(out.arms.grounding.steps).toHaveLength(3);
+    expect(out.arms.grounding.steps[0].screenshot).toBe('data:image/png;base64,shot1');
+    expect(out.arms.grounding.initial_state.url).toBe('https://example.com/start');
+    expect(out.arms.nongrounding.steps).toHaveLength(3);
+    expect(out.arms.nongrounding.steps[0].screenshot).toBeNull();
+  });
+
+  test('an unrecorded bare arm is null in `arms`, not an empty object pretending to be one', () => {
+    const record = complete();
+    record.arms.nongrounding = null;
+    expect(window.buildGuideV2Task({ record }).arms.nongrounding).toBeNull();
+  });
+
+  test('the flattened trajectory still travels, from the grounded arm', () => {
+    const out = window.buildGuideV2Task({ record: complete() });
+    expect(out.trajectory).toHaveLength(3);
+    expect(out.trajectory[0].index).toBe(1);
+    expect(out.trajectory[0].n).toBe(1);
+    expect(out.trajectory[2].instruction).toBe('Do thing 3');
+    expect(out.url).toBe('https://example.com/start');
+  });
+
+  test('both source ids are written, and they are the same value', () => {
+    const out = window.buildGuideV2Task({ record: complete() });
+    expect(out.source_trajectory_id).toBe('guide-1756');
+    expect(out.source_task_id).toBe(out.source_trajectory_id);
+  });
+
+  test('the completion pair is recorded, and separates failing from admitting it', () => {
+    const succeeded = window.buildGuideV2Task({ record: complete() });
+    expect(succeeded.agent_completed).toBe(true);
+    expect(succeeded.claims_completion).toBe(true);
+
+    // Failed, and the answer asserts success anyway — the hallucinated-result case.
+    const bluffed = complete();
+    bluffed.ground_truth = { correctness: 'failure', problems: ['hallucinated_result'], errors: [], no_error: true };
+    const b = window.buildGuideV2Task({ record: bluffed });
+    expect(b.agent_completed).toBe(false);
+    expect(b.claims_completion).toBe(true);
+
+    // Failed, and said so.
+    const admitted = complete();
+    admitted.ground_truth = { correctness: 'failure', problems: ['could_not_complete'], errors: [], no_error: true };
+    const a = window.buildGuideV2Task({ record: admitted });
+    expect(a.agent_completed).toBe(false);
+    expect(a.claims_completion).toBe(false);
+  });
+
+  test('no verdict leaves the completion pair null, never false', () => {
+    const record = complete();
+    record.ground_truth = { correctness: '', problems: [], errors: [], no_error: false };
+    const out = window.buildGuideV2Task({ record });
+    // false would read as a recorded finding — "the agent failed" — rather than as silence.
+    expect(out.agent_completed).toBeNull();
+    expect(out.claims_completion).toBeNull();
+  });
+
+  test('the assigned condition decides the task style, overriding the screenshots', () => {
+    expect(window.buildGuideV2Task({ record: complete() }).task_style).toBe('guide_visual');
+    // Screenshots are still present, but the researcher filed it as the text condition.
+    expect(window.buildGuideV2Task({ record: complete({ condition: 'text' }) }).task_style)
+      .toBe('guide_text');
+  });
+
+  test('grouped ground-truth errors are flattened one row per step', () => {
+    const out = window.buildGuideV2Task({ record: complete() });
+    expect(out.guide_ground_truth.correct).toBe(true);
+    expect(out.guide_ground_truth.errors).toEqual([
+      { step: 2, type: 'wrong_target' },
+      { step: 3, type: 'wrong_target' }
+    ]);
+    expect(out.guide_ground_truth.errors_grouped).toEqual([{ type: 'wrong_target', steps: [2, 3] }]);
+  });
+
+  test('no recorded verdict means no `correct` key, and a draft rather than a live item', () => {
+    const record = complete();
+    record.ground_truth = { correctness: '', problems: [], errors: [], no_error: false };
+    const out = window.buildGuideV2Task({ record });
+    expect(out.guide_ground_truth).not.toHaveProperty('correct');
+    expect(out.in_study).toBe(false);
+    expect(out._missing).toContain('ground truth verdict');
+  });
+
+  test('a missing bare arm names the cell it is missing, and holds the item back', () => {
+    const record = complete();
+    record.arms.nongrounding = null;
+    const out = window.buildGuideV2Task({ record });
+    expect(out.in_study).toBe(false);
+    expect(out._missing).toContain('correct_nongrounding answer');
+  });
+
+  test('an unticked trajectory would publish as a draft, if it were published at all', () => {
+    // planGuideV2Publish is what actually keeps it out; the payload still describes it honestly so
+    // that an unticked-but-live row is never written back as live by some other caller.
+    const out = window.buildGuideV2Task({ record: complete({ in_study: false }) });
+    expect(out.in_study).toBe(false);
+    expect(out._missing).toContain('excluded here');
+    expect(out.trajectory).toHaveLength(3);
+  });
+
+  test('a trajectory already on V2 is published into that row, not a new one', () => {
+    const record = complete();
+    // The shape the existing rows are actually in: a different id scheme, and no source_task_id.
+    const v2Row = { id: 'gv2-ed05972e-i5fi3b', source_task_id: null, goal: record.goal, in_study: true };
+    const out = window.buildGuideV2Task({ record, v2Row });
+    expect(out.id).toBe('gv2-ed05972e-i5fi3b');
+    // Written even though the row lacked it, so the NEXT publish matches on the id instead of
+    // having to fall back to the goal text.
+    expect(out.source_task_id).toBe('guide-1756');
+  });
+
+  test('a run with no steps cannot go live', () => {
+    const record = complete();
+    record.arms.grounding.steps = [];
+    const out = window.buildGuideV2Task({ record });
+    expect(out.in_study).toBe(false);
+    // Counted over the arms, which is where the RPC now counts them too.
+    expect(out._missing).toContain('steps');
+  });
+
+  test('ids are rewritten to the RPC\'s alphabet, deterministically', () => {
+    expect(window._guideV2Id('guide-1756')).toBe('guide-1756');
+    expect(window._guideV2Id('sess 42/b')).toBe('sess-42-b');
+    // Leading punctuation is dropped: the RPC requires the first character to be alphanumeric.
+    expect(window._guideV2Id('__abc')).toBe('abc');
+    expect(window._guideV2Id('x'.repeat(120))).toHaveLength(80);
+    // Same input, same row — re-publishing an edit must not create a second item.
+    expect(window._guideV2Id('sess 42/b')).toBe(window._guideV2Id('sess 42/b'));
+  });
+
+  test('the report names what each row did, and which V2 row it landed on', () => {
+    const line = window.describeGuideV2Publish([
+      { id: 'a', v2_id: 'a', ok: true, in_study: true, steps: 3, action: 'create' },
+      { id: 'b', v2_id: 'gv2-ed05', ok: true, in_study: true, steps: 4, action: 'update' },
+      { id: 'c', v2_id: 'c', ok: true, in_study: false, missing: ['steps'], action: 'create' },
+      { id: 'd', v2_id: 'd', ok: false, error: 'boom', action: 'update' }
+    ]);
+    expect(line).toContain('✓ a — live, created (3 steps)');
+    // The id it updated is named, because it cannot be guessed from the local one.
+    expect(line).toContain('✓ b → gv2-ed05 — live, updated (4 steps)');
+    expect(line).toContain('◦ c — created as a draft, not live yet (missing: steps)');
+    expect(line).toContain('✗ d — boom');
+  });
+});
+
+// Matching a local capture to the row it already occupies on V2, and deciding what a publish does.
+// This is the layer that stops one task becoming two rows, so it is tested against the shape the
+// project is actually in: ids from a different scheme, and `source_task_id` null on every row.
+describe('planGuideV2Publish (sidepanel/guide_v2_publish.js)', () => {
+  beforeAll(() => {
+    window.chrome = window.chrome || {};
+    window.chrome.storage = window.chrome.storage
+      || { local: { get: jest.fn(async () => ({})), set: jest.fn(async () => {}) } };
+    loadScript('sidepanel/guide_trajectories.js');
+    loadScript('sidepanel/guide_v2_publish.js');
+  });
+
+  const HOTELS = 'Find me three 4-star hotels in Austin and two 3-star hotels with pet friendly';
+  const local = (id, goal, over = {}) => Object.assign({ id, goal, title: goal }, over);
+  const v2 = (id, goal, over = {}) => Object.assign(
+    { id, source_task_id: null, goal, title: goal, in_study: false, updated_at: '2026-08-31T18:28:00Z' },
+    over);
+
+  test('matches on the goal when the ids come from different schemes', () => {
+    const rows = [v2('gv2-ed05972e-i5fi3b', HOTELS, { in_study: true })];
+    const hit = window.matchGuideV2Row(rows, local('gv2-ms9iw0pq-5kj5zr', HOTELS));
+    expect(hit.id).toBe('gv2-ed05972e-i5fi3b');
+  });
+
+  test('source_trajectory_id wins over everything — it is the capture\'s identity', () => {
+    const rows = [
+      // A live row whose goal matches, which is what would have been chosen before.
+      v2('goal-twin', HOTELS, { in_study: true }),
+      // The row this capture is actually keyed to, seeded by hand and not live.
+      v2('gv2-ms9hwloh-15fuvy', 'A goal that was since reworded',
+        { source_trajectory_id: 'gv2-ms9hwloh-15fuvy' })
+    ];
+    const hit = window.matchGuideV2Row(rows, local('gv2-ms9hwloh-15fuvy', HOTELS));
+    expect(hit.id).toBe('gv2-ms9hwloh-15fuvy');
+  });
+
+  test('an edited goal still finds its row once the id is recorded', () => {
+    const rows = [v2('r1', 'The original wording', { source_trajectory_id: 'cap-9' })];
+    expect(window.matchGuideV2Row(rows, local('cap-9', 'The goal, since rewritten')).id).toBe('r1');
+  });
+
+  test('the goal match ignores case, spacing and trailing punctuation', () => {
+    const rows = [v2('r1', 'Add 1 orange and 2 bananas to the cart.')];
+    expect(window.matchGuideV2Row(rows, local('x', '  add 1 orange   and 2 bananas to the cart '))
+      .id).toBe('r1');
+  });
+
+  test('source_task_id beats the goal, so a re-publish is exact', () => {
+    const rows = [
+      v2('older', HOTELS, { in_study: true }),
+      v2('mine', HOTELS, { source_task_id: 'local-1' })
+    ];
+    expect(window.matchGuideV2Row(rows, local('local-1', HOTELS)).id).toBe('mine');
+  });
+
+  test('when two rows share a goal the live one wins — it is the one being walked', () => {
+    const rows = [
+      v2('draft-row', HOTELS, { updated_at: '2026-08-31T21:00:00Z' }),
+      v2('live-row', HOTELS, { in_study: true, updated_at: '2026-08-31T18:00:00Z' })
+    ];
+    expect(window.matchGuideV2Row(rows, local('x', HOTELS)).id).toBe('live-row');
+  });
+
+  test('among equals the most recently published wins', () => {
+    const rows = [
+      v2('old', HOTELS, { updated_at: '2026-08-31T18:00:00Z' }),
+      v2('new', HOTELS, { updated_at: '2026-08-31T21:00:00Z' })
+    ];
+    expect(window.matchGuideV2Row(rows, local('x', HOTELS)).id).toBe('new');
+  });
+
+  test('a goal that matches nothing is a new row, not a wrong one', () => {
+    const rows = [v2('r1', HOTELS)];
+    expect(window.matchGuideV2Row(rows, local('x', 'Some entirely different task'))).toBeNull();
+  });
+
+  test('only ticked trajectories are planned; the rest are not written at all', () => {
+    const rows = [v2('gv2-ed05972e-i5fi3b', HOTELS, { in_study: true })];
+    const bank = [
+      local('a', HOTELS),                                  // ticked, already on V2
+      local('b', 'A brand new task from this run'),         // ticked, not on V2
+      local('c', 'Another live one', { in_study: false })   // unticked
+    ];
+    const plan = window.planGuideV2Publish(bank, rows);
+    expect(plan.map(p => [p.record.id, p.action])).toEqual([['a', 'update'], ['b', 'create']]);
+    expect(plan.find(p => p.record.id === 'a').v2Row.id).toBe('gv2-ed05972e-i5fi3b');
+  });
+
+  test('unticking something live on V2 writes nothing — it does not take the row down', () => {
+    const rows = [v2('live-row', HOTELS, { in_study: true })];
+    const plan = window.planGuideV2Publish([local('a', HOTELS, { in_study: false })], rows);
+    expect(plan).toEqual([]);
+  });
+
+  test('task_index is the position in the whole bank, not in the ticked subset', () => {
+    const bank = [
+      local('a', 'One', { in_study: false }),
+      local('b', 'Two'),
+      local('c', 'Three')
+    ];
+    const plan = window.planGuideV2Publish(bank, []);
+    // b keeps index 1 even though it is the first thing published: ticking `a` later must not
+    // renumber the queue underneath a participant.
+    expect(plan.map(p => [p.record.id, p.taskIndex])).toEqual([['b', 1], ['c', 2]]);
+  });
+
+  test('rows nothing local claims are reported, so a live orphan is visible', () => {
+    const rows = [
+      v2('claimed', HOTELS, { in_study: true }),
+      v2('orphan-live', 'A task from another bank', { in_study: true }),
+      v2('orphan-draft', 'Yet another', { in_study: false })
+    ];
+    const left = window.unmatchedGuideV2Rows([local('a', HOTELS)], rows);
+    expect(left.map(r => r.id)).toEqual(['orphan-live', 'orphan-draft']);
+  });
+});
+
 describe('Annotation trajectories (sidepanel/annotation_trajectories.js)', () => {
   const A = require('../../sidepanel/annotation_trajectories.js');
 
@@ -12634,6 +14626,197 @@ describe('Annotation trajectories (sidepanel/annotation_trajectories.js)', () =>
   });
 });
 
+describe('Model performance trajectories (sidepanel/model_performance_trajectories.js)', () => {
+  const M = require('../../sidepanel/model_performance_trajectories.js');
+
+  const banked = (over = {}) => Object.assign({
+    id: 'rw session:42',
+    goal: 'Open the History section',
+    title: 'Wikipedia',
+    captured_at: '2026-09-10T10:00:00.000Z',
+    task_id: 'annot-07', task_name: 'Wikipedia',
+    run_meta: { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.5', calls: 6, unpriced: 0, cost_usd: 0.0123, prompt_tokens: 9000, completion_tokens: 1200, duration_ms: 42000 },
+    arms: { grounding: {
+      initial_state: { url: 'https://en.wikipedia.org', screenshot: null },
+      answer: 'Opened it.',
+      steps: [
+        { n: 1, instruction: 'Click search', action: 'click', target_text: 'Search', url: 'https://en.wikipedia.org', screenshot: 'data:image/png;base64,AAA' },
+        { n: 2, instruction: 'Type query', action: 'type', target_text: '', url: 'https://en.wikipedia.org/w', screenshot: null },
+      ],
+    } },
+  }, over);
+
+  test('_modelPerfRunMeta sums the session ledger and names the model most calls used', () => {
+    const meta = M._modelPerfRunMeta([
+      { ts: 1000, provider: 'openrouter', model: 'a', costUsd: 0.01, promptTokens: 100, completionTokens: 10 },
+      { ts: 4000, provider: 'openrouter', model: 'a', costUsd: 0.02, promptTokens: 200, completionTokens: 20 },
+      { ts: 9000, provider: 'openrouter', model: 'b', costUsd: null, promptTokens: 50, completionTokens: 5 },
+      null,
+    ]);
+    expect(meta).toEqual({ provider: 'openrouter', model: 'a', calls: 3, unpriced: 1, cost_usd: 0.03, prompt_tokens: 350, completion_tokens: 35, duration_ms: 8000 });
+    expect(M._modelPerfRunMeta([])).toEqual({ provider: '', model: '', calls: 0, unpriced: 0, cost_usd: 0, prompt_tokens: 0, completion_tokens: 0, duration_ms: null });
+  });
+
+  test('buildModelPerformanceTask mirrors the annotation payload and adds the model and cost', () => {
+    const p = M.buildModelPerformanceTask(banked(), 3);
+    expect(p.id).toBe('rw-session-42');
+    expect(p.source_task_id).toBe('annot-07');
+    expect(p.source_trajectory_id).toBe('rw session:42');
+    expect(p.url).toBe('https://en.wikipedia.org');
+    expect(p.goal).toBe('Open the History section');
+    expect(p.agent_answer).toBe('Opened it.');
+    expect(p.trajectory).toHaveLength(2);
+    expect(p.task_style).toBe('guide_visual');
+    expect(p.provider).toBe('openrouter');
+    expect(p.model).toBe('anthropic/claude-sonnet-4.5');
+    expect(p.run_meta.cost_usd).toBe(0.0123);
+    expect(p.task_index).toBe(3);
+    expect(p.in_report).toBe(true);
+    expect(p.captured_at).toBe('2026-09-10T10:00:00.000Z');
+    expect(p).not.toHaveProperty('in_annotation');
+  });
+
+  test('an unticked or empty run is not in the report; a run without ledger data still publishes', () => {
+    expect(M.buildModelPerformanceTask(banked({ in_report: false })).in_report).toBe(false);
+    const empty = banked(); empty.arms.grounding.steps = [];
+    expect(M.buildModelPerformanceTask(empty).in_report).toBe(false);
+    const bare = M.buildModelPerformanceTask(banked({ run_meta: undefined }));
+    expect(bare.model).toBe(''); expect(bare.run_meta).toEqual({}); expect(bare.in_report).toBe(true);
+  });
+
+  test('buildModelPerformanceBundle keeps capture order and drops unticked runs', () => {
+    const b = M.buildModelPerformanceBundle([
+      banked({ id: 'run-b', captured_at: '2026-09-10T12:00:00Z' }),
+      banked({ id: 'run-c', captured_at: '2026-09-10T13:00:00Z', in_report: false }),
+      banked({ id: 'run-a', captured_at: '2026-09-10T11:00:00Z' }),
+    ]);
+    expect(b.kind).toBe('pageguide_model_performance_trajectories');
+    expect(b.trajectories.map(t => t.id)).toEqual(['run-a', 'run-b']);
+    expect(b.trajectories.map(t => t.task_index)).toEqual([0, 1]);
+  });
+});
+
+describe('LLM judge (sidepanel/llm_judge.js)', () => {
+  const J = require('../../sidepanel/llm_judge.js');
+
+  test('the prompt carries the task, both answers and every evidence item with its note', () => {
+    const u = J.buildJudgeUserPrompt({
+      task: 'Find two courses.', candidateModel: 'google/gemini-3.5-flash',
+      groundTruth: { answer: 'CS 101 and CS 202.', evidence: [{ key: 'cs101', note: 'Schedule row for CS 101' }, { key: 'cs202' }] },
+      candidate: { answer: 'CS 101, CS 303.', evidence: [{ key: 'row_a', note: 'CS 101 row' }] },
+    });
+    expect(u).toContain('TASK:\nFind two courses.');
+    expect(u).toContain('- cs101: Schedule row for CS 101');
+    expect(u).toContain('- cs202: (no note)');
+    expect(u).toContain('CANDIDATE (google/gemini-3.5-flash) answer:\nCS 101, CS 303.');
+    expect(J.buildJudgeSystemPrompt()).toMatch(/"gt_matches"/);
+    expect(J.JUDGE_PROMPT_VERSION).toBe('judge-v1');
+  });
+
+  test('parseJudgeResponse tolerates fences and prose, and normalizes keys', () => {
+    const p = J.parseJudgeResponse('Sure:\n```json\n{"answer_correct": false, "answer_reason": "Missing CS 202.", "gt_matches": [{"key":"cs101","candidate_key":"row_a"},{"key":"cs202","candidate_key":null}], "candidate_matches": [{"key":"row_a","gt_key":"cs101"}]}\n```');
+    expect(p.answer_correct).toBe(false);
+    expect(p.gt_matches).toEqual([{ key: 'cs101', candidate_key: 'row_a' }, { key: 'cs202', candidate_key: null }]);
+    expect(J.parseJudgeResponse('no json here')).toBeNull();
+    expect(J.parseJudgeResponse('{"answer_correct": "yes"}').answer_correct).toBeNull();
+  });
+
+  test('scoreJudgment: precision over candidate items, recall over ground truth, only real keys count', () => {
+    const parsed = { answer_correct: true,
+      gt_matches: [{ key: 'a', candidate_key: 'x' }, { key: 'b', candidate_key: null }, { key: 'ghost', candidate_key: 'y' }],
+      candidate_matches: [{ key: 'x', gt_key: 'a' }, { key: 'y', gt_key: null }, { key: 'z', gt_key: 'c' }] };
+    const sc = J.scoreJudgment(parsed, ['a', 'b', 'c'], ['x', 'y', 'z']);
+    // a↔x from both sides; c↔z from the candidate side; b missed; y extra; "ghost" is not a real key.
+    expect(sc.tp).toBe(2); expect(sc.fn).toBe(1); expect(sc.fp).toBe(1);
+    expect(sc.precision).toBeCloseTo(2 / 3); expect(sc.recall).toBeCloseTo(2 / 3); expect(sc.f1).toBeCloseTo(2 / 3);
+    expect(sc.unmatched_gt).toEqual(['b']); expect(sc.unmatched_candidate).toEqual(['y']);
+    expect(sc.answer_correct).toBe(true);
+    // Degenerate cases: nothing on either side is a perfect match; candidate with nothing recalls nothing.
+    expect(J.scoreJudgment(null, [], [])).toMatchObject({ precision: 1, recall: 1, f1: 1 });
+    expect(J.scoreJudgment(null, ['a'], [])).toMatchObject({ precision: 0, recall: 0, f1: 0 });
+  });
+
+  test('groundTruthEvidence uses annotator A, falls back to the majority, or everything when ungraded', () => {
+    const items = [{ key: 'a' }, { key: 'b' }, { key: 'c' }];
+    expect(J.groundTruthEvidence(items, [])).toEqual(items);
+    const verdicts = [
+      { key: 'a', correct: true, annotator: 'A' }, { key: 'b', correct: false, annotator: 'A' }, { key: 'c', correct: true, annotator: 'A' },
+      { key: 'a', correct: true, annotator: 'B' }, { key: 'b', correct: true, annotator: 'B' }, { key: 'c', correct: false, annotator: 'B' },
+    ];
+    expect(J.groundTruthEvidence(items, verdicts, 'A').map(e => e.key)).toEqual(['a', 'c']);   // A's verdicts only
+    expect(J.groundTruthEvidence(items, verdicts, 'B').map(e => e.key)).toEqual(['a', 'b']);
+    // A has not graded this run → majority of everyone (ties keep).
+    const onlyB = verdicts.filter(v => v.annotator === 'B');
+    expect(J.groundTruthEvidence(items, onlyB, 'A').map(e => e.key)).toEqual(['a', 'b']);
+    // No annotator filter → plain majority.
+    expect(J.groundTruthEvidence(items, verdicts, null).map(e => e.key)).toEqual(['a', 'b', 'c']);
+  });
+
+  test('page level: pages are origin + path, scored as sets', () => {
+    expect(J.normalizePageUrl('https://www.Booking.com/searchresults.html?ss=Austin&sid=abc#map')).toBe('https://www.booking.com/searchresults.html');
+    expect(J.normalizePageUrl('https://x.com/a/b/')).toBe('https://x.com/a/b');
+    expect(J.normalizePageUrl('')).toBe('');
+    const gt = [{ key: 'a', url: 'https://s.com/p1?x=1' }, { key: 'b', url: 'https://s.com/p1?x=2' }, { key: 'c', url: 'https://s.com/p2' }];
+    const cand = [{ key: 'x', url: 'https://s.com/p1' }, { key: 'y', url: 'https://s.com/p3' }];
+    const sc = J.pageLevelScore(gt, cand);
+    expect(sc.gt_pages).toEqual(['https://s.com/p1', 'https://s.com/p2']);   // two crops on p1 = one page
+    expect(sc.page_tp).toBe(1); expect(sc.page_fp).toBe(1); expect(sc.page_fn).toBe(1);
+    expect(sc.page_precision).toBe(0.5); expect(sc.page_recall).toBe(0.5); expect(sc.page_f1).toBe(0.5);
+    expect(J.pageLevelScore([], [])).toMatchObject({ page_precision: 1, page_recall: 1 });
+    const agg = J.aggregateJudgments([{ page_precision: 1, page_recall: 0.5, page_f1: 2 / 3 }, { precision: 1 }]);
+    expect(agg.page_runs).toBe(1); expect(agg.mean_page_recall).toBe(0.5);
+  });
+
+  test('runWithConcurrency caps in-flight work, keeps input order, and isolates failures', async () => {
+    let inFlight = 0, peak = 0;
+    const seen = [];
+    const out = await J.runWithConcurrency([1, 2, 3, 4, 5, 6], 3, async (n) => {
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise(r => setTimeout(r, 5));
+      inFlight--;
+      if (n === 4) throw new Error('boom');
+      return n * 10;
+    }, (n, r) => seen.push([n, r.ok]));
+    expect(peak).toBe(3);
+    expect(out.map(r => r.ok ? r.value : `err:${r.error.message}`)).toEqual([10, 20, 30, 'err:boom', 50, 60]);
+    expect(seen).toHaveLength(6);
+    expect(await J.runWithConcurrency([], 4, async () => 1)).toEqual([]);
+    expect(J.JUDGE_MODELS[0].model).toBe('google/gemini-3.1-pro-preview');
+  });
+
+  test('judgments are kept per judge; old per-pair entries migrate under their judge', () => {
+    expect(J.judgmentKey('b1', 'r1', 'gpt-4o')).toBe('b1|r1|gpt-4o');
+    const migrated = J.migrateJudgments({
+      'b1|r1': { baseline_id: 'b1', run_id: 'r1', judge_model: 'google/gemini-3.1-pro-preview', f1: 1 },
+      'b1|r1|gpt-4o': { baseline_id: 'b1', run_id: 'r1', judge_model: 'gpt-4o', f1: 0.5 },
+      'junk': null,
+    });
+    expect(Object.keys(migrated).sort()).toEqual(['b1|r1|google/gemini-3.1-pro-preview', 'b1|r1|gpt-4o']);
+    expect(J.JUDGE_MODELS.some(m => m.provider === 'openai' && m.model === 'gpt-4o')).toBe(true);
+  });
+
+  test('judgeAgreement compares two judges on the pairs both judged', () => {
+    const g = [{ baseline_id: 'b', run_id: '1', answer_correct: true, f1: 1 }, { baseline_id: 'b', run_id: '2', answer_correct: false, f1: 0 }, { baseline_id: 'b', run_id: '3', answer_correct: true, f1: 0.5 }];
+    const o = [{ baseline_id: 'b', run_id: '1', answer_correct: true, f1: 0.5 }, { baseline_id: 'b', run_id: '2', answer_correct: true, f1: 0 }];
+    const ag = J.judgeAgreement(g, o);
+    expect(ag.pairs).toBe(2); expect(ag.answer_agree).toBe(1); expect(ag.answer_agreement).toBe(0.5);
+    expect(ag.mean_abs_f1_diff).toBeCloseTo(0.25); expect(ag.disagreeing_pairs).toEqual(['b|2']);
+    expect(J.judgeAgreement([], o).pairs).toBe(0);
+  });
+
+  test('aggregateJudgments: accuracy, mean and micro P/R/F1', () => {
+    const agg = J.aggregateJudgments([
+      { answer_correct: true, precision: 1, recall: 0.5, f1: 2 / 3, tp: 1, fp: 0, fn: 1 },
+      { answer_correct: false, precision: 0.5, recall: 1, f1: 2 / 3, tp: 1, fp: 1, fn: 0 },
+      null,
+    ]);
+    expect(agg.runs).toBe(2); expect(agg.answer_correct).toBe(1); expect(agg.answer_accuracy).toBe(0.5);
+    expect(agg.mean_precision).toBeCloseTo(0.75); expect(agg.mean_recall).toBeCloseTo(0.75);
+    expect(agg.micro_precision).toBeCloseTo(2 / 3); expect(agg.micro_recall).toBeCloseTo(2 / 3); expect(agg.micro_f1).toBeCloseTo(2 / 3);
+    expect(J.aggregateJudgments([]).answer_accuracy).toBeNull();
+  });
+});
+
 describe('Annotator site logic (annotate/annotate_logic.js)', () => {
   const L = require('../../annotate/annotate_logic.js');
 
@@ -12641,6 +14824,114 @@ describe('Annotator site logic (annotate/annotate_logic.js)', () => {
     trajectory_id: tid, annotator_id: who, answer_correct: answer,
     step_labels: corrects.map((c, i) => ({ step: i + 1, correct: c })),
   }, extra);
+
+  test('defaultStepLabels starts every step as correct, so the annotator only flags the wrong ones', () => {
+    const labels = L.defaultStepLabels([{ n: 1 }, { n: 2 }, {}]);
+    expect(labels).toEqual([
+      { step: 1, correct: true, error_type: '', note: '' },
+      { step: 2, correct: true, error_type: '', note: '' },
+      { step: 3, correct: true, error_type: '', note: '' },
+    ]);
+    expect(L.defaultStepLabels(null)).toEqual([]);
+  });
+
+  test('evidence labels are the annotation: gate, completion and defaults', () => {
+    const evidence = [{ key: 'pink_paddle' }, { key: '97' }, { key: 'pink_paddle' }];
+    expect(L.defaultEvidenceLabels(evidence)).toEqual([
+      { key: 'pink_paddle', correct: null, problem: '', note: '' },
+      { key: '97', correct: null, problem: '', note: '' },
+    ]);
+    const keys = ['pink_paddle', '97'];
+    const base = { trajectory_id: 't', annotator_id: 'A', evidence_count: 2 };
+    // Nothing graded: both named. Steps and the answer are not asked for at all.
+    expect(L.annotationProblem({ ...base, evidence_labels: [] }, 5, keys)).toBe('Evidence ev:pink_paddle, ev:97 not graded yet.');
+    expect(L.annotationProblem({ ...base, evidence_labels: [{ key: 'pink_paddle', correct: true }] }, 5, keys)).toBe('Evidence ev:97 not graded yet.');
+    // Incorrect needs a problem type.
+    expect(L.annotationProblem({ ...base, evidence_labels: [{ key: 'pink_paddle', correct: true }, { key: '97', correct: false }] }, 5, keys)).toBe('Pick a problem for ev:97.');
+    const done = { ...base, evidence_labels: [{ key: 'pink_paddle', correct: true }, { key: '97', correct: false, problem: 'missing' }] };
+    expect(L.annotationProblem(done, 5, keys)).toBeNull();
+    expect(L.annotationProblem({ ...done, answer_correct: null, step_labels: [] }, 5, keys)).toBeNull();
+    // Completion is by count: a saved row that graded everything it was shown is done.
+    expect(L.annotationComplete(done)).toBe(true);
+    expect(L.annotationComplete({ ...done, evidence_count: 3 })).toBe(false);
+    expect(L.annotationComplete({ ...base, evidence_count: 0, evidence_labels: [] })).toBe(true);
+    // normalizeAnnotation drops the problem on a correct item and unknown problem ids.
+    const n = L.normalizeAnnotation({ ...base, evidence_labels: [{ key: 'a', correct: true, problem: 'missing' }, { key: 'b', correct: false, problem: 'bogus' }] });
+    expect(n.evidence_labels).toEqual([{ key: 'a', correct: true, problem: '', note: '' }, { key: 'b', correct: false, problem: '', note: '' }]);
+  });
+
+  test('agreement is computed on evidence labels, paired by key', () => {
+    const ev = (who, tid, labels, count = labels.length) => ({ trajectory_id: tid, annotator_id: who, evidence_count: count,
+      evidence_labels: Object.entries(labels).map(([key, v]) => ({ key, correct: v[0], problem: v[1] || '' })) });
+    const trajectories = [{ id: 't1', title: 'One' }, { id: 't2', title: 'Two' }];
+    const results = [
+      ev('A', 't1', { a: [true], b: [false, 'irrelevant'], c: [true] }),
+      ev('B', 't1', { a: [true], b: [false, 'unsupported'], c: [false, 'missing'] }),
+      ev('A', 't2', { x: [true] }, 2),   // A graded 1 of 2 → not complete
+    ];
+    const rep = L.agreementReport(trajectories, results, 'A', 'B');
+    const t1 = rep.perTrajectory[0];
+    expect(t1.evidence_compared).toBe(3);
+    expect(t1.evidence_agreement).toBeCloseTo(2 / 3);
+    expect(t1.disagreeing_evidence).toEqual(['c']);
+    expect(t1.evidence_problem_agreement).toBe(0);     // both said b is wrong, for different reasons
+    expect(t1.complete_a && t1.complete_b).toBe(true);
+    const t2 = rep.perTrajectory[1];
+    expect(t2.complete_a).toBe(false);
+    expect(t2.has_b).toBe(false);
+    expect(rep.overall.trajectories_complete_both).toBe(1);
+    expect(rep.overall.evidence_compared).toBe(3);
+    expect(L.agreementCsv(rep).split('\n')[0]).toMatch(/^trajectory_id,title,evidence_compared,evidence_agreement,evidence_kappa/);
+  });
+
+  test('answerEvidence normalizes the saved crops and splitAnswerMarkers finds every [ev:key]', () => {
+    const arms = { grounding: { answer_evidence: [
+      { key: 'pink_paddle', note: 'cheapest pink', screenshot: '/9j/AAA', source: 'citation', step: 4 },
+      { key: 7, image: 'iVBOR', cited: false },
+      null,
+    ] } };
+    expect(L.answerEvidence(arms)).toEqual([
+      { key: 'pink_paddle', note: 'cheapest pink', screenshot: '/9j/AAA', step: 4, source: 'citation', cited: true },
+      { key: '7', note: '', screenshot: 'iVBOR', step: null, source: '', cited: false },
+    ]);
+    expect(L.answerEvidence({ grounding: { answer_evidence: { a: { screenshot: 'x' } } } })[0].key).toBe('a');
+    expect(L.answerEvidence(null)).toEqual([]);
+    expect(L.splitAnswerMarkers('Paddle for $10.34 [ev:pink_paddle], and [ev:green_paddle].')).toEqual([
+      { text: 'Paddle for $10.34 ' }, { ev: 'pink_paddle', raw: 'pink_paddle' }, { text: ', and ' }, { ev: 'green_paddle', raw: 'green_paddle' }, { text: '.' },
+    ]);
+    // Free-text markers are accepted and normalized to the key the saved evidence would carry.
+    expect(L.splitAnswerMarkers('open until 9 [ev:Sportsplex Hours 4:00pm - 9:00pm].')).toEqual([
+      { text: 'open until 9 ' }, { ev: 'sportsplex_hours_4_00pm_-_9_00pm', raw: 'Sportsplex Hours 4:00pm - 9:00pm' }, { text: '.' },
+    ]);
+    expect(L.answerEvidence({ grounding: { answer_evidence: [{ key: 'Sportsplex Hours 4:00pm - 9:00pm', screenshot: 'x' }] } })[0].key).toBe('sportsplex_hours_4_00pm_-_9_00pm');
+    expect(L.splitAnswerMarkers('no markers')).toEqual([{ text: 'no markers' }]);
+    expect(L.splitAnswerMarkers('')).toEqual([{ text: '' }]);
+  });
+
+  test('applyTrajectoryPatch changes only the patched fields and mirrors the answer into the arm', () => {
+    const t = { id: 't1', title: 'Old', goal: 'g', agent_answer: 'old answer', in_annotation: true,
+      arms: { grounding: { answer: 'old answer', steps: [{ n: 1 }] } }, trajectory: [{ n: 1 }] };
+    const out = L.applyTrajectoryPatch(t, { agent_answer: '  new answer ', in_annotation: false });
+    expect(out.agent_answer).toBe('new answer');
+    expect(out.arms.grounding.answer).toBe('new answer');
+    expect(out.arms.grounding.steps).toBe(t.arms.grounding.steps);   // untouched, not re-copied
+    expect(out.in_annotation).toBe(false);
+    expect(out.title).toBe('Old');
+    expect(out.trajectory).toBe(t.trajectory);
+    expect(t.agent_answer).toBe('old answer');                        // input not mutated
+    expect(t.arms.grounding.answer).toBe('old answer');
+    expect(L.applyTrajectoryPatch(t, { title: '  ' }).title).toBeNull();
+    expect(L.applyTrajectoryPatch(t, { source_task_id: ' annot-09 ' }).source_task_id).toBe('annot-09');
+    expect(L.applyTrajectoryPatch(t, { source_task_id: '' }).source_task_id).toBeNull();
+  });
+
+  test('trajectoryPatchDiff sends only what differs, reading the answer from the arm when the column is empty', () => {
+    const t = { id: 't1', title: 'A', goal: 'g', agent_answer: '', arms: { grounding: { answer: 'from arm' } } };
+    expect(L.trajectoryPatchDiff(t, { title: 'A', goal: 'g', agent_answer: 'from arm', in_annotation: true })).toEqual({});
+    expect(L.trajectoryPatchDiff(t, { title: 'B', agent_answer: 'fixed', in_annotation: false }))
+      .toEqual({ title: 'B', agent_answer: 'fixed', in_annotation: false });
+    expect(L.trajectoryPatchDiff(t, { source_task_id: 'annot-09' })).toEqual({ source_task_id: 'annot-09' });
+  });
 
   test('normalizeAnnotation drops the error type on a correct step and problems on a correct answer', () => {
     const n = L.normalizeAnnotation({
@@ -12656,11 +14947,11 @@ describe('Annotator site logic (annotate/annotate_logic.js)', () => {
     expect(n.duration_ms).toBe(1201);
   });
 
-  test('annotationProblem names the missing pieces in order', () => {
-    expect(L.annotationProblem({ annotator_id: '' }, 2)).toMatch(/annotator ID/);
-    expect(L.annotationProblem(ann('A', 't', [true, null], true), 2)).toMatch(/Step 2/);
-    expect(L.annotationProblem(ann('A', 't', [true, true], null), 2)).toMatch(/final answer/);
-    expect(L.annotationProblem(ann('A', 't', [true, true], false), 2)).toMatch(/problem/);
+  test('annotationProblem asks for the annotator, then only for the evidence', () => {
+    expect(L.annotationProblem({ annotator_id: '' }, 2)).toMatch(/Annotator A or B/);
+    // Ungraded steps and an unjudged answer no longer block submission.
+    expect(L.annotationProblem(ann('A', 't', [true, null], null), 2, [])).toBeNull();
+    expect(L.annotationProblem(ann('A', 't', [true, true], false), 2, ['k'])).toMatch(/ev:k not graded/);
     expect(L.annotationProblem(ann('A', 't', [true, true], false, { answer_problems: ['incomplete'] }), 2)).toBeNull();
   });
 
@@ -12699,6 +14990,6 @@ describe('Annotator site logic (annotate/annotate_logic.js)', () => {
     expect(L.listAnnotators(results)).toEqual(['A', 'B']);
     const csv = L.agreementCsv(rep);
     expect(csv.split('\n')).toHaveLength(3);
-    expect(csv).toContain('"t1","One","3","3","0.667"');
+    expect(csv).toContain('"true","true","3","3","0.667"');   // step columns follow the evidence ones
   });
 });

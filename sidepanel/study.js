@@ -103,17 +103,137 @@ function _gradeFindAnswer(selected, correct) {
   return String(selected || '').trim().toLowerCase() === String(correct || '').trim().toLowerCase();
 }
 
+// ── THE V2 FIND DESIGN: two groups, four cells, one Yes/No verdict ──────────────
+//
+// V1 asked the participant to FIND the answer and pick it out of four options. V2 asks them to
+// VERIFY one: the page and the agent's answer are both in front of them, and the only question is
+// whether that answer is right. This is a different task, and the whole assignment below exists to
+// make sure the answer they are asked to judge is a fair draw.
+//
+// GROUPS. A participant does one task style, not both, so a within-participant comparison is never
+// confounded by the text/visual difference:
+//
+//   Group A -> Find x Text      Group B -> Find x Visual
+//
+// assigned round robin by the participant's slot: 1st -> A, 2nd -> B, 3rd -> A, ...
+//
+// CELLS. Inside their group the four cells are crossed, so one sitting covers both axes:
+//
+//                   grounded                    non-grounded
+//   correct         correct_grounding           correct_nongrounding
+//   incorrect       incorrect_grounding         incorrect_nongrounding
+//
+// A participant walks one question per cell, so half of what they judge is correct and half is not,
+// and half is grounded and half is bare. The starting cell rotates with the slot, so which question
+// carries which cell differs between participants and no single question is always the wrong one.
+
+/** Group A runs the text questions, group B the visual ones. */
+const STUDY_FIND_GROUPS = {
+  A: { taskStyle: 'find_text',   label: 'Find \u00d7 Text' },
+  B: { taskStyle: 'find_visual', label: 'Find \u00d7 Visual' },
+};
+
 /**
- * Fisher-Yates shuffle. `rng` is injectable (defaults to Math.random) so tests can get a
- * deterministic order.
+ * The cells in the order they are dealt. Must stay equal to STUDY_V2_VARIANTS in
+ * study_responses.js — a unit test pins that. Spelt again here rather than imported because this
+ * file loads FIRST and these are top-level pure functions; reaching for the other file's constant
+ * at load time is what threw the last time it was tried.
  */
-function _shuffleStudyOptions(arr, rng = Math.random) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+const STUDY_FIND_CELLS = [
+  'correct_grounding',
+  'correct_nongrounding',
+  'incorrect_grounding',
+  'incorrect_nongrounding'
+];
+
+/** find_visual vs find_text. tasks.json mixes "FIND X VISUAL" and "FIND x TEXT", hence the /i. */
+function _findTaskStyle(task) {
+  return /visual/i.test(String(task?.type || '')) ? 'find_visual' : 'find_text';
+}
+
+/** Round robin: even slots run group A, odd slots group B. */
+function _studyGroupForSlot(slot) {
+  return (((Number(slot) || 0) % 2) + 2) % 2 === 0 ? 'A' : 'B';
+}
+
+/**
+ * How many questions a participant actually answers: whole four-cell rounds only.
+ *
+ * A partial round is not a smaller version of the design, it is an UNBALANCED one — six questions
+ * dealt round robin gives four correct answers and two incorrect, so the participant meets more
+ * right answers than wrong ones and "did they say yes too often" stops being answerable. Better to
+ * hold the remainder back and say so than to run a lopsided sitting.
+ */
+function _balancedFindCount(available) {
+  const n = Math.max(0, Math.floor(Number(available) || 0));
+  return n - (n % STUDY_FIND_CELLS.length);
+}
+
+/** Rotate a list so consecutive participants start at a different place in it. Pure. */
+function _rotateForSlot(items, slot) {
+  const list = Array.isArray(items) ? items : [];
+  const n = list.length;
+  if (!n) return [];
+  const k = (((Number(slot) || 0) % n) + n) % n;
+  return list.slice(k).concat(list.slice(0, k));
+}
+
+/**
+ * The cell for each question this participant will see, in queue order. Pure.
+ *
+ * @param {number} count - how many questions (a multiple of four; see _balancedFindCount)
+ * @param {number} slot  - the participant's assignment slot
+ */
+function _dealFindVariants(count, slot) {
+  const n = STUDY_FIND_CELLS.length;
+  const start = (((Number(slot) || 0) % n) + n) % n;
+  const out = [];
+  for (let i = 0; i < Math.max(0, Number(count) || 0); i++) {
+    out.push(STUDY_FIND_CELLS[(start + i) % n]);
   }
-  return a;
+  return out;
+}
+
+/**
+ * Was the participant's Yes/No right?
+ *
+ * Scored against the answer that was SHOWN, never against a fixed property of the question — the
+ * same question is correct for one participant and incorrect for the next, which is the point of
+ * the correctness axis. supabase_schema_v2.sql makes the same point about `variant_key`.
+ *
+ * Deliberately reads the cell name itself rather than calling _variantCorrectness, so this stays a
+ * self-contained pure function in the file the study screens live in.
+ *
+ * @param {boolean} verdict - true = the participant said the answer is correct
+ * @param {string} variantKey - the cell that was shown
+ */
+function _gradeFindVerdict(verdict, variantKey) {
+  const shownCorrect = !String(variantKey || '').startsWith('incorrect');
+  return !!verdict === shownCorrect;
+}
+
+/**
+ * Everything the assignment decides for one participant, from their slot. Pure.
+ *
+ * @param {Array<object>} findTasks - every find task in the bank, in file order
+ * @param {number} slot
+ * @returns {{group: string, taskStyle: string, tasks: Array<object>, variants: Array<string>,
+ *            heldBack: number}}
+ */
+function _assignFindSession(findTasks, slot) {
+  const group = _studyGroupForSlot(slot);
+  const taskStyle = STUDY_FIND_GROUPS[group].taskStyle;
+  const eligible = (findTasks || []).filter(t => _findTaskStyle(t) === taskStyle);
+  // Rotated before the cut, so two participants in the same group do not always get the same four.
+  const rotated = _rotateForSlot(eligible, slot);
+  const count = _balancedFindCount(rotated.length);
+  return {
+    group,
+    taskStyle,
+    tasks: rotated.slice(0, count),
+    variants: _dealFindVariants(count, slot),
+    heldBack: rotated.length - count,
+  };
 }
 
 const STUDY_EVIDENCE_PROMPTS = [
@@ -188,10 +308,23 @@ function _buildStudyResultRecord(ctx) {
     taskType, task, condition, elapsedMs, answer,
     notesElapsedMs, answerElapsedMs, answerChoiceMs, findSupportingMs,
     evidenceResponses, guideAnswer, groundTruth, confidence, helpfulness, chatSnapshot, behaviorData,
+    variantKey, claimTextSnapshot,
   } = ctx;
 
   const questionOrTask = taskType === 'find' ? task.question : task.task;
-  const answerCorrect = taskType === 'find' ? _gradeFindAnswer(answer, task.answer) : null;
+  // V2 Find is a VERDICT on the answer shown, so it is graded against the cell that was dealt —
+  // the same question is correct for one participant and incorrect for the next. `answer` is
+  // 'yes'/'no' here rather than a copied-out option.
+  //
+  // The V1 branch stays for a row recorded before the cells existed, and for a bank replayed
+  // without an assignment: without a variantKey there is nothing to score a verdict against, and
+  // silently grading 'yes' as a wrong option string would fill the column with falses.
+  const findVerdict = taskType === 'find' && variantKey
+    ? String(answer || '').trim().toLowerCase() === 'yes'
+    : null;
+  const answerCorrect = taskType !== 'find'
+    ? null
+    : (variantKey ? _gradeFindVerdict(findVerdict, variantKey) : _gradeFindAnswer(answer, task.answer));
   // Every score column is present on every row, null when there is nothing to score, so the CSV has
   // no ragged columns and a find row cannot be mistaken for an unscored guide row. The scorer
   // returns domain names (verdict_correct); the columns carry a score_ prefix so a reader can tell
@@ -227,9 +360,14 @@ function _buildStudyResultRecord(ctx) {
     time_ms:           elapsedMs,
     notes_time_ms:     notesElapsedMs ?? null,
     // answer_time_ms is the whole Answer screen. The two halves below split it at the moment the
-    // participant commits to a multiple-choice answer: everything before is reading the agent's
-    // answer and deciding, everything after is finding the evidence for it on the page. They are
-    // different acts, and averaging them together hides which one the grounding actually helped.
+    // participant commits to their Yes/No: everything before is reading the agent's answer and
+    // deciding whether it is right, everything after is finding the evidence for that judgement on
+    // the page. They are different acts, and averaging them together hides which one the grounding
+    // actually helped.
+    //
+    // `answer_multiple_choice_ms` is a HISTORICAL name — it is the time-to-verdict now, and the
+    // column is kept rather than renamed because study_task_results already holds V1 rows under it.
+    // The V2 table calls the same number `verdict_time_ms`; see _buildFindV2ResultRow.
     answer_time_ms:    answerElapsedMs ?? null,
     answer_multiple_choice_ms: answerChoiceMs ?? null,
     find_supporting_answer_ms: findSupportingMs ?? null,
@@ -250,6 +388,17 @@ function _buildStudyResultRecord(ctx) {
     answer:            answer,
     answer_correct:    answerCorrect,
     question_or_task:  questionOrTask,
+    // ── The V2 assignment, carried on the V1 row too ──
+    // `study_task_results` has no column for these, so they are stripped before that insert and
+    // survive inside task_data (below). They are top level here because the CSV is what gets
+    // analysed first, and a verdict whose cell is not beside it cannot be interpreted at all: the
+    // same question is correct for one participant and incorrect for the next.
+    variant_key:        variantKey || null,
+    participant_verdict: findVerdict,
+    // The wording that produced the verdict. Stored per row because the item can be re-authored
+    // later, and a judgement is only meaningful against the exact text that was judged — the same
+    // reason supabase_schema_v2.sql keeps claim_text_snapshot.
+    claim_text_snapshot: claimTextSnapshot || null,
     confidence:        confidence || null,
     helpfulness:       helpfulness || null,
     chat_turn_count:   snap.chat_turn_count || 0,
@@ -266,7 +415,13 @@ function _buildStudyResultRecord(ctx) {
     agent_think_ms:     beh.agent_think_ms     || [],
     page_visit_count:   beh.page_visit_count   || 0,
     page_visit_urls:    beh.page_visit_urls    || [],
-    task_data:          task,
+    // The assignment rides along inside task_data so a V1 row is self-describing even though the
+    // table has no columns for it.
+    task_data:          Object.assign({}, task, {
+      variant_key: variantKey || null,
+      participant_verdict: findVerdict,
+      claim_text_snapshot: claimTextSnapshot || null,
+    }),
   };
 }
 
@@ -276,7 +431,7 @@ const STUDY_CSV_COLUMNS = [
   'notes_time_ms', 'answer_time_ms', 'answer_multiple_choice_ms', 'find_supporting_answer_ms',
   'evidence_responses', 'guide_answer_correct', 'guide_answer_problems', 'guide_answer_problem',
   'guide_errors', ...GUIDE_SCORE_COLUMNS, 'answer',
-  'answer_correct', 'confidence', 'helpfulness', 'chat_turn_count',
+  'answer_correct', 'variant_key', 'participant_verdict', 'confidence', 'helpfulness', 'chat_turn_count',
   'scroll_user_count', 'scroll_agent_count', 'ctrl_f_count', 'text_select_count', 'click_count',
   'mouse_move_px', 'agent_think_ms', 'page_visit_count', 'page_visit_urls', 'completed_at',
 ];
@@ -356,7 +511,15 @@ if (typeof window !== 'undefined') {
   window._formatStudyTime = _formatStudyTime;
   window._buildTaskQueue = _buildTaskQueue;
   window._gradeFindAnswer = _gradeFindAnswer;
-  window._shuffleStudyOptions = _shuffleStudyOptions;
+  window.STUDY_FIND_GROUPS = STUDY_FIND_GROUPS;
+  window.STUDY_FIND_CELLS = STUDY_FIND_CELLS;
+  window._findTaskStyle = _findTaskStyle;
+  window._studyGroupForSlot = _studyGroupForSlot;
+  window._balancedFindCount = _balancedFindCount;
+  window._rotateForSlot = _rotateForSlot;
+  window._dealFindVariants = _dealFindVariants;
+  window._gradeFindVerdict = _gradeFindVerdict;
+  window._assignFindSession = _assignFindSession;
   window._studyEvidencePrompts = _studyEvidencePrompts;
   window._buildStudyResultRecord = _buildStudyResultRecord;
   window._buildStudyResultsCSV = _buildStudyResultsCSV;
@@ -386,7 +549,14 @@ if (typeof window !== 'undefined') {
     taskFilter: 'all',  // debug only: examine just one half of the study
     participantId: '',
     sessionId: null, // study_sessions.id once the session row is created (null if Supabase off)
-    queue: [],       // ordered [{taskType, task}, ...]
+    // V2 assignment. `assignmentSlot` is the counterbalancing counter — from the V2 project when it
+    // is configured, from a local counter otherwise — and everything else about what this
+    // participant sees is derived from it: their group, and the cell dealt to each question.
+    assignmentSlot: null,
+    group: null,        // 'A' (Find x Text) | 'B' (Find x Visual)
+    heldBack: 0,        // questions the bank had but a balanced sitting could not use
+    v2SessionId: null,  // pageguide_find_v2_sessions.id, for the verdict rows
+    queue: [],       // ordered [{taskType, task, variantKey}, ...]
     idx: 0,          // current position in queue
     results: [],
     timerInterval: null,
@@ -409,7 +579,13 @@ if (typeof window !== 'undefined') {
   async function loadTasks() {
     try {
       const url = chrome.runtime.getURL('user_study_data/tasks.json');
-      const data = await fetch(url).then(r => r.json());
+      const shipped = await fetch(url).then(r => r.json());
+      // The researcher's question/answer edits go on FIRST, so everything downstream — the queue,
+      // the recorder screen, grading, and the publish bundle — reads one wording. See the overlay
+      // note in study_responses.js for why the edits are not written back into tasks.json.
+      const data = (typeof listStudyTaskEdits === 'function' && typeof _applyStudyTaskEdits === 'function')
+        ? _applyStudyTaskEdits(shipped, await listStudyTaskEdits())
+        : shipped;
       const queue = _buildTaskQueue(data);
       // The guide half is whatever has been captured and edited — a trajectory is authored in the
       // panel, so making the researcher also hand-write it into tasks.json would be two sources of
@@ -436,6 +612,9 @@ if (typeof window !== 'undefined') {
       }
       if (queue.length && typeof pruneStudyGroundTruth === 'function') {
         await pruneStudyGroundTruth(ids);
+      }
+      if (queue.length && typeof pruneStudyTaskEdits === 'function') {
+        await pruneStudyTaskEdits(ids);
       }
       return queue;
     } catch (e) {
@@ -623,16 +802,32 @@ if (typeof window !== 'undefined') {
    */
   function studyAnswerArmSwitchHtml() {
     if (!_studyRecording()) return '';
+    const cells = STUDY_V2_VARIANTS.map(v =>
+      `<button class="study-arm-btn" data-arm="${v}">${_armLabel(v)} `
+      + `<span class="study-arm-badge" data-badge="${v}">–</span></button>`).join('');
     return `
       <div class="study-answer-arm-switch" id="study-answer-arm-switch">
         <button class="study-arm-btn study-arm-btn-active" data-arm="live">Live</button>
-        <button class="study-arm-btn" data-arm="grounding">Grounded <span class="study-arm-badge" data-badge="grounding">–</span></button>
-        <button class="study-arm-btn" data-arm="nongrounding">Non-grounded <span class="study-arm-badge" data-badge="nongrounding">–</span></button>
+        ${cells}
       </div>`;
   }
 
-  /** Labels used in buttons and notices, so "Grounded"/"Non-grounded" is spelt once. */
+  /** The V1 arm names, still what the participant-facing screens label by. */
   const STUDY_ARM_LABELS = { grounding: 'Grounded', nongrounding: 'Non-grounded' };
+
+  /**
+   * What to call one arm or one V2 cell, so each is spelt once. V2 authors four rather than two —
+   * see STUDY_V2_VARIANTS in study_responses.js for why.
+   *
+   * Resolved at CALL time, not at load time: study_responses.js owns V2_VARIANT_LABELS and this
+   * file is loaded before it, so folding the two tables together up here threw a ReferenceError
+   * on every panel open.
+   */
+  function _armLabel(name) {
+    return STUDY_ARM_LABELS[name]
+      || (typeof V2_VARIANT_LABELS !== 'undefined' ? V2_VARIANT_LABELS[name] : null)
+      || name;
+  }
 
   /** • saved · ✎ unsaved draft · – nothing yet. */
   function _studyArmBadge(arm) {
@@ -708,15 +903,20 @@ if (typeof window !== 'undefined') {
       return (id != null && typeof _getAnswerPayload === 'function') ? _getAnswerPayload(id) : null;
     };
 
-    const arms = {
-      grounding: { record: taskId ? await getStudyResponse(taskId, 'grounding') : null, draft: null, dirty: false },
-      nongrounding: { record: taskId ? await getStudyResponse(taskId, 'nongrounding') : null, draft: null, dirty: false }
-    };
-    // With no live answer this run, open on whichever arm actually has something to read rather
+    const arms = {};
+    for (const variant of STUDY_V2_VARIANTS) {
+      arms[variant] = {
+        record: taskId ? await getStudyResponse(taskId, variant) : null,
+        draft: null,
+        dirty: false
+      };
+    }
+    // With no live answer this run, open on whichever cell actually has something to read rather
     // than on an empty Live tab.
     const hasLive = !!(snapshot?.answers || []).length;
-    let active = hasLive ? 'live'
-      : (arms.grounding.record ? 'grounding' : (arms.nongrounding.record ? 'nongrounding' : 'live'));
+    let active = hasLive
+      ? 'live'
+      : (STUDY_V2_VARIANTS.find(v => arms[v].record) || 'live');
 
     const setNote = (msg) => { if (note) note.textContent = msg || ''; };
 
@@ -739,14 +939,17 @@ if (typeof window !== 'undefined') {
      */
     const syncPageForArm = (name) => {
       if (typeof sendToContentScript !== 'function') return;
-      if (name === 'grounding') {
-        const record = arms.grounding?.record;
+      // Read grounded-ness off the cell rather than matching a name, so the incorrect-grounded
+      // cell replays its citations too — a wrong answer with real citations is the whole point of
+      // the incorrect arm, and matching 'grounding' exactly would have shown it bare.
+      if (name !== 'live' && _variantIsGrounded(name)) {
+        const record = arms[name]?.record;
         const answer = record?.answer_raw || record?.answer_display || '';
         const anchors = Array.isArray(record?.citation_anchors) ? record.citation_anchors : [];
         if (answer && (anchors.length || /\[\d+:"/.test(answer))) {
           sendToContentScript({ action: 'showSavedGrounding', anchors, answer }).catch(() => {});
         }
-      } else if (name === 'nongrounding') {
+      } else if (name !== 'live') {
         sendToContentScript({ action: 'showSavedGrounding', anchors: [], answer: '' }).catch(() => {});
         sendToContentScript({ action: 'setAnswerHighlightsVisible', visible: false }).catch(() => {});
       } else {
@@ -775,16 +978,22 @@ if (typeof window !== 'undefined') {
       if (active === 'live') {
         // Name the target when there is a choice, so it is never ambiguous which answer is banked.
         const which = liveAnswerIds.length > 1 ? ` (answer ${liveIndex + 1})` : '';
-        return `<button class="study-act-btn study-act-primary" data-act="save-grounded">💾 Save as Grounded${which}</button>` +
+        // TWO targets, because which cell a live run belongs in is a judgement the researcher makes
+        // and the panel cannot: the same question run on a weaker model produces the incorrect arm's
+        // answer, and it arrives here looking exactly like the correct one.
+        return `<button class="study-act-btn study-act-primary" data-act="save-live" data-variant="correct_grounding">💾 Save as ${_armLabel('correct_grounding')}${which}</button>` +
+          `<button class="study-act-btn" data-act="save-live" data-variant="incorrect_grounding">💾 Save as ${_armLabel('incorrect_grounding')}${which}</button>` +
           `<button class="study-act-btn" data-act="edit">✏️ Edit</button>`;
       }
       const arm = arms[active];
       const hasText = !!_studyArmText(arm);
-      const strip = active === 'grounding' && hasText
-        ? `<button class="study-act-btn" data-act="strip">✂️ Strip → Non-grounded</button>` : '';
+      // Strips down its own row of the 2x2 — see _bareTwinOf. A wrong answer with the citations
+      // taken out is still the wrong answer, not the correct arm's bare version.
+      const strip = _variantIsGrounded(active) && hasText
+        ? `<button class="study-act-btn" data-act="strip">✂️ Strip → ${_armLabel(_bareTwinOf(active))}</button>` : '';
       const edit = hasText ? `<button class="study-act-btn" data-act="edit">✏️ Edit</button>` : '';
       const save = arm.dirty
-        ? `<button class="study-act-btn study-act-primary" data-act="save-arm">💾 Save as ${STUDY_ARM_LABELS[active]}</button>` : '';
+        ? `<button class="study-act-btn study-act-primary" data-act="save-arm">💾 Save as ${_armLabel(active)}</button>` : '';
       return strip + edit + save;
     }
 
@@ -803,7 +1012,7 @@ if (typeof window !== 'undefined') {
         const text = _studyArmText(arm);
         list.innerHTML = text
           ? studySavedAnswerHtml(arm.draft != null ? arm.draft : arm.record, arm.record?.evidence)
-          : `<div class="study-llm-answer-message study-llm-answer-plain">Nothing recorded for the ${STUDY_ARM_LABELS[active].toLowerCase()} arm yet.</div>`;
+          : `<div class="study-llm-answer-message study-llm-answer-plain">Nothing recorded for the ${_armLabel(active)} cell yet.</div>`;
       }
       if (actions) actions.innerHTML = actionsHtml();
       sw.querySelectorAll('.study-arm-btn').forEach(b => {
@@ -841,7 +1050,7 @@ if (typeof window !== 'undefined') {
       let anchorNote = '';
       const citationCount = _studyCitationCount(toSave.answer_raw || toSave.answer_display || '');
       const anchorCount = Array.isArray(toSave.citation_anchors) ? toSave.citation_anchors.length : 0;
-      if (armName === 'grounding' && /\[\d+:"/.test(toSave.answer_raw || toSave.answer_display || '')
+      if (_variantIsGrounded(armName) && /\[\d+:"/.test(toSave.answer_raw || toSave.answer_display || '')
         && anchorCount < citationCount
         && typeof _attachCitationAnchors === 'function') {
         const anchored = await _attachCitationAnchors(toSave);
@@ -856,7 +1065,7 @@ if (typeof window !== 'undefined') {
       arm.record = toSave;
       arm.draft = null;
       arm.dirty = false;
-      setNote(`Saved ${STUDY_ARM_LABELS[armName].toLowerCase()} answer for ${taskId}${res.synced ? ' (synced)' : ' (local)'}.${anchorNote}`);
+      setNote(`Saved ${_armLabel(armName)} answer for ${taskId}${res.synced ? ' (synced)' : ' (local)'}.${anchorNote}`);
       return true;
     }
 
@@ -881,23 +1090,26 @@ if (typeof window !== 'undefined') {
       if (!btn) return;
       const act = btn.dataset.act;
 
-      if (act === 'save-grounded') {
+      if (act === 'save-live') {
+        const variant = btn.dataset.variant || 'correct_grounding';
         if (!parkedLive()?.result) {
           setNote('The live answer is no longer in memory — re-run the question, then save.');
           return;
         }
-        if (await persist('grounding', { fromParked: true })) show('grounding');
+        if (await persist(variant, { fromParked: true })) show(variant);
         else render();
         return;
       }
 
       if (act === 'strip') {
-        const source = _studyArmText(arms.grounding);
+        const source = _studyArmText(arms[active]);
         if (!source) return;
-        arms.nongrounding.draft = _stripStudyGrounding(source);
-        arms.nongrounding.dirty = true;
-        show('nongrounding');
-        setNote('Stripped from the grounded answer — edit it, then save. Nothing is stored until you do.');
+        const target = _bareTwinOf(active);
+        arms[target].draft = _stripStudyGrounding(source);
+        arms[target].dirty = true;
+        show(target);
+        setNote(`Stripped from the ${_armLabel(active)} answer — edit it, then save. `
+          + 'Nothing is stored until you do.');
         return;
       }
 
@@ -911,7 +1123,7 @@ if (typeof window !== 'undefined') {
           return;
         }
         const next = await openStudyAnswerEditor(current, {
-          title: active === 'live' ? 'Edit the live answer' : `Edit the ${STUDY_ARM_LABELS[active].toLowerCase()} answer`,
+          title: active === 'live' ? 'Edit the live answer' : `Edit the ${_armLabel(active)} answer`,
           hint: 'Markers are live: <code>[N:"…"]</code> scrolls to a highlighted span, <code>[ev:key]</code> to an annotation on the page.'
         });
         if (next == null) return;
@@ -1741,6 +1953,82 @@ if (typeof window !== 'undefined') {
   window.supabaseInsert = supabaseInsert;
 
   // Create the parent study_sessions row at study start so task rows can reference session_id.
+  /**
+   * Where a participant's assignment slot comes from when the V2 project is not configured.
+   *
+   * A local counter is NOT as good as the server's: two machines running participants at once each
+   * keep their own count, so the groups stay balanced on each machine but not across them. It
+   * exists so the study still runs offline, not as an equal alternative — when V2 is configured the
+   * atomic RPC is used instead.
+   */
+  const STUDY_LOCAL_SLOT_KEY = 'pageguide_study_local_slot';
+
+  async function _nextLocalSlot() {
+    try {
+      const data = await chrome.storage.local.get(STUDY_LOCAL_SLOT_KEY);
+      const slot = Math.max(0, Math.floor(Number(data?.[STUDY_LOCAL_SLOT_KEY]) || 0));
+      await chrome.storage.local.set({ [STUDY_LOCAL_SLOT_KEY]: slot + 1 });
+      return slot;
+    } catch (e) {
+      console.warn('[Study] local slot counter unreadable, falling back to 0:', e);
+      return 0;
+    }
+  }
+
+  /**
+   * Deal this participant their group and their four questions, and cut the queue down to them.
+   *
+   * Runs once, at Start. Everything it decides is derived from ONE number — the slot — so the whole
+   * assignment is reproducible from the recorded `assignment_slot` alone, without having to store
+   * the deal alongside it.
+   *
+   * Guide tasks are left alone: the groups are a Find design, and a guide trajectory has no
+   * correctness cell to deal. They keep riding on `s.arm`.
+   *
+   * @returns {Promise<{ok: boolean, error?: string}>}
+   */
+  async function _dealStudyQueue() {
+    const claimed = typeof claimFindV2Session === 'function'
+      ? await claimFindV2Session(s.participantId)
+      : null;
+    s.assignmentSlot = claimed ? claimed.slot : await _nextLocalSlot();
+    s.v2SessionId = claimed ? claimed.sessionId : null;
+
+    const findTasks = s.queue.filter(e => e.taskType === 'find').map(e => e.task);
+    const guideEntries = s.queue.filter(e => e.taskType === 'guide');
+    const assignment = _assignFindSession(findTasks, s.assignmentSlot);
+
+    s.group = assignment.group;
+    s.heldBack = assignment.heldBack;
+    // s.arm still exists for the guide half and for anything that labels a row by condition; for
+    // Find it is now per QUESTION, so it is derived from the first cell rather than chosen.
+    s.arm = assignment.variants.length && !_variantIsGrounded(assignment.variants[0])
+      ? 'nongrounding'
+      : 'grounding';
+
+    if (!assignment.tasks.length && findTasks.length) {
+      return {
+        ok: false,
+        error: `Group ${assignment.group} needs at least ${STUDY_FIND_CELLS.length} `
+          + `${STUDY_FIND_GROUPS[assignment.group].label} questions to run a balanced sitting, but `
+          + `only ${findTasks.filter(t => _findTaskStyle(t) === assignment.taskStyle).length} are in `
+          + 'the bank. Author more, or run the other group.'
+      };
+    }
+
+    s.queue = assignment.tasks
+      .map((task, i) => ({ taskType: 'find', task, variantKey: assignment.variants[i] }))
+      .concat(guideEntries);
+
+    if (!s.queue.length) return { ok: false, error: 'No tasks are ready to run.' };
+    return { ok: true };
+  }
+
+  /** The cell dealt to the question at a queue position, or null for a guide task. */
+  function _studyVariantAt(idx) {
+    return s.queue[idx]?.variantKey || null;
+  }
+
   async function startSession(participantId) {
     s.sessionId = null;
     const row = await supabaseInsert('study_sessions', {
@@ -1748,6 +2036,85 @@ if (typeof window !== 'undefined') {
       condition_order: studyConditionLabel(s.mode === 'study' ? s.arm : null),
     });
     if (row && row.id) s.sessionId = row.id;
+  }
+
+  /**
+   * Build the V2 verdict row. Pure, so the mapping is testable without a network.
+   *
+   * The V2 results table is not the V1 one with columns added: it records the JUDGEMENT (what was
+   * shown, what they said, whether that was right) where V1 recorded a produced answer. So this is
+   * a mapping, not a copy.
+   *
+   * @param {object} result - the local row from _buildStudyResultRecord
+   * @param {{sessionId: number|null, clientRunId: string, evidenceScores: object|null}} ctx
+   */
+  function _buildFindV2ResultRow(result, ctx = {}) {
+    const variantKey = result.variant_key || 'correct_grounding';
+    const ev = ctx.evidenceScores || {};
+    return {
+      // Idempotency handle. The schema makes it unique and grants anon UPDATE so a retry after a
+      // dropped connection lands on the same row rather than counting the participant twice.
+      result_key: `${ctx.clientRunId || 'run'}::${result.participant_id}::${result.task_id}::${result.task_index}`,
+      client_run_id: ctx.clientRunId || null,
+      session_id: ctx.sessionId ?? null,
+      participant_id: result.participant_id,
+      claim_id: result.task_id,
+      task_index: result.task_index,
+      question_index: result.question_index,
+      task_style: _findTaskStyle(result.task_data || {}),
+      condition: result.condition,
+      variant_key: variantKey,
+      question: result.question_or_task || '',
+      claim_text_snapshot: result.claim_text_snapshot || '',
+      // What the item WAS, as shown — read off the cell, not off the question.
+      claim_correct_snapshot: !String(variantKey).startsWith('incorrect'),
+      participant_verdict: !!result.participant_verdict,
+      verdict_correct: !!result.answer_correct,
+      answer_time_ms: result.answer_time_ms ?? 0,
+      verdict_time_ms: result.answer_multiple_choice_ms ?? null,
+      evidence_time_ms: result.find_supporting_answer_ms ?? null,
+      evidence_responses: result.evidence_responses || [],
+      score_evidence_precision: ev.precision ?? null,
+      score_evidence_recall: ev.recall ?? null,
+      score_evidence_exact: ev.exact ?? null,
+      score_evidence_hop_exact: ev.hop_exact ?? null,
+      confidence: result.confidence || null,
+      helpfulness: result.helpfulness || null,
+      notes: null,
+      interaction_summary: null,
+      // Nullable and NOT defaulted to zero, deliberately — the schema says so: a row whose
+      // instrumentation never started observed nothing, and a 0 would average in as a participant
+      // who sat perfectly still.
+      scroll_user_count: result.scroll_user_count ?? null,
+      ctrl_f_count: result.ctrl_f_count ?? null,
+      text_select_count: result.text_select_count ?? null,
+      click_count: result.click_count ?? null,
+      mouse_move_px: result.mouse_move_px ?? null,
+    };
+  }
+  window._buildFindV2ResultRow = _buildFindV2ResultRow;
+
+  /** One id per sitting, so a retried submit is recognisable as the same attempt. */
+  let _studyClientRunId = null;
+
+  /**
+   * Mirror one Find verdict to the V2 project. Guide tasks are skipped — they belong to the guide
+   * table, which this design does not touch.
+   *
+   * Best effort and never throws: the row is already in chrome.storage.local and in the CSV, and a
+   * participant must not be stopped mid-study by a network failure.
+   */
+  async function _persistFindV2Result(result, { taskType, variantKey } = {}) {
+    if (taskType !== 'find' || !variantKey) return false;
+    if (typeof submitFindV2Result !== 'function') return false;
+    if (!_studyClientRunId) {
+      _studyClientRunId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    const row = _buildFindV2ResultRow(result, {
+      sessionId: s.v2SessionId,
+      clientRunId: _studyClientRunId,
+    });
+    return submitFindV2Result(row);
   }
 
   // ── Persistence: chrome.storage.local (always) + Supabase (best-effort, if configured) ──
@@ -1949,7 +2316,12 @@ if (typeof window !== 'undefined') {
     let tasks = [];
     try {
       if (!wantFind) throw { skip: true };
-      const data = await fetch(chrome.runtime.getURL('user_study_data/tasks.json')).then(r => r.json());
+      const shipped = await fetch(chrome.runtime.getURL('user_study_data/tasks.json')).then(r => r.json());
+      // Published with the researcher's edits applied — the site has to carry the question the
+      // participant was actually asked, not the one that happened to ship in the file.
+      const data = (typeof listStudyTaskEdits === 'function' && typeof _applyStudyTaskEdits === 'function')
+        ? _applyStudyTaskEdits(shipped, await listStudyTaskEdits())
+        : shipped;
       tasks = (data?.find || []).map((t, i) => ({
         id: t.id,
         task_type: 'find',
@@ -2042,6 +2414,7 @@ if (typeof window !== 'undefined') {
       study_task_pages: pages,
     };
   }
+  window.listStudyPages = listStudyPages;   // study_v2_publish.js needs the captured page
   window._buildStimulusBundle = _buildStimulusBundle;
 
   /** One line per table, so the export says what it actually contains. Pure. */
@@ -2245,6 +2618,95 @@ if (typeof window !== 'undefined') {
   // job it exists for: working through the unassigned ones).
   let _guideTrajFilter = 'all';
 
+  /**
+   * WHICH SUPABASE PROJECT THE LIST IS ABOUT. V2 by default.
+   *
+   * V1 and V2 are different projects with different tables, different privilege models and
+   * different transports — V1 goes through the loopback helper that holds the secret key, V2 goes
+   * straight to a password-gated RPC. So "publish" means two different things, and the researcher
+   * has to be able to see which one they are about to do BEFORE pressing it rather than after.
+   * Making it a visible switch rather than two adjacent buttons is the difference between choosing
+   * a target and mis-clicking one.
+   *
+   * V2 is the default because it is the study that is being run; V1 stays reachable because its
+   * data is still being collected and a published V1 trajectory occasionally needs replacing.
+   */
+  let _guideTrajSource = 'v2';
+
+  /**
+   * What V2 already holds, keyed by local trajectory id. Cached for the life of the panel screen
+   * rather than re-fetched on every render: switching a filter or ticking a checkbox re-renders,
+   * and a network round trip on each of those would make the list stutter for no new information.
+   * Publishing and the ⟳ button both clear it, which are the only two ways it goes stale.
+   */
+  let _guideV2Index = null;
+
+  async function _loadGuideV2Index({ force = false } = {}) {
+    if (_guideV2Index && !force) return _guideV2Index;
+    if (typeof listGuideV2Tasks !== 'function') {
+      _guideV2Index = { ok: false, error: 'guide_v2_publish.js did not load.', byId: {}, rows: [] };
+      return _guideV2Index;
+    }
+    _guideV2Index = await listGuideV2Tasks();
+    return _guideV2Index;
+  }
+
+  /**
+   * The V2 row one banked trajectory will be published into, or null for a new one.
+   *
+   * Delegates to guide_v2_publish.js rather than matching here, so the chip on a row and the row
+   * the publish actually writes cannot disagree — a preview that matches by different rules than
+   * the publish is worse than no preview.
+   */
+  function _guideV2RowFor(index, record) {
+    if (typeof matchGuideV2Row !== 'function') return null;
+    return matchGuideV2Row(index?.rows || [], record);
+  }
+
+  /**
+   * What V2 holds for this trajectory, as one chip. Pure.
+   *
+   * Three states rather than two, because "published but not live" is the state that actually
+   * bites: the row is on V2, so nothing looks missing, and the participant never sees it. It gets
+   * the warn colour for exactly that reason. The step count is shown when it disagrees with the
+   * local one — that is the cheapest visible sign that an edited trajectory was never re-published.
+   */
+  function _guideV2ChipHtml(v2Row, record) {
+    const ticked = _guideTrajectoryInStudy(record);
+    if (!v2Row) {
+      return ticked
+        ? '<span class="study-traj-tag study-traj-tag-ok" title="Not on V2 yet — Publish guide will create it">will create</span>'
+        : '<span class="study-traj-tag study-traj-tag-none" title="Not on V2, and not ticked — Publish guide will leave it alone">not published</span>';
+    }
+    const localSteps = record?.arms?.grounding?.steps?.length || 0;
+    const drift = Number(v2Row.step_count) !== localSteps
+      ? ` V2 has ${v2Row.step_count} step${v2Row.step_count === 1 ? '' : 's'}, this has ${localSteps}.`
+      : '';
+    const when = v2Row.updated_at ? new Date(v2Row.updated_at).toLocaleString() : 'unknown';
+    // Named on the chip, because the id it updates is the one thing that cannot be guessed from
+    // here: the rows already on V2 use a different id scheme than this bank, so "which row" is a
+    // real question and matching by goal is what answers it.
+    const where = `Row ${v2Row.id}, last published ${when}.${drift}`;
+    if (!ticked) {
+      // Unticked means "not published", never "unpublished". Said plainly on the chip for the one
+      // case where the difference bites: the row is live, and leaving it unticked will NOT take it
+      // down. A researcher who reads "will remove" and gets a row still in the queue has been
+      // misled by the panel rather than by Supabase.
+      return v2Row.in_study
+        ? `<span class="study-traj-tag study-traj-tag-warn"
+            title="${escapeAttr(`Unticked here, but this row is LIVE on V2 and publishing will not `
+              + `change that — only ticked trajectories are written. Remove it in Supabase if it `
+              + `should not be walked. ${where}`)}"
+            >live on V2 ⚠ not publishing</span>`
+        : `<span class="study-traj-tag study-traj-tag-none"
+            title="${escapeAttr(`Unticked, and a draft on V2. Nothing will be written. ${where}`)}"
+            >V2 draft · skipped</span>`;
+    }
+    return `<span class="study-traj-tag ${drift ? 'study-traj-tag-warn' : 'study-traj-tag-ok'}"
+      title="${escapeAttr(`Publish guide will update this row in place, not add a second one. ${where}`)}"
+      >will update${drift ? ' ⚠' : ''}</span>`;
+  }
+
   // ── Record Annotation Trajectories ──
   // The annotator-website bank (sidepanel/annotation_trajectories.js). Deliberately a much smaller
   // screen than the guide recorder above: nothing here is edited, because the annotators grade the
@@ -2272,12 +2734,40 @@ if (typeof window !== 'undefined') {
     if (chatInput) { chatInput.value = task.task; chatInput.focus(); }
   }
 
+  /**
+   * What the annotator site is actually showing: the live rows of pageguide_annotation_trajectories
+   * (anon select is limited to in_annotation = true by RLS). Keyed by the row id AND by the bank id
+   * it was published from, so a banked capture can be matched either way. Empty when Supabase is
+   * not configured or unreachable.
+   */
+  let _liveLoadError = '';
+  async function _loadLiveAnnotationRows() {
+    _liveLoadError = '';
+    if (!(typeof window._v2Configured === 'function' && window._v2Configured())) { _liveLoadError = 'V2 Supabase is not configured'; return null; }
+    try {
+      // Only the answer evidence is selected out of `arms` (a JSON-path select): the whole column
+      // carries every step screenshot — ~30 MB for 12 rows — which the side panel cannot hold.
+      const res = await fetch(`${SUPABASE_V2_URL}/rest/v1/pageguide_annotation_trajectories?select=id,source_task_id,source_trajectory_id,title,goal,url,step_count,agent_answer,evidence:arms->grounding->answer_evidence,task_index,created_at&order=task_index.asc`, { headers: window._v2Headers() });
+      if (!res.ok) { _liveLoadError = `annotation rows: HTTP ${res.status}`; return null; }
+      const rows = await res.json();
+      return rows.map(r => Object.assign(r, { arms: { grounding: { answer_evidence: Array.isArray(r.evidence) ? r.evidence : [] } } }));
+    } catch (e) { _liveLoadError = `annotation rows: ${e.message}`; return null; }
+  }
+
+  let _annotFilter = 'shown';   // 'shown' = live on the annotator site · 'all' = everything banked
+
   async function renderAnnotationTrajectoryList() {
     const all = await listAnnotationTrajectories();
-    const rows = Object.values(all).sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')));
+    const allRows = Object.values(all).sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')));
+    const live = await _loadLiveAnnotationRows();
+    const liveIds = new Set((live || []).flatMap(r => [r.id, r.source_trajectory_id].filter(Boolean)));
+    const isShown = (t) => live ? (liveIds.has(t.id) || liveIds.has(_annotationId(t.id))) : t.in_annotation !== false;
+    const shownRows = allRows.filter(isShown);
+    const rows = _annotFilter === 'shown' ? shownRows : allRows;
     const ticked = rows.filter(t => t.in_annotation !== false).length;
     const configured = typeof window._v2Configured === 'function' && window._v2Configured();
     const tasks = await loadAnnotationTasks();
+    const shownTaskIds = new Set(shownRows.map(t => t.task_id).filter(Boolean));
     const current = (await chrome.storage.local.get('pageguide_annotation_current_task')).pageguide_annotation_current_task || null;
     const capturedFor = (id) => rows.filter(t => t.task_id === id).length;
 
@@ -2308,6 +2798,13 @@ if (typeof window !== 'undefined') {
             }).join('')}
           </div>
           <div class="study-traj-group-head">Captured runs <span class="study-traj-filter-n">${rows.length}</span></div>` : ''}
+          <div class="study-traj-filters">
+            <button class="study-traj-filter${_annotFilter === 'shown' ? ' study-traj-filter-on' : ''}" data-annot-filter="shown"
+              title="${live ? 'The rows the annotator site is showing right now (live on Supabase)' : 'Ticked in this bank (Supabase not reachable, so this is the local tick)'}">
+              Shown to annotators <span class="study-traj-filter-n">${shownRows.length}</span>${shownTaskIds.size ? ` · ${shownTaskIds.size} of ${tasks.length} tasks` : ''}</button>
+            <button class="study-traj-filter${_annotFilter === 'all' ? ' study-traj-filter-on' : ''}" data-annot-filter="all">
+              All captured <span class="study-traj-filter-n">${allRows.length}</span></button>
+          </div>
           <p class="study-intro">${rows.length
             ? `Guide runs captured for the annotator website. <strong>${ticked} of ${rows.length}</strong> ticked.
                Publishing upserts them into <code>pageguide_annotation_trajectories</code>
@@ -2348,6 +2845,9 @@ if (typeof window !== 'undefined') {
     $('study-close').onclick = closeStudyPanel;
     overlay.querySelectorAll('[data-annot-start]').forEach(btn => {
       btn.onclick = () => { const t = tasks.find(x => x.id === btn.dataset.annotStart); if (t) startAnnotationTask(t); };
+    });
+    overlay.querySelectorAll('[data-annot-filter]').forEach(btn => {
+      btn.onclick = () => { _annotFilter = btn.dataset.annotFilter; renderAnnotationTrajectoryList(); };
     });
     if (!rows.length) return;
 
@@ -2391,9 +2891,603 @@ if (typeof window !== 'undefined') {
     };
   }
 
+  // ── Record Model Performance ──
+  // The third bank (sidepanel/model_performance_trajectories.js): the same 12 tasks as the
+  // annotation recorder, run once per model, captured with what each run cost. Same screen shape
+  // as the annotation recorder — launcher, captured runs, publish/export/delete — plus the model
+  // and cost on every row, and a per-task count of which models have been run.
+  async function renderModelPerformanceTrajectoryList() {
+    const all = await listModelPerformanceTrajectories();
+    const rows = Object.values(all).sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')));
+    const ticked = rows.filter(t => t.in_report !== false).length;
+    const configured = typeof window._v2Configured === 'function' && window._v2Configured();
+    const tasks = await loadAnnotationTasks();
+    const current = (await chrome.storage.local.get('pageguide_annotation_current_task')).pageguide_annotation_current_task || null;
+    const runsFor = (id) => rows.filter(t => t.task_id === id);
+    const modelOf = (t) => t.run_meta?.model || t.run_meta?.provider || '';
+    const costOf = (t) => {
+      const m = t.run_meta || {};
+      if (!m.calls) return 'no cost recorded';
+      const money = m.cost_usd ? `$${Number(m.cost_usd).toFixed(4)}` : 'unpriced';
+      const secs = m.duration_ms ? ` · ${Math.round(m.duration_ms / 1000)}s` : '';
+      return `${money} · ${m.calls} call${m.calls === 1 ? '' : 's'} · ${((m.prompt_tokens || 0) + (m.completion_tokens || 0)).toLocaleString()} tok${secs}`;
+    };
+    const models = [...new Set(rows.map(modelOf).filter(Boolean))].sort();
+    // The judge's verdicts (Model Comparison), so the launcher says which tasks still need a rerun:
+    // per task and model, the latest judgment of the latest run.
+    const judgmentsAll = Object.values(await _loadJudgments());
+    const verdictFor = (taskId, model) => judgmentsAll
+      .filter(j => j.task_id === taskId && (j.run_model || '') === model)
+      .sort((a, b) => String(b.judged_at || '').localeCompare(String(a.judged_at || '')))[0] || null;
+    const taskVerdicts = (taskId) => [...new Set(runsFor(taskId).map(modelOf).filter(Boolean))].map(m => ({ model: m, j: verdictFor(taskId, m) }));
+    const needsRerun = (taskId) => taskVerdicts(taskId).some(v => v.j && v.j.answer_correct === false);
+    const rerunCount = tasks.filter(t => needsRerun(t.id)).length;
+    const verdictHtml = (taskId) => taskVerdicts(taskId).map(v => v.j
+      ? `<span class="study-traj-filter-n ${v.j.answer_correct === false ? 'study-annot-rerun' : (v.j.answer_correct === true ? 'study-perf-ok' : '')}" title="${escapeAttr(`${v.model} judged by ${v.j.judge_model}: ${v.j.answer_reason || ''} · snippet F1 ${Number(v.j.f1 || 0).toFixed(2)}`)}">${escapeHTML(v.model.split('/').pop())}: ${v.j.answer_correct === false ? '✗ incorrect — rerun' : (v.j.answer_correct === true ? '✓ correct' : '? unjudged')}</span>`
+      : `<span class="study-traj-filter-n" title="Not judged yet — ⋯ → Model Comparison → Judge">${escapeHTML(v.model.split('/').pop())}: not judged</span>`).join(' ');
+
+    setHTML(`
+      <div class="study-screen">
+        <div class="study-header">
+          <span class="study-title">📈 Record Model Performance</span>
+          <button class="study-close-btn" id="study-close">✕</button>
+        </div>
+        <div class="study-body">
+          ${tasks.length ? `
+          <div class="study-traj-group-head" title="Pick the model in Options first. Press ▶ to open the starting site with the instruction in the chat box. Run Guide, then press 📈 on the journey card.">
+            Tasks to run <span class="study-traj-filter-n">${tasks.length}</span>${models.length ? ` <span class="study-traj-meta">· models so far: ${models.map(escapeHTML).join(', ')}</span>` : ''}${rerunCount ? ` <span class="study-traj-filter-n study-annot-rerun">${rerunCount} judged incorrect — rerun</span>` : ''}
+          </div>
+          <div id="study-perf-tasks">
+            ${tasks.map((t, i) => {
+              const runs = runsFor(t.id);
+              const ran = [...new Set(runs.map(modelOf).filter(Boolean))];
+              return `
+              <div class="study-traj-row${runs.length && !needsRerun(t.id) ? ' study-traj-row-out' : ''}${needsRerun(t.id) ? ' study-perf-rerun-row' : ''}${current?.id === t.id ? ' study-annot-task-current' : ''}">
+                <span class="study-traj-step-n">${i + 1}</span>
+                <div class="study-traj-main">
+                  <div class="study-traj-title">${escapeHTML(t.name)}${current?.id === t.id ? ' <span class="study-traj-filter-n">running</span>' : ''}${needsRerun(t.id) ? ' <span class="study-traj-filter-n study-annot-rerun">↻ rerun</span>' : ''}</div>
+                  <div class="study-traj-meta">${escapeHTML(t.task)}</div>
+                  <div class="study-traj-meta">${escapeHTML(t.url)}${runs.length ? ` · ${runs.length} run${runs.length === 1 ? '' : 's'}${ran.length ? ` (${ran.map(escapeHTML).join(', ')})` : ''}` : ''}</div>
+                  ${runs.length ? `<div class="study-traj-meta study-perf-verdicts">${verdictHtml(t.id)}</div>` : ''}
+                </div>
+                <button class="study-evidence-clear${needsRerun(t.id) ? ' study-cmp-rerun' : ''}" data-perf-start="${escapeAttr(t.id)}" title="${needsRerun(t.id) ? 'Judged incorrect — rerun: ' : ''}Open the site and put the task in the chat box">${needsRerun(t.id) ? '↻ Rerun' : '▶'}</button>
+              </div>`;
+            }).join('')}
+          </div>
+          <div class="study-traj-group-head">Captured runs <span class="study-traj-filter-n">${rows.length}</span></div>` : ''}
+          <p class="study-intro">${rows.length
+            ? `Guide runs captured per model. <strong>${ticked} of ${rows.length}</strong> ticked${rows.some(t => !t.task_id) ? ` · <span class="study-annot-rerun">${rows.filter(t => !t.task_id).length} not assigned to a task</span>` : ''}.
+               Publishing upserts them into <code>pageguide_model_performance_trajectories</code>
+               (see <code>supabase_schema_model_performance.sql</code>)${configured ? '' : ' — V2 Supabase is not configured, so use Export'}.`
+            : 'Nothing captured yet. Pick a model in Options, run a task, then press 📈 on its journey card to capture it.'}</p>
+          ${rows.length ? `
+          <div class="study-traj-bulk">
+            <button class="study-evidence-clear" data-perf-bulk="in">Select all</button>
+            <button class="study-evidence-clear" data-perf-bulk="out">Deselect all</button>
+            <button class="study-evidence-clear" id="study-perf-publish" ${configured ? '' : 'disabled'}
+              title="Upsert every ticked run into pageguide_model_performance_trajectories">⬆ Publish → Supabase</button>
+            <button class="study-evidence-clear" id="study-perf-export"
+              title="Save the ticked runs as a JSON file">⬇ Export JSON</button>
+          </div>
+          <div class="study-llm-answers-note" id="study-perf-note"></div>
+          <div id="study-perf-list">
+            ${rows.map(t => {
+              const steps = t.arms?.grounding?.steps || [];
+              const on = t.in_report !== false;
+              return `
+              <div class="study-traj-row${on ? '' : ' study-traj-row-out'}" data-perf-id="${escapeAttr(t.id)}">
+                <input type="checkbox" class="study-annot-tick" data-perf-tick="${escapeAttr(t.id)}" ${on ? 'checked' : ''}
+                  title="Include in the report">
+                <div class="study-traj-main">
+                  <div class="study-traj-title">${modelOf(t) ? `<span class="study-traj-filter-n study-perf-model">${escapeHTML(modelOf(t))}</span> ` : ''}${escapeHTML(t.title || t.goal || t.id)}</div>
+                <div class="study-traj-meta study-perf-assign">Task:
+                  <select data-perf-task="${escapeAttr(t.id)}" title="Which of the 12 tasks this run is a run of — the comparison pairs runs with their task's annotation baseline">
+                    <option value="">— not assigned —</option>
+                    ${tasks.map(k => `<option value="${escapeAttr(k.id)}" ${k.id === t.task_id ? 'selected' : ''}>${escapeHTML(k.name)}</option>`).join('')}
+                    ${t.task_id && !tasks.some(k => k.id === t.task_id) ? `<option value="${escapeAttr(t.task_id)}" selected>${escapeHTML(t.task_id)} (not in tasks.json)</option>` : ''}
+                  </select>${t.task_id ? '' : ' <span class="study-annot-rerun">⚠ unassigned — will not appear in Model Comparison</span>'}
+                </div>
+                  <div class="study-traj-meta">${steps.length} step${steps.length === 1 ? '' : 's'}
+                    · ${t.arms?.grounding?.answer ? 'answer recorded' : 'no answer'}
+                    · ${escapeHTML(costOf(t))}
+                    · ${escapeHTML(String(t.captured_at || '').slice(0, 16).replace('T', ' '))}</div>
+                </div>
+                <button class="study-evidence-clear" data-perf-delete="${escapeAttr(t.id)}" title="Remove from this bank">🗑</button>
+              </div>`;
+            }).join('')}
+          </div>` : ''}
+        </div>
+      </div>
+    `);
+    $('study-close').onclick = closeStudyPanel;
+    overlay.querySelectorAll('[data-perf-start]').forEach(btn => {
+      btn.onclick = () => { const t = tasks.find(x => x.id === btn.dataset.perfStart); if (t) startAnnotationTask(t); };
+    });
+    if (!rows.length) return;
+
+    const note = (msg) => { const el = $('study-perf-note'); if (el) el.textContent = msg; };
+    const setTick = async (id, on) => {
+      const rec = await getModelPerformanceTrajectory(id);
+      if (!rec) return;
+      rec.in_report = !!on;
+      await saveModelPerformanceTrajectory(rec, { downscale: false });
+    };
+    overlay.querySelectorAll('[data-perf-tick]').forEach(cb => {
+      cb.onchange = async () => { await setTick(cb.dataset.perfTick, cb.checked); renderModelPerformanceTrajectoryList(); };
+    });
+    overlay.querySelectorAll('[data-perf-bulk]').forEach(btn => {
+      btn.onclick = async () => {
+        for (const t of rows) await setTick(t.id, btn.dataset.perfBulk === 'in');
+        renderModelPerformanceTrajectoryList();
+      };
+    });
+    overlay.querySelectorAll('[data-perf-delete]').forEach(btn => {
+      btn.onclick = async () => { await deleteModelPerformanceTrajectory(btn.dataset.perfDelete); renderModelPerformanceTrajectoryList(); };
+    });
+    // Assign / reassign the task a run belongs to. Saved at once; a re-publish updates the row's
+    // source_task_id in place, so a run captured under the wrong task is fixed here, not re-recorded.
+    overlay.querySelectorAll('[data-perf-task]').forEach(sel => {
+      sel.onchange = async () => {
+        const rec = await getModelPerformanceTrajectory(sel.dataset.perfTask);
+        if (!rec) return;
+        const task = tasks.find(k => k.id === sel.value);
+        rec.task_id = task ? task.id : '';
+        rec.task_name = task ? task.name : '';
+        await saveModelPerformanceTrajectory(rec, { downscale: false });
+        note(task ? `Assigned to ${task.name}. Publish again to update Supabase.` : 'Unassigned.');
+        renderModelPerformanceTrajectoryList();
+      };
+    });
+    const pub = $('study-perf-publish');
+    if (pub) pub.onclick = async () => {
+      pub.disabled = true;
+      note('Publishing…');
+      const res = await publishModelPerformanceTrajectories(rows);
+      note(res.ok ? describeModelPerformancePublish(res.rows) : `Could not publish: ${res.error}`);
+      pub.disabled = false;
+    };
+    const exp = $('study-perf-export');
+    if (exp) exp.onclick = () => {
+      const bundle = buildModelPerformanceBundle(rows);
+      const blob = new Blob([JSON.stringify(bundle)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'model_performance_trajectories.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      note(`Exported ${bundle.trajectories.length} runs.`);
+    };
+  }
+
+  // ── Model Comparison ──
+  // The 12 tasks side by side: the run the annotators are grading (pageguide_annotation_trajectories,
+  // with the annotators' evidence verdicts from pageguide_annotation_results) against every
+  // model-performance run of the same task (pageguide_model_performance_trajectories, or this
+  // bank's unpublished captures). Read-only; everything comes from Supabase, with the local
+  // model-performance bank filled in for runs not yet published.
+  let _compareModel = 'all';
+  let _compareOpen = new Set();
+  let _compareShowAll = new Set();                    // task ids whose non-final runs are unfolded
+  const COMPARE_FINAL_KEY = 'pageguide_compare_final_runs';   // { "<task id>|<model>": run id }
+  async function _loadFinalRuns() {
+    try { const d = await chrome.storage.local.get(COMPARE_FINAL_KEY); return (d[COMPARE_FINAL_KEY] && typeof d[COMPARE_FINAL_KEY] === 'object') ? d[COMPARE_FINAL_KEY] : {}; }
+    catch (e) { return {}; }
+  }
+  async function _setFinalRun(taskId, model, runId) {
+    const all = await _loadFinalRuns();
+    all[`${taskId}|${model}`] = runId;
+    await chrome.storage.local.set({ [COMPARE_FINAL_KEY]: all });
+  }
+  const JUDGMENTS_KEY = 'pageguide_llm_judgments';   // { "<baseline id>|<run id>": judgment }
+  let _judgeChoice = null;                            // { provider, model } — defaults to JUDGE_MODELS[0]
+  let _judging = false;
+
+  async function _loadJudgments() {
+    try {
+      const d = await chrome.storage.local.get(JUDGMENTS_KEY);
+      const stored = (d[JUDGMENTS_KEY] && typeof d[JUDGMENTS_KEY] === 'object') ? d[JUDGMENTS_KEY] : {};
+      const migrated = migrateJudgments(stored);
+      // Judgments are kept per judge model, so a second opinion never overwrites the first.
+      if (Object.keys(migrated).some(k => !(k in stored))) await chrome.storage.local.set({ [JUDGMENTS_KEY]: migrated });
+      return migrated;
+    } catch (e) { return {}; }
+  }
+  /** The OpenAI key lives where Options keeps it; the judge bar can set it when it is missing. */
+  async function _openaiKeySet() {
+    try { const st = await chrome.storage.sync.get('openaiApiKey'); return !!String(st.openaiApiKey || '').trim(); } catch (e) { return false; }
+  }
+  async function _saveJudgment(pairKey, judgment) {
+    const all = await _loadJudgments();
+    all[pairKey] = judgment;
+    await chrome.storage.local.set({ [JUDGMENTS_KEY]: all });
+  }
+
+  /** Evidence items with the note the judge reads (key + what the agent said the crop shows). */
+  function _evidenceItemsOf(answer, arms, stepUrls = null) {
+    const notes = new Map(), steps = new Map();
+    (arms?.grounding?.answer_evidence || []).forEach((e, i) => {
+      const k = _evidenceKeysOf('', { grounding: { answer_evidence: [e] } })[0]?.key;
+      if (k) { notes.set(k, String(e?.note || '')); if (e?.step != null) steps.set(k, Number(e.step)); }
+    });
+    const items = _evidenceKeysOf(answer, arms).map(e => ({ key: e.key, note: notes.get(e.key) || (e.crop ? '' : '(cited in the answer, no crop saved)'), step: steps.has(e.key) ? steps.get(e.key) : null }));
+    return stepUrls ? _attachEvidenceUrls(items, stepUrls) : items;
+  }
+  /** Step URLs for a run: the RPC map for published rows, the banked steps for local ones. */
+  function _stepUrlsFor(row, map) {
+    if (row?.local && row.arms?.grounding?.steps) return row.arms.grounding.steps.map((st, i) => ({ n: st?.n ?? i + 1, url: st?.url || '' }));
+    return (map && (map.get(row?.id) || map.get(row?.source_trajectory_id))) || null;
+  }
+  const GT_ANNOTATOR = 'A';   // whose verdicts define the ground-truth evidence
+
+  /**
+   * Judge one (baseline, run) pair with the chosen model. The ground truth is the baseline's answer
+   * and the evidence items the annotators kept; the candidate is the run's answer and evidence.
+   * Stores the parsed judgment plus the P/R/F1 it scores to, keyed by the pair.
+   */
+  async function _judgePair(task, base, run, results) {
+    const judge = _judgeChoice || JUDGE_MODELS[0];
+    const baseItems = _evidenceItemsOf(base.agent_answer, base.arms);
+    const verdicts = results.filter(r => r.trajectory_id === base.id).flatMap(r => (Array.isArray(r.evidence_labels) ? r.evidence_labels : []).map(l => ({ key: l?.key, correct: l?.correct, annotator: r.annotator_id })));
+    const gt = groundTruthEvidence(baseItems, verdicts, GT_ANNOTATOR);
+    const cand = _evidenceItemsOf(run.agent_answer, run.arms);
+    const systemPrompt = buildJudgeSystemPrompt();
+    const userPrompt = buildJudgeUserPrompt({ task: task.task, groundTruth: { answer: _stripEv(base.agent_answer), evidence: gt }, candidate: { answer: _stripEv(run.agent_answer), evidence: cand }, candidateModel: run.model || run.provider || '' });
+    const res = await chrome.runtime.sendMessage({
+      action: 'callLLM', systemPrompt, messages: [{ role: 'user', content: userPrompt }],
+      overrides: { provider: judge.provider, model: judge.model },
+      metadata: { mode: 'judge', task: task.id, baseline: base.id, run: run.id, judge: judge.model, prompt_version: JUDGE_PROMPT_VERSION },
+    });
+    if (!res || res.error) throw new Error(res?.error || 'No response from the judge');
+    const parsed = parseJudgeResponse(res.content);
+    if (!parsed) throw new Error('Judge returned no JSON');
+    const score = scoreJudgment(parsed, gt.map(e => e.key), cand.map(e => e.key));
+    const judgment = Object.assign({ task_id: task.id, baseline_id: base.id, run_id: run.id, run_model: run.model || run.provider || '',
+      judge_provider: judge.provider, judge_model: judge.model, prompt_version: JUDGE_PROMPT_VERSION, judged_at: new Date().toISOString(), gt_annotator: GT_ANNOTATOR,
+      answer_reason: parsed.answer_reason, gt_keys: gt.map(e => e.key), candidate_keys: cand.map(e => e.key), raw: parsed }, score);
+    await _saveJudgment(judgmentKey(base.id, run.id, judge.model), judgment);
+    return judgment;
+  }
+
+  async function _loadAnnotationResults() {
+    if (!(typeof window._v2Configured === 'function' && window._v2Configured())) return [];
+    try {
+      const res = await fetch(`${SUPABASE_V2_URL}/rest/v1/pageguide_annotation_results?select=trajectory_id,annotator_id,evidence_labels,evidence_count,answer_correct`, { headers: window._v2Headers() });
+      return res.ok ? await res.json() : [];
+    } catch (e) { return []; }
+  }
+  /** [{n,url}] per live run, by run id — from the step-url RPCs (supabase_migration_step_urls.sql). */
+  let _stepUrlsError = '';
+  async function _loadStepUrls(fn) {
+    if (!(typeof window._v2Configured === 'function' && window._v2Configured())) return new Map();
+    try {
+      const res = await fetch(`${SUPABASE_V2_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: window._v2Headers(), body: '{}' });
+      if (!res.ok) { if (res.status === 404) _stepUrlsError = 'run supabase_migration_step_urls.sql for page-level metrics'; return new Map(); }
+      const rows = await res.json();
+      return new Map(rows.map(r => [r.id, Array.isArray(r.step_urls) ? r.step_urls : []]));
+    } catch (e) { return new Map(); }
+  }
+  /** The URL an evidence item came from: its step's page, else the run's last page. */
+  function _attachEvidenceUrls(items, stepUrls) {
+    const byN = new Map((stepUrls || []).map(su => [Number(su?.n), String(su?.url || '')]));
+    const last = (stepUrls || []).length ? String(stepUrls[stepUrls.length - 1]?.url || '') : '';
+    return items.map(e => Object.assign({}, e, { url: (e.step != null && byN.get(Number(e.step))) || last }));
+  }
+
+  let _perfLoadError = '';
+  async function _loadModelPerfRows() {
+    _perfLoadError = '';
+    if (!(typeof window._v2Configured === 'function' && window._v2Configured())) return [];
+    try {
+      const res = await fetch(`${SUPABASE_V2_URL}/rest/v1/pageguide_model_performance_trajectories?select=id,source_task_id,source_trajectory_id,title,goal,step_count,agent_answer,provider,model,calls,cost_usd,prompt_tokens,completion_tokens,duration_ms,evidence:arms->grounding->answer_evidence,captured_at&order=captured_at.asc`, { headers: window._v2Headers() });
+      if (!res.ok) { _perfLoadError = `model runs: HTTP ${res.status}`; return []; }
+      const rows = await res.json();
+      return rows.map(r => Object.assign(r, { arms: { grounding: { answer_evidence: Array.isArray(r.evidence) ? r.evidence : [] } } }));
+    } catch (e) { _perfLoadError = `model runs: ${e.message}`; return []; }
+  }
+
+  /** Evidence items of a run: saved crops + cited markers without a crop (same rule as the site). */
+  function _evidenceKeysOf(answer, arms) {
+    const norm = (k) => String(k == null ? '' : k).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64);
+    const keys = [];
+    const seen = new Set();
+    (arms?.grounding?.answer_evidence || []).forEach((e, i) => { const k = norm(e?.key == null ? i + 1 : e.key); if (k && !seen.has(k)) { seen.add(k); keys.push({ key: k, crop: !!(e?.screenshot) }); } });
+    const re = /\[ev:\s*([^\]]+?)\s*\]/g; let m;
+    while ((m = re.exec(String(answer || '')))) { const k = norm(m[1]); if (k && !seen.has(k)) { seen.add(k); keys.push({ key: k, crop: false }); } }
+    return keys;
+  }
+
+  /** The annotators' verdicts on one baseline run: per annotator, correct / graded. */
+  function _evidenceVerdicts(results, trajectoryId) {
+    return results.filter(r => r.trajectory_id === trajectoryId).map(r => {
+      const labels = Array.isArray(r.evidence_labels) ? r.evidence_labels : [];
+      const graded = labels.filter(l => l && l.correct !== null && l.correct !== undefined);
+      return { who: r.annotator_id, correct: graded.filter(l => l.correct === true).length, graded: graded.length, total: Number(r.evidence_count) || graded.length,
+        bad: graded.filter(l => l.correct === false).map(l => `${l.key}${l.problem ? ` (${l.problem})` : ''}`) };
+    }).sort((a, b) => String(a.who).localeCompare(String(b.who)));
+  }
+
+  const _fmtMoney = (v) => (v == null || !isFinite(Number(v))) ? '—' : `$${Number(v).toFixed(4)}`;
+  const _fmtSecs = (ms) => (ms == null || !isFinite(Number(ms))) ? '—' : `${Math.round(Number(ms) / 1000)}s`;
+  const _stripEv = (t) => String(t || '').replace(/\s*\[ev:[^\]]+\]/g, '').trim();
+
+  async function renderModelComparison() {
+    setHTML(`<div class="study-screen"><div class="study-header"><span class="study-title">📊 Model Comparison</span><button class="study-close-btn" id="study-close">✕</button></div><div class="study-body"><p class="study-intro">Loading…</p></div></div>`);
+    $('study-close').onclick = closeStudyPanel;
+    _stepUrlsError = '';
+    const [tasks, live, results, perfRemote, perfLocalAll, judgments, baseUrls, perfUrls, finalRuns, openaiKeySet] = await Promise.all([
+      loadAnnotationTasks(), _loadLiveAnnotationRows(), _loadAnnotationResults(), _loadModelPerfRows(), listModelPerformanceTrajectories(), _loadJudgments(),
+      _loadStepUrls('pageguide_annotation_step_urls'), _loadStepUrls('pageguide_model_performance_step_urls'), _loadFinalRuns(), _openaiKeySet(),
+    ]);
+    // Page-level scores are deterministic, so they are computed here from the current data rather
+    // than stored with the judgment: ground truth = the baseline items annotator A kept.
+    const pageScoreFor = (base, run) => {
+      if (!base || !run) return null;
+      const bu = _stepUrlsFor(base, baseUrls), ru = _stepUrlsFor(run, perfUrls);
+      if (!bu || !ru) return null;
+      const verdicts = results.filter(r => r.trajectory_id === base.id).flatMap(r => (Array.isArray(r.evidence_labels) ? r.evidence_labels : []).map(l => ({ key: l?.key, correct: l?.correct, annotator: r.annotator_id })));
+      const gt = groundTruthEvidence(_evidenceItemsOf(base.agent_answer, base.arms, bu), verdicts, GT_ANNOTATOR);
+      return pageLevelScore(gt, _evidenceItemsOf(run.agent_answer, run.arms, ru));
+    };
+    const judge = _judgeChoice || JUDGE_MODELS[0];
+    // The selected judge's verdicts drive the cells, the table and the means; other judges' verdicts
+    // on the same pair are listed beside them and compared in the judge bar.
+    const judgmentBy = (base, run, judgeModel) => (base && run) ? judgments[judgmentKey(base.id, run.id, judgeModel)] || null : null;
+    const judgmentFor = (base, run) => {
+      const j = judgmentBy(base, run, judge.model);
+      if (!j) return null;
+      return Object.assign({}, j, pageScoreFor(base, run) || {});
+    };
+    const otherJudges = [...new Set(Object.values(judgments).map(j => j.judge_model).filter(m => m && m !== judge.model))].sort();
+    const otherOpinions = (base, run) => otherJudges.map(m => ({ judge: m, j: judgmentBy(base, run, m) })).filter(o => o.j);
+    const pct = (v) => v == null ? '—' : `${Math.round(v * 100)}%`;
+    const f2 = (v) => v == null ? '—' : Number(v).toFixed(2);
+    const configured = typeof window._v2Configured === 'function' && window._v2Configured();
+    // Local captures not yet published, shaped like the remote rows.
+    const remoteIds = new Set(perfRemote.map(r => r.source_trajectory_id || r.id));
+    const perfLocal = Object.values(perfLocalAll).filter(t => !remoteIds.has(t.id) && !remoteIds.has(_modelPerfId(t.id))).map(t => {
+      const m = t.run_meta || {};
+      return { id: t.id, source_task_id: t.task_id || '', title: t.title, goal: t.goal, step_count: (t.arms?.grounding?.steps || []).length,
+        agent_answer: t.arms?.grounding?.answer || '', provider: m.provider || '', model: m.model || '', calls: m.calls, cost_usd: m.cost_usd,
+        prompt_tokens: m.prompt_tokens, completion_tokens: m.completion_tokens, duration_ms: m.duration_ms, arms: t.arms, captured_at: t.captured_at, local: true };
+    });
+    const perf = perfRemote.concat(perfLocal);
+    const models = [...new Set(perf.map(r => r.model || r.provider).filter(Boolean))].sort();
+    // One run per task × model counts toward the table and the means: the one you picked (★), else
+    // the most recent capture. Reruns therefore replace the earlier attempt by default, and the
+    // earlier attempts fold away under "show N other runs".
+    const modelKey = (r) => r.model || r.provider || '';
+    const isFinal = (r) => {
+      const group = perf.filter(x => x.source_task_id === r.source_task_id && modelKey(x) === modelKey(r));
+      const chosen = finalRuns[`${r.source_task_id}|${modelKey(r)}`];
+      if (chosen && group.some(x => x.id === chosen)) return r.id === chosen;
+      const latest = group.slice().sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')))[0];
+      return latest && latest.id === r.id;
+    };
+    const shownPerf = _compareModel === 'all' ? perf : perf.filter(r => (r.model || r.provider) === _compareModel);
+    const baselineFor = (taskId) => (live || []).filter(r => r.source_task_id === taskId).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0] || null;
+
+    const answerBlock = (label, text, extra = '') => `
+      <div class="study-cmp-answer"><div class="study-cmp-kicker">${label}</div><div class="study-cmp-text">${escapeHTML(_stripEv(text) || '(no answer recorded)')}</div>${extra}</div>`;
+
+    const rowsHtml = tasks.map((t, i) => {
+      const base = baselineFor(t.id);
+      const baseEv = base ? _evidenceKeysOf(base.agent_answer, base.arms) : [];
+      const verdicts = base ? _evidenceVerdicts(results, base.id) : [];
+      const allRuns = shownPerf.filter(r => r.source_task_id === t.id).sort((a, b) => String(a.captured_at || '').localeCompare(String(b.captured_at || '')));
+      const finalRunsHere = allRuns.filter(isFinal);
+      const otherRuns = allRuns.filter(r => !isFinal(r));
+      const showAll = _compareShowAll.has(t.id);
+      const runs = showAll ? allRuns : finalRunsHere;
+      const open = _compareOpen.has(t.id);
+      const finalTag = (r) => isFinal(r)
+        ? '<span class="study-traj-filter-n study-cmp-final" title="This run counts toward the table and the means">★ final</span>'
+        : `<button class="study-evidence-clear study-cmp-makefinal" data-cmp-final="${escapeAttr(r.id)}" data-cmp-final-task="${escapeAttr(t.id)}" data-cmp-final-model="${escapeAttr(modelKey(r))}" title="Use this run as ${escapeAttr(modelKey(r))}'s final run for this task instead">☆ make final</button>`;
+      const judgeCell = (r) => {
+        const j = judgmentFor(base, r);
+        if (!base) return '';
+        if (!j) return `<div class="study-cmp-judge"><button class="study-evidence-clear" data-judge-run="${escapeAttr(r.id)}" data-judge-task="${escapeAttr(t.id)}" ${_judging ? 'disabled' : ''} title="Ask ${escapeAttr(judge.model)} to grade this run against the baseline">⚖ Judge</button></div>`;
+        const ans = j.answer_correct === true ? '<span class="study-cmp-ok">answer ✓</span>' : (j.answer_correct === false ? '<span class="study-cmp-bad">answer ✗</span>' : 'answer ?');
+        const rerun = j.answer_correct === false
+          ? `<button class="study-evidence-clear study-cmp-rerun" data-cmp-rerun="${escapeAttr(t.id)}" title="Open ${escapeAttr(t.url)} with the task in the chat box; the next 📈 capture is tagged ${escapeAttr(t.name)}">↻ Rerun task</button>`
+          : '';
+        const others = otherOpinions(base, r).map(o => `<span class="study-cmp-other" title="${escapeAttr(`${o.judge}: ${o.j.answer_reason || ''}`)}">${escapeHTML(o.judge.split('/').pop())}: ${o.j.answer_correct === true ? '<span class="study-cmp-ok">✓</span>' : (o.j.answer_correct === false ? '<span class="study-cmp-bad">✗</span>' : '?')} F1 ${f2(o.j.f1)}</span>`).join('');
+        return `<div class="study-cmp-judge" title="${escapeAttr(`${j.judge_model} · ${j.answer_reason || ''}\nGT evidence: ${(j.gt_keys || []).join(', ') || '—'}\nmissed: ${(j.unmatched_gt || []).join(', ') || '—'}\nextra: ${(j.unmatched_candidate || []).join(', ') || '—'}`)}">
+          <span class="study-cmp-other" title="${escapeAttr(judge.model)}">${escapeHTML(judge.model.split('/').pop())}:</span> ${ans} · P ${f2(j.precision)} · R ${f2(j.recall)} · F1 ${f2(j.f1)}
+          <button class="study-evidence-clear study-cmp-rejudge" data-judge-run="${escapeAttr(r.id)}" data-judge-task="${escapeAttr(t.id)}" ${_judging ? 'disabled' : ''} title="Re-judge with ${escapeAttr(judge.model)}">↻</button>
+          ${rerun}
+        </div>${others ? `<div class="study-cmp-judge study-cmp-others">${others}</div>` : ''}`;
+      };
+      const verdictHtml = verdicts.length
+        ? verdicts.map(v => `<span class="study-traj-filter-n" title="${escapeAttr(v.bad.length ? `Marked not correct: ${v.bad.join(', ')}` : 'All evidence marked correct')}">${escapeHTML(v.who)}: ${v.correct}/${v.graded}${v.graded < v.total ? ` of ${v.total}` : ''} ✓</span>`).join(' ')
+        : '<span class="study-traj-meta">not graded yet</span>';
+      return `
+        <div class="study-traj-row study-cmp-row${open ? ' study-cmp-open' : ''}" data-cmp-task="${escapeAttr(t.id)}">
+          <span class="study-traj-step-n">${i + 1}</span>
+          <div class="study-traj-main">
+            <div class="study-traj-title">${escapeHTML(t.name)} <span class="study-traj-meta">${escapeHTML(t.task)}</span></div>
+            <div class="study-cmp-grid">
+              <div class="study-cmp-cell study-cmp-base">
+                <div class="study-cmp-kicker">Annotation run (baseline)</div>
+                ${base
+                  ? `<div class="study-traj-meta">${base.step_count} steps · ${baseEv.length} evidence (${baseEv.filter(e => e.crop).length} with crop)</div>
+                     <div class="study-cmp-verdicts">${verdictHtml}</div>`
+                  : '<div class="study-traj-meta">not on the annotator site</div>'}
+              </div>
+              ${runs.length ? runs.map(r => `
+              <div class="study-cmp-cell">
+                <div class="study-cmp-kicker">${escapeHTML(r.model || r.provider || 'model ?')}${r.local ? ' <span class="study-traj-filter-n" title="Captured in this extension, not published yet">local</span>' : ''} ${finalTag(r)}</div>
+                <div class="study-traj-meta">${escapeHTML(String(r.captured_at || '').slice(0, 16).replace('T', ' '))}</div>
+                <div class="study-traj-meta">${r.step_count} steps${base ? ` (${r.step_count - base.step_count >= 0 ? '+' : ''}${r.step_count - base.step_count})` : ''} · ${_evidenceKeysOf(r.agent_answer, r.arms).length} evidence</div>
+                <div class="study-traj-meta">${_fmtMoney(r.cost_usd)} · ${r.calls != null ? `${r.calls} calls` : '— calls'} · ${((Number(r.prompt_tokens) || 0) + (Number(r.completion_tokens) || 0)).toLocaleString()} tok · ${_fmtSecs(r.duration_ms)}</div>
+                ${judgeCell(r)}
+              </div>`).join('') : `<div class="study-cmp-cell study-traj-meta">no model run yet${_compareModel === 'all' ? '' : ` for ${escapeHTML(_compareModel)}`}</div>`}
+            </div>
+            ${otherRuns.length ? `<button class="study-evidence-clear study-cmp-showall" data-cmp-showall="${escapeAttr(t.id)}">${showAll ? `▴ hide ${otherRuns.length} earlier run${otherRuns.length === 1 ? '' : 's'}` : `▾ show ${otherRuns.length} other run${otherRuns.length === 1 ? '' : 's'} (not counted)`}</button>` : ''}
+            ${open ? `
+            <div class="study-cmp-answers">
+              ${base ? answerBlock('Baseline answer', base.agent_answer) : ''}
+              ${runs.map(r => answerBlock(`${escapeHTML(r.model || r.provider || 'model ?')} answer`, r.agent_answer)).join('')}
+            </div>` : ''}
+          </div>
+          <button class="study-evidence-clear" data-cmp-toggle="${escapeAttr(t.id)}" title="${open ? 'Hide the answers' : 'Show the answers side by side'}">${open ? '▴' : '▾'}</button>
+        </div>`;
+    }).join('');
+
+    const withBase = tasks.filter(t => baselineFor(t.id)).length;
+    const withRun = tasks.filter(t => shownPerf.some(r => r.source_task_id === t.id)).length;
+    // Pairs to judge: every shown run whose task has a baseline. Aggregate over the ones judged.
+    const pairs = shownPerf.filter(isFinal).map(r => ({ run: r, base: baselineFor(r.source_task_id), task: tasks.find(t => t.id === r.source_task_id) })).filter(p => p.base && p.task);
+    // Judge buttons on folded-away runs still work one at a time.
+    const anyPair = (runId, taskId) => { const r = shownPerf.find(x => x.id === runId); const t = tasks.find(x => x.id === taskId); const b = r && baselineFor(r.source_task_id); return (r && t && b) ? { run: r, task: t, base: b } : null; };
+    const unjudged = pairs.filter(p => !judgmentFor(p.base, p.run));
+    const judged = pairs.map(p => Object.assign({}, p, { j: judgmentFor(p.base, p.run) })).filter(p => p.j);
+    const agg = aggregateJudgments(judged.map(p => p.j));
+    const tableHtml = judged.length ? `
+      <div class="study-cmp-tablewrap">
+        <table class="study-cmp-table">
+          <thead>
+            <tr><th rowspan="2">#</th><th rowspan="2">Task</th><th rowspan="2">Model</th><th rowspan="2">Answer</th><th colspan="3">Page-level</th><th colspan="3">Snippet-level</th></tr>
+            <tr><th>Precision</th><th>Recall</th><th>F1</th><th>Precision</th><th>Recall</th><th>F1</th></tr>
+          </thead>
+          <tbody>
+            ${judged.sort((a, b) => tasks.indexOf(a.task) - tasks.indexOf(b.task)).map(p => `
+            <tr>
+              <td>${tasks.indexOf(p.task) + 1}</td><td>${escapeHTML(p.task.name)}</td><td>${escapeHTML(p.run.model || p.run.provider || '')}</td>
+              <td class="${p.j.answer_correct === true ? 'study-cmp-ok' : (p.j.answer_correct === false ? 'study-cmp-bad' : '')}">${p.j.answer_correct === true ? '✓' : (p.j.answer_correct === false ? '✗' : '—')}</td>
+              <td>${f2(p.j.page_precision)}</td><td>${f2(p.j.page_recall)}</td><td>${f2(p.j.page_f1)}</td>
+              <td>${f2(p.j.precision)}</td><td>${f2(p.j.recall)}</td><td>${f2(p.j.f1)}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr><td></td><td colspan="2"><strong>Mean</strong> (${agg.runs} runs${_compareModel === 'all' ? '' : ` · ${escapeHTML(_compareModel)}`})</td>
+              <td><strong>${agg.answer_correct}/${agg.answer_judged}</strong></td>
+              <td><strong>${f2(agg.mean_page_precision)}</strong></td><td><strong>${f2(agg.mean_page_recall)}</strong></td><td><strong>${f2(agg.mean_page_f1)}</strong></td>
+              <td><strong>${f2(agg.mean_precision)}</strong></td><td><strong>${f2(agg.mean_recall)}</strong></td><td><strong>${f2(agg.mean_f1)}</strong></td></tr>
+          </tfoot>
+        </table>
+        <div class="study-traj-meta">${judged.filter(p => p.j.answer_correct === false).length ? `<span class="study-cmp-bad">${judged.filter(p => p.j.answer_correct === false).length} incorrect</span> — press ↻ Rerun task on a run to redo it; the new capture is tagged with that task automatically. · ` : ''}One run per task and model counts (★ final — the latest capture unless you pick another). Ground truth = annotator ${GT_ANNOTATOR}'s kept evidence on the annotation run. Page = origin + path of the step each evidence item came from${_stepUrlsError ? ` — <span class="study-cmp-bad">${escapeHTML(_stepUrlsError)}</span>` : ''}. Snippet = the judge's fact-level pairing. <button class="study-evidence-clear" id="study-cmp-csv">⬇ CSV</button></div>
+      </div>` : '';
+    const aggHtml = agg.runs ? `
+      <div class="study-cmp-agg">
+        <div class="study-cmp-stat"><div class="study-cmp-stat-n">${agg.answer_correct}/${agg.answer_judged}</div><div class="study-cmp-stat-l">final answer correct (${pct(agg.answer_accuracy)})</div></div>
+        <div class="study-cmp-stat"><div class="study-cmp-stat-n">${f2(agg.mean_precision)}</div><div class="study-cmp-stat-l">evidence precision (mean · micro ${f2(agg.micro_precision)})</div></div>
+        <div class="study-cmp-stat"><div class="study-cmp-stat-n">${f2(agg.mean_recall)}</div><div class="study-cmp-stat-l">evidence recall (mean · micro ${f2(agg.micro_recall)})</div></div>
+        <div class="study-cmp-stat"><div class="study-cmp-stat-n">${f2(agg.mean_f1)}</div><div class="study-cmp-stat-l">evidence F1 (mean · micro ${f2(agg.micro_f1)})</div></div>
+        <div class="study-traj-meta">${agg.runs} run${agg.runs === 1 ? '' : 's'} judged${_compareModel === 'all' ? ' across all models' : ` for ${escapeHTML(_compareModel)}`}</div>
+      </div>` : '';
+    const judgeBar = `
+      <div class="study-cmp-judgebar">
+        <label class="study-traj-meta">⚖ Judge model
+          <select id="study-cmp-judge-model">
+            ${JUDGE_MODELS.map(m => `<option value="${escapeAttr(`${m.provider}|${m.model}`)}" ${m.provider === judge.provider && m.model === judge.model ? 'selected' : ''}>${escapeHTML(m.model)}${m.provider !== 'openrouter' ? ` (${escapeHTML(m.provider)})` : ''}</option>`).join('')}
+          </select>
+        </label>
+        <button class="study-evidence-clear" id="study-cmp-judge-all" ${_judging || !unjudged.length ? 'disabled' : ''} title="Judge every shown run that has a baseline and no judgment yet">⚖ Judge ${unjudged.length} unjudged</button>
+        <button class="study-evidence-clear" id="study-cmp-judge-redo" ${_judging || !pairs.length ? 'disabled' : ''} title="Judge every shown run again with the selected judge model">↻ Re-judge all ${pairs.length}</button>
+        <button class="study-evidence-clear" id="study-cmp-judge-export" ${!agg.runs ? 'disabled' : ''} title="Download every stored judgment as JSON">⬇ Judgments</button>
+        <span class="study-traj-meta" id="study-cmp-judge-note">${_judging ? 'Judging…' : `Prompt: sidepanel/llm_judge.js (${JUDGE_PROMPT_VERSION}) · text-only, ground truth = annotator ${GT_ANNOTATOR}'s kept evidence`}</span>
+      </div>
+      ${judge.provider === 'openai' ? `
+      <div class="study-cmp-judgebar study-cmp-keybar">
+        <span class="study-traj-meta">OpenAI API key: ${openaiKeySet
+          ? '<span class="study-cmp-ok">✓ set</span> in Options → OpenAI — the judge uses it directly; your agent stays on its own provider.'
+          : `<span class="study-cmp-bad">not set</span> — ${escapeHTML(judge.model)} needs it. Paste it under Options → OpenAI → API key, then come back.`}</span>
+        <button class="study-evidence-clear" id="study-cmp-open-options">Open Options</button>
+      </div>` : ''}
+      ${otherJudges.length ? `
+      <div class="study-cmp-judgebar">
+        <span class="study-traj-meta">Judges on record: <strong>${escapeHTML(judge.model)}</strong> (${Object.values(judgments).filter(j => j.judge_model === judge.model).length})${otherJudges.map(m => {
+          const ag = judgeAgreement(Object.values(judgments).filter(j => j.judge_model === judge.model), Object.values(judgments).filter(j => j.judge_model === m));
+          return ` · ${escapeHTML(m)} (${Object.values(judgments).filter(j => j.judge_model === m).length})${ag.pairs ? ` — agree on answer ${ag.answer_agree}/${ag.answer_compared}${ag.mean_abs_f1_diff != null ? `, mean |ΔF1| ${f2(ag.mean_abs_f1_diff)}` : ''}` : ''}`;
+        }).join('')}. Switch the judge above to see the other opinion's table.</span>
+      </div>` : ''}`;
+    setHTML(`
+      <div class="study-screen">
+        <div class="study-header">
+          <span class="study-title">📊 Model Comparison</span>
+          <button class="study-close-btn" id="study-close">✕</button>
+        </div>
+        <div class="study-body">
+          <p class="study-intro">${configured
+            ? `The ${tasks.length} annotation tasks: the run the annotators are grading against each model run of the same task. <strong>${withBase}</strong> have a baseline on the annotator site · <strong>${withRun}</strong> have a model run${_compareModel === 'all' ? '' : ` from ${escapeHTML(_compareModel)}`}. Evidence verdicts are the annotators' (✓ = correct &amp; relevant).`
+            : 'V2 Supabase is not configured — only this extension\'s unpublished model runs are shown.'}
+            ${_liveLoadError || _perfLoadError ? `<br><span class="study-cmp-bad">Could not load ${escapeHTML([_liveLoadError, _perfLoadError].filter(Boolean).join(' · '))} — press ⟳ to retry.</span>` : ''}</p>
+          <div class="study-traj-filters">
+            <button class="study-traj-filter${_compareModel === 'all' ? ' study-traj-filter-on' : ''}" data-cmp-model="all">All models <span class="study-traj-filter-n">${perf.length}</span></button>
+            ${models.map(m => `<button class="study-traj-filter${_compareModel === m ? ' study-traj-filter-on' : ''}" data-cmp-model="${escapeAttr(m)}">${escapeHTML(m)} <span class="study-traj-filter-n">${perf.filter(r => (r.model || r.provider) === m).length}</span></button>`).join('')}
+            <button class="study-traj-filter" id="study-cmp-refresh" title="Re-read Supabase">⟳</button>
+          </div>
+          ${judgeBar}
+          ${tableHtml}
+          ${aggHtml}
+          ${rowsHtml}
+        </div>
+      </div>`);
+    $('study-close').onclick = closeStudyPanel;
+    $('study-cmp-refresh').onclick = renderModelComparison;
+    overlay.querySelectorAll('[data-cmp-model]').forEach(b => { b.onclick = () => { _compareModel = b.dataset.cmpModel; renderModelComparison(); }; });
+    overlay.querySelectorAll('[data-cmp-toggle]').forEach(b => {
+      b.onclick = () => { const id = b.dataset.cmpToggle; _compareOpen.has(id) ? _compareOpen.delete(id) : _compareOpen.add(id); renderModelComparison(); };
+    });
+    overlay.querySelectorAll('[data-cmp-showall]').forEach(b => {
+      b.onclick = () => { const id = b.dataset.cmpShowall; _compareShowAll.has(id) ? _compareShowAll.delete(id) : _compareShowAll.add(id); renderModelComparison(); };
+    });
+    overlay.querySelectorAll('[data-cmp-final]').forEach(b => {
+      b.onclick = async () => { await _setFinalRun(b.dataset.cmpFinalTask, b.dataset.cmpFinalModel, b.dataset.cmpFinal); renderModelComparison(); };
+    });
+    overlay.querySelectorAll('[data-cmp-rerun]').forEach(b => {
+      b.onclick = () => { const t = tasks.find(x => x.id === b.dataset.cmpRerun); if (t) startAnnotationTask(t); };
+    });
+    const sel = $('study-cmp-judge-model');
+    if (sel) sel.onchange = () => { const [provider, model] = sel.value.split('|'); _judgeChoice = { provider, model }; renderModelComparison(); };
+    const judgeNote = (msg) => { const el = $('study-cmp-judge-note'); if (el) el.textContent = msg; };
+    // Judge calls are independent, so "all" runs JUDGE_CONCURRENCY of them at once; each pair's
+    // judgment is saved as it lands (_judgePair), so a failure or a closed panel loses only its own.
+    const runJudge = async (list) => {
+      if (_judging || !list.length) return;
+      _judging = true;
+      let done = 0, failed = 0;
+      const failures = [];
+      overlay.querySelectorAll('[data-judge-run], #study-cmp-judge-all, #study-cmp-judge-redo').forEach(b => { b.disabled = true; });
+      judgeNote(`Judging ${list.length} run${list.length === 1 ? '' : 's'} with ${judge.model}, ${Math.min(JUDGE_CONCURRENCY, list.length)} at a time…`);
+      await runWithConcurrency(list, JUDGE_CONCURRENCY, (p) => _judgePair(p.task, p.base, p.run, results), (p, r) => {
+        if (r.ok) done++; else { failed++; failures.push(`${p.task.name}: ${r.error?.message || r.error}`); console.warn('[Compare] judge failed:', p.run.id, r.error); }
+        judgeNote(`Judged ${done + failed} / ${list.length}${failed ? ` (${failed} failed)` : ''} — last: ${p.task.name} · ${p.run.model || p.run.provider || 'run'}`);
+      });
+      _judging = false;
+      renderModelComparison().then(() => judgeNote(`Judged ${done}${failed ? `, ${failed} failed — ${failures.join('; ')}` : ''} with ${judge.model}.`));
+    };
+    overlay.querySelectorAll('[data-judge-run]').forEach(b => {
+      b.onclick = () => { const p = anyPair(b.dataset.judgeRun, b.dataset.judgeTask); if (p) runJudge([p]); };
+    });
+    const allBtn = $('study-cmp-judge-all'); if (allBtn) allBtn.onclick = () => runJudge(unjudged);
+    const redoBtn = $('study-cmp-judge-redo'); if (redoBtn) redoBtn.onclick = () => runJudge(pairs);
+    const openOpts = $('study-cmp-open-options'); if (openOpts) openOpts.onclick = () => {
+      try { chrome.runtime.openOptionsPage(); } catch (e) { window.open(chrome.runtime.getURL('options/options.html'), '_blank'); }
+    };
+    const csvBtn = $('study-cmp-csv'); if (csvBtn) csvBtn.onclick = () => {
+      const q = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+      const head = ['task_id', 'task', 'model', 'run_id', 'answer_correct', 'page_precision', 'page_recall', 'page_f1', 'snippet_precision', 'snippet_recall', 'snippet_f1', 'judge_model', 'gt_annotator', 'judged_at'];
+      const lines = [head.join(',')].concat(judged.map(p => [p.task.id, p.task.name, p.run.model || p.run.provider || '', p.run.id, p.j.answer_correct, p.j.page_precision, p.j.page_recall, p.j.page_f1, p.j.precision, p.j.recall, p.j.f1, p.j.judge_model, p.j.gt_annotator || GT_ANNOTATOR, p.j.judged_at].map(q).join(',')));
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'model_comparison.csv'; a.click(); URL.revokeObjectURL(a.href);
+    };
+    const expBtn = $('study-cmp-judge-export'); if (expBtn) expBtn.onclick = async () => {
+      const all = await _loadJudgments();
+      const blob = new Blob([JSON.stringify({ kind: 'pageguide_llm_judgments', exported_at: new Date().toISOString(), judgments: Object.values(all) }, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'llm_judgments.json'; a.click(); URL.revokeObjectURL(a.href);
+    };
+  }
+
   async function renderGuideTrajectoryList() {
     const all = await listGuideTrajectories();
     const rows = Object.values(all).sort((a, b) => String(b.captured_at || '').localeCompare(String(a.captured_at || '')));
+    // The order a participant walks, which is what task_index has to mean. The list itself is newest
+    // first because that is the useful order to author in; publishing must not inherit that, or the
+    // queue would run backwards.
+    const queue = rows.slice().sort((a, b) => String(a.captured_at || '').localeCompare(String(b.captured_at || '')));
+    const onV2 = _guideTrajSource === 'v2';
+    const v2Index = onV2 ? await _loadGuideV2Index() : null;
     const counts = { all: rows.length, unassigned: rows.filter(t => !t.condition).length };
     GUIDE_CONDITIONS.forEach(c => { counts[c.id] = rows.filter(t => t.condition === c.id).length; });
     const filters = [{ id: 'all', label: 'All' }]
@@ -2405,6 +3499,53 @@ if (typeof window !== 'undefined') {
     // walk, and it must not appear to change just because the list is filtered.
     const inStudy = rows.filter(t => _guideTrajectoryInStudy(t) && t.arms?.grounding?.steps?.length).length;
 
+    // WHAT PRESSING PUBLISH WOULD DO, worked out by the same function that will do it. The headline
+    // is a preview rather than a description of the bank, because the two differ in exactly the case
+    // that matters — an edited trajectory whose V2 row is still the old one.
+    const plan = (onV2 && v2Index?.ok && typeof planGuideV2Publish === 'function')
+      ? planGuideV2Publish(queue, v2Index.rows)
+      : [];
+    const nCreate = plan.filter(p => p.action === 'create').length;
+    const nUpdate = plan.filter(p => p.action === 'update').length;
+    // Ticked but already live on V2 under a row this bank cannot see as its own — nothing here can
+    // take those down, so they are counted separately rather than folded into the headline.
+    const nSkippedLive = onV2 && v2Index?.ok
+      ? rows.filter(t => !_guideTrajectoryInStudy(t) && _guideV2RowFor(v2Index, t)?.in_study).length
+      : 0;
+    // Rows on V2 that no trajectory here claims. A LIVE one is the case worth acting on: it is in
+    // the participant's queue, nothing in this bank can update it, and publishing will not take it
+    // down. Drafts are inert and are counted only so the total adds up.
+    const v2Unmatched = (onV2 && v2Index?.ok && typeof unmatchedGuideV2Rows === 'function')
+      ? unmatchedGuideV2Rows(rows, v2Index.rows)
+      : [];
+    const v2UnmatchedLive = v2Unmatched.filter(r => r.in_study);
+
+    /**
+     * The list, split into what V2 already has and what this run captured.
+     *
+     * TWO GROUPS RATHER THAN ONE FLAT LIST, because they are two different publishes: the first
+     * group updates rows participants may already be walking, the second adds rows that do not
+     * exist yet. Seeing which is which before pressing publish is the whole point — a capture that
+     * looks new but is really an edit of a live task is exactly how the duplicate rows on V2
+     * happened.
+     *
+     * V1 has no such distinction and stays a flat list.
+     */
+    function _guideTrajGroupsHtml(list, renderRow) {
+      if (!onV2 || !v2Index?.ok) return list.map(renderRow).join('');
+      const known = [];
+      const fresh = [];
+      list.forEach(t => (_guideV2RowFor(v2Index, t) ? known : fresh).push(t));
+      const section = (label, hint, group) => group.length
+        ? `<div class="study-traj-group-head" title="${escapeAttr(hint)}">${escapeHTML(label)}`
+          + ` <span class="study-traj-filter-n">${group.length}</span></div>`
+          + group.map(renderRow).join('')
+        : '';
+      return section('Already on V2', 'Matched to a row that is already published. Publishing '
+          + 'updates that row in place rather than adding a second one.', known)
+        + section('New from this run', 'No row on V2 yet. Publishing creates one.', fresh);
+    }
+
     setHTML(`
       <div class="study-screen">
         <div class="study-header">
@@ -2414,7 +3555,15 @@ if (typeof window !== 'undefined') {
         <div class="study-body">
           <p class="study-intro">${rows.length
             ? `Captured guide runs. Edit one into the trajectory the study should show, then save it.
-               <strong>${inStudy} of ${rows.length}</strong> will appear in the Guide User Study.`
+               ${onV2
+                 ? (v2Index?.ok
+                   ? `Publishing would <strong>update ${nUpdate}</strong> row${nUpdate === 1 ? '' : 's'}
+                      already on <strong>V2</strong>, <strong>create ${nCreate}</strong> new one${nCreate === 1 ? '' : 's'}
+                      from the ${plan.length} ticked here — ${v2Index.rows.length} row${v2Index.rows.length === 1 ? '' : 's'} on V2 today.
+                      ${nSkippedLive ? `<strong>${nSkippedLive}</strong> unticked trajector${nSkippedLive === 1 ? 'y is' : 'ies are'}
+                        still live on V2; publishing will not take ${nSkippedLive === 1 ? 'it' : 'them'} down.` : ''}`
+                   : `Could not read V2: ${escapeHTML(v2Index?.error || 'unknown error')}`)
+                 : `<strong>${inStudy} of ${rows.length}</strong> will appear in the Guide User Study.`}`
             : 'Nothing captured yet. Run a guide task, then press 🎬 on its journey card to capture it.'}</p>
           ${rows.length ? `
           <div class="study-traj-filters" id="study-traj-filters">
@@ -2424,16 +3573,35 @@ if (typeof window !== 'undefined') {
                 <span class="study-traj-filter-n">${counts[f.id] || 0}</span></button>`).join('')}
           </div>
           <div class="study-traj-bulk">
+            <span class="study-traj-sub">Publish to:</span>
+            <button class="study-traj-filter${onV2 ? ' study-traj-filter-on' : ''}" data-traj-source="v2"
+              title="The four-variant V2 project — pageguide_guide_v2_tasks, written straight from here">V2</button>
+            <button class="study-traj-filter${onV2 ? '' : ' study-traj-filter-on'}" data-traj-source="v1"
+              title="The original project — study_guide_trajectories, written through the local publish helper">V1</button>
+            ${onV2 ? '<button class="study-evidence-clear" id="study-traj-v2-refresh" title="Re-read what V2 currently holds">⟳</button>' : ''}
+          </div>
+          <div class="study-traj-bulk">
             <span class="study-traj-sub">${_guideTrajFilter === 'all'
               ? 'All trajectories:'
               : 'Shown here only:'}</span>
-            <button class="study-evidence-clear" data-traj-bulk="in">Include all</button>
-            <button class="study-evidence-clear" data-traj-bulk="out">Exclude all</button>
-            <button class="study-evidence-clear" id="study-traj-publish" title="Publish the GUIDE trajectories via the local publish helper">⬆ Publish guide</button>
-            <button class="study-evidence-clear" id="study-traj-export" title="Save the guide bundle to a file, to upload later with scripts/publish.mjs">⬇ Export instead</button>
+            <button class="study-evidence-clear" data-traj-bulk="in">Select all</button>
+            <button class="study-evidence-clear" data-traj-bulk="out">Deselect all</button>
+            ${onV2
+              ? `<button class="study-evidence-clear" id="study-traj-publish-v2" title="Upsert every captured trajectory into the V2 pageguide_guide_v2_tasks table. Trajectories that are incomplete or excluded go up as drafts (in_study = false) and are named in the report.">⬆ Publish guide → V2</button>`
+              : `<button class="study-evidence-clear" id="study-traj-publish" title="Publish the GUIDE trajectories via the local publish helper">⬆ Publish guide → V1</button>
+                 <button class="study-evidence-clear" id="study-traj-export" title="Save the guide bundle to a file, to upload later with scripts/publish.mjs">⬇ Export instead</button>`}
           </div>
-          <div class="study-llm-answers-note" id="study-traj-list-note"></div>` : ''}
-          ${shown.length ? shown.map(t => {
+          <div class="study-llm-answers-note${v2UnmatchedLive.length ? ' study-note-bad' : ''}"
+            id="study-traj-list-note">${v2Unmatched.length
+              ? escapeHTML(`${v2Unmatched.length} row(s) on V2 match no trajectory here`
+                + `${v2UnmatchedLive.length
+                  ? `, and ${v2UnmatchedLive.length} of them ${v2UnmatchedLive.length === 1 ? 'is' : 'are'} LIVE: `
+                    + `${v2UnmatchedLive.map(r => r.id).join(', ')}. Participants are walking `
+                    + `${v2UnmatchedLive.length === 1 ? 'it' : 'them'} and publishing from here will not `
+                    + 'change that — they were published from another bank. Edit or remove them in Supabase.'
+                  : ' (all drafts, so nothing is walking them).'}`)
+              : ''}</div>` : ''}
+          ${shown.length ? _guideTrajGroupsHtml(shown, t => {
             const g = t.arms?.grounding;
             const ng = t.arms?.nongrounding;
             const gtProblem = _guideGroundTruthProblem(t.ground_truth);
@@ -2458,12 +3626,13 @@ if (typeof window !== 'undefined') {
                   <span class="study-traj-tag${gtProblem ? ' study-traj-tag-warn' : ' study-traj-tag-ok'}"
                     title="${escapeAttr(gtProblem || 'Ground truth recorded')}"
                     >${gtProblem ? '⚠ ground truth' : '✓ ground truth'}</span>
+                  ${onV2 && v2Index?.ok ? _guideV2ChipHtml(_guideV2RowFor(v2Index, t), t) : ''}
                 </div>
               </div>
               <button class="study-evidence-annotate" data-traj-open="${escapeAttr(t.id)}">Edit</button>
               <button class="study-truth-item-btn" data-traj-delete="${escapeAttr(t.id)}" title="Delete this trajectory">✕</button>
             </div>`;
-          }).join('') : (rows.length ? '<div class="study-truth-empty">No trajectory in this condition yet.</div>' : '')}
+          }) : (rows.length ? '<div class="study-truth-empty">No trajectory in this condition yet.</div>' : '')}
         </div>
       </div>`);
     $('study-close').onclick = closeStudyPanel;
@@ -2491,6 +3660,62 @@ if (typeof window !== 'undefined') {
       if (!n) return;
       n.textContent = msg || '';
       n.className = `study-llm-answers-note${tone ? ' study-note-' + tone : ''}`;
+    };
+
+    // The V1/V2 switch. Re-renders rather than toggling classes, because the two sources show
+    // different buttons and different chips — half-updating that is how a V1 publish gets pressed
+    // on a screen that says V2.
+    overlay.querySelectorAll('[data-traj-source]').forEach(btn => {
+      btn.onclick = () => { _guideTrajSource = btn.dataset.trajSource; renderGuideTrajectoryList(); };
+    });
+
+    const v2Refresh = $('study-traj-v2-refresh');
+    if (v2Refresh) v2Refresh.onclick = async () => {
+      v2Refresh.disabled = true;
+      listNote('Re-reading V2…');
+      await _loadGuideV2Index({ force: true });
+      renderGuideTrajectoryList();
+    };
+
+    // ── Publish to V2 ──
+    // Straight to the password-gated RPC, not through the loopback helper: V2's save function is
+    // SECURITY DEFINER and granted to anon, so the anon key plus a typed password is enough and no
+    // secret key or terminal is involved. See guide_v2_publish.js.
+    const publishV2Btn = $('study-traj-publish-v2');
+    if (publishV2Btn) publishV2Btn.onclick = async () => {
+      if (typeof publishGuideV2 !== 'function') {
+        listNote('guide_v2_publish.js did not load.', 'bad');
+        return;
+      }
+      publishV2Btn.disabled = true;
+      listNote(`Publishing the ${plan.length} ticked trajector${plan.length === 1 ? 'y' : 'ies'} to V2`
+        + ` — ${nUpdate} update, ${nCreate} new…`);
+      try {
+        // The whole bank, in queue order — planGuideV2Publish keeps only the ticked ones and works
+        // out, for each, whether it lands on an existing row or a new one. Queue order comes from
+        // the full bank rather than the ticked subset, so ticking one more later does not renumber
+        // everything a participant walks.
+        const res = await publishGuideV2(queue, { v2Rows: v2Index?.ok ? v2Index.rows : null });
+        if (!res.ok) { listNote(res.error, 'bad'); return; }
+        const failed = res.rows.filter(r => !r.ok).length;
+        const drafts = res.rows.filter(r => r.ok && !r.in_study).length;
+        const live = res.rows.filter(r => r.ok && r.in_study).length;
+        listNote(`${live} live · ${drafts} draft · ${failed} failed`
+          + `\n${describeGuideV2Publish(res.rows)}`, failed ? 'bad' : 'ok');
+        // The chips are now wrong by definition, so re-read before they are looked at again.
+        await _loadGuideV2Index({ force: true });
+        const note = $('study-traj-list-note');
+        const held = note ? { text: note.textContent, cls: note.className } : null;
+        await renderGuideTrajectoryList();
+        // renderGuideTrajectoryList rebuilds the note element, and the report is the one thing on
+        // this screen that cannot be recovered by looking again.
+        const fresh = $('study-traj-list-note');
+        if (fresh && held) { fresh.textContent = held.text; fresh.className = held.cls; }
+      } catch (e) {
+        listNote(`Could not publish to V2: ${e?.message || e}`, 'bad');
+      } finally {
+        publishV2Btn.disabled = false;
+      }
     };
 
     const publishBtn = $('study-traj-publish');
@@ -3145,12 +4370,13 @@ if (typeof window !== 'undefined') {
             <label class="study-radio-btn"><input type="radio" name="study-half" value="guide"><span>📘 Guide trajectories only</span></label>
           </div>`;
 
+    // NOT a picker any more. Which group a participant is in, and which cell each of their
+    // questions carries, is dealt from their assignment slot — see _assignFindSession. Leaving it
+    // as a choice let the person running the session pick, and a counterbalance that someone
+    // chooses is not a counterbalance. Shown, not chosen, so the researcher can still see it.
     const armPicker = recording ? '' : `
-          <p class="study-question-text" style="margin-top:12px;">Which answers should this participant read?</p>
-          <div class="study-radio-group" id="study-arm-group">
-            ${STUDY_ARM_CHOICES.map((c, i) => `
-              <label class="study-radio-btn"><input type="radio" name="study-arm" value="${c.id}"${i === 0 ? ' checked' : ''}><span>${c.label} — <em>${c.note}</em></span></label>`).join('')}
-          </div>`;
+          <p class="study-question-text" style="margin-top:12px;">Assignment</p>
+          <p class="study-traj-sub" id="study-assignment-note">Group and answer order are dealt automatically when the study starts, alternating between Find &times; Text and Find &times; Visual.</p>`;
 
     setHTML(`
       <div class="study-screen">
@@ -3160,8 +4386,8 @@ if (typeof window !== 'undefined') {
         </div>
         <div class="study-body">
           <p class="study-intro">${recording
-            ? `Walk all <strong>${s.queue.length} tasks</strong>, recording each question's grounded and non-grounded answer and its ground truth.`
-            : `You'll answer <strong>${s.queue.length} questions</strong>. For each one you'll read the agent's answer, then say what you found on the page.`}</p>
+            ? `Walk all <strong>${s.queue.length} tasks</strong>, recording each question's four answers — correct and incorrect, grounded and bare — and its ground truth.`
+            : 'For each question you\'ll see a page and an answer an AI agent gave. Your job is to decide whether that answer is <strong>correct</strong>, and then point at what on the page told you.'}</p>
           <label class="study-question-text" for="study-pid-input" style="margin-top:8px;">Participant ID (optional)</label>
           <input type="text" class="study-input" id="study-pid-input" placeholder="e.g. P07">
           ${armPicker}
@@ -3181,12 +4407,19 @@ if (typeof window !== 'undefined') {
         return;
       }
       s.participantId = ($('study-pid-input')?.value || '').trim() || 'anon';
-      s.arm = overlay.querySelector('input[name="study-arm"]:checked')?.value || 'grounding';
       s.taskFilter = overlay.querySelector('input[name="study-half"]:checked')?.value || 'all';
       if (s.taskFilter !== 'all') {
         s.queue = s.queue.filter(entry => entry.taskType === s.taskFilter);
         if (!s.queue.length) {
           setHTML(`<div class="study-screen"><div class="study-body"><p class="study-error">No ${escapeHTML(s.taskFilter)} tasks are ready to run.</p></div></div>`);
+          return;
+        }
+      }
+      // Participants are dealt; a recording pass walks the whole bank as authored.
+      if (!recording) {
+        const dealt = await _dealStudyQueue();
+        if (!dealt.ok) {
+          setHTML(`<div class="study-screen"><div class="study-body"><p class="study-error">${escapeHTML(dealt.error)}</p></div></div>`);
           return;
         }
       }
@@ -3235,6 +4468,135 @@ if (typeof window !== 'undefined') {
     $('study-saved-nongrounded').onclick = () => show('nongrounding');
   }
 
+  // ── Capture size presets ──────────────────────────────────────────────────────
+  //
+  // A page has to be small enough to be WRITTEN, not just captured: two of the ten Find items
+  // failed to publish with Postgres's statement timeout (57014) while every other page went up at
+  // 3–5 MB. Shrinking the defaults for all ten would be the wrong trade — a Find question can turn
+  // on a detail inside an engraving — so the smaller budgets are offered PER CAPTURE, and only the
+  // page that will not fit gives anything up.
+  //
+  // Values are requests, not commands: the content script clamps them (see _pgCaptureLimits) and
+  // reports back what it actually used.
+  const STUDY_CAPTURE_PRESETS = [
+    { id: 'full',    label: 'Full quality',  hint: '1600px · 0.82 — the default' },
+    { id: 'smaller', label: 'Smaller',       hint: '1200px · 0.70 — about half the bytes',
+      options: { imgMaxWidth: 1200, imgQuality: 0.7 } },
+    { id: 'small',   label: 'Smallest',      hint: '900px · 0.60 — for a page that will not publish',
+      options: { imgMaxWidth: 900, imgQuality: 0.6 } },
+  ];
+
+  /** The capture options for a preset id. Pure. An unknown id means the defaults. */
+  function _studyCapturePresetOptions(id) {
+    return STUDY_CAPTURE_PRESETS.find(p => p.id === id)?.options || null;
+  }
+
+  // ── Editing a Find question in place ──────────────────────────────────────────
+  //
+  // V1 wrote the question and its four options together, so a question could lean on the options
+  // ("...which of the following?") and be perfectly clear. V2 shows no options — the participant
+  // judges the agent's answer — which leaves those questions dangling mid-sentence, and leaves the
+  // stored `answer` as the only statement of what is correct. Both now have to be fixable against
+  // the live page, in the same sitting as the recording, so the researcher is not editing
+  // tasks.json in a different window and reloading the extension between every wording change.
+  //
+  // Recorder only. A participant editing the question would be editing the stimulus.
+
+  /** The shipped task, straight from tasks.json — the baseline an edit is diffed against. */
+  async function _shippedFindTask(taskId) {
+    try {
+      const data = await fetch(chrome.runtime.getURL('user_study_data/tasks.json')).then(r => r.json());
+      return (data?.find || []).find(t => String(t?.id) === String(taskId)) || null;
+    } catch (e) {
+      console.warn('[Study] could not read tasks.json to diff an edit:', e);
+      return null;
+    }
+  }
+
+  function renderStudyTaskEditor(task) {
+    const answer = String(task?.answer == null ? '' : task.answer);
+    return `
+      <div class="study-task-edit" id="study-task-edit">
+        <div class="study-task-edit-answer">
+          <span class="study-task-edit-label">Correct answer</span>
+          <span class="study-task-edit-value">${answer ? escapeHTML(answer) : '<em>not set</em>'}</span>
+        </div>
+        <div class="study-evidence-actions">
+          <button type="button" class="study-evidence-clear" id="study-edit-question" title="Reword this question. Saved here, not in tasks.json.">✏️ Edit question</button>
+          <button type="button" class="study-evidence-clear" id="study-edit-answer" title="Change what counts as the correct answer">✏️ Edit answer</button>
+          <button type="button" class="study-evidence-clear" id="study-edit-reset"${
+            Array.isArray(task?.edited_fields) && task.edited_fields.length ? '' : ' hidden'
+          } title="Drop the edits and go back to the wording in tasks.json">↩ Reset to file</button>
+        </div>
+        <div class="study-llm-answers-note" id="study-task-edit-note"></div>
+      </div>`;
+  }
+
+  function bindStudyTaskEditor(task) {
+    const section = $('study-task-edit');
+    if (!section || !task?.id) return;
+    const note = (msg, tone = '') => {
+      const n = $('study-task-edit-note');
+      if (!n) return;
+      n.textContent = msg || '';
+      n.className = `study-llm-answers-note${tone ? ' study-note-' + tone : ''}`;
+    };
+
+    /**
+     * Write one field. Both current values go in every time, diffed against the shipped task, so
+     * editing the answer cannot drop an earlier question edit — and an edit typed back to the
+     * shipped wording clears itself rather than pinning the old text (see _buildStudyTaskEdit).
+     */
+    const apply = async (field, value) => {
+      const shipped = await _shippedFindTask(task.id);
+      if (!shipped) { note('Could not read tasks.json — nothing saved.', 'bad'); return; }
+      const next = { question: task.question, answer: task.answer, [field]: value };
+      const record = _buildStudyTaskEdit(shipped, next);
+      const res = await saveStudyTaskEdit(task.id, record);
+      if (!res?.saved) { note(`Could not save: ${res?.error || 'unknown error'}`, 'bad'); return; }
+      // Re-render off the merged task so the screen shows exactly what a participant would get.
+      s.queue[s.idx].task = _applyStudyTaskEdit(shipped, record);
+      renderTaskSetup();
+      const n = $('study-task-edit-note');
+      if (n) {
+        n.textContent = record ? `Saved — ${field} is edited here, not in tasks.json.` : 'Back to the wording in tasks.json.';
+        n.className = 'study-llm-answers-note';
+      }
+    };
+
+    $('study-edit-question')?.addEventListener('click', async () => {
+      const next = await openStudyAnswerEditor(String(task.question || ''), {
+        title: 'Edit the question',
+        hint: 'The participant sees this wording and no options, so it has to stand on its own — '
+          + 'a question ending "…which of the following?" has nothing to point at.'
+      });
+      if (next == null) return;
+      const text = String(next).replace(/\s+/g, ' ').trim();
+      if (!text) { note('A question cannot be blank — nothing saved.', 'bad'); return; }
+      await apply('question', text);
+    });
+
+    $('study-edit-answer')?.addEventListener('click', async () => {
+      const next = await openStudyAnswerEditor(String(task.answer || ''), {
+        title: 'Edit the correct answer',
+        hint: 'What the participant\'s Yes/No verdict is judged against, and what the wrong-answer '
+          + 'variants are authored away from.'
+      });
+      if (next == null) return;
+      const text = String(next).replace(/\s+/g, ' ').trim();
+      if (!text) { note('An answer cannot be blank — nothing saved.', 'bad'); return; }
+      await apply('answer', text);
+    });
+
+    $('study-edit-reset')?.addEventListener('click', async () => {
+      const shipped = await _shippedFindTask(task.id);
+      if (!shipped) { note('Could not read tasks.json — nothing changed.', 'bad'); return; }
+      await saveStudyTaskEdit(task.id, null);
+      s.queue[s.idx].task = shipped;
+      renderTaskSetup();
+    });
+  }
+
   function renderTaskSetup() {
     showTargetsOnPage([]); // nothing pinned by the ground-truth panel outlives its screen
     const entry = s.queue[s.idx];
@@ -3256,11 +4618,15 @@ if (typeof window !== 'undefined') {
         <div class="study-progress">Task ${s.idx + 1}/${s.queue.length} · ${STUDY_TASK_LABELS[taskType]}${studyTaskNavHtml()}</div>
         <div class="study-body">
           <div class="study-task-card">
-            <div class="study-task-type-badge">${STUDY_TASK_LABELS[taskType]}</div>
+            <div class="study-task-type-badge">${STUDY_TASK_LABELS[taskType]}${
+              _studyRecording() && Array.isArray(task.edited_fields) && task.edited_fields.length
+                ? ` <span class="study-task-edited-badge" title="Edited here, not in tasks.json: ${escapeAttr(task.edited_fields.join(', '))}">✏️ edited</span>`
+                : ''}</div>
             <p class="study-task-desc">${_studyRecording()
               ? escapeHTML(taskQuestion || STUDY_TASK_DESCRIPTIONS[taskType])
               : STUDY_TASK_DESCRIPTIONS[taskType]}</p>
           </div>
+          ${_studyRecording() && taskType === 'find' ? renderStudyTaskEditor(task) : ''}
           ${savedAnswersRow}
           ${_studyRecording() ? `
             <!-- The SAME action as the Guide recorder's button, not a Find-only one: the stimuli are
@@ -3269,6 +4635,12 @@ if (typeof window !== 'undefined') {
                  action nobody runs. -->
             <div class="study-traj-bulk" style="justify-content:flex-end;">
               <button class="study-evidence-clear" id="study-capture-page" title="Freeze this task's page so the study website can show it — the live page cannot be framed or scripted">📄 Capture page</button>
+              <!-- Per capture, not a setting: only the page that cannot be written should lose
+                   pixels. See STUDY_CAPTURE_PRESETS. -->
+              <select class="study-capture-preset" id="study-capture-preset" title="How hard to shrink this page's images. Lower it only for a page that fails to publish.">
+                ${STUDY_CAPTURE_PRESETS.map(p =>
+                  `<option value="${p.id}">${escapeHTML(p.label)} — ${escapeHTML(p.hint)}</option>`).join('')}
+              </select>
               <!-- One task, for CHECKING. A ten-page bundle is a slow and miserable way to find out
                    that the anchors did not land, and it re-uploads nine pages that were already
                    right. Same rows, same keys, same upsert — just this task's — so what it proves
@@ -3281,6 +4653,11 @@ if (typeof window !== 'undefined') {
               <button class="study-evidence-clear" id="study-show-grounding" title="Draw the saved grounded answer's highlights and evidence marks on this page, exactly as the study site will">👁 Show grounding</button>
               <button class="study-evidence-clear" id="study-publish-find-one" title="Publish ONLY this task — its question, recorded answers, ground truth and captured page. For checking one page before sending the lot.">⬆ Publish this find</button>
               <button class="study-evidence-clear" id="study-publish-find" title="Publish the FIND questions, recorded answers, ground truth and captured pages via the local publish helper">⬆ Publish find</button>
+              <!-- V2 goes straight to Supabase rather than through the loopback helper: its save
+                   function is SECURITY DEFINER and granted to anon, gated on an admin password, so
+                   no secret key is needed in the browser. See study_v2_publish.js. -->
+              <button class="study-evidence-clear" id="study-publish-v2-one" title="Upsert ONLY this task into the V2 four-variant claims table, with all four authored answers, the ground truth and the captured page">⬆ V2 this find</button>
+              <button class="study-evidence-clear" id="study-publish-v2" title="Upsert every FIND task into the V2 four-variant claims table. Items missing a cell go up as drafts (in_study = false) and are named in the report.">⬆ V2 all find</button>
             </div>
             <div class="study-llm-answers-note" id="study-find-publish-note"></div>` : ''}
           ${_studyRecording() ? `
@@ -3304,6 +4681,7 @@ if (typeof window !== 'undefined') {
     $('study-close').onclick = closeStudyPanel;
     bindStudyTaskNav();
     bindStudySavedAnswerPreview(task);
+    if (_studyRecording() && taskType === 'find') bindStudyTaskEditor(task);
 
     // Freeze the page this task is about. Runs in the content script, on the tab the participant
     // would be looking at, so what is captured is the page as it actually rendered.
@@ -3330,7 +4708,11 @@ if (typeof window !== 'undefined') {
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) { note('No active tab to capture.', 'bad'); return; }
-        const snapshot = await chrome.tabs.sendMessage(tab.id, { action: 'capturePageSnapshot' });
+        const preset = $('study-capture-preset')?.value || 'full';
+        const snapshot = await chrome.tabs.sendMessage(tab.id, {
+          action: 'capturePageSnapshot',
+          options: _studyCapturePresetOptions(preset)
+        });
         if (!snapshot || snapshot.error) {
           note(`Could not capture: ${snapshot?.error || 'the page did not respond'}. `
             + 'Open the task page first, and reload it if PageGuide was installed after it loaded.', 'bad');
@@ -3351,7 +4733,12 @@ if (typeof window !== 'undefined') {
         const sharedWith = await _pageSharedWith(task.id, snapshot.url);
         const res = await saveStudyPage(task.id, snapshot);
         if (!res.saved) { note(`Captured, but could not store it: ${res.error}`, 'bad'); return; }
-        note(`Captured ${_fmtSnapshotSize(snapshot.bytes)} from ${snapshot.url} — `
+        // The size used is named whenever it is not the default, so a page that was shrunk cannot
+        // quietly stay shrunk through later re-captures without anyone noticing.
+        const shrunk = snapshot.limits && snapshot.limits.imgMaxWidth < 1600
+          ? ` at ${snapshot.limits.imgMaxWidth}px/${snapshot.limits.imgQuality}`
+          : '';
+        note(`Captured ${_fmtSnapshotSize(snapshot.bytes)}${shrunk} from ${snapshot.url} — `
           + `${anchored.summary}. `
           + (sharedWith
             ? `${sharedWith} already has this same page — only one copy is published, and both tasks read it.`
@@ -3501,6 +4888,50 @@ if (typeof window !== 'undefined') {
         findPublishOne.disabled = false;
       }
     };
+
+    // ── Publishing into the V2 four-variant schema ──
+    //
+    // Separate from _publishStimuliVia, and it has to be: that one writes the V1 tables through the
+    // loopback helper, while V2 is a different project with a different shape (four authored
+    // answers in one jsonb, one row per item) and a different privilege model. Routing them through
+    // one function would mean a change for one silently altering the other.
+    const _v2Note = (msg, tone = '') => {
+      const n = $('study-find-publish-note');
+      if (!n) return;
+      n.textContent = msg || '';
+      n.className = `study-llm-answers-note${tone ? ' study-note-' + tone : ''}`;
+    };
+
+    async function _runV2Publish(button, onlyTaskId) {
+      if (typeof publishFindV2 !== 'function') {
+        _v2Note('study_v2_publish.js did not load.', 'bad');
+        return;
+      }
+      button.disabled = true;
+      _v2Note(onlyTaskId ? `Publishing ${onlyTaskId} to V2…` : 'Publishing every find task to V2…');
+      try {
+        // tasks.json is the authoring format and stays the single list — reading it here rather
+        // than keeping a second copy is the same rule _buildStimulusBundle follows.
+        const data = await fetch(chrome.runtime.getURL('user_study_data/tasks.json')).then(r => r.json());
+        const res = await publishFindV2(data?.find || [], onlyTaskId);
+        if (!res.ok) { _v2Note(res.error, 'bad'); return; }
+        const failed = res.rows.filter(r => !r.ok).length;
+        const drafts = res.rows.filter(r => r.ok && !r.in_study).length;
+        const live = res.rows.filter(r => r.ok && r.in_study).length;
+        _v2Note(`${live} live · ${drafts} draft · ${failed} failed\n${describeFindV2Publish(res.rows)}`,
+          failed ? 'bad' : 'ok');
+      } catch (e) {
+        _v2Note(`Could not publish to V2: ${e?.message || e}`, 'bad');
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    const v2PublishOne = $('study-publish-v2-one');
+    if (v2PublishOne) v2PublishOne.onclick = () => _runV2Publish(v2PublishOne, task.id);
+
+    const v2PublishAll = $('study-publish-v2');
+    if (v2PublishAll) v2PublishAll.onclick = () => _runV2Publish(v2PublishAll, null);
 
     const openOnly = $('study-open-only-btn');
     if (openOnly) openOnly.onclick = async () => {
@@ -3653,11 +5084,6 @@ if (typeof window !== 'undefined') {
     };
   }
 
-  const STUDY_ARM_CHOICES = [
-    { id: 'grounding', label: 'Grounded', note: 'The answer keeps its citations and evidence markers.' },
-    { id: 'nongrounding', label: 'Non-grounded', note: 'The same answer, with every marker removed.' },
-  ];
-
   const STUDY_MINI_Q_HEIGHT_KEY = 'pageguide_study_mini_q_height';
 
   /**
@@ -3754,9 +5180,13 @@ if (typeof window !== 'undefined') {
    * at submit, so what it measures here is how the participant read the page while answering.
    */
   async function renderTaskPlayback(taskType, task) {
-    const record = task?.id ? await getStudyResponse(task.id, s.arm) : null;
+    // The CELL dealt to this question, not the session's arm: with correctness counterbalanced per
+    // question, two questions in the same sitting read from different cells. Guide tasks have no
+    // cell and fall back to the arm.
+    const slot = _studyVariantAt(s.idx) || s.arm;
+    const record = task?.id ? await getStudyResponse(task.id, slot) : null;
     if (!record) {
-      const label = STUDY_ARM_LABELS[s.arm] || s.arm;
+      const label = _armLabel(slot);
       setHTML(`
         <div class="study-screen">
           <div class="study-header"><span class="study-title">${STUDY_TASK_LABELS[taskType]}</span><button class="study-close-btn" id="study-close">✕</button></div>
@@ -3799,18 +5229,27 @@ if (typeof window !== 'undefined') {
 
     let answerHTML = '';
     if (taskType === 'find') {
-      const options = _shuffleStudyOptions([task.answer, ...(task.distractors || [])]);
       const notesBlock = s.currentNotes ? `<div class="study-notes-display"><span class="study-notes-display-label">📝 Your notes</span><p class="study-notes-display-text">${escapeHTML(s.currentNotes)}</p></div>` : '';
+      // VERIFY, do not find. The participant has the page and the agent's answer in front of them,
+      // and the only question is whether that answer is right — which is a judgement about the
+      // answer shown, so it is graded against the cell that was dealt (see _gradeFindVerdict) and
+      // never against a fixed property of the question.
+      //
+      // The multiple-choice list that used to be here asked a different thing entirely: it asked
+      // them to produce the answer, which the agent has already done, and it leaked the truth —
+      // four options with one right one tells you the agent is wrong the moment its answer is not
+      // among them.
       answerHTML = `
         ${notesBlock}
         ${llmAnswersHTML}
         <div class="study-question-card">
           <div class="study-question-head">
             <span class="study-question-badge">Q1</span>
-            <p class="study-question-text">Select the answer you found:</p>
+            <p class="study-question-text">Is the agent's answer above correct?</p>
           </div>
           <div class="study-radio-group" id="study-answer-group">
-            ${options.map(opt => `<label class="study-radio-btn"><input type="radio" name="study-answer" value="${escapeAttr(opt)}"><span>${escapeHTML(opt)}</span></label>`).join('')}
+            <label class="study-radio-btn"><input type="radio" name="study-answer" value="yes"><span>✅ Yes — the answer is correct</span></label>
+            <label class="study-radio-btn"><input type="radio" name="study-answer" value="no"><span>❌ No — the answer is wrong</span></label>
           </div>
         </div>
         ${renderStudyCitationPicker()}
@@ -3841,7 +5280,7 @@ if (typeof window !== 'undefined') {
             <div class="study-timer-display study-answer-timer-display" id="study-support-timer-row" hidden><span class="study-timer-label">🔎 Finding the evidence</span><span class="study-timer study-answer-timer" id="study-support-timer">00:00</span></div>
           </div>
           ${answerHTML}
-          <div id="study-answer-error" class="study-error" style="display:none;">Please select an answer.</div>
+          <div id="study-answer-error" class="study-error" style="display:none;">Please answer the question above.</div>
           ${_studyRecording() ? '<button class="study-btn study-btn-secondary study-btn-back" id="study-back-btn" title="Recording only: return to the chat to re-ask or refine the answer">← Back to chat</button>' : ''}
           <div class="study-answer-submit-row">
             ${twoStage ? '<button class="study-btn study-btn-primary" id="study-choice-next-btn">Next →</button>' : ''}
@@ -3870,7 +5309,7 @@ if (typeof window !== 'undefined') {
     if (playbackRecord) {
       const list = $('study-llm-answers-list');
       if (list) {
-        list.dataset.studyActiveArm = playbackRecord.condition || s.arm || '';
+        list.dataset.studyActiveArm = playbackRecord.condition || _studyVariantAt(s.idx) || s.arm || '';
         list._studyPlaybackRecord = playbackRecord;
       }
       // The answer on screen is this record's, so the page shows this record's evidence.
@@ -3926,7 +5365,9 @@ if (typeof window !== 'undefined') {
       const sel = overlay.querySelector('input[name="study-answer"]:checked');
       const errorEl = $('study-answer-error');
       if (!sel) {
-        errorEl.textContent = 'Please select an answer.';
+        errorEl.textContent = taskType === 'find'
+          ? 'Please say whether the answer is correct.'
+          : 'Please select an answer.';
         errorEl.style.display = '';
         return;
       }
@@ -4315,6 +5756,16 @@ if (typeof window !== 'undefined') {
           console.warn('[Study] Could not read ground truth for scoring:', e);
         }
       }
+      // The cell this question was dealt, and the wording the participant actually judged. Read
+      // from the queue entry rather than from `s.arm`: correctness is counterbalanced per question,
+      // so the session has no single answer to either.
+      const variantKey = _studyVariantAt(s.idx);
+      const shownRecord = (taskType === 'find' && task?.id && variantKey)
+        ? await getStudyResponse(task.id, variantKey)
+        : null;
+      const claimTextSnapshot = shownRecord
+        ? (shownRecord.answer_display || shownRecord.answer_raw || '')
+        : null;
       const result = _buildStudyResultRecord({
         participantId: s.participantId,
         sessionId: s.sessionId,
@@ -4324,7 +5775,13 @@ if (typeof window !== 'undefined') {
         totalTasks: s.queue.length,
         taskType,
         task,
-        condition: studyConditionLabel(s.mode === 'study' ? s.arm : null),
+        variantKey,
+        claimTextSnapshot,
+        // The grounding half of the cell, so plain by-arm queries stay readable — the same split
+        // supabase_schema_v2.sql keeps `condition` for beside `variant_key`.
+        condition: variantKey
+          ? studyConditionLabel(_variantIsGrounded(variantKey) ? 'grounding' : 'nongrounding')
+          : studyConditionLabel(s.mode === 'study' ? s.arm : null),
         elapsedMs: timings.totalElapsed,
         notesElapsedMs: timings.notesElapsed,
         answerElapsedMs: timings.answerElapsed,
@@ -4346,6 +5803,7 @@ if (typeof window !== 'undefined') {
 
       s.results.push(result);
       await persistResult(result);
+      await _persistFindV2Result(result, { task, variantKey, timings, taskType });
 
       s.idx++;
       if (s.idx < s.queue.length) {
@@ -4380,7 +5838,7 @@ if (typeof window !== 'undefined') {
   window.openStudyPanel = async function openStudyPanel(mode) {
     if (s.open) return;
     s.open = true;
-    s.mode = (mode === 'study' || mode === 'record-guide' || mode === 'record-annotation') ? mode : 'record';
+    s.mode = (mode === 'study' || mode === 'record-guide' || mode === 'record-annotation' || mode === 'record-model-performance' || mode === 'compare') ? mode : 'record';
     overlay = document.getElementById('study-overlay');
     miniBar = document.getElementById('study-mini-bar');
     if (!overlay || !miniBar) {
@@ -4395,6 +5853,14 @@ if (typeof window !== 'undefined') {
     }
     if (s.mode === 'record-annotation') {
       renderAnnotationTrajectoryList();
+      return;
+    }
+    if (s.mode === 'record-model-performance') {
+      renderModelPerformanceTrajectoryList();
+      return;
+    }
+    if (s.mode === 'compare') {
+      renderModelComparison();
       return;
     }
     s.queue = await loadTasks();

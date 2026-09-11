@@ -117,6 +117,24 @@
       text-decoration: underline;
     }
     
+    /* Shown when the picked model takes no images but Vision is on. Advisory only —
+       a text-only model is a fine choice for the text-only tasks. */
+    .model-warning {
+      display: block;
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      border-radius: 6px;
+      background: rgba(245, 158, 11, 0.08);
+      color: #f59e0b;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    
+    .model-warning[hidden] {
+      display: none;
+    }
+    
     /* Provider selector tabs */
     .provider-tabs {
       display: flex;
@@ -385,6 +403,11 @@
             <option value="gemini-3-flash-preview">Gemini 3.0 Flash</option>
             <option value="gemini-3-pro-preview">Gemini 3.0 Pro</option>
             <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+            <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+            <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
+            <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
+            <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
+            <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
           </select>
         </div>
       </div>
@@ -398,21 +421,86 @@
         </div>
         <div class="form-group">
           <label for="openrouterModel">Model</label>
+          <!-- Grouped by vendor: the list is long enough that a flat one stops being scannable.
+               Models marked "(text only)" take no images. The request builder attaches a screenshot
+               unconditionally, so one of those with Vision on fails at the API — hence the warning
+               below, and TEXT_ONLY_OPENROUTER_MODELS in options.js, which must list exactly them. -->
           <select id="openrouterModel">
-            <option value="anthropic/claude-sonnet-4.5">Claude 4.5 Sonnet</option>
-            <option value="anthropic/claude-opus-4.5">Claude 4.5 Opus</option>
-            <option value="anthropic/claude-sonnet-4.6">Claude 4.6 Sonnet</option>
-            <option value="anthropic/claude-opus-4.6">Claude 4.6 Opus</option>
-            <option value="openai/gpt-4o-2024-11-20">GPT-4o</option>
-            <option value="openai/gpt-4o-mini-2024-07-18">GPT-4o Mini</option>
-            <option value="openai/gpt-5.2">GPT-5.2</option>
-            <option value="openai/gpt-5.2-pro">GPT-5.2 Pro</option>
-            <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
-            <option value="google/gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
-            <option value="google/gemini-3-flash-preview">Gemini 3.0 Flash Preview</option>
-            <option value="google/gemini-3-pro-preview">Gemini 3.0 Pro Preview</option>
-            <option value="google/gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+            <optgroup label="Anthropic">
+              <option value="anthropic/claude-sonnet-4.5">Claude 4.5 Sonnet</option>
+              <option value="anthropic/claude-opus-4.5">Claude 4.5 Opus</option>
+              <option value="anthropic/claude-sonnet-4.6">Claude 4.6 Sonnet</option>
+              <option value="anthropic/claude-opus-4.6">Claude 4.6 Opus</option>
+              <option value="anthropic/claude-haiku-4.5">Claude 4.5 Haiku</option>
+              <option value="anthropic/claude-3-haiku">Claude 3 Haiku</option>
+              <option value="anthropic/claude-opus-4.8">Claude 4.8 Opus</option>
+              <option value="anthropic/claude-sonnet-5">Claude 5 Sonnet</option>
+              <option value="anthropic/claude-opus-5">Claude 5 Opus</option>
+              <option value="anthropic/claude-fable-5">Claude 5 Fable</option>
+              <option value="anthropic/claude-fable-5.1">Claude 5.1 Fable</option>
+            </optgroup>
+            <optgroup label="OpenAI">
+              <option value="openai/gpt-4o-2024-11-20">GPT-4o</option>
+              <option value="openai/gpt-4o-mini-2024-07-18">GPT-4o Mini</option>
+              <option value="openai/gpt-5.2">GPT-5.2</option>
+              <option value="openai/gpt-5.2-pro">GPT-5.2 Pro</option>
+              <option value="openai/gpt-5.4-mini">GPT-5.4 Mini</option>
+              <option value="openai/gpt-5.4-nano">GPT-5.4 Nano</option>
+              <option value="openai/gpt-4.1-mini">GPT-4.1 Mini</option>
+              <option value="openai/gpt-4.1-nano">GPT-4.1 Nano</option>
+              <option value="openai/gpt-5.5">GPT-5.5</option>
+              <option value="openai/gpt-5.6-luna">GPT-5.6 Luna</option>
+              <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
+              <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="openai/gpt-6-astra">GPT-6 Astra</option>
+            </optgroup>
+            <optgroup label="xAI">
+              <option value="x-ai/grok-4.3">Grok 4.3</option>
+              <option value="x-ai/grok-4.5">Grok 4.5</option>
+              <option value="x-ai/grok-4.6">Grok 4.6</option>
+            </optgroup>
+            <optgroup label="Google">
+              <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
+              <option value="google/gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+              <option value="google/gemini-3-flash-preview">Gemini 3.0 Flash Preview</option>
+              <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+              <option value="google/gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
+              <option value="google/gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+              <option value="google/gemini-3.5-flash">Gemini 3.5 Flash</option>
+              <option value="google/gemini-3.6-flash">Gemini 3.6 Flash</option>
+              <option value="google/gemini-3.7-flash">Gemini 3.7 Flash</option>
+              <option value="google/gemini-3.8-flash">Gemini 3.8 Flash</option>
+            </optgroup>
+            <optgroup label="Qwen">
+              <option value="qwen/qwen3.8-max">Qwen3.8 Max</option>
+              <option value="qwen/qwen3.8-flash">Qwen3.8 Flash</option>
+              <option value="qwen/qwen3-vl-235b-a22b-instruct">Qwen3 VL 235B</option>
+              <option value="qwen/qwen3.8-27b">Qwen3.8 27B</option>
+              <option value="qwen/qwen3.7-flash">Qwen3.7 Flash</option>
+              <option value="qwen/qwen3.7-plus">Qwen3.7 Plus</option>
+              <option value="qwen/qwen3.7-max">Qwen3.7 Max (text only)</option>
+            </optgroup>
+            <optgroup label="DeepSeek">
+              <option value="deepseek/deepseek-v4.1-flash">DeepSeek V4.1 Flash</option>
+              <option value="deepseek/deepseek-v4-flash-vision-exp">DeepSeek V4 Flash Vision</option>
+              <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash (text only)</option>
+              <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro (text only)</option>
+              <option value="deepseek/deepseek-v3.2">DeepSeek V3.2 (text only)</option>
+            </optgroup>
+            <optgroup label="Moonshot">
+              <option value="moonshotai/kimi-k3">Kimi K3</option>
+              <option value="moonshotai/kimi-k2.7-code">Kimi K2.7 Code</option>
+              <option value="moonshotai/kimi-k2.6">Kimi K2.6</option>
+              <option value="moonshotai/kimi-k2-thinking">Kimi K2 Thinking (text only)</option>
+            </optgroup>
+            <optgroup label="Mistral">
+              <option value="mistralai/mistral-small-3.2-24b-instruct">Mistral Small 3.2 24B</option>
+              <option value="mistralai/ministral-8b-2512">Ministral 8B</option>
+              <option value="mistralai/ministral-3b-2512">Ministral 3B</option>
+              <option value="mistralai/mistral-medium-3.1">Mistral Medium 3.1</option>
+            </optgroup>
           </select>
+          <div id="openrouterVisionWarning" class="model-warning" hidden></div>
         </div>
       </div>
       
@@ -429,6 +517,15 @@
             <option value="gpt-4o-2024-11-20">GPT-4o</option>
             <option value="gpt-4o-mini-2024-07-18">GPT-4o Mini</option>
             <option value="gpt-5.2-2025-12-11">GPT-5.2-2025-12-11</option>
+            <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+            <option value="gpt-5.4-nano">GPT-5.4 Nano</option>
+            <option value="gpt-4.1-mini-2025-04-14">GPT-4.1 Mini</option>
+            <option value="gpt-4.1-nano-2025-04-14">GPT-4.1 Nano</option>
+            <option value="gpt-5.5">GPT-5.5</option>
+            <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+            <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+            <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+            <option value="gpt-6-astra">GPT-6 Astra</option>
             <!-- <option value="gpt-5.2-pro-2025-12-11">GPT-5.2-Pro-2025-12-11</option> -->
           </select>
         </div>
@@ -496,6 +593,15 @@
           <span class="toggle-desc">The maximum number of steps the agent can take autonomously in auto mode before pausing to prevent infinite loops.</span>
         </div>
         <input type="number" id="maxSteps" min="1" max="100" value="20" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
+      </div>
+      <!-- The other half of the same dial: the step cap bounds the whole run, this bounds how long
+           the run may spend going in circles. Both belong here, not behind the debug code. -->
+      <div class="form-group">
+        <label for="guideLoopStepThreshold">Loop Step Pause Threshold</label>
+        <div class="toggle-info" style="margin-bottom: 8px;">
+          <span class="toggle-desc">Number of consecutive steps scoring at or above the loop threshold (0.3) before the guide pauses. Default 6. Lower it to stop sooner on repetition; raise it for pages where revisiting the same control is normal. A step that scores below the threshold clears the streak.</span>
+        </div>
+        <input type="number" id="guideLoopStepThreshold" min="1" max="20" step="1" value="6" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
       </div>
     </div>
 
@@ -570,13 +676,6 @@
             <span class="toggle-desc">Number of consecutive low-confidence actions allowed before the guide pauses for user review.</span>
           </div>
           <input type="number" id="guideLowConfidenceActionThreshold" min="1" max="10" step="1" value="5" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
-        </div>
-        <div class="form-group" style="margin-bottom: 16px;">
-          <label for="guideLoopStepThreshold">Loop Step Pause Threshold</label>
-          <div class="toggle-info" style="margin-bottom: 8px;">
-            <span class="toggle-desc">Number of consecutive steps scoring at or above the loop threshold (0.3) before the guide stops. 1 stops on the first repeat-looking step; raise it for pages where revisiting the same control is normal. A step that scores below the threshold clears the streak.</span>
-          </div>
-          <input type="number" id="guideLoopStepThreshold" min="1" max="10" step="1" value="1" style="width: 100px; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color);">
         </div>
         <div class="form-group" style="margin-bottom: 16px;">
           <label for="guideConfidenceThreshold">Yellow Confidence Threshold</label>

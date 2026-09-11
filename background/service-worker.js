@@ -405,7 +405,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'callRouterLLM') {
-    // Fast router - always uses Gemini 2.5 Flash for quick routing decisions
+    // Fast router - runs on whichever provider/model is selected in Settings
     callRouterLLM(request.messages, request.systemPrompt)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
@@ -439,7 +439,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       metadata: request.metadata || {}
     }).catch(() => null);
 
-    _withDebugResponse(debugId, Date.now(), callLLM(request.messages, request.systemPrompt, request.imageBase64), request)
+    _withDebugResponse(debugId, Date.now(), callLLM(request.messages, request.systemPrompt, request.imageBase64, request.overrides || null), request)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
@@ -586,6 +586,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // messages from the side panel (no sender.tab) must pass one explicitly — see panel.js's
     // stopGuide/stopPausedGuideWithRecap/resetChat, which all target guideTabId/currentTabId.
     const targetTabId = request.tabId ?? sender.tab?.id;
+    // A clear names the run it is ending when it can. Stopping one run and starting the next are
+    // unordered async messages, and a clear from the OLD run arriving after the NEW run registered
+    // used to delete the new run's session — which then failed to resume on its first navigation
+    // and answered "Guide not active". A clear with no sessionId still clears unconditionally: that
+    // is a reset, which means "whatever is there".
+    const clearingSession = request.sessionId ? String(request.sessionId) : null;
+    const liveSession = targetTabId != null ? _gv2Sessions.get(targetTabId) : null;
+    const staleClear = !!(clearingSession && liveSession?.sessionId
+      && String(liveSession.sessionId) !== clearingSession);
+    if (staleClear) {
+      console.log('[SW guidev2] ignoring clear for finished session', clearingSession,
+        '— tab', targetTabId, 'is running', liveSession.sessionId);
+      sendResponse({ success: true, ignored: true });
+      return false;
+    }
     if (targetTabId != null) {
       _gv2Sessions.delete(targetTabId);
       detachDebugger(targetTabId); // release any background-capture debugger session for this tab
@@ -912,6 +927,31 @@ async function callOpenAIEmbeddings(texts = []) {
 
 // ===== Multi-Image LLM Router =====
 // Supports multiple images for comparison tasks (e.g., image_ask)
+// Output budget for a single step. Guide steps carry thought + instruction + evidence sidecars +
+// annotations, and on reasoning models the hidden reasoning tokens count against this too, so 1024
+// silently truncated the JSON mid-string and surfaced as "Could not parse step JSON". 4096 was still
+// hit by reasoning models, so the budget is generous and the reasoning effort is capped below.
+const LLM_MAX_OUTPUT_TOKENS = 16384;
+
+// A guide step is a small structured decision, not a proof: cap the hidden reasoning so it does not
+// eat the output budget (and the user's wait). OpenRouter ignores this on models without reasoning.
+const OPENROUTER_REASONING = { effort: 'low' };
+
+/** OpenAI direct: only the reasoning families accept reasoning_effort; gpt-4o rejects it. */
+function _openaiReasoningParams(model) {
+  return /^(o\d|gpt-5|gpt-6)/.test(String(model || '')) ? { reasoning_effort: 'low' } : {};
+}
+
+/**
+ * OpenAI-compatible responses report `finish_reason: "length"` when max_tokens cut the output off.
+ * A cut-off JSON object can't be parsed, so report the real cause instead of handing back a partial.
+ */
+function _truncatedOutputError(data, providerLabel) {
+  const finish = data?.choices?.[0]?.finish_reason;
+  if (finish !== 'length') return null;
+  return { error: `${providerLabel} response was truncated (max_tokens reached). Try a shorter goal or a model with a larger output budget.` };
+}
+
 async function callLLMWithImages(messages, systemPrompt, images = []) {
   // Start keep-alive to prevent service worker from going inactive
   startKeepAlive();
@@ -956,171 +996,67 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
   return result;
 }
 
-// ===== Fast Router LLM =====
-// Prefers Gemini 2.5 Flash for fast routing. If no Gemini key is set (e.g. an
-// OpenRouter-only or OpenAI-only user), falls back to the user's selected provider
-// so routing still works without requiring a separate Gemini key.
-async function callRouterLLM(messages, systemPrompt) {
-  const config = CONFIG.providers.gemini;
-  const routerModel = 'gemini-2.5-flash';
-
-  // Load all relevant settings in one call
+// ===== Selected provider/model =====
+// The one place that answers "which model did the user pick?". Every Find task — routing, image
+// selection, Ask — runs on this, so switching the model in Settings switches it everywhere rather
+// than only for the main answer call. Pure.
+function selectedProviderModel(settings) {
+  const provider = (settings && settings.provider) || CONFIG.defaultProvider;
+  const config = CONFIG.providers[provider];
+  const picked = provider === 'gemini' ? settings?.geminiModel
+    : provider === 'openrouter' ? settings?.openrouterModel
+    : provider === 'openai' ? settings?.openaiModel
+    : '';
+  return { provider, model: String(picked || config?.defaultModel || '') };
+}
+/** The provider/model the user picked, read from storage. Falls back to the defaults on error. */
+async function readSelectedProviderModel() {
   let settings = {};
   try {
     settings = await chrome.storage.sync.get([
-      'geminiApiKey', 'provider',
-      'openrouterApiKey', 'openrouterModel',
-      'openaiApiKey', 'openaiModel'
+      'provider', 'geminiModel', 'openrouterModel', 'openaiModel'
     ]);
-  } catch (e) { /* ignore */ }
+  } catch (e) { /* fall through to defaults */ }
+  return selectedProviderModel(settings);
+}
 
-  const apiKey = (settings.geminiApiKey || config.defaultApiKey || '').trim();
-
-  // If no Gemini key, route via the user's selected provider instead
-  if (!apiKey) {
-    console.log('🎯 No Gemini key for router — using selected provider as fallback');
-    return callLLM(messages, systemPrompt);
-  }
-  
-  const url = `${config.endpoint}/${routerModel}:generateContent?key=${apiKey}`;
-  
-  try {
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
-    console.log('🎯 Router LLM (Gemini 2.5 Flash) - prompt length:', userContent.length);
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: userContent }] }],
-        generationConfig: { 
-          temperature: 0.1, 
-          maxOutputTokens: 256 // Router responses are short
-        }
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return { error: `Router API error: ${data.error?.message || response.status}` };
-    }
-    
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      return { error: 'Empty response from router' };
-    }
-    
-    return { content: text };
-  } catch (error) {
-    return { error: `Router network error: ${error.message}` };
-  }
+// ===== Fast Router LLM =====
+// Routing runs on the model selected in Settings, same as every other Find step. It used to be
+// pinned to Gemini 2.5 Flash, which meant a user who switched to (say) an OpenRouter model still
+// had their routing decided by Gemini — and silently needed a second API key for it.
+async function callRouterLLM(messages, systemPrompt) {
+  const { provider, model } = await readSelectedProviderModel();
+  console.log(`\u{1F3AF} Router LLM (${provider} ${model})`);
+  const result = await callLLM(messages, systemPrompt);
+  if (result && !result.error) return { ...result, provider, model };
+  return result;
 }
 
 // ===== Cheap Image Selection LLM =====
-// Text-only prefilter for Find/Ask visual image attachments. It intentionally uses Gemini 2.5
-// Flash Lite and only sees candidate ids/titles, never image pixels.
+// Text-only prefilter for Find/Ask visual image attachments: it only ever sees candidate
+// ids/titles, never image pixels, so a text-only model is fine here. It runs on the selected
+// model too, so one Find run does not span two vendors.
 async function callImageSelectionLLM(messages, systemPrompt) {
-  const geminiConfig = CONFIG.providers.gemini;
-  const openrouterConfig = CONFIG.providers.openrouter;
-  const selectorModel = 'gemini-2.5-flash-lite';
-  const openrouterSelectorModel = 'google/gemini-2.5-flash-lite';
+  const { provider, model } = await readSelectedProviderModel();
+  console.log(`\u{1F5BC}\u{FE0F} Image selector LLM (${provider} ${model})`);
+  const result = await callLLM(messages, systemPrompt);
+  if (result && !result.error) return { ...result, provider, model };
+  return result;
+}
 
-  let settings = {};
-  try {
-    settings = await chrome.storage.sync.get(['geminiApiKey', 'openrouterApiKey']);
-  } catch (e) { /* ignore */ }
-
-  let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-  if (messages?.length > 0) {
-    userContent += messages[messages.length - 1].content;
-  }
-
-  const geminiApiKey = (settings.geminiApiKey || geminiConfig.defaultApiKey || '').trim();
-  const openrouterApiKey = (settings.openrouterApiKey || openrouterConfig.defaultApiKey || '').trim();
-  let geminiError = '';
-
-  if (geminiApiKey) {
-    const url = `${geminiConfig.endpoint}/${selectorModel}:generateContent?key=${geminiApiKey}`;
-    try {
-      console.log('🖼️ Image selector LLM (Gemini 2.5 Flash Lite) - prompt length:', userContent.length);
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: userContent }] }],
-          generationConfig: {
-            temperature: 0,
-            maxOutputTokens: 256
-          }
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        geminiError = `Gemini selector API error: ${data.error?.message || response.status}`;
-      } else {
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return { content: text, provider: 'gemini', model: selectorModel };
-        geminiError = 'Empty response from Gemini image selector';
-      }
-    } catch (error) {
-      geminiError = `Gemini selector network error: ${error.message}`;
-    }
-  } else {
-    geminiError = 'Gemini API key not configured for image selection';
-  }
-
-  if (!openrouterApiKey) {
-    return { error: geminiError };
-  }
-
-  try {
-    console.log('🖼️ Image selector LLM (OpenRouter Gemini 2.5 Flash Lite) - prompt length:', userContent.length);
-    const extensionReferer = (typeof chrome?.runtime?.getURL === 'function')
-      ? chrome.runtime.getURL('')
-      : 'https://pageguide.local/';
-    const response = await fetch(`${openrouterConfig.endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openrouterApiKey}`,
-        'HTTP-Referer': extensionReferer,
-        'X-Title': 'PageGuide'
-      },
-      body: JSON.stringify({
-        model: openrouterSelectorModel,
-        messages: [{ role: 'user', content: userContent }],
-        temperature: 0,
-        max_tokens: 256
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return { error: `OpenRouter image selector API error: ${data.error?.message || response.status}${geminiError ? ` (Gemini fallback reason: ${geminiError})` : ''}` };
-    }
-
-    const text = data.choices?.[0]?.message?.content;
-    if (!text) {
-      return { error: `Empty response from OpenRouter image selector${geminiError ? ` (Gemini fallback reason: ${geminiError})` : ''}` };
-    }
-
-    return { content: text, provider: 'openrouter', model: openrouterSelectorModel, fallbackReason: geminiError };
-  } catch (error) {
-    return { error: `OpenRouter image selector network error: ${error.message}${geminiError ? ` (Gemini fallback reason: ${geminiError})` : ''}` };
-  }
+/** Pin provider/model for one call. Pure. Unknown providers are ignored; keys are never overridden. */
+function _applyModelOverride(settings, overrides) {
+  const base = Object.assign({}, settings || {});
+  const provider = String(overrides?.provider || '').trim();
+  const model = String(overrides?.model || '').trim();
+  if (!['gemini', 'openrouter', 'openai'].includes(provider)) return base;
+  base.provider = provider;
+  if (model) base[`${provider}Model`] = model;
+  return base;
 }
 
 // ===== Main LLM Router =====
-async function callLLM(messages, systemPrompt, imageBase64 = null) {
+async function callLLM(messages, systemPrompt, imageBase64 = null, overrides = null) {
   // Start keep-alive to prevent service worker from going inactive
   startKeepAlive();
   
@@ -1136,6 +1072,9 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
     stopKeepAlive();
     return { error: 'Failed to load settings' };
   }
+  // A caller may pin the provider/model for this one call (the LLM judge in Model Comparison runs
+  // on a model chosen in that screen, not the one the agent is set to). Keys still come from settings.
+  settings = _applyModelOverride(settings, overrides);
 
   const provider = settings.provider || CONFIG.defaultProvider;
 
@@ -1379,7 +1318,8 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
         model: model,
         messages: chatMessages,
         temperature: 0.1,
-        max_tokens: 1024,
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
+        reasoning: OPENROUTER_REASONING,
         // Ask OpenRouter to price the call. Without this the response carries token counts but no
         // `usage.cost`, and cost would have to be guessed from a local price table.
         usage: { include: true }
@@ -1392,6 +1332,8 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
       return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
     }
 
+    const truncated = _truncatedOutputError(data, 'OpenRouter');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenRouter' };
@@ -1444,7 +1386,8 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        max_completion_tokens: 1024,
+        max_completion_tokens: LLM_MAX_OUTPUT_TOKENS,
+        ..._openaiReasoningParams(model),
         // o-series models (o1, o3, o4-mini, …) don't support temperature
         ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
       })
@@ -1456,6 +1399,8 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
       return { error: `OpenAI API error: ${data.error?.message || response.status}` };
     }
 
+    const truncated = _truncatedOutputError(data, 'OpenAI');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenAI' };
@@ -1596,7 +1541,8 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
         model: model,
         messages: chatMessages,
         temperature: 0.1,
-        max_tokens: 1024,
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
+        reasoning: OPENROUTER_REASONING,
         // Same as the single-image path: this is what makes `usage.cost` come back. Images are the
         // expensive half of a guide step, so a run priced without them would be badly wrong.
         usage: { include: true }
@@ -1609,6 +1555,8 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
       return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
     }
 
+    const truncated = _truncatedOutputError(data, 'OpenRouter');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenRouter' };
@@ -1664,7 +1612,8 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        max_completion_tokens: 1024,
+        max_completion_tokens: LLM_MAX_OUTPUT_TOKENS,
+        ..._openaiReasoningParams(model),
         // o-series models (o1, o3, o4-mini, …) don't support temperature
         ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
       })
@@ -1676,6 +1625,8 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
       return { error: `OpenAI API error: ${data.error?.message || response.status}` };
     }
 
+    const truncated = _truncatedOutputError(data, 'OpenAI');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenAI' };

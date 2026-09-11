@@ -394,6 +394,7 @@ function _gv2ClearActionTimers() {
 
 function _gv2StopInternal() {
   const restoreCtx = window._guidev2 && window._guidev2._restoreContext;
+  const stoppedSessionId = window._guidev2?.sessionId || null;
   _guidev2Stopped = true;
   _guidev2Resuming = false;
   _guidev2WaitingForClick = false;
@@ -411,7 +412,7 @@ function _gv2StopInternal() {
   } catch (e) {}
   // Persist a tombstone so a navigation already in flight can't resume the agent, and drop any
   // one-shot steer handoff so it doesn't fire on the next load.
-  _gv2MarkStopped();
+  _gv2MarkStopped(stoppedSessionId);
   try { if (typeof rewindClearSteerPending === 'function') rewindClearSteerPending(); } catch (e) {}
 }
 
@@ -494,34 +495,94 @@ async function gv2SaveFallback(extra = {}) {
   } catch (e) { /* ignore */ }
 }
 
-async function gv2LoadFallback() {
+/**
+ * The saved run, if there is one worth having.
+ *
+ * The age limit exists to stop a forgotten run from waking up by itself on an unrelated page, so it
+ * belongs to the AUTOMATIC resume path only — a person pressing Resume is asking for that exact
+ * run, however long they spent reading it first, and they get it by passing maxAge: Infinity.
+ *
+ * Staleness no longer DELETES the state either. A stale read on some other page used to wipe the
+ * only copy of a parked run, so a pause the user came back to after ten minutes answered "Guide not
+ * active". Session storage is emptied when the browser session ends, and a stop or a new run clears
+ * it explicitly; nothing needs this read to do it.
+ *
+ * @param {object} [opts] - { maxAge } how old the state may be, in ms
+ */
+async function gv2LoadFallback({ maxAge = _GV2_MAX_AGE } = {}) {
   try {
     const r = await chrome.storage.session.get(_GV2_KEY);
     const saved = r[_GV2_KEY];
     if (!saved) return null;
-    if (Date.now() - (saved.timestamp || 0) > _GV2_MAX_AGE) {
-      await gv2ClearFallback();
-      return null;
-    }
+    if (Number.isFinite(maxAge) && Date.now() - (saved.timestamp || 0) > maxAge) return null;
     return saved;
   } catch (e) { return null; }
 }
 
-async function gv2ClearFallback() {
-  try { await chrome.storage.session.remove(_GV2_KEY); } catch (e) {}
+/**
+ * Drop the saved run.
+ *
+ * Scoped by session for the same reason the stop tombstone is: a clear belonging to a run that has
+ * ended must never delete the run that started after it. Called with no id it clears whatever is
+ * there, which is what a reset wants.
+ *
+ * @param {string|null} sessionId - only clear the state if it belongs to this run
+ */
+async function gv2ClearFallback(sessionId = null) {
+  try {
+    if (sessionId) {
+      const r = await chrome.storage.session.get(_GV2_KEY);
+      const saved = r[_GV2_KEY];
+      if (saved && saved.sessionId && String(saved.sessionId) !== String(sessionId)) return;
+    }
+    await chrome.storage.session.remove(_GV2_KEY);
+  } catch (e) {}
 }
+if (typeof window !== 'undefined') window.gv2ClearFallback = gv2ClearFallback;
 
 // ===== STOP TOMBSTONE =====
 // `_guidev2Stopped` is in-memory and does NOT survive a navigation, so after the user clicks
 // Stop a pending page-load (from the agent's own click) could otherwise resume the agent on the
 // next page. This persisted marker is checked by the resume paths and is cleared only when the
 // user intentionally starts a new guide or steers.
+//
+// It names the run it kills. Stopping a run and starting the next one are two unordered async
+// writes — _gv2StopInternal fires the mark without awaiting it, because it is called from a
+// synchronous stop — so a mark from the OLD run could land after the new run had already cleared
+// it, and then the new run died the moment it navigated: "resume suppressed — user stopped the
+// guide". Identity settles that without having to order the writes: a tombstone for session A
+// cannot suppress session B. It also stops a Stop in one tab from killing a run in another.
 const _GV2_STOP_KEY = 'pageguideGuidanceV2Stopped';
-async function _gv2MarkStopped() {
-  try { await chrome.storage.session.set({ [_GV2_STOP_KEY]: Date.now() }); } catch (e) {}
+async function _gv2MarkStopped(sessionId = null) {
+  try {
+    await chrome.storage.session.set({
+      [_GV2_STOP_KEY]: { sessionId: sessionId ? String(sessionId) : null, at: Date.now() }
+    });
+  } catch (e) {}
 }
-async function _gv2IsStopMarked() {
-  try { const r = await chrome.storage.session.get(_GV2_STOP_KEY); return !!r[_GV2_STOP_KEY]; } catch (e) { return false; }
+
+/**
+ * Is THIS run the one that was stopped?
+ *
+ * An unattributed mark (the older number-only shape, or a stop with no session in hand) still
+ * suppresses everything — it is the conservative reading, and suppressing a resume is recoverable
+ * where resuming a stopped agent is not.
+ *
+ * @param {string|null} sessionId - the run about to be resumed
+ */
+async function _gv2IsStopMarked(sessionId = null) {
+  try {
+    const r = await chrome.storage.session.get(_GV2_STOP_KEY);
+    const mark = r[_GV2_STOP_KEY];
+    if (!mark) return false;
+    const markedSession = (mark && typeof mark === 'object') ? mark.sessionId : null;
+    if (!markedSession || !sessionId) return true;
+    return String(markedSession) === String(sessionId);
+  } catch (e) { return false; }
+}
+if (typeof window !== 'undefined') {
+  window._gv2MarkStopped = _gv2MarkStopped;
+  window._gv2IsStopMarked = _gv2IsStopMarked;
 }
 async function _gv2ClearStopMark() {
   try { await chrome.storage.session.remove(_GV2_STOP_KEY); } catch (e) {}
@@ -656,6 +717,31 @@ async function _gv2WaitForPageReady(maxWait = 10000) {
 // ===== RESUME AFTER NAVIGATION =====
 
 /**
+ * What to do with a run whose first step on a freshly-loaded page could not be generated. Pure.
+ *
+ * The failure is almost always a bad FIRST READ of a page that has only just loaded: a screenshot
+ * the capture API rate-limited, a model call that failed, a heavy page still settling. The IDENTICAL
+ * failure on the same page only reports an error and leaves the run resumable
+ * (_gv2GenerateAndDispatch) — but this path used to clear window._guidev2, the service worker's
+ * session AND session storage, so one hiccup after a navigation destroyed the run outright and every
+ * later Resume answered "Guide not active". Nothing could bring it back.
+ *
+ * So only the outcomes that MEAN to end a run end it. Everything else parks the run, paused, where
+ * the user's Resume can pick it up.
+ *
+ * @param {object|null} result - what gv2GenerateNextStep returned
+ * @returns {'paused'|'terminal'|'retry'|'park'}
+ */
+function _gv2ResumeFailureDisposition(result) {
+  const errText = String(result?.error || '');
+  if (/Guide paused/i.test(errText)) return 'paused';
+  if (result?.stoppedByMaxSteps || /Guide stopped/i.test(errText)) return 'terminal';
+  if (/Could not parse step JSON/i.test(errText)) return 'retry';
+  return 'park';
+}
+if (typeof window !== 'undefined') window._gv2ResumeFailureDisposition = _gv2ResumeFailureDisposition;
+
+/**
  * Restore guidance state from `state` (from SW or session storage),
  * wait for the new page's DOM to settle, then generate the next step.
  */
@@ -664,11 +750,12 @@ async function _gv2ResumeFromState(state) {
     console.log('[guidev2] Already resuming, ignoring duplicate resume signal');
     return;
   }
-  // Honor a Stop that happened before this navigation finished — don't auto-wake the agent.
-  if (await _gv2IsStopMarked()) {
+  // Honor a Stop that happened before this navigation finished — don't auto-wake the agent. Scoped
+  // to the run being resumed: a tombstone left by an earlier run must not kill this one.
+  if (await _gv2IsStopMarked(state?.sessionId || null)) {
     console.log('[guidev2] resume suppressed — user stopped the guide');
-    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
-    try { await gv2ClearFallback(); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', sessionId: state?.sessionId || null }); } catch (e) {}
+    try { await gv2ClearFallback(state?.sessionId || null); } catch (e) {}
     return;
   }
   _guidev2Resuming = true;
@@ -751,13 +838,26 @@ async function _gv2ResumeFromState(state) {
           });
         } catch (e) {}
       }
-      if (pausedErr) {
-        // Pausing can race an in-flight resume/generate path. Preserve the guide so Resume works.
-      } else if (!/Could not parse step JSON/i.test(errText)) {
-        window._guidev2.active = false;
-        _gv2ClearState();
-      } else {
-        await _gv2SetState(false);
+      switch (_gv2ResumeFailureDisposition(result)) {
+        case 'paused':
+          // Pausing can race an in-flight resume/generate path. Preserve the guide so Resume works.
+          break;
+        case 'terminal':
+          // _gv2StopForMaxSteps / gv2StopGuide already cleared what they own.
+          break;
+        case 'retry':
+          await _gv2SetState(false);
+          break;
+        default: // 'park'
+          window._guidev2.active = true;
+          window._guidev2.paused = true;
+          await _gv2SetState(false);
+          try {
+            chrome.runtime.sendMessage({
+              action: 'guidePaused',
+              reason: 'Could not read this page just now — press Resume to try again.'
+            });
+          } catch (e) {}
       }
     }
   } catch (e) {
@@ -767,6 +867,8 @@ async function _gv2ResumeFromState(state) {
     _guidev2Resuming = false;
   }
 }
+
+if (typeof window !== 'undefined') window._gv2ResumeFromState = _gv2ResumeFromState;
 
 // ===== REWIND STEER (branch & re-run from a past step) =====
 
@@ -1349,8 +1451,29 @@ function _gv2FlagReplayStuck(step, reason) {
 // ===== STATE HELPERS =====
 
 /**
+ * Can this action take the page out from under us?
+ *
+ * `pendingResume` is the ONLY thing that lets a run survive a navigation: the fresh page's content
+ * script resumes solely when the stored state has it set (_gv2HandleSwMessage and
+ * _gv2CheckSessionStorageFallback both gate on it), and otherwise goes quiet with no error. It used
+ * to be set for click steps alone, so a `type` that submits (Enter in a search box, an autosubmit
+ * form) or a manual `goto_url` navigated away with the flag false and silently killed the run.
+ *
+ * So the flag is armed for every action that CAN navigate, and disarmed again by
+ * _gv2ContinueAfterFormEdit once the page has proved it is still alive. Arming it wrongly costs one
+ * resume that re-reads the same page; leaving it unarmed ends the run.
+ *
+ * @param {string} action - the step's action verb
+ * @returns {boolean} true when the step may end in a page load
+ */
+function _gv2ActionExpectsNavigation(action) {
+  const a = String(action || '').toLowerCase();
+  return a === 'click' || a === 'type' || a === 'clear_text' || a === 'goto_url' || a === 'drag_drop';
+}
+
+/**
  * Push guidance state to SW memory (primary) and session storage (fallback).
- * @param {boolean} pendingResume - true when a click step is active and we expect navigation
+ * @param {boolean} pendingResume - true when the active step may navigate (_gv2ActionExpectsNavigation)
  */
 async function _gv2SetState(pendingResume) {
   const s = window._guidev2;
@@ -1409,16 +1532,19 @@ async function _gv2SetState(pendingResume) {
 }
 
 function _gv2ClearState() {
+  // Read before active is flipped: every clear below names the run it is ending, so a clear that
+  // lands late (these are all fire-and-forget) cannot delete the next run's state.
+  const sessionId = window._guidev2?.sessionId || null;
   window._guidev2.active = false;
   _gv2HideIndicator();
   gv2HideAutoOverlay();
   gv2HideRestoreOverlay();
 
   // Clear from SW
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', sessionId }); } catch (e) {}
 
   // Clear session storage
-  gv2ClearFallback();
+  gv2ClearFallback(sessionId);
 }
 
 // ===== REWIND CAPTURE (Slice 1) =====
@@ -1492,19 +1618,20 @@ async function _gv2LowConfidenceActionThreshold() {
 /**
  * How many steps in a row may score at or above GV2_LOOP_STOP_THRESHOLD before the guide stops.
  *
- * Default 1, which is what the guard has always done: one repeat-looking step and it stops. The
- * setting exists because that is tuned for safety, not for every page — a site that legitimately
- * revisits the same control twice (paging a list, retrying a flaky menu) trips it on a step that is
- * making progress, and the operator is better placed than the constant to say how much repetition
- * is normal here.
+ * Default 6. It was 1 — stop on the first repeat-looking step — which is tuned for safety, not for
+ * real pages: a single step that revisits a control (paging a list, retrying a flaky menu, a search
+ * box that has not submitted yet) scores as a loop while the run is still making progress, and the
+ * run was being paused on it. Six consecutive over-threshold steps is a loop; one is a coincidence.
+ * Adjustable in Options, next to the autonomous-step cap.
  */
+const _GV2_LOOP_STEPS_DEFAULT = 6;
 async function _gv2LoopStepThreshold() {
   try {
     const r = await chrome.storage.local.get(_GV2_LOOP_STEPS_KEY);
     const n = Number(r[_GV2_LOOP_STEPS_KEY]);
-    return Number.isFinite(n) ? Math.max(1, Math.round(n)) : 1;
+    return Number.isFinite(n) ? Math.max(1, Math.round(n)) : _GV2_LOOP_STEPS_DEFAULT;
   } catch (e) {
-    return 1;
+    return _GV2_LOOP_STEPS_DEFAULT;
   }
 }
 if (typeof window !== 'undefined') window._gv2LoopStepThreshold = _gv2LoopStepThreshold;
@@ -2627,7 +2754,8 @@ Annotate the screenshot so the user can visually understand this evidence.`;
       return out;
     }
     const repairedRawResponse = _gv2RepairAnnotatorJsonText(out.rawResponse);
-    const raw = repairedRawResponse && typeof gv2ExtractJsonObject === 'function' ? gv2ExtractJsonObject(repairedRawResponse) : null;
+    const parsedRaw = repairedRawResponse && typeof gv2ExtractJsonObject === 'function' ? gv2ExtractJsonObject(repairedRawResponse) : null;
+    const raw = _gv2UnwrapAnnotatorItem(parsedRaw, item.key);
     const imageSize = await _gv2ImageSizeFromBase64(screenshotBase64);
     const coercedRaw = _gv2CoerceAnnotatorResult(raw, imageSize);
     out.annotationCoordinateDebug = coercedRaw?.__coordinateDebug || null;
@@ -2978,6 +3106,30 @@ function _gv2PreprocessGridCoordinates(raw) {
   return raw;
 }
 
+/**
+ * Unwrap a batch-shaped annotator reply for a single evidence item.
+ *
+ * The annotator system prompt documents two reply shapes — a bare {region_bbox, annotations} and a
+ * batch {"items":[{key, region_bbox, annotations}]} — and the model sometimes answers a one-item
+ * request in the batch shape anyway. Coercing that wrapper finds no coordinates at all, so the item
+ * ends up with zero annotations and the crop is drawn without any box. Pull the matching item out
+ * (by key when it is there, otherwise the first one) before coercion.
+ *
+ * @param {object|null} raw - parsed annotator JSON
+ * @param {string} key - the evidence key that was requested
+ * @returns {object|null} the single-item shape to coerce
+ */
+function _gv2UnwrapAnnotatorItem(raw, key) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) return raw;
+  const items = raw.items.filter(it => it && typeof it === 'object');
+  if (!items.length) return raw;
+  const wanted = String(key || '').trim().toLowerCase();
+  const match = wanted
+    ? items.find(it => String(it.key || it.evidence_key || it.evidenceKey || '').trim().toLowerCase() === wanted)
+    : null;
+  return match || items[0];
+}
+
 function _gv2CoerceAnnotatorResult(raw, imageSize) {
   if (!raw || typeof raw !== 'object') return raw;
 
@@ -3022,6 +3174,68 @@ function _gv2CoerceAnnotatorResult(raw, imageSize) {
     coercedAnnotations: Array.isArray(out.annotations) ? out.annotations : []
   };
   return out;
+}
+
+/**
+ * The on-page renderer's input, built from one captured evidence item.
+ *
+ * pageguideShowEvidenceAnnotations places shapes in DOCUMENT coordinates, and the annotator's
+ * coordinates are fractions of the screenshot it was shown — so the capture geometry (where the
+ * page was standing, and how big the viewport was) is what converts one to the other. An item with
+ * neither shapes nor a region has nothing to draw.
+ *
+ * @param {object} cap - a gv2CaptureEvidenceItems result
+ * @param {number|null} evidenceNumber - the chip number, so [ev:N] can scroll to this mark
+ * @returns {object|null} marks for pageguideShowEvidenceAnnotations
+ */
+function _gv2MarksFromCapture(cap, evidenceNumber = null) {
+  if (!cap || typeof cap !== 'object') return null;
+  const drawable = (m) => !!m && ((Array.isArray(m.annotations) && m.annotations.length) || m.region_bbox);
+  if (cap.marks && typeof cap.marks === 'object') return drawable(cap.marks) ? cap.marks : null;
+  const annotations = Array.isArray(cap.annotations) ? cap.annotations : [];
+  const region = cap.annotationRegionBbox || cap.region_bbox || cap.visualEvidenceNormRect || null;
+  if (!annotations.length && !region) return null;
+  const geometry = cap.annotationGeometry || cap.captureGeometry || null;
+  return {
+    annotations,
+    region_bbox: region,
+    annotationGeometry: geometry,
+    captureGeometry: geometry,
+    visualEvidenceIndex: cap.visualEvidenceIndex != null ? cap.visualEvidenceIndex : null,
+    evidenceNumber,
+    source_image_id: cap.source_image_id || 'viewport',
+    note: cap.note || cap.visualEvidenceReason || ''
+  };
+}
+
+/**
+ * Put the annotator's shapes on the REAL page, not only in the evidence crop.
+ *
+ * A box drawn over a picture of the page proves less than the same box drawn over the page the
+ * user is looking at, and it is far easier to act on — so every annotated evidence item the user
+ * is shown is also replayed onto the live DOM.
+ *
+ * Called when a run REACHES ITS ANSWER, never mid-run: the overlay would otherwise land in the
+ * screenshots the next step is generated from, and pageguideShowEvidenceAnnotations scrolls to its
+ * first mark, which would move the page out from under the agent.
+ *
+ * @param {Array<object>} caps - captured evidence items (or items carrying a `marks` bag)
+ * @returns {number} how many shapes were drawn
+ */
+function gv2DrawEvidenceMarksOnPage(caps) {
+  try {
+    if (typeof pageguideShowEvidenceAnnotations !== 'function') return 0;
+    const marks = (Array.isArray(caps) ? caps : [])
+      .map((cap, i) => _gv2MarksFromCapture(cap, i + 1))
+      .filter(Boolean);
+    if (!marks.length) return 0;
+    const drawn = pageguideShowEvidenceAnnotations(marks) || 0;
+    console.log(`[guidev2] drew ${drawn} evidence mark(s) on the live page`);
+    return drawn;
+  } catch (e) {
+    console.warn('[guidev2] on-page evidence marks failed:', e);
+    return 0;
+  }
 }
 
 async function gv2CaptureEvidenceItems(items, options = {}) {
@@ -3272,6 +3486,8 @@ if (typeof window !== 'undefined') {
   window._gv2ApplyAnnotatorResultToItem = _gv2ApplyAnnotatorResultToItem;
   window._gv2AnnotatesExternalSource = _gv2AnnotatesExternalSource;
   window._gv2EvidenceDisplayRegion = _gv2EvidenceDisplayRegion;
+  window._gv2MarksFromCapture = _gv2MarksFromCapture;
+  window.gv2DrawEvidenceMarksOnPage = gv2DrawEvidenceMarksOnPage;
 }
 
 async function gv2RunTerminalVerifyResult({ action, instruction, findQuery, visualEvidenceItems, restoreScroll = false } = {}) {
@@ -3543,6 +3759,15 @@ async function gv2CaptureStepRecord(data) {
       captureMode: item.captureMode || null,
       captureError: item.captureError || null
     }));
+    // The run is over on the terminal step, so the marks can go onto the live page: the user is
+    // being asked to check an answer, and the shapes are far easier to read over the real page than
+    // over a crop of it. Saved evidence first — it is what the answer cites — then the finish
+    // step's own confirmation evidence.
+    if (captureShots && (data.isLastStep || data.action === 'finish')) {
+      const terminalMarks = [...savedEvidenceCapturesRaw, ...evidenceItems];
+      if (terminalMarks.length) gv2DrawEvidenceMarksOnPage(terminalMarks);
+    }
+
     const firstEvidence = evidenceItems[0] || {
       visualEvidenceShot: null,
       visualEvidenceOriginalShot: null,
@@ -4475,19 +4700,26 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     // for the action. Resolve each item independently: prefer index/text, then use that item's rect
     // only when no distinct SoM element resolves. Cap at five.
     const hasAnySavedEvidenceForAnswer = !!(hasSavedEvidence || (Array.isArray(g.evidenceScratchpad) && g.evidenceScratchpad.length));
-    const confirmationEvidenceSkippedReason = (isFinish && hasAnySavedEvidenceForAnswer)
-      ? (hasSavedEvidence ? 'saved_evidence_on_finish_step' : 'saved_evidence_in_trajectory')
-      : '';
     const rawConfirmationEvidence = step.confirmationEvidence != null ? step.confirmationEvidence : step.visualEvidence;
-    const visualEvidenceItems = (isFinish && hasAnySavedEvidenceForAnswer)
-      ? []
-      : (typeof gv2NormalizeVisualEvidenceList === 'function')
+    const allConfirmationItems = (typeof gv2NormalizeVisualEvidenceList === 'function')
       ? gv2NormalizeVisualEvidenceList(rawConfirmationEvidence, 5)
       : ((typeof gv2NormalizeVisualEvidence === 'function' && gv2NormalizeVisualEvidence(rawConfirmationEvidence))
           ? [gv2NormalizeVisualEvidence(rawConfirmationEvidence)] : []);
     const finishAnswerEvidenceRefs = (isFinish && typeof gv2ParseEvidenceRefs === 'function')
       ? gv2ParseEvidenceRefs(step.answer || step.instruction || '')
       : [];
+    // With saved evidence in play, only the confirmation items the answer actually cites are
+    // captured (gv2SelectFinishConfirmationItems) — uncited ones are redundant, cited ones are not.
+    const savedEvidenceKeys = [
+      ...(Array.isArray(g.evidenceScratchpad) ? g.evidenceScratchpad.map(e => e?.key) : []),
+      ...(hasSavedEvidence ? normalizedSaveEvidence.entries.map(e => e?.key) : [])
+    ];
+    const visualEvidenceItems = (isFinish && typeof gv2SelectFinishConfirmationItems === 'function')
+      ? gv2SelectFinishConfirmationItems(allConfirmationItems, step.answer || step.instruction || '', savedEvidenceKeys, hasAnySavedEvidenceForAnswer)
+      : (isFinish && hasAnySavedEvidenceForAnswer ? [] : allConfirmationItems);
+    const confirmationEvidenceSkippedReason = (isFinish && hasAnySavedEvidenceForAnswer && !visualEvidenceItems.length)
+      ? (hasSavedEvidence ? 'saved_evidence_on_finish_step' : 'saved_evidence_in_trajectory')
+      : '';
     const resolvedEvidenceItemsRaw = [];
     for (let i = 0; i < visualEvidenceItems.length; i++) {
       const item = visualEvidenceItems[i];
@@ -4502,7 +4734,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
         if (cand) { itemEl = cand; }
         else { itemIndex = null; }
       }
-      const confirmationKey = item?.name || finishAnswerEvidenceRefs[i] || (itemIndex != null ? String(itemIndex) : `confirmation_${i + 1}`);
+      const citedIndexKey = (itemIndex != null && finishAnswerEvidenceRefs.includes(String(itemIndex))) ? String(itemIndex) : null;
+      const confirmationKey = item?.name || citedIndexKey || finishAnswerEvidenceRefs[i] || (itemIndex != null ? String(itemIndex) : `confirmation_${i + 1}`);
       const confirmationNote = item?.reason || item?.text || item?.annotation_prompt || 'Confirmation of the answer';
       resolvedEvidenceItemsRaw.push({
         key: confirmationKey,
@@ -4745,6 +4978,9 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       typeText: step.typeText,
       value: step.value,
       instruction: step.instruction,
+      // _gv2ShouldSubmitAfterType reads both: the explicit flag, and the instruction that so often
+      // carries the intent instead ("...and press Enter").
+      submit: step.submit === true ? true : (step.submit === false ? false : undefined),
       highRisk: isHighRisk,
       dropTarget: resolvedDropTarget ? {
         index: resolvedDropTarget.index,
@@ -4799,9 +5035,12 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     } else if (isLast || action === 'finish') {
       // Clear state after capture runs at end of function
     } else if (action === 'scroll_down' || action === 'scroll_up' || action === 'goto_url') {
-      await _gv2SetState(false);
+      // goto_url always navigates; scrolling does not.
+      await _gv2SetState(_gv2ActionExpectsNavigation(action));
     } else if (action === 'type' || action === 'clear_text') {
-      await _gv2SetState(false);
+      // A field edit may or may not end in a page load (Enter in a search box, an autosubmit form).
+      // Arm the resume; _gv2ContinueAfterFormEdit disarms it if the page is still here afterwards.
+      await _gv2SetState(_gv2ActionExpectsNavigation(action));
       if (!autoPerform) {
         if (willPause) {
           if (loopStop) {
@@ -4981,6 +5220,8 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
     const finalEvidenceScratchpad = Array.isArray(g.evidenceScratchpad) ? g.evidenceScratchpad.slice() : [];
 
     if (autoPerform && !isLast && action !== 'finish' && !isFind && !isWatchVideo) {
+      // type is skipped here only because it needs no click listener — its resume was already armed
+      // above, before the field edit that may submit the page.
       if (action !== 'type') {
         await _gv2SetState(true);
         if (!willPause && !(g.autoMode && isHighRisk)) _gv2SetupClickListener();
@@ -7000,16 +7241,7 @@ async function gv2BuildFindEvidence(hasHighlights, question, modelEvidence = nul
   // Put the annotator's marks on the real page, not just in the evidence card: the participant is
   // being asked to check the answer, and a box drawn over a picture of the page proves less than
   // the same box drawn over the page. Runs the moment the agent finishes answering.
-  try {
-    const marks = visual
-      .map(item => item.marks)
-      .filter(m => m && ((Array.isArray(m.annotations) && m.annotations.length) || m.region_bbox));
-    if (marks.length && typeof pageguideShowEvidenceAnnotations === 'function') {
-      pageguideShowEvidenceAnnotations(marks);
-    }
-  } catch (e) {
-    console.warn('[guidev2] on-page evidence marks failed:', e);
-  }
+  gv2DrawEvidenceMarksOnPage(visual);
 
   return visual;
 }
@@ -7184,6 +7416,9 @@ function _gv2SetEditableValue(input, text) {
 
 async function _gv2ContinueAfterFormEdit(label) {
   _gv2SetWorkingStatus('Checking result…');
+  // Reaching here means the edit did NOT navigate — this page is still running. Disarm the resume
+  // armed for the step so a later, unrelated page load cannot wake the agent up.
+  try { if (window._guidev2) await _gv2SetState(false); } catch (e) { /* non-fatal */ }
   try { await gv2RecaptureAfterAction(_gv2CompletedStepNumber()); } catch (e) { /* non-fatal */ }
 
   console.log(`[guidev2] ${label} done, generating next step...`);
@@ -7208,12 +7443,111 @@ async function _gv2ContinueAfterFormEdit(label) {
  * Agent fills a text field automatically using native input setters
  * so React / Vue / Angular state management picks up the change.
  */
+/**
+ * Does this type step have to SUBMIT the field, not just fill it?
+ *
+ * Filling a search box changes nothing the model can see: the next step is generated from the same
+ * page, so it proposes the same "type X and press Enter" again, and again, until the loop guard
+ * pauses the run. That is the whole "it keeps repeating the same step" failure.
+ *
+ * The contract's "submit" flag is authoritative when the model sets it. It usually does not — it
+ * just writes the intent into the instruction ("...and press Enter") — so that phrasing counts too.
+ *
+ * @param {object} step - the live step
+ * @returns {boolean} true when Enter should be pressed after the text goes in
+ */
+function _gv2ShouldSubmitAfterType(step) {
+  if (!step) return false;
+  if (step.submit === true) return true;
+  if (step.submit === false) return false;
+  const text = `${step.instruction || ''} ${step.thought || ''}`;
+  return /\b(?:press|pressing|hit|hitting|then\s+press)\s+(?:the\s+)?(?:enter|return)\b|\b(?:enter|return)\s+key\b/i.test(text);
+}
+
+/**
+ * Press Enter in a field the way the browser would.
+ *
+ * A synthetic keydown does NOT trigger the browser's implicit form submission — that default action
+ * is reserved for real user input — so a page that relies on it (a plain <form> search box) would
+ * see the key and do nothing. Dispatch the key sequence first: a page with its own Enter handler
+ * calls preventDefault, and that is our signal to stop, exactly as the browser would. Only when the
+ * default survives do we perform the submission the browser would have performed.
+ *
+ * @param {Element} input - the field that was just filled
+ * @returns {boolean} true when Enter was handled or a form was submitted
+ */
+function _gv2PressEnter(input) {
+  if (!input || typeof input.dispatchEvent !== 'function') return false;
+  try { input.focus({ preventScroll: true }); } catch (e) {}
+
+  const makeKeyEvent = (type) => {
+    const ev = new KeyboardEvent(type, {
+      bubbles: true, cancelable: true, composed: true,
+      key: 'Enter', code: 'Enter', location: 0
+    });
+    // keyCode/which are not init-dict properties, but jQuery-era handlers still read them.
+    try {
+      Object.defineProperty(ev, 'keyCode', { get: () => 13 });
+      Object.defineProperty(ev, 'which', { get: () => 13 });
+    } catch (e) {}
+    return ev;
+  };
+
+  const defaultAllowed = input.dispatchEvent(makeKeyEvent('keydown'));
+  input.dispatchEvent(makeKeyEvent('keypress'));
+  input.dispatchEvent(makeKeyEvent('keyup'));
+  if (!defaultAllowed) return true; // the page handled Enter itself
+
+  const form = (typeof input.closest === 'function') ? input.closest('form') : null;
+  if (!form) {
+    // No form — the site's own submit control is the next best thing (icon buttons included).
+    const button = _gv2NearbySubmitButton(input);
+    if (button) { _gv2DispatchClick(button); return true; }
+    return false;
+  }
+  const submitter = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+  if (typeof form.requestSubmit === 'function') {
+    // requestSubmit runs validation and fires submit handlers; form.submit() skips both.
+    form.requestSubmit(submitter || undefined);
+    return true;
+  }
+  if (submitter) { _gv2DispatchClick(submitter); return true; }
+  try { form.submit(); return true; } catch (e) { return false; }
+}
+
+/**
+ * The submit control belonging to a formless search box — Walmart, and most SPA search bars, render
+ * a magnifier <button> next to the input with no <form> around either.
+ *
+ * @param {Element} input - the field that was filled
+ * @returns {Element|null}
+ */
+function _gv2NearbySubmitButton(input) {
+  const scope = (typeof input.closest === 'function')
+    ? (input.closest('[role="search"], search, [class*="search"], [data-testid*="search"]') || input.parentElement)
+    : null;
+  if (!scope || typeof scope.querySelectorAll !== 'function') return null;
+  const named = Array.from(scope.querySelectorAll('button, [role="button"], input[type="submit"]'))
+    .filter(el => {
+      if (el === input) return false;
+      const name = `${el.getAttribute?.('aria-label') || ''} ${el.getAttribute?.('title') || ''} ${el.textContent || ''}`;
+      return /search|submit|go\b/i.test(name) || el.type === 'submit';
+    });
+  // Prefer one we can see; a page often carries a second, hidden search form (mobile layout, a
+  // collapsed header). Fall back to the best-named candidate when visibility cannot be judged.
+  const visible = named.find(el => {
+    try { return typeof isHiddenElement !== 'function' || !isHiddenElement(el); } catch (e) { return true; }
+  });
+  return visible || named[0] || null;
+}
+
 async function _gv2AutoType(step) {
   if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
   _gv2SetWorkingStatus(_gv2ActionStatus('type', step));
 
   // Slice 5: canonical ACT/type carries text in `value`; legacy type used `typeText`.
   const typeText = (step.typeText != null) ? step.typeText : step.value;
+  let submitted = false;
   if (!typeText) {
     console.warn('[guidev2] autoType: no text to type in step');
   } else {
@@ -7226,7 +7560,24 @@ async function _gv2AutoType(step) {
       _gv2SetEditableValue(input, typeText);
       await new Promise(r => setTimeout(r, 400));
       if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+      if (_gv2ShouldSubmitAfterType(step)) {
+        submitted = _gv2PressEnter(input);
+        console.log('[guidev2] Auto-type submitted with Enter:', submitted);
+      }
     }
+  }
+
+  if (submitted) {
+    // The submission may be a full page load (this frame dies and the new page resumes — its
+    // pendingResume was armed before the edit), or an in-page result render. Let it happen before
+    // reading the page, or the next step would be generated from the pre-submit screenshot.
+    _gv2SetWorkingStatus('Checking result…');
+    await new Promise(r => setTimeout(r, 600));
+    if (_guidev2PageHiding) return { success: false, progressed: false, navigated: true };
+    if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
+    try { await gv2WaitForDomStable(6000, 500); } catch (e) { /* best-effort */ }
+    if (_guidev2PageHiding) return { success: false, progressed: false, navigated: true };
+    if (_gv2IsStopped()) return { success: false, progressed: false, error: 'Guide stopped' };
   }
 
   return _gv2ContinueAfterFormEdit('Auto-type');
@@ -7606,8 +7957,9 @@ if (typeof window !== 'undefined') window.gv2PauseGuide = gv2PauseGuide;
 
 /** The run this tab was executing, from wherever a copy of it survived. */
 async function _gv2LoadResumableState() {
-  // Session storage first: it is written on every step and survives an SW restart.
-  const saved = await gv2LoadFallback();
+  // Session storage first: it is written on every step and survives an SW restart. No age limit —
+  // this path only runs for an explicit Resume/Next/Pause, which is the user naming the run.
+  const saved = await gv2LoadFallback({ maxAge: Infinity });
   if (saved?.active) return saved;
 
   // Then the service worker's per-tab copy. It is the only survivor when session storage was
@@ -7620,7 +7972,10 @@ async function _gv2LoadResumableState() {
   return null;
 }
 
-if (typeof window !== 'undefined') window._gv2LoadResumableState = _gv2LoadResumableState;
+if (typeof window !== 'undefined') {
+  window._gv2LoadResumableState = _gv2LoadResumableState;
+  window.gv2LoadFallback = gv2LoadFallback;
+}
 
 async function _gv2HydrateResumeState() {
   const live = window._guidev2;
@@ -7793,6 +8148,10 @@ if (typeof window !== 'undefined') {
   window._gv2BuildSteerQuestion = _gv2BuildSteerQuestion;
   window._gv2CoerceAnnotatorResult = _gv2CoerceAnnotatorResult;
   window._gv2PreprocessGridCoordinates = _gv2PreprocessGridCoordinates;
+  window._gv2UnwrapAnnotatorItem = _gv2UnwrapAnnotatorItem;
+  window._gv2ActionExpectsNavigation = _gv2ActionExpectsNavigation;
+  window._gv2ShouldSubmitAfterType = _gv2ShouldSubmitAfterType;
+  window._gv2PressEnter = _gv2PressEnter;
 }
 
 // ===== ROUTER INTEGRATION =====

@@ -93,6 +93,38 @@ const PG_SNAPSHOT_IMG_MAX_WIDTH = 1600;
 const PG_SNAPSHOT_IMG_QUALITY = 0.82;
 
 /**
+ * Resolve one capture's image budget. Pure.
+ *
+ * The defaults above are right for nearly every page, so they stay the defaults. But a page can be
+ * heavy enough that the finished row cannot be WRITTEN: Postgres cancels the insert with statement
+ * timeout 57014, which is what two of the ten Find items did (a Public Domain Review essay of
+ * scanned engravings, and an Aeon essay of large photography — every other page went up at 3–5 MB).
+ *
+ * Lowering the constants globally is the wrong trade. A Find question can turn on a detail inside
+ * an engraving, so the eight pages that publish fine should keep every pixel they have; only the
+ * one page that will not fit should give any up. Hence a per-capture override rather than a new
+ * default.
+ *
+ * @param {{imgMaxWidth?: number, imgQuality?: number}} [options]
+ * @returns {{imgMaxWidth: number, imgQuality: number}}
+ */
+function _pgCaptureLimits(options) {
+  const width = Number(options?.imgMaxWidth);
+  const quality = Number(options?.imgQuality);
+  return {
+    // Never below the min width an image is stored at, or the floor in _pgShrinkDataUri would
+    // silently win and the setting would do nothing; never above the default, which is the cap.
+    imgMaxWidth: Number.isFinite(width) && width > 0
+      ? Math.min(PG_SNAPSHOT_IMG_MAX_WIDTH, Math.max(PG_SNAPSHOT_IMG_MIN_WIDTH, Math.round(width)))
+      : PG_SNAPSHOT_IMG_MAX_WIDTH,
+    // 0.3 is where JPEG artefacts start eating the fine detail these questions are asked about.
+    imgQuality: Number.isFinite(quality) && quality > 0
+      ? Math.min(PG_SNAPSHOT_IMG_QUALITY, Math.max(0.3, quality))
+      : PG_SNAPSHOT_IMG_QUALITY,
+  };
+}
+
+/**
  * The narrowest an image is ever stored at, whatever it is drawn at.
  *
  * A thumbnail drawn at 90px would otherwise be banked at 180px and turn to mush the moment a
@@ -110,7 +142,7 @@ const PG_SNAPSHOT_IMG_REENCODE_BYTES = 180 * 1024;
  * gains nothing from a re-encode and would only lose quality, and SVG has no pixels to resample —
  * re-encoding one to JPEG would rasterize a diagram that was crisp at any size.
  */
-async function _pgShrinkDataUri(dataUri, renderedWidth = 0) {
+async function _pgShrinkDataUri(dataUri, renderedWidth = 0, limits = null) {
   if (!dataUri || !dataUri.startsWith('data:image/')) return dataUri;
   if (dataUri.startsWith('data:image/svg')) return dataUri;
   // An ANIMATED GIF is flattened to its first frame when it is large. The animation is lost, which
@@ -141,9 +173,10 @@ async function _pgShrinkDataUri(dataUri, renderedWidth = 0) {
     // shown, and a fraction of the bytes. The floor keeps an image usable if it is later opened
     // full-size in the evidence lightbox; the cap is unchanged, so a wide hero image is still
     // capped rather than doubled.
+    const { imgMaxWidth, imgQuality } = limits || _pgCaptureLimits(null);
     const target = Math.min(
-      PG_SNAPSHOT_IMG_MAX_WIDTH,
-      Math.max(PG_SNAPSHOT_IMG_MIN_WIDTH, (renderedWidth || 0) * 2) || PG_SNAPSHOT_IMG_MAX_WIDTH,
+      imgMaxWidth,
+      Math.max(PG_SNAPSHOT_IMG_MIN_WIDTH, (renderedWidth || 0) * 2) || imgMaxWidth,
       img.naturalWidth,
     );
     // Re-encode when there are pixels to drop, or when the file is heavy AND re-encoding it could
@@ -168,7 +201,7 @@ async function _pgShrinkDataUri(dataUri, renderedWidth = 0) {
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const out = canvas.toDataURL('image/jpeg', PG_SNAPSHOT_IMG_QUALITY);
+    const out = canvas.toDataURL('image/jpeg', imgQuality);
     // Only take it if it actually helped: a small illustration can re-encode LARGER as a JPEG.
     return out.length < dataUri.length ? out : dataUri;
   } catch (e) {
@@ -189,7 +222,7 @@ function _pgAbsolute(url) {
  * against the page instead would quietly fetch the wrong thing — or, worse, a real but different
  * image, which nobody would notice.
  */
-async function _pgInlineCssUrls(cssText, sheetHref) {
+async function _pgInlineCssUrls(cssText, sheetHref, limits = null) {
   const seen = new Map();
   const urls = [...String(cssText).matchAll(/url\((['"]?)([^'")]+)\1\)/g)]
     .map(m => m[2].trim())
@@ -199,7 +232,7 @@ async function _pgInlineCssUrls(cssText, sheetHref) {
     if (seen.has(raw)) continue;
     let abs;
     try { abs = new URL(raw, sheetHref || document.baseURI).href; } catch (e) { continue; }
-    seen.set(raw, await _pgShrinkDataUri(await _pgFetchAsDataUri(abs)));
+    seen.set(raw, await _pgShrinkDataUri(await _pgFetchAsDataUri(abs), 0, limits));
   }
 
   let out = String(cssText);
@@ -220,7 +253,7 @@ async function _pgInlineCssUrls(cssText, sheetHref) {
  * readable directly. Cross-origin sheets throw on .cssRules (that is the whole point of the
  * restriction), so those are re-fetched by URL as a fallback.
  */
-async function _pgCollectCss() {
+async function _pgCollectCss(limits = null) {
   const parts = [];
   for (const sheet of Array.from(document.styleSheets)) {
     let text = '';
@@ -235,7 +268,7 @@ async function _pgCollectCss() {
         } catch (e2) { /* leave it out; layout degrades, text survives */ }
       }
     }
-    if (text) parts.push(await _pgInlineCssUrls(text, sheet.href || document.baseURI));
+    if (text) parts.push(await _pgInlineCssUrls(text, sheet.href || document.baseURI, limits));
   }
   return parts.join('\n');
 }
@@ -321,7 +354,7 @@ async function _pgSettleLazyImages() {
  * re-encode per image — and a silent wait of a minute is indistinguishable from a hang, which is
  * exactly how it was read. `onProgress` lets the panel say "image 14 of 61" instead.
  */
-async function _pgInlineImages(root, onProgress) {
+async function _pgInlineImages(root, onProgress, limits = null) {
   const imgs = Array.from(root.querySelectorAll('img'));
   let done = 0;
   for (const img of imgs) {
@@ -334,7 +367,7 @@ async function _pgInlineImages(root, onProgress) {
     if (!abs) continue;
     const drawnWidth = Number(img.getAttribute('data-pg-w')) || 0;
     img.removeAttribute('data-pg-w');
-    const dataUri = await _pgShrinkDataUri(await _pgFetchAsDataUri(abs), drawnWidth);
+    const dataUri = await _pgShrinkDataUri(await _pgFetchAsDataUri(abs), drawnWidth, limits);
     if (dataUri) img.setAttribute('src', dataUri);
     // NO URL FALLBACK. The snapshot's own CSP is `img-src data:`, so a remote URL here could never
     // load — it rendered as a broken-image icon, which is worse than either alternative: it looks
@@ -366,11 +399,11 @@ function _pgReplaceWithPlaceholder(img) {
 }
 
 /** Inline CSS background images declared inline on elements. */
-async function _pgInlineInlineStyles(root) {
+async function _pgInlineInlineStyles(root, limits = null) {
   const els = Array.from(root.querySelectorAll('[style*="url("]'));
   for (const el of els) {
     const before = el.getAttribute('style') || '';
-    el.setAttribute('style', await _pgInlineCssUrls(before, document.baseURI));
+    el.setAttribute('style', await _pgInlineCssUrls(before, document.baseURI, limits));
   }
 }
 
@@ -495,9 +528,14 @@ function _pgStampAnchors() {
 /**
  * Capture the current page as one self-contained HTML string.
  *
- * @returns {Promise<{html: string, bytes: number, url: string, title: string, truncated: boolean}>}
+ * @param {{imgMaxWidth?: number, imgQuality?: number}} [options] - shrink THIS capture's images
+ *   harder than the defaults, for a page too heavy to be written inside the database's statement
+ *   timeout. See _pgCaptureLimits.
+ * @returns {Promise<{html: string, bytes: number, url: string, title: string, truncated: boolean,
+ *   limits: {imgMaxWidth: number, imgQuality: number}}>}
  */
-async function pgCapturePageSnapshot() {
+async function pgCapturePageSnapshot(options = null) {
+  const limits = _pgCaptureLimits(options);
   // Let the lazy loaders finish FIRST. Capturing before they have run inlines the blurred
   // placeholders, and the snapshot is then unreadable exactly where the question points.
   await _pgSettleLazyImages();
@@ -513,7 +551,7 @@ async function pgCapturePageSnapshot() {
     if (w > 0) img.setAttribute('data-pg-w', String(w));
   });
 
-  const css = await _pgCollectCss();
+  const css = await _pgCollectCss(limits);
 
   // Stamped BEFORE the clone so the attributes are copied into it, and removed immediately after so
   // the researcher's live page is left as it was found.
@@ -575,8 +613,8 @@ async function pgCapturePageSnapshot() {
     try {
       chrome.runtime.sendMessage({ action: 'captureProgress', done, total });
     } catch (e) { /* no receiver is fine — the capture is not for the panel's benefit */ }
-  });
-  await _pgInlineInlineStyles(clone);
+  }, limits);
+  await _pgInlineInlineStyles(clone, limits);
 
   const head = clone.querySelector('head') || clone.insertBefore(document.createElement('head'), clone.firstChild);
 
@@ -605,11 +643,15 @@ async function pgCapturePageSnapshot() {
     // and then puts every citation on whatever text search happens to hit first — which is what
     // "the evidence is on the wrong paragraph" was, on every page at once. The caller says so.
     anchors: { index: anchors.indexCount, image: anchors.imageCount },
+    // Reported back so the panel can say what a re-capture actually used, rather than what was asked
+    // for — the request is clamped (see _pgCaptureLimits).
+    limits,
   };
 }
 
 if (typeof window !== 'undefined') {
   window.pgCapturePageSnapshot = pgCapturePageSnapshot;
+  window._pgCaptureLimits = _pgCaptureLimits;
   window._pgInlineCssUrls = _pgInlineCssUrls;
   window._pgBestImageUrl = _pgBestImageUrl;
   window._pgShrinkDataUri = _pgShrinkDataUri;

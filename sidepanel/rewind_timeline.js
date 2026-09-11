@@ -389,12 +389,15 @@
     const pageTargetActions = new Set(['click', 'type', 'clear_text', 'drag_drop']);
     const hasActionScore = [rec.mechGrounding, rec.grounded, rec.mechLoop, rec.loop]
       .some(v => typeof v === 'number' && isFinite(v));
+    // Loop, Plan and the model's own element text are researcher instrumentation (debug mode only),
+    // matching the step card in the panel; Grounding and the DOM text always show.
+    const dbg = !!global.__pgDebugEnabled;
     const scoreHtml = (pageTargetActions.has(action) && hasActionScore)
       ? `<div class="rw-score-details" style="margin-top:8px;font:400 11px/1.5 -apple-system,sans-serif;opacity:.9">
           <div><strong>Grounding:</strong> ${fmtScore(rec.mechGrounding)}</div>
-          <div><strong>Loop:</strong> ${fmtScore(rec.mechLoop)}${rec.loopMatches != null ? ` (${_escape(rec.loopMatches)}/10 matches)` : ''}</div>
-          <div><strong>Plan:</strong> ${_escape(planText)}</div>
-          ${rec.llmElementText ? `<div><strong>LLM text:</strong> ${_escape(rec.llmElementText)}</div>` : ''}
+          ${dbg ? `<div><strong>Loop:</strong> ${fmtScore(rec.mechLoop)}${rec.loopMatches != null ? ` (${_escape(rec.loopMatches)}/10 matches)` : ''}</div>` : ''}
+          ${dbg ? `<div><strong>Plan:</strong> ${_escape(planText)}</div>` : ''}
+          ${(dbg && rec.llmElementText) ? `<div><strong>LLM text:</strong> ${_escape(rec.llmElementText)}</div>` : ''}
           ${rec.domElementText ? `<div><strong>DOM text:</strong> ${_escape(rec.domElementText)}</div>` : ''}
         </div>`
       : '';

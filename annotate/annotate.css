@@ -99,3 +99,68 @@ button, input, select, textarea { font: inherit; }
 .an-row-rerun { cursor: default; border-left: 4px solid var(--an-bad); }
 .an-row-rerun .an-row-state { color: var(--an-bad); font-weight: 700; }
 [hidden] { display: none !important; }
+
+/* Researcher mode: every row, hidden ones dimmed, and an inline edit form under the row */
+.an-row-wrap { display: flex; flex-direction: column; gap: 0; }
+.an-row-hidden { border-style: dashed; opacity: 0.75; }
+.an-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--an-bad); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: middle; }
+.an-row-answer { color: var(--an-ink); opacity: 0.8; }
+.an-btn-edit { padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
+.an-edit { display: flex; flex-direction: column; gap: 8px; background: #fff; border: 1px solid var(--an-accent); border-top: none; border-radius: 0 0 10px 10px; padding: 12px 14px; margin: -6px 8px 6px; }
+.an-edit label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--an-muted); }
+.an-edit input, .an-edit textarea { padding: 6px 8px; border: 1px solid var(--an-line); border-radius: 6px; color: var(--an-ink); width: 100%; resize: vertical; }
+.an-edit-check { flex-direction: row !important; align-items: center; color: var(--an-ink) !important; }
+.an-edit-check input { width: auto !important; }
+.an-edit-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.an-edit-note { margin-right: auto; font-size: 12px; color: var(--an-bad); }
+.an-btn-save { background: var(--an-accent); color: #fff; border-color: transparent; font-weight: 700; }
+.an-btn-save:disabled { opacity: 0.5; }
+.an-saved { color: var(--an-good); }
+.an-task-name { font-size: 11px; font-weight: 700; color: var(--an-accent); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 4px; }
+.an-edit select { padding: 6px 8px; border: 1px solid var(--an-line); border-radius: 6px; background: #fff; }
+
+/* Annotator A / B picker */
+.an-seg { display: inline-flex; border: 1px solid var(--an-line); border-radius: 999px; overflow: hidden; background: #fff; }
+.an-seg-btn { border: none; background: none; padding: 5px 16px; cursor: pointer; font-weight: 700; color: var(--an-muted); }
+.an-seg-btn + .an-seg-btn { border-left: 1px solid var(--an-line); }
+.an-seg-on { background: var(--an-accent); color: #fff; }
+.an-seg-nudge { outline: 2px solid var(--an-bad); outline-offset: 2px; }
+.an-row-static { cursor: default; }
+.an-row-static:hover { border-color: var(--an-line); }
+.an-edit-wrap { margin-bottom: 8px; }
+.an-edit-wrap .an-edit { margin-top: -6px; }
+.an-task-none { color: var(--an-muted); }
+.an-btn-vis { font-size: 12px; padding: 5px 10px; white-space: nowrap; color: var(--an-muted); }
+.an-btn-vis-on { color: var(--an-good); border-color: var(--an-good); }
+.an-btn-vis:disabled { opacity: 0.6; }
+.an-status { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: 4px; padding: 1px 6px; margin-right: 8px; }
+.an-status-kept { background: #e6f4ec; color: var(--an-good); }
+.an-status-rerun { background: #fdecea; color: var(--an-bad); }
+.an-edit-publish-note { font-size: 12px; }
+.an-bad { color: var(--an-bad); }
+.an-row-state { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }
+.an-row-time { font-size: 11px; color: var(--an-muted); font-weight: 400; }
+.an-grade-hint { font-weight: 400; color: var(--an-muted); font-size: 12px; }
+
+/* Visual evidence saved with the answer */
+.an-ev-chip { display: inline-block; font-family: ui-monospace, Menlo, monospace; font-size: 11px; padding: 0 6px; border-radius: 4px; background: #fff; border: 1px solid var(--an-accent); color: var(--an-accent); text-decoration: none; vertical-align: baseline; margin: 0 1px; }
+.an-ev-chip:hover { background: var(--an-accent); color: #fff; }
+.an-ev-chip-missing { border-style: dashed; color: var(--an-muted); border-color: var(--an-line); }
+.an-evidence { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 6px 0 12px; }
+.an-ev { margin: 0; background: var(--an-bg); border: 1px solid var(--an-line); border-radius: 8px; padding: 8px; scroll-margin-top: 80px; }
+.an-ev-img { display: block; width: 100%; max-height: 220px; object-fit: contain; object-position: left top; background: #fff; border: 1px solid var(--an-line); border-radius: 4px; cursor: zoom-in; }
+.an-ev figcaption { font-size: 12px; margin-top: 6px; color: var(--an-ink); }
+.an-ev-key { font-family: ui-monospace, Menlo, monospace; font-weight: 700; color: var(--an-accent); }
+.an-ev-step { font-size: 11px; color: var(--an-muted); }
+.an-ev-flash { outline: 2px solid var(--an-accent); outline-offset: 2px; }
+.an-ev-fallback { border-style: dashed; }
+.an-ev-fallback .an-ev-key { color: var(--an-muted); }
+
+/* Evidence grading */
+.an-ev-head-todo { color: var(--an-bad); }
+.an-ev-grade { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--an-line); }
+.an-ev-grade .an-pill { font-size: 12px; padding: 4px 8px; }
+.an-ev-grade .an-err, .an-ev-grade .an-step-note { flex-basis: 100%; font-size: 12px; }
+.an-ev-good { border-color: var(--an-good); }
+.an-ev-bad { border-color: var(--an-bad); }
+.an-progress-minor { opacity: 0.7; margin-top: 2px; }

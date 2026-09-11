@@ -562,12 +562,14 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   letter-spacing: 0.06em;
 }
 
-/* Researcher-only arm switch over the answers box (debug mode). */
+/* Researcher-only arm switch over the answers box (debug mode).
+   Five tabs since V2 (Live + the four cells), so it wraps rather than overflowing the panel. */
 .study-answer-arm-switch {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   background: rgba(255, 255, 255, 0.05);
-  border-radius: 999px;
+  border-radius: 12px;
   padding: 2px;
 }
 .study-arm-btn {
@@ -579,6 +581,7 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   font-weight: 600;
   padding: 3px 10px;
   cursor: pointer;
+  white-space: nowrap;
 }
 .study-arm-btn-active {
   background: rgba(255, 190, 132, 0.28);
@@ -630,6 +633,9 @@ body.light-mode .study-citation-mark    { background: rgba(255,200,0,0.3); color
   margin-top: 6px;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.45);
+  /* The V2 publish report is one line per task, set with textContent — without this they run
+     together into a paragraph and the per-task result is unreadable. */
+  white-space: pre-line;
 }
 .study-llm-answers-list {
   display: flex;
@@ -1079,6 +1085,51 @@ body.light-mode .study-header        { border-color: rgba(255, 166, 87, 0.16); }
 }
 .study-truth-save-row { justify-content: flex-end; margin-top: 10px; }
 
+/* Sits in the authoring button row, so it reads as one control with 📄 Capture page. */
+.study-capture-preset {
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: #fff;
+  color: #333;
+  max-width: 210px;
+}
+
+/* Editing a Find question in place — recorder only, so it sits with the other authoring rows. */
+.study-task-edit {
+  margin: 8px 0 10px;
+  padding: 9px 10px;
+  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.study-task-edit-answer {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.study-task-edit-label {
+  flex: none;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.55);
+}
+.study-task-edit-value { color: #111; }
+.study-task-edit-value em { color: rgba(0, 0, 0, 0.4); }
+/* Says the wording on screen is not the wording in the file, which is otherwise invisible. */
+.study-task-edited-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: rgba(232, 122, 43, 0.14);
+  color: #a4551b;
+}
+
 /* Submit, and — in authoring mode only — a way past a question without answering it. */
 .study-answer-submit-row {
   display: flex;
@@ -1366,6 +1417,24 @@ body.light-mode .study-header        { border-color: rgba(255, 166, 87, 0.16); }
   gap: 6px;
   margin: 0 0 10px;
 }
+
+/* Splits the list into "already on V2" and "new from this run". A rule rather than a heading
+   weight, because the two groups are the same kind of thing and only the publish differs — a
+   louder header would read as two sections of the study rather than two fates for one press. */
+.study-traj-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.5);
+}
+.study-traj-group-head:first-child { margin-top: 2px; }
 
 /* An excluded trajectory stays legible — it is still editable, it just will not be shown to a
    participant — so it is dimmed rather than hidden or struck through. */
@@ -1692,6 +1761,52 @@ body.light-mode .study-step-pick.is-on:hover {
   gap: 8px;
 }
 .study-open-row .study-btn { flex: 1; margin: 0; }
+
 /* Record Annotation Trajectories: the task currently being run */
 .study-annot-task-current { border-color: #d6863f; box-shadow: 0 0 0 2px rgba(214, 134, 63, 0.25); }
 .study-annot-rerun { background: #c0392b; color: #fff; }
+
+/* Record Model Performance: the model a run was made with */
+.study-perf-model { background: rgba(214, 134, 63, 0.14); }
+
+/* Model Comparison */
+.study-cmp-row { align-items: flex-start; }
+.study-cmp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; margin-top: 6px; }
+.study-cmp-cell { background: rgba(0, 0, 0, 0.03); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+.study-cmp-base { border-color: rgba(214, 134, 63, 0.5); background: rgba(214, 134, 63, 0.06); }
+.study-cmp-kicker { font: 800 10px/1.4 inherit; letter-spacing: 0.05em; text-transform: uppercase; color: #d6863f; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.study-cmp-verdicts { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.study-cmp-answers { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.study-cmp-answer { background: #fff; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; padding: 6px 8px; }
+.study-cmp-text { white-space: pre-wrap; font-size: 12px; line-height: 1.45; }
+
+/* Model Comparison — LLM judge */
+.study-cmp-judgebar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; }
+.study-cmp-judgebar select { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid rgba(0, 0, 0, 0.14); border-radius: 6px; margin-left: 4px; max-width: 220px; }
+.study-cmp-agg { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px; margin: 0 0 12px; }
+.study-cmp-stat { background: #fff; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; padding: 8px 10px; }
+.study-cmp-stat-n { font: 800 18px/1.2 inherit; }
+.study-cmp-stat-l { font-size: 10px; color: rgba(0, 0, 0, 0.55); }
+.study-cmp-agg > .study-traj-meta { grid-column: 1 / -1; }
+.study-cmp-judge { margin-top: 4px; font-size: 11px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.study-cmp-ok { color: #2e8b57; font-weight: 700; }
+.study-cmp-bad { color: #c0392b; font-weight: 700; }
+.study-cmp-rejudge { padding: 0 6px; font-size: 11px; }
+
+/* Model Comparison — results table */
+.study-cmp-tablewrap { overflow-x: auto; background: #fff; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; padding: 6px 8px; margin: 0 0 12px; }
+.study-cmp-table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.study-cmp-table th, .study-cmp-table td { padding: 4px 6px; text-align: center; border-bottom: 1px solid rgba(0, 0, 0, 0.08); white-space: nowrap; }
+.study-cmp-table th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: rgba(0, 0, 0, 0.55); }
+.study-cmp-table td:nth-child(2), .study-cmp-table td:nth-child(3) { text-align: left; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.study-cmp-table tfoot td { border-top: 2px solid rgba(0, 0, 0, 0.15); border-bottom: none; }
+.study-perf-assign select { font: inherit; font-size: 11px; padding: 2px 4px; border: 1px solid rgba(0, 0, 0, 0.14); border-radius: 6px; margin-left: 4px; max-width: 200px; }
+.study-cmp-rerun { padding: 0 6px; font-size: 11px; color: #c0392b; border-color: rgba(192, 57, 43, 0.4); }
+.study-perf-rerun-row { border-left: 3px solid #c0392b; }
+.study-perf-verdicts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.study-perf-ok { color: #2e8b57; }
+.study-cmp-final { background: rgba(46, 139, 87, 0.12); color: #2e8b57; }
+.study-cmp-makefinal { padding: 0 6px; font-size: 10px; }
+.study-cmp-showall { margin-top: 6px; font-size: 11px; }
+.study-cmp-other { font-size: 10px; color: rgba(0, 0, 0, 0.6); margin-right: 6px; }
+.study-cmp-others { margin-top: 2px; }

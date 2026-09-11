@@ -183,6 +183,9 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       const anchor = document.createElement('div');
       anchor.style.cssText = 'position:fixed;top:0;left:0;width:10px;height:10px';
       document.body.appendChild(anchor);
+      // Restoring a step is a researcher affordance — the button only exists in debug mode.
+      // @ts-ignore
+      window.__pgDebugEnabled = true;
       // @ts-ignore
       showGoalStepPreview(2, anchor);
     });
@@ -205,6 +208,45 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     expect(res.pending.newGoal).toBe(''); // restore-only: no new instruction
     expect(res.pending.url).toBe('https://ex.com/a'); // land on step 1's page (before step 2)
     expect(res.nav).toBe('https://ex.com/a'); // working tab navigated to the landing URL
+  });
+
+  // Without debug mode the step card is a plain record: the screenshot, which step, what it did.
+  // Everything that grades the step or re-runs it belongs to the researcher.
+  test('debug off: the step preview card carries no scores, badge or action buttons', async () => {
+    await panelPage.evaluate(async () => {
+      // @ts-ignore
+      window.__pgDebugEnabled = false;
+      // @ts-ignore
+      await rewindStartSession('simple-card', 'original goal');
+      // @ts-ignore
+      await rewindPutRecord({ sessionId: 'simple-card', step: 1, instruction: 'open menu', action: 'click', url: 'https://ex.com/a', target: { text: 'Menu' }, screenshot: 'AAAA', mechGrounding: 0.81, mechLoop: 0.2, confidence: 0.72 });
+      // @ts-ignore
+      currentGuideRecords = [
+        { step: 1, planStep: 1, sessionId: 'simple-card', url: 'https://ex.com/a', instruction: 'open menu', confidence: 0.72 }
+      ];
+      const anchor = document.createElement('div');
+      anchor.style.cssText = 'position:fixed;top:0;left:0;width:10px;height:10px';
+      document.body.appendChild(anchor);
+      // @ts-ignore
+      showGoalStepPreview(1, anchor);
+    });
+
+    const card = panelPage.locator('#pageguide-goal-step-preview');
+    await expect(card).toBeVisible();
+    // Kept: which step it is, and what the step did.
+    await expect(card.locator('.pageguide-goal-step-preview-title')).toHaveText(/Step 1/);
+    await expect(card.locator('.pageguide-goal-step-preview-text')).toHaveText(/open menu/);
+    // Gone: the grade, the scores, the raw URL, the before-shot, and both action buttons.
+    for (const sel of [
+      '.pageguide-goal-step-conf',
+      '.pageguide-goal-step-scores',
+      '.pageguide-goal-step-link',
+      '.pageguide-goal-step-before',
+      '.pageguide-goal-step-inspect',
+      '.pageguide-goal-step-steer'
+    ]) {
+      await expect(card.locator(sel)).toHaveCount(0);
+    }
   });
 
   test('steer creates a branch journey and preserves the original path', async () => {

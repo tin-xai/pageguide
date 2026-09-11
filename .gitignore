@@ -2,6 +2,7 @@
 config.js
 keys.py
 sidepanel/supabase_config.js
+.private/
 
 # Dependencies
 node_modules/

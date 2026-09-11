@@ -3010,6 +3010,16 @@ body {
   animation: pageguide-working-pulse 1.25s ease-in-out infinite;
 }
 
+/* Outside debug mode the trail is plain progress, not a grade: a step that ran reads the same
+   neutral gray whatever it scored. The confidence/review/verify classes are not even emitted
+   there (see _buildGoalTimelineRow) — this covers `done`, which is green by default. */
+.pageguide-goal-row-dot.simple.done,
+.pageguide-goal-row-dot.simple.verify-success,
+.pageguide-goal-row-dot.simple.verify-failed,
+.pageguide-goal-row-dot.simple.verify-blocked {
+  background: var(--pg-muted, #9aa0b4);
+}
+
 .pageguide-goal-row-dot.conf-high { outline: 2px solid var(--pg-success, #22c55e); outline-offset: 1px; }
 .pageguide-goal-row-dot.conf-med { outline: 2px solid #eab308; outline-offset: 1px; }
 

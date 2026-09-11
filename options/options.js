@@ -10,6 +10,55 @@ const PROVIDER_NAMES = {
   openai: 'OpenAI'
 };
 
+// OpenRouter models that accept TEXT ONLY, per openrouter.ai/api/v1/models.
+//
+// This matters because nothing downstream checks: background/service-worker.js pushes an
+// `image_url` part onto every OpenRouter request whenever Vision is on, with no per-model
+// capability test, so one of these models comes back as an opaque API error rather than as
+// "that model cannot see". Rather than silently dropping the screenshot — which would change
+// what the agent is answering from without saying so — the picker warns and leaves the choice
+// alone. A text-only model is the right pick for a text-only task.
+//
+// Must stay in step with the "(text only)" labels in options.html; a unit test pins that.
+const TEXT_ONLY_OPENROUTER_MODELS = [
+  'qwen/qwen3.7-max',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-v3.2',
+  'moonshotai/kimi-k2-thinking'
+];
+window.TEXT_ONLY_OPENROUTER_MODELS = TEXT_ONLY_OPENROUTER_MODELS;
+
+/**
+ * The warning to show under the OpenRouter picker, or '' for nothing to say. Pure.
+ *
+ * Only the combination is a problem: a text-only model with Vision off is fine, and a
+ * vision model with Vision on is fine.
+ *
+ * @param {string} model - the selected OpenRouter model id
+ * @param {boolean} visionEnabled - the Vision (Screenshot) toggle
+ * @returns {string}
+ */
+function openrouterVisionWarning(model, visionEnabled) {
+  if (!visionEnabled) return '';
+  if (!TEXT_ONLY_OPENROUTER_MODELS.includes(String(model || ''))) return '';
+  return `\u26a0\ufe0f ${model} takes text only, but Vision (Screenshot) is on. `
+    + 'Requests that attach a screenshot will be rejected by OpenRouter \u2014 turn Vision off '
+    + 'for this model, or pick one that reads images.';
+}
+window.openrouterVisionWarning = openrouterVisionWarning;
+
+/** Paint the warning under the picker from whatever the two controls currently hold. */
+function refreshOpenrouterVisionWarning() {
+  const box = document.getElementById('openrouterVisionWarning');
+  const select = document.getElementById('openrouterModel');
+  const vision = document.getElementById('visionEnabled');
+  if (!box || !select || !vision) return;
+  const message = openrouterVisionWarning(select.value, vision.checked);
+  box.textContent = message;
+  box.hidden = !message;
+}
+
 // Load saved settings
 async function loadSettings() {
   const settings = await chrome.storage.sync.get([
@@ -81,9 +130,13 @@ async function loadSettings() {
     const actionThresholdInput = document.getElementById('guideLowConfidenceActionThreshold');
     if (actionThresholdInput) actionThresholdInput.value = Number.isFinite(Number(local.guideLowConfidenceActionThreshold)) ? Number(local.guideLowConfidenceActionThreshold) : 5;
     const loopStepInput = document.getElementById('guideLoopStepThreshold');
-    // Default 1 — what the loop guard did before it was configurable.
-    if (loopStepInput) loopStepInput.value = Number.isFinite(Number(local.guideLoopStepThreshold)) ? Number(local.guideLoopStepThreshold) : 1;
+    // Default 6 — see _gv2LoopStepThreshold. One over-threshold step is a coincidence, not a loop.
+    if (loopStepInput) loopStepInput.value = Number.isFinite(Number(local.guideLoopStepThreshold)) ? Number(local.guideLoopStepThreshold) : 6;
   } catch (e) {}
+
+  // After both controls it reads are populated, or a saved text-only model would look fine on load
+  // and only warn once something was touched.
+  refreshOpenrouterVisionWarning();
 }
 
 // Render the read-only "what PageGuide has learned about you" viewer
@@ -361,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (loopStepThresholdInput) {
     loopStepThresholdInput.addEventListener('change', async () => {
       const raw = Number(loopStepThresholdInput.value);
-      const value = Number.isFinite(raw) ? Math.max(1, Math.round(raw)) : 1;
+      const value = Number.isFinite(raw) ? Math.max(1, Math.round(raw)) : 6;
       loopStepThresholdInput.value = value;
       try {
         await chrome.storage.local.set({ guideLoopStepThreshold: value });
@@ -394,6 +447,12 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {}
     });
   }
+
+  // The text-only warning follows either control that can create the mismatch.
+  const openrouterModelSelect = document.getElementById('openrouterModel');
+  const visionToggle = document.getElementById('visionEnabled');
+  if (openrouterModelSelect) openrouterModelSelect.addEventListener('change', refreshOpenrouterVisionWarning);
+  if (visionToggle) visionToggle.addEventListener('change', refreshOpenrouterVisionWarning);
 
   // Debug code entry event listener
   const debugCodeInput = document.getElementById('debugCode');

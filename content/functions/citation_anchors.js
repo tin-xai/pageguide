@@ -222,7 +222,12 @@ function _pgCitationKey(index, quote) {
 function _pgAnswerCitations(answer) {
   const seen = new Set();
   const cites = [];
-  String(answer || '').replace(/\[(\d+):"([^"]*)"\]/g, (m, index, text) => {
+  // Through the shared repair first: a compound bracket ([281:"a", 766:"b"]) closes after the
+  // SECOND quote, so this pattern saw neither citation and the answer resolved to no anchors at
+  // all. See normalizeCitationMarkers in content/utils.js.
+  const text0 = (typeof normalizeCitationMarkers === 'function')
+    ? normalizeCitationMarkers(answer) : String(answer || '');
+  String(text0).replace(/\[(\d+):"([^"]*)"\]/g, (m, index, text) => {
     const key = _pgCitationKey(index, text);
     if (!seen.has(key)) { seen.add(key); cites.push({ index: Number(index), text, key }); }
     return m;

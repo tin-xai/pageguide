@@ -1804,7 +1804,10 @@ function gv2EvidenceMemoryText(entries) {
 function gv2ParseEvidenceRefs(text) {
   const out = [];
   const seen = new Set();
-  const re = /\[ev:([a-zA-Z0-9_-]+)\]/g;
+  // Anything up to the closing bracket: the model sometimes writes the evidence NAME rather than
+  // its slug ("[ev:Sportsplex Hours 4:00pm - 9:00pm]"); normalizing it yields the same key the
+  // confirmation item's name normalizes to, so the citation still resolves to its picture.
+  const re = /\[ev:\s*([^\]]+?)\s*\]/g;
   let m;
   while ((m = re.exec(String(text || '')))) {
     const key = gv2NormalizeEvidenceKey(m[1]);
@@ -1936,7 +1939,24 @@ function gv2BuildAnswerEvidence(input) {
     push(e, 'scratchpad', { key });
   });
 
-  // 3. Finish-time confirmation evidence — only when no saved evidence exists. This is the
+  // 3a. Confirmation evidence the answer actually CITES by its SoM index ("added to cart [ev:97]")
+  // is kept even when saved evidence exists: a marker in the answer must resolve to a picture, or
+  // the reader (and the annotator) sees a citation that points at nothing. Only the uncited,
+  // redundant confirmation chips are suppressed below.
+  if (items.length > 0 && confirmation.length) {
+    const cited = (typeof gv2ParseEvidenceRefs === 'function') ? gv2ParseEvidenceRefs(finalAnswer) : [];
+    cited.forEach(key => {
+      if (!key || emittedKeys.has(key)) return;
+      const c = confirmation.find(x => x && gv2NormalizeEvidenceKey(x.key) === key);
+      if (!c) return;
+      const step = Number(c.step);
+      if (!Number.isFinite(step)) return;
+      emittedKeys.add(key);
+      items.push({ source: 'confirmation', step, region_bbox: c.region_bbox || null, note: c.note || 'Confirmation', key });
+    });
+  }
+
+  // 3b. Finish-time confirmation evidence — only when no saved evidence exists. This is the
   // navigation/state-change path: "completed X" gets a hoverable confirmation region, while
   // information tasks that saved evidence do not get a redundant final confirmation chip.
   if (items.length === 0) {
@@ -1968,7 +1988,34 @@ function gv2BuildAnswerEvidence(input) {
   return items;
 }
 
+/**
+ * Which finish-time confirmation items to capture when the run ALSO has saved evidence.
+ *
+ * Without saved evidence every item is captured (that is the navigation-task path). With saved
+ * evidence, an uncited confirmation is redundant — the saved crops are the evidence — but an item
+ * the answer cites by name or SoM index ("added to cart [ev:97]") must still be captured, or the
+ * answer carries a marker with no picture behind it. Items whose key is already a saved-evidence
+ * key are left to the scratchpad.
+ *
+ * @param {Array<object>} items - normalized confirmation items ({name?, index?, ...})
+ * @param {string} finalAnswer - the finish answer, with its [ev:…] markers
+ * @param {Array<string>} savedKeys - keys already in the evidence scratchpad
+ * @param {boolean} hasSavedEvidence
+ * @returns {Array<object>} the items to capture, in their original order
+ */
+function gv2SelectFinishConfirmationItems(items, finalAnswer, savedKeys, hasSavedEvidence) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!hasSavedEvidence) return list;
+  const cited = new Set(gv2ParseEvidenceRefs(finalAnswer));
+  const saved = new Set((Array.isArray(savedKeys) ? savedKeys : []).map(gv2NormalizeEvidenceKey).filter(Boolean));
+  return list.filter(item => {
+    const keys = [item.name, item.index != null ? String(item.index) : ''].map(gv2NormalizeEvidenceKey).filter(Boolean);
+    return keys.some(k => cited.has(k) && !saved.has(k));
+  });
+}
+
 if (typeof window !== 'undefined') {
+  window.gv2SelectFinishConfirmationItems = gv2SelectFinishConfirmationItems;
   window.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
   window.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
   window.gv2NormalizeEvidencePoint = gv2NormalizeEvidencePoint;
@@ -1982,6 +2029,7 @@ if (typeof window !== 'undefined') {
   window.gv2BuildAnswerEvidence = gv2BuildAnswerEvidence;
 }
 if (typeof module !== 'undefined' && module.exports) {
+  module.exports.gv2SelectFinishConfirmationItems = gv2SelectFinishConfirmationItems;
   module.exports.gv2NormalizeEvidenceKey = gv2NormalizeEvidenceKey;
   module.exports.gv2NormalizeEvidenceBbox = gv2NormalizeEvidenceBbox;
   module.exports.gv2NormalizeEvidencePoint = gv2NormalizeEvidencePoint;
@@ -3072,6 +3120,86 @@ function _citationEchoesProse(before, after, span) {
 }
 
 /**
+ * Rescue a citation that kept the prompt's PLACEHOLDER but carried a real index.
+ *
+ * The prompt asks for [N:"text"], where N stands for a number from the page index. A model that
+ * copies the template literally writes [N:195] instead of [195:"Malachowsky"] — the letter where
+ * the number belongs, and the number where the quote belongs. That shape matches nothing: the
+ * citation pattern below requires the bracket to START with digits, so the marker rendered as raw
+ * text and the reader got no link to the evidence at all. Cheap/small models do this far more
+ * often than large ones, which is why it shows up now that a run uses whichever model is selected.
+ *
+ * The index is right there, so this normalises the shape rather than discarding it. What is left
+ * for _stripInvalidPlaceholderCitations is the genuinely index-less case, [N:"text"], which cannot
+ * be resolved to an element and so must not become a link.
+ *
+ * Deliberately NOT touching [idx:…] — that is a real format of its own (element ranges), handled
+ * separately above, and rewriting it to [N] would break it.
+ *
+ * @param {string} text
+ * @returns {string} the same text with [N:195], [n = 195], [#195] and friends rewritten to [195]
+ */
+function _normalizePlaceholderCitationIndices(text) {
+  return String(text || '')
+    // [N:195], [n = 195, 197], [N:195:"quote"] → [195], [195, 197], [195:"quote"]
+    .replace(/\[\s*N\s*[:=]\s*(\d+(?:\s*[,;]\s*\d+)*)\s*(?::\s*(?:"([^"\]]*)"|'([^'\]]*)'))?\s*\]/gi,
+      (match, indices, dq, sq) => {
+        const list = indices.split(/[,;]/).map(n => n.trim()).filter(Boolean).join(', ');
+        const quote = dq || sq || '';
+        return quote ? `[${list}:"${quote}"]` : `[${list}]`;
+      })
+    // [#195] / [# 195, 197] — the other way a model marks "this is an index".
+    .replace(/\[\s*#\s*(\d+(?:\s*[,;]\s*\d+)*)\s*\]/g,
+      (match, indices) => `[${indices.split(/[,;]/).map(n => n.trim()).filter(Boolean).join(', ')}]`);
+}
+
+/**
+ * Split a bracket that packs SEVERAL citations into one — [281:"approach", 766:"Oxford University"].
+ *
+ * Models write this when they cite two elements for one claim, and it broke every reader in a
+ * different way: the panel's pattern took the first index and swallowed the rest as the "quote",
+ * so one chip appeared carrying `"approach", 766:"Oxford University"` as its text; the anchor
+ * resolver, which requires the bracket to close right after the quote, matched nothing at all and
+ * highlighted neither element. Both citations are well-formed inside the bracket, so this splits
+ * them into `[281:"approach"][766:"Oxford University"]` and every reader downstream sees two
+ * ordinary citations.
+ *
+ * Only splits when there are TWO OR MORE index:"quote" pairs — a lone [281:"approach"] is already
+ * right, and a quote containing a comma must not be torn in half. Brackets holding no quoted pair
+ * ([idx:1-2], [ev:key], [12]) are left exactly as they are.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function _splitCompoundCitations(text) {
+  return String(text || '').replace(/\[([^\][]*['"][^\][]*)\]/g, (match, inner) => {
+    const pairs = [...inner.matchAll(/(\d+)\s*:\s*(?:"([^"]*)"|'([^']*)')/g)];
+    if (pairs.length < 2) return match;
+    return pairs.map(([, index, dq, sq]) => `[${index}:"${dq === undefined ? sq : dq}"]`).join('');
+  });
+}
+
+/**
+ * Put an answer's citation markers into the ONE shape every reader understands: `[index:"quote"]`.
+ *
+ * Lives here, in the file both the content scripts and the side panel load, because the panel
+ * (chips), the highlighter (page marks), the anchor resolver (study playback) and the non-grounding
+ * stripper each parse markers with their own regex. A shape repaired in one of them and not the
+ * others is worse than not repairing it: the reader sees a citation the highlighter cannot find.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeCitationMarkers(text) {
+  return _normalizePlaceholderCitationIndices(_splitCompoundCitations(text));
+}
+if (typeof window !== 'undefined') {
+  window._normalizePlaceholderCitationIndices = _normalizePlaceholderCitationIndices;
+  window._splitCompoundCitations = _splitCompoundCitations;
+  window.normalizeCitationMarkers = normalizeCitationMarkers;
+}
+
+/**
  * Strip citation markers from an answer, keeping the model's prose intact and complete. Used by
  * Non-grounding baseline mode (isNonGroundingModeOn) so the displayed answer has no clickable
  * citation chips at all — not just no on-page highlight — since parseCitations() in the side panel
@@ -3097,9 +3225,9 @@ function stripCitationMarkers(answer) {
   if (!answer) return answer;
   // Curly quotes must be folded to straight ones with explicit escapes — a literal ["”] in the
   // source is just a straight quote twice and never matched the smart quotes models emit.
-  const normalized = String(answer)
+  const normalized = normalizeCitationMarkers(String(answer)
     .replace(/[“”„‟"]/g, '"')
-    .replace(/[‘’‚‛']/g, "'");
+    .replace(/[‘’‚‛']/g, "'"));
 
   // One pass over every marker shape, so each match can see the text around it. The index part
   // allows comma-separated lists ([517, 519:"text"]) the same way parseCitations does. The quoted

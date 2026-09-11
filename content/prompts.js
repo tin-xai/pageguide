@@ -93,7 +93,8 @@ PAGE INDEX (use these numbers for citations):
 INSTRUCTIONS:
 1. Answer the question based on the page content if possible
 2. If the page content has the answer, use [N:"text"] citations inline to reference specific elements from the PAGE INDEX
-   - N is the index number from PAGE INDEX
+   - N is the index NUMBER from PAGE INDEX — write the number itself, never the letter N.
+     Correct: [195:"Malachowsky"]. Wrong: [N:195], [N:"Malachowsky"], [idx:195].
    - "text" is the EXACT text snippet to highlight (copy from the page content)
 3. Each citation should point to an element that supports that part of your answer
 4. For lists of items, cite each one with the specific text to highlight
@@ -157,7 +158,8 @@ Reply with ONLY a JSON object:
 ANSWER RULES (identical to the text-only mode, plus the screenshot):
 1. Answer the question from the page content and the screenshot
 2. Use [N:"text"] citations inline to reference specific elements from the PAGE INDEX
-   - N is the index number from PAGE INDEX
+   - N is the index NUMBER from PAGE INDEX — write the number itself, never the letter N.
+     Correct: [195:"Malachowsky"]. Wrong: [N:195], [N:"Malachowsky"], [idx:195].
    - "text" is the EXACT text snippet to highlight (copy from the page content)
 3. Each citation should point to an element that supports that part of your answer
 4. For lists of items, cite each one with the specific text to highlight
@@ -380,6 +382,7 @@ ACTIONS:
 
 CITATION FORMAT:
 - Use [N:"text"] to cite elements, e.g., [45:"pink velvet chair"]
+- N is the index NUMBER from PAGE INDEX — write the number itself, never the letter N
 
 EXAMPLES:
 
@@ -681,6 +684,7 @@ Return JSON only:
   "confirmationEvidence": [{"index": M|null, "rect": {"x":0..1,"y":0..1,"w":0..1,"h":0..1}, "text": "label of the confirmation region", "reason": "one sentence: how this region confirms the final answer", "need_annotation": false, "annotation_prompt": "short instruction for the annotator or null"}],
   "action": "click" | "type" | "clear_text" | "drag_drop" | "scroll_down" | "scroll_up" | "goto_url" | "watch_video" | "finish",
   "typeText": "text to type (only when action=type; null/empty when action=clear_text)",
+  "submit": true | false,
   "url": "the target URL (only when action=goto_url; for watch_video this may be the video URL)",
   "videoUrl": "the video URL to watch (only when action=watch_video; null otherwise)",
   "videoQuery": "the question to answer from the video (only when action=watch_video; null otherwise)",
@@ -708,7 +712,12 @@ RULES:
 4. action="click": click the highlighted element (the agent does this for low-risk steps;
    the user does it for high-risk ones)
 5. action="type": provide typeText; the agent auto-fills low-risk fields, and lets the user
-   type high-risk ones (e.g. passwords)
+   type high-risk ones (e.g. passwords). Set "submit": true when filling the field is not enough and
+   the value has to be SENT — a search box, a "go to page N" field, a login form's last field. The
+   agent then presses Enter for you. Never emit a separate step whose only job is to press Enter or
+   click the search icon; that step would repeat forever because the page has not changed yet.
+   Set "submit": false (or omit it) for a field that is only being filled in, e.g. one of several
+   form fields you will submit later.
 6. action="clear_text": clear the highlighted form field's current value; leave typeText
    empty/null. Use it before typing a replacement value or when the task asks to reset a field.
    Sensitive fields (passwords, payment, private data) are high risk and should be handed to the user.

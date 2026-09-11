@@ -22,18 +22,23 @@
       <button class="an-tab an-tab-on" data-tab="queue">Queue</button>
       <button class="an-tab" data-tab="agreement">Agreement</button>
       <button class="an-tab" data-tab="rerun">Rerun</button>
+      <button class="an-tab" data-tab="edit" id="an-tab-edit" hidden>✎ Edit</button>
     </nav>
     <div class="an-who">
-      <label for="an-annotator">Annotator ID</label>
-      <input id="an-annotator" placeholder="e.g. A1" maxlength="80">
+      <span>Annotator</span>
+      <div class="an-seg" id="an-annotator-seg" role="radiogroup" aria-label="Annotator">
+        <button type="button" class="an-seg-btn" data-annotator="A" role="radio" aria-checked="false">A</button>
+        <button type="button" class="an-seg-btn" data-annotator="B" role="radio" aria-checked="false">B</button>
+      </div>
       <span class="an-source" id="an-source"></span>
+      <button class="an-btn an-btn-quiet" id="an-researcher" hidden title="Enter the admin password to unlock the Edit tab">🔑 Researcher</button>
     </div>
   </header>
 
   <main class="an-main">
     <section id="an-queue" class="an-view">
       <div class="an-toolbar">
-        <p class="an-intro">Pick a trajectory. Grade each step, then the final answer. Your progress is saved when you press <strong>Submit</strong>.</p>
+        <p class="an-intro">Pick a trajectory and <strong>grade its evidence</strong>: for every crop the agent saved with its answer, say whether it is correct and relevant to the task (and what is wrong if not). Steps and the final answer are optional. Press <strong>Submit</strong> when all evidence is graded.</p>
         <label class="an-file">⬇ Load exported JSON <input type="file" id="an-file" accept="application/json" multiple hidden></label>
       </div>
       <div id="an-queue-list" class="an-list"></div>
@@ -42,6 +47,7 @@
     <section id="an-task" class="an-view" hidden>
       <div class="an-task-head">
         <button class="an-btn an-btn-quiet" id="an-back">← Queue</button>
+        <button class="an-btn an-btn-quiet" id="an-task-edit" hidden title="Edit task name, agent answer…">✎ Edit</button>
         <div class="an-task-title">
           <div class="an-kicker">Task</div>
           <h1 id="an-goal"></h1>
@@ -70,6 +76,18 @@
       </div>
       <div id="an-overall" class="an-overall"></div>
       <div class="an-table-wrap"><table class="an-table" id="an-agree-table"></table></div>
+    </section>
+    <section id="an-edit" class="an-view" hidden>
+      <!-- The researcher's tab: every published run (hidden ones included), each with a form for
+           the task name, title, task text, agent answer and visibility. Needs the V2 admin
+           password when Supabase is configured (supabase_migration_annotation_edit.sql). -->
+      <div class="an-toolbar">
+        <p class="an-intro">Fix a run without re-publishing it: pick the <strong>task name</strong> it belongs to and correct the <strong>agent's answer</strong> annotators grade. Save writes straight to Supabase.</p>
+        <button class="an-btn" id="an-edit-refresh">⟳ Refresh</button>
+        <label class="an-file" title="Upsert the runs in an exported bundle (⋯ → Record Annotation Trajectories → Export JSON) into Supabase">⬆ Publish JSON → Supabase <input type="file" id="an-edit-publish" accept="application/json" multiple hidden></label>
+        <span class="an-edit-publish-note" id="an-edit-publish-note"></span>
+      </div>
+      <div id="an-edit-list" class="an-list"></div>
     </section>
     <section id="an-rerun" class="an-view" hidden>
       <!-- Which of the 12 tasks still need a fresh run (tasks.json, status = "rerun"): the study's

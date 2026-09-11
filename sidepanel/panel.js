@@ -1541,6 +1541,30 @@ function _timelineDetailTextHtml(label, text) {
   </div>`;
 }
 
+/**
+ * The mechanism-score rows under a step card — debug mode only.
+ *
+ * Grounding, Loop, Plan and the two element texts are researcher instrumentation: they only mean
+ * anything next to the confidence formula. The card a participant sees is a plain record of what
+ * happened, so outside debug mode this block is not rendered at all.
+ */
+function _guideStepScoresHtml(scoreSource = {}, isInitialNode = false, planTotalFallback = 0) {
+  if (!window.__pgDebugEnabled) return '';
+  if (!_shouldShowGuideActionScores(scoreSource, isInitialNode)) return '';
+  const fmtScore = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '\u2014';
+  const loopMatches = scoreSource.loopMatches != null ? Number(scoreSource.loopMatches) : null;
+  const planDone = scoreSource.planCompleted != null ? Number(scoreSource.planCompleted) : null;
+  const planTotal = scoreSource.planTotal != null ? Number(scoreSource.planTotal) : planTotalFallback;
+  return `<div class="pageguide-goal-step-scores">
+        <div>Grounding: <b>${fmtScore(scoreSource.mechGrounding ?? scoreSource.grounded)}</b></div>
+        <div>Loop: <b>${fmtScore(scoreSource.mechLoop)}</b>${loopMatches != null ? ` (${loopMatches}/10 matches)` : ''}</div>
+        <div>Plan: <b>${Number.isFinite(planDone) && planTotal ? `${Math.min(planDone, planTotal)}/${planTotal}` : '\u2014'}</b></div>
+        ${_timelineDetailTextHtml('LLM text', scoreSource.llmElementText)}
+        ${_timelineDetailTextHtml('DOM text', scoreSource.domElementText)}
+      </div>`;
+}
+window._guideStepScoresHtml = _guideStepScoresHtml;
+
 async function showGoalStepPreview(step, anchor) {
   // Final guard for the Non-grounding baseline — the View Journey step popover (screenshot +
   // saved/annotated evidence + "Inspect more") is a grounding affordance. _buildGoalTimelineRow
@@ -1557,11 +1581,17 @@ async function showGoalStepPreview(step, anchor) {
     }
   } catch (e) {}
 
+  // Outside debug mode the card is deliberately plain: the screenshot, which step it is, and what
+  // the step did. Everything that grades or re-runs the step — the confidence badge, the score
+  // block, the review status, the raw URL, the timing, the before-action shot, "Inspect more" and
+  // "Restore here" — is researcher instrumentation and appears only under debug.
+  const debug = !!window.__pgDebugEnabled;
+
   // Confidence status (green ≥70%, yellow <70%) — no red for confidence.
   const conf = meta?.confidence;
   const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf, guideConfidenceThreshold) : null;
   // Confidence pinned to the top-left corner of the card.
-  const confHtml = (tier && conf != null)
+  const confHtml = (debug && tier && conf != null)
     ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
     : '';
   // Debug-only: all three formula versions side by side (Full / No-progress / No-loop).
@@ -1571,32 +1601,20 @@ async function showGoalStepPreview(step, anchor) {
     ? `<div class="pageguide-goal-step-dual">🐞 Full: <b>${pctOf(dual.full)}</b> · No-progress: <b>${pctOf(dual.reduced)}</b> · No-loop: <b>${pctOf(dual.noloop)}</b></div>`
     : '';
   const scoreSource = rec || meta || {};
-  const reviewInfo = _guideStepReviewInfo(scoreSource);
+  const reviewInfo = debug ? _guideStepReviewInfo(scoreSource) : [];
   const reviewHtml = reviewInfo.length
     ? `<div class="pageguide-goal-step-review-status">
         <div>Status: ${reviewInfo.map(item => `<b>${escapeHtml(item.label)}</b>`).join(' · ')}</div>
         ${reviewInfo.map(item => `<div>${escapeHtml(item.detail)}</div>`).join('')}
       </div>`
     : '';
-  const fmtScore = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '—';
-  const loopMatches = scoreSource.loopMatches != null ? Number(scoreSource.loopMatches) : null;
-  const planDone = scoreSource.planCompleted != null ? Number(scoreSource.planCompleted) : null;
-  const planTotal = scoreSource.planTotal != null ? Number(scoreSource.planTotal) : currentGuidePlan.length;
-  const scoreHtml = _shouldShowGuideActionScores(scoreSource, isInitialNode)
-    ? `<div class="pageguide-goal-step-scores">
-        <div>Grounding: <b>${fmtScore(scoreSource.mechGrounding ?? scoreSource.grounded)}</b></div>
-        <div>Loop: <b>${fmtScore(scoreSource.mechLoop)}</b>${loopMatches != null ? ` (${loopMatches}/10 matches)` : ''}</div>
-        <div>Plan: <b>${Number.isFinite(planDone) && planTotal ? `${Math.min(planDone, planTotal)}/${planTotal}` : '—'}</b></div>
-        ${_timelineDetailTextHtml('LLM text', scoreSource.llmElementText)}
-        ${_timelineDetailTextHtml('DOM text', scoreSource.domElementText)}
-      </div>`
-    : '';
+  const scoreHtml = _guideStepScoresHtml(scoreSource, isInitialNode, currentGuidePlan.length);
   const url = meta?.url || rec?.url || '';
   // Show the URL as a compact "link" hyperlink rather than the full (often long) address.
-  const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
+  const urlHtml = (debug && url) ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
   const evidenceHtml = _savedEvidencePreviewHtml(meta, rec);
   const annotationsHtml = _savedAnnotationsPreviewHtml(meta, rec);
-  const allowSteer = !!meta && !isInitialNode;
+  const allowSteer = debug && !!meta && !isInitialNode;
 
   // Card layout: the REGION-around-the-target crop is the picture on top; the full BEFORE-action
   // screenshot is tucked into a collapsible below it. (Falls back to the before-shot on top when
@@ -1613,14 +1631,14 @@ async function showGoalStepPreview(step, anchor) {
     ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && (beforeShot || afterShot)) ? `class="pageguide-memory-shot-trigger" data-shot-kind="${beforeShot ? 'before' : 'after'}"` : ''}>`
     : '';
   // Only show the collapsible before-shot when it isn't already the top image.
-  const beforeHtml = (beforeShot && regionShot)
+  const beforeHtml = (debug && beforeShot && regionShot)
     ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
         <img class="pageguide-memory-shot-trigger" data-shot-kind="before" src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
     : '';
 
   const preview = document.createElement('div');
   preview.id = 'pageguide-goal-step-preview';
-  preview.className = 'pageguide-goal-step-preview';
+  preview.className = 'pageguide-goal-step-preview' + (debug ? '' : ' simple');
   preview.innerHTML = `
     ${confHtml}
     ${topImg}
@@ -1633,8 +1651,8 @@ async function showGoalStepPreview(step, anchor) {
     ${dualHtml}
     ${urlHtml}
     ${beforeHtml}
-    ${meta?.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
-    ${meta ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
+    ${(debug && meta?.durationMs != null) ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
+    ${(debug && meta) ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
     ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">Restore here</button>' : ''}
   `;
 
@@ -1673,8 +1691,9 @@ async function showGoalStepPreview(step, anchor) {
 
     // Clicks inside the steer box (e.g. the textarea) should not open the inspector.
     // Default: open the in-panel inspector (snapshot + Restore here), which restores THIS
-    // working tab and still offers "Open detailed view ↗" for the full-page view.
-    if (meta && typeof RewindTimeline !== 'undefined') {
+    // working tab and still offers "Open detailed view ↗" for the full-page view. That is the same
+    // affordance as the hidden "Inspect more" button, so outside debug mode the card is inert.
+    if (debug && meta && typeof RewindTimeline !== 'undefined') {
       hideGoalStepPreview();
       if (typeof RewindTimeline.openStep === 'function') RewindTimeline.openStep(meta);
       else if (typeof RewindTimeline.openFullPageStep === 'function') RewindTimeline.openFullPageStep(meta);
@@ -1727,17 +1746,22 @@ function _buildGoalTimelineRow(step, label, st, rec, isInitial) {
   row.className = 'pageguide-goal-row' + (isInitial ? ' initial' : '');
   row.dataset.step = String(step);
 
+  const debug = !!window.__pgDebugEnabled;
   const dot = document.createElement('span');
-  dot.className = 'pageguide-goal-row-dot';
+  dot.className = 'pageguide-goal-row-dot' + (debug ? '' : ' simple');
   if (st.status === 'done') dot.classList.add('done');
   else if (st.status === 'current') dot.classList.add('current');
-  // Confidence status (green ≥70%, yellow <70%) — NO red for confidence.
-  const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
-  if (tier === 'high') dot.classList.add('conf-high');
-  else if (tier === 'med') dot.classList.add('conf-med');
-  const reviewInfo = _guideStepReviewInfo(rec || st || {});
-  if (reviewInfo.length) dot.classList.add('review');
-  if (st.verify) dot.classList.add(`verify-${st.verify}`);
+  // How a step SCORED is researcher instrumentation: the confidence ring (green ≥70%, yellow <70%),
+  // the review ring and the verify colors. Outside debug mode the trail is plain progress — a step
+  // that ran is neutral gray whatever it scored — so a participant is not reading a grade.
+  const reviewInfo = debug ? _guideStepReviewInfo(rec || st || {}) : [];
+  if (debug) {
+    const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
+    if (tier === 'high') dot.classList.add('conf-high');
+    else if (tier === 'med') dot.classList.add('conf-med');
+    if (reviewInfo.length) dot.classList.add('review');
+    if (st.verify) dot.classList.add(`verify-${st.verify}`);
+  }
 
   const text = document.createElement('span');
   text.className = 'pageguide-goal-row-text';
@@ -1754,6 +1778,7 @@ function _buildGoalTimelineRow(step, label, st, rec, isInitial) {
   }
   return row;
 }
+window._buildGoalTimelineRow = _buildGoalTimelineRow;
 
 // Vertical, live-updating step timeline: a dot on the left, the action on the right.
 // Tucked inside a native <details> so it can be collapsed once the guide finishes,
@@ -2010,7 +2035,7 @@ function ensureGoalCardMessage() {
               </svg>
             </span>
           </button>
-          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo">
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-save-trajectory-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo" style="display:none;">
             <span class="pageguide-inline-icon">
               <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
@@ -2021,6 +2046,7 @@ function ensureGoalCardMessage() {
           </button>
           <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-study" title="Capture this trajectory for the user study" style="display:none;">🎬</button>
           <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-annotation" title="Capture this trajectory for the annotator website" style="display:none;">📝</button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-model-performance" title="Capture this trajectory for the model-performance table (with its model and cost)" style="display:none;">📈</button>
           <span class="pageguide-journey-cost" id="pageguide-card-cost"></span>
         </div>
       </div>
@@ -2035,8 +2061,12 @@ function ensureGoalCardMessage() {
   document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => saveTrajectoryToRepo());
   document.getElementById('pageguide-card-capture-study')?.addEventListener('click', () => captureTrajectoryForStudy());
   document.getElementById('pageguide-card-capture-annotation')?.addEventListener('click', () => captureTrajectoryForAnnotation());
-  const captureBtn = document.getElementById('pageguide-card-capture-study');
-  if (captureBtn) captureBtn.style.display = window.__pgDebugEnabled ? '' : 'none';
+  document.getElementById('pageguide-card-capture-model-performance')?.addEventListener('click', () => captureTrajectoryForModelPerformance());
+  // Researcher affordances (capture-for-study, save-trajectory) are debug-mode only; a card can be
+  // built after the flag is already known, so apply it here too rather than waiting for a toggle.
+  card.querySelectorAll('.pageguide-capture-study-btn, .pageguide-save-trajectory-btn').forEach(el => {
+    el.style.display = window.__pgDebugEnabled ? '' : 'none';
+  });
   updateJourneyCostChip(card);
   return card;
 }
@@ -2455,6 +2485,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     hideMoreMenu();
     if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-annotation');
   });
+  document.getElementById('pageguide-record-model-performance')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-model-performance');
+  });
+  document.getElementById('pageguide-model-comparison')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('compare');
+  });
   // Export PDF / Save trajectory now live on the dynamically-created "View Journey" chat
   // bubble (see ensureGoalCardMessage), which attaches their click listeners itself at
   // creation time since the buttons don't exist in the static HTML anymore.
@@ -2693,7 +2731,12 @@ function parseCitations(text, isPdf = false) {
     .replace(/['']/g, "'");
   
   // Use normalized text for parsing
-  text = _stripInvalidPlaceholderCitations(normalizedText);
+  // Malformed-but-recoverable marker shapes are repaired BEFORE the strip, which would otherwise
+  // throw the indices away with the rest of the placeholder. Shared with the content scripts (see
+  // normalizeCitationMarkers in content/utils.js) so the panel, the highlighter and the anchor
+  // resolver all agree on what counts as a citation.
+  text = _stripInvalidPlaceholderCitations(
+    typeof normalizeCitationMarkers === 'function' ? normalizeCitationMarkers(normalizedText) : normalizedText);
   
   let result = '';
   let lastIndex = 0;
@@ -3617,8 +3660,9 @@ async function checkShowBranchButton() {
   const btn = document.getElementById('pageguide-show-branch-btn');
   if (!btn) return;
 
+  // The branch tree is a researcher affordance, like the prompt viewer and the study toggles.
   const activeSessionId = getActiveSessionId();
-  if (!activeSessionId) {
+  if (!activeSessionId || !window.__pgDebugEnabled) {
     btn.style.display = 'none';
     return;
   }
@@ -3899,14 +3943,17 @@ async function showBranchTree(keepZoom = false) {
         ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && (beforeShot || afterShot)) ? `class="pageguide-memory-shot-trigger" data-shot-kind="${beforeShot ? 'before' : 'after'}"` : ''}>` 
         : '';
 
-      const beforeHtml = (beforeShot && regionShot)
+      // Same rule as the timeline step card: plain outside debug mode.
+      const debug = !!window.__pgDebugEnabled;
+
+      const beforeHtml = (debug && beforeShot && regionShot)
         ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
             <img class="pageguide-memory-shot-trigger" data-shot-kind="before" src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
         : '';
 
       const conf = node.meta.confidence;
       const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf, guideConfidenceThreshold) : null;
-      const badgeHtml = (tier && conf != null)
+      const badgeHtml = (debug && tier && conf != null)
         ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
         : '';
 
@@ -3914,10 +3961,10 @@ async function showBranchTree(keepZoom = false) {
       const instruction = node.meta.instruction || 'Initial state';
 
       const url = node.meta.url || rec?.url || '';
-      const urlHtml = url ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
+      const urlHtml = (debug && url) ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
       const evidenceHtml = _savedEvidencePreviewHtml(node.meta, rec);
 
-      const allowSteer = node.stepNum > 0;
+      const allowSteer = debug && node.stepNum > 0;
 
       card.innerHTML = `
         ${badgeHtml}
@@ -3927,8 +3974,8 @@ async function showBranchTree(keepZoom = false) {
         ${evidenceHtml}
         ${urlHtml}
         ${beforeHtml}
-        ${node.meta.durationMs != null ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(node.meta.durationMs)}</div>` : ''}
-        <button type="button" class="pageguide-goal-step-inspect">Inspect more</button>
+        ${(debug && node.meta.durationMs != null) ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(node.meta.durationMs)}</div>` : ''}
+        ${debug ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
         ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">Restore here</button>' : ''}
       `;
 
@@ -5512,6 +5559,59 @@ async function captureTrajectoryForAnnotation() {
   }
 }
 window.captureTrajectoryForAnnotation = captureTrajectoryForAnnotation;
+
+/**
+ * The model-performance twin of captureTrajectoryForAnnotation: same run, same shape, third bank —
+ * plus what the run cost, read off the cost ledger for this session (provider, model, calls,
+ * tokens, dollars, wall time), so runs of different models on the same task can be compared
+ * (sidepanel/model_performance_trajectories.js).
+ */
+async function captureTrajectoryForModelPerformance() {
+  const sid = typeof getActiveSessionId === 'function' ? getActiveSessionId() : currentGuideSessionId;
+  if (!sid) { addMessage('⚠️ No guide run to capture — run a guide task first.', 'error'); return; }
+  if (typeof saveModelPerformanceTrajectory !== 'function') {
+    addMessage('❌ Model-performance bank is not loaded (model_performance_trajectories.js).', 'error');
+    return;
+  }
+  try {
+    const trajectory = await readTrajectoryFromSession(sid);
+    if (!trajectory) { addMessage('⚠️ That run has no steps to capture.', 'error'); return; }
+    // Tag with the task it was started from (▶ in Record Model Performance shares the launcher key
+    // with the annotation recorder, so a run started from either screen is tagged).
+    try {
+      const cur = (await chrome.storage.local.get('pageguide_annotation_current_task')).pageguide_annotation_current_task;
+      if (cur?.id) { trajectory.task_id = cur.id; trajectory.task_name = cur.name || ''; }
+    } catch (e) { /* untagged is fine */ }
+    // The run's cost and model, from the ledger. A run with no priced calls still captures — the
+    // meta is just empty — because the trajectory itself is the record; the cost is the extra.
+    try {
+      const local = await chrome.storage.local.get(PAGEGUIDE_COST_LEDGER_KEY);
+      const entries = costEntriesForSession(local[PAGEGUIDE_COST_LEDGER_KEY], sid);
+      trajectory.run_meta = _modelPerfRunMeta(entries);
+      if (!trajectory.run_meta.model) {
+        const st = await chrome.storage.sync.get(['provider', 'openrouterModel', 'openaiModel', 'geminiModel']);
+        const prov = st.provider || '';
+        trajectory.run_meta.provider = trajectory.run_meta.provider || prov;
+        trajectory.run_meta.model = st[`${prov}Model`] || st.openrouterModel || st.geminiModel || st.openaiModel || '';
+      }
+    } catch (e) { trajectory.run_meta = trajectory.run_meta || {}; }
+    const res = await saveModelPerformanceTrajectory(trajectory);
+    if (!res.saved) { addMessage(`❌ Could not capture: ${res.error || 'unknown error'}`, 'error'); return; }
+    const steps = trajectory.arms.grounding.steps;
+    const m = trajectory.run_meta || {};
+    const cost = m.calls ? ` · ${m.model || m.provider || 'model ?'} · ${m.calls} call(s)${m.cost_usd ? ` · $${Number(m.cost_usd).toFixed(4)}` : ''}` : (m.model ? ` · ${m.model}` : '');
+    addMessage(
+      `📈 Captured **${trajectory.title}** for model performance — ${steps.length} step(s)${cost}. ` +
+      (trajectory.task_id
+        ? `Tagged as **${trajectory.task_name || trajectory.task_id}**. Publish it under ⋯ → Record Model Performance.`
+        : '⚠️ Not assigned to a task (it was not started from ▶). Assign it under ⋯ → Record Model Performance → Task, or it will not appear in Model Comparison.'),
+      'system'
+    );
+  } catch (e) {
+    addMessage(`❌ Could not capture: ${e?.message || e}`, 'error');
+  }
+}
+window.captureTrajectoryForModelPerformance = captureTrajectoryForModelPerformance;
 
 /** Human-readable byte size for chip labels. */
 function _fmtBytes(bytes) {
@@ -7715,6 +7815,12 @@ window._costChipText = _costChipText;
 async function refreshCostChips(ledger = null) {
   const chips = document.querySelectorAll('.pageguide-cost-chip');
   if (!chips.length) return;
+  // Spend is a researcher affordance. A chip can outlive the toggle (it was rendered while debug
+  // was on, or by a path that did not re-check), so blank it here rather than pricing it.
+  if (!window.__pgDebugEnabled) {
+    chips.forEach(chip => { chip.style.display = 'none'; chip.textContent = ''; });
+    return;
+  }
   let entries = ledger;
   let debugPrompts = [];
   try {
@@ -8697,13 +8803,28 @@ function updateDebugButtonVisibility(enabled, alwaysShowPromptBtn = false) {
   // Publish a global flag so other in-panel modules (e.g. the rewind inspector) can show
   // debug-only details like the confidence breakdown without re-reading storage.
   window.__pgDebugEnabled = !!enabled;
+  // The prompt viewer is debug-only, full stop: the composer a participant sees carries no
+  // researcher controls. (The alwaysShowPromptBtn option can no longer force it into view without
+  // debug mode — it only keeps the button when debug is on.)
   const btn = document.getElementById('pageguide-debug-prompt-btn');
   if (btn) {
-    btn.style.display = (enabled || alwaysShowPromptBtn) ? 'inline-flex' : 'none';
+    btn.style.display = enabled ? 'inline-flex' : 'none';
   }
   const visualInputWrap = document.querySelector('.pageguide-visualinput-wrap');
   if (visualInputWrap) {
     visualInputWrap.style.display = enabled ? '' : 'none';
+  }
+  // The two user-study A/B axes (Grounding On/Non-grounding, Evidence Visual/Text) and the branch
+  // tree are set by the researcher, not the participant: a run's arm should not be changeable from
+  // the composer during a session. They follow the debug toggle like every other researcher control.
+  document.querySelectorAll('.pageguide-nongrounding-wrap, .pageguide-evidencemode-wrap').forEach(el => {
+    el.style.display = enabled ? '' : 'none';
+  });
+  if (!enabled) {
+    const branchBtn = document.getElementById('pageguide-show-branch-btn');
+    if (branchBtn) branchBtn.style.display = 'none';
+  } else if (typeof checkShowBranchButton === 'function') {
+    checkShowBranchButton();
   }
   const summaryAgentWrap = document.querySelector('.pageguide-summaryagent-wrap');
   if (summaryAgentWrap) {
@@ -8714,7 +8835,18 @@ function updateDebugButtonVisibility(enabled, alwaysShowPromptBtn = false) {
     recapWrap.style.display = enabled ? '' : 'none';
   }
   // Recording is the researcher's half of the study; a participant only ever sees "User Study".
-  document.querySelectorAll('.pageguide-record-study-item, .pageguide-capture-study-btn').forEach(el => {
+  document.querySelectorAll('.pageguide-record-study-item, .pageguide-capture-study-btn, .pageguide-save-trajectory-btn').forEach(el => {
     el.style.display = enabled ? '' : 'none';
   });
+  // What a run cost is researcher instrumentation too — hide every chip on screen, live or recalled.
+  if (!enabled) {
+    document.querySelectorAll('.pageguide-cost-chip, .pageguide-journey-cost').forEach(el => {
+      el.style.display = 'none';
+      el.textContent = '';
+    });
+  } else {
+    updateJourneyCostChip();
+    refreshCostChips();
+  }
 }
+window.updateDebugButtonVisibility = updateDebugButtonVisibility;

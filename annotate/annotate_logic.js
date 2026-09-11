@@ -25,6 +25,19 @@
   ];
 
   /**
+   * The evidence-level problem types. THIS is what the annotation is about now: for every piece of
+   * evidence the agent saved with its answer (and every [ev:…] marker it cited without saving a
+   * crop), is it correct and relevant to the task? Step labels and the answer verdict are still
+   * recorded when given, but completion and agreement are computed on evidence alone.
+   */
+  const ANNOT_EVIDENCE_PROBLEMS = [
+    { id: 'irrelevant', label: 'Irrelevant — not about what the task asked for.' },
+    { id: 'unsupported', label: 'Does not support the claim — the crop does not show what the answer says it shows.' },
+    { id: 'wrong_region', label: 'Wrong region — the crop is of the wrong element or area of the page.' },
+    { id: 'missing', label: 'Missing — no crop was saved for this marker.' },
+  ];
+
+  /**
    * Clean one annotation into the shape save_pageguide_annotation stores. Tolerant on the way in
    * (a half-filled form must be savable as a draft), strict on the way out.
    *
@@ -44,11 +57,24 @@
       }))
       .filter(l => Number.isFinite(l.step) && l.step > 0)
       .sort((a, b) => a.step - b.step);
+    const validEvProb = new Set(ANNOT_EVIDENCE_PROBLEMS.map(t => t.id));
+    const seenKeys = new Set();
+    const evidence = (Array.isArray(src.evidence_labels) ? src.evidence_labels : [])
+      .map(l => ({
+        key: String(l?.key == null ? '' : l.key).trim(),
+        correct: l?.correct === true ? true : (l?.correct === false ? false : null),
+        problem: l?.correct === false && validEvProb.has(l?.problem) ? l.problem : '',
+        note: String(l?.note || '').trim(),
+      }))
+      .filter(l => l.key && !seenKeys.has(l.key) && seenKeys.add(l.key));
+    const evidenceCount = Number.isFinite(Number(src.evidence_count)) ? Math.max(0, Math.round(Number(src.evidence_count))) : evidence.length;
     const answerCorrect = src.answer_correct === true ? true : (src.answer_correct === false ? false : null);
     return {
       trajectory_id: String(src.trajectory_id || '').trim(),
       annotator_id: String(src.annotator_id || '').trim(),
       step_labels: steps,
+      evidence_labels: evidence,
+      evidence_count: evidenceCount,
       answer_correct: answerCorrect,
       // Problems only mean something on a failed answer.
       answer_problems: answerCorrect === false
@@ -59,17 +85,47 @@
     };
   }
 
-  /** What is still unanswered, or null when the annotation can be submitted. */
-  function annotationProblem(annotation, stepCount) {
+  /**
+   * What is still unanswered, or null when the annotation can be submitted.
+   *
+   * ONLY the evidence gates submission: every evidence item in `evidenceKeys` needs a verdict, and
+   * an incorrect one needs a problem type. Step labels and the answer verdict are optional extras
+   * — they are stored if given, never required. (`stepCount` is accepted for call compatibility
+   * and ignored.)
+   */
+  function annotationProblem(annotation, stepCount, evidenceKeys) {
     const a = normalizeAnnotation(annotation);
-    if (!a.annotator_id) return 'Enter your annotator ID first.';
-    const labelled = new Set(a.step_labels.filter(l => l.correct !== null).map(l => l.step));
-    const missing = [];
-    for (let n = 1; n <= (stepCount || 0); n++) if (!labelled.has(n)) missing.push(n);
-    if (missing.length) return `Step${missing.length === 1 ? '' : 's'} ${missing.join(', ')} not graded yet.`;
-    if (a.answer_correct === null) return 'Say whether the final answer is correct.';
-    if (a.answer_correct === false && !a.answer_problems.length) return 'Pick at least one problem with the answer.';
+    if (!a.annotator_id) return 'Choose Annotator A or B first.';
+    const keys = Array.isArray(evidenceKeys) ? evidenceKeys.map(k => String(k)) : a.evidence_labels.map(l => l.key);
+    const byKey = new Map(a.evidence_labels.map(l => [l.key, l]));
+    const missing = keys.filter(k => !byKey.has(k) || byKey.get(k).correct === null);
+    if (missing.length) return `Evidence ${missing.map(k => `ev:${k}`).join(', ')} not graded yet.`;
+    const noProblem = keys.filter(k => byKey.get(k).correct === false && !byKey.get(k).problem);
+    if (noProblem.length) return `Pick a problem for ${noProblem.map(k => `ev:${k}`).join(', ')}.`;
     return null;
+  }
+
+  /** A saved annotation counts as complete when every evidence item it was shown has a verdict. */
+  function annotationComplete(annotation) {
+    const a = normalizeAnnotation(annotation);
+    const graded = a.evidence_labels.filter(l => l.correct !== null).length;
+    return graded >= a.evidence_count;
+  }
+
+  /** A fresh annotation's evidence labels: one per item, ungraded — the annotator must decide each. */
+  function defaultEvidenceLabels(evidence) {
+    const seen = new Set();
+    return (Array.isArray(evidence) ? evidence : [])
+      .map(e => String(e?.key == null ? '' : e.key).trim())
+      .filter(k => k && !seen.has(k) && seen.add(k))
+      .map(key => ({ key, correct: null, problem: '', note: '' }));
+  }
+
+  /** The evidence items both annotators graded, by key, in the first annotator's order. */
+  function pairEvidenceLabels(x, y) {
+    const byKey = (ann) => new Map(normalizeAnnotation(ann).evidence_labels.filter(l => l.correct !== null).map(l => [l.key, l]));
+    const mx = byKey(x), my = byKey(y);
+    return [...mx.keys()].filter(k => my.has(k)).map(k => ({ key: k, a: mx.get(k), b: my.get(k) }));
   }
 
   /**
@@ -131,6 +187,7 @@
     const find = (tid, who) => rows.find(r => r.trajectory_id === String(tid) && r.annotator_id === who) || null;
 
     const allStepA = [], allStepB = [], allErrA = [], allErrB = [], allAnsA = [], allAnsB = [];
+    const allEvA = [], allEvB = [], allEvPA = [], allEvPB = [];
     const perTrajectory = (Array.isArray(trajectories) ? trajectories : []).map(t => {
       const a = find(t.id, annotatorA);
       const b = find(t.id, annotatorB);
@@ -143,9 +200,16 @@
       const errA = errPairs.map(p => p.a.error_type);
       const errB = errPairs.map(p => p.b.error_type);
       const ansComparable = both && a.answer_correct !== null && b.answer_correct !== null;
+      // Evidence — the primary measure. Problem type only where both said "incorrect".
+      const evPairs = both ? pairEvidenceLabels(a, b) : [];
+      const evA = evPairs.map(p => p.a.correct), evB = evPairs.map(p => p.b.correct);
+      const evProbPairs = evPairs.filter(p => p.a.correct === false && p.b.correct === false);
+      const evPA = evProbPairs.map(p => p.a.problem), evPB = evProbPairs.map(p => p.b.problem);
       if (both) {
         allStepA.push(...stepA); allStepB.push(...stepB);
         allErrA.push(...errA); allErrB.push(...errB);
+        allEvA.push(...evA); allEvB.push(...evB);
+        allEvPA.push(...evPA); allEvPB.push(...evPB);
       }
       if (ansComparable) { allAnsA.push(a.answer_correct); allAnsB.push(b.answer_correct); }
       return {
@@ -154,6 +218,13 @@
         step_count: Number(t.step_count) || 0,
         has_a: !!a,
         has_b: !!b,
+        complete_a: !!a && annotationComplete(a),
+        complete_b: !!b && annotationComplete(b),
+        evidence_compared: evPairs.length,
+        evidence_agreement: percentAgreement(evA, evB),
+        evidence_kappa: cohensKappa(evA, evB),
+        disagreeing_evidence: evPairs.filter(p => p.a.correct !== p.b.correct).map(p => p.key),
+        evidence_problem_agreement: percentAgreement(evPA, evPB),
         steps_compared: pairs.length,
         step_agreement: percentAgreement(stepA, stepB),
         step_kappa: cohensKappa(stepA, stepB),
@@ -169,6 +240,11 @@
       perTrajectory,
       overall: {
         trajectories_both: perTrajectory.filter(r => r.has_a && r.has_b).length,
+        trajectories_complete_both: perTrajectory.filter(r => r.complete_a && r.complete_b).length,
+        evidence_compared: allEvA.length,
+        evidence_agreement: percentAgreement(allEvA, allEvB),
+        evidence_kappa: cohensKappa(allEvA, allEvB),
+        evidence_problem_agreement: percentAgreement(allEvPA, allEvPB),
         steps_compared: allStepA.length,
         step_agreement: percentAgreement(allStepA, allStepB),
         step_kappa: cohensKappa(allStepA, allStepB),
@@ -190,21 +266,124 @@
   function agreementCsv(report) {
     const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
     const fmt = (v) => v == null ? '' : (typeof v === 'number' ? v.toFixed(3) : v);
-    const head = ['trajectory_id', 'title', 'step_count', 'steps_compared', 'step_agreement', 'step_kappa',
+    const head = ['trajectory_id', 'title', 'evidence_compared', 'evidence_agreement', 'evidence_kappa',
+      'disagreeing_evidence', 'evidence_problem_agreement', 'complete_a', 'complete_b',
+      'step_count', 'steps_compared', 'step_agreement', 'step_kappa',
       'disagreeing_steps', 'error_type_agreement', 'answer_a', 'answer_b', 'answer_agree'];
     const lines = [head.join(',')];
     (report?.perTrajectory || []).forEach(r => {
-      lines.push([r.id, r.title, r.step_count, r.steps_compared, fmt(r.step_agreement), fmt(r.step_kappa),
+      lines.push([r.id, r.title, r.evidence_compared, fmt(r.evidence_agreement), fmt(r.evidence_kappa),
+        (r.disagreeing_evidence || []).join(' '), fmt(r.evidence_problem_agreement), r.complete_a, r.complete_b,
+        r.step_count, r.steps_compared, fmt(r.step_agreement), fmt(r.step_kappa),
         r.disagreeing_steps.join(' '), fmt(r.error_type_agreement), r.answer_a, r.answer_b, r.answer_agree]
         .map(esc).join(','));
     });
     return lines.join('\n');
   }
 
+  /**
+   * A fresh annotation's step labels: every step starts CORRECT. The annotator's job is to flag the
+   * steps that did not serve the goal, not to confirm each one — most steps in a run are fine, and
+   * grading them one by one was the slow part. Submit still requires the answer-level verdict.
+   */
+  function defaultStepLabels(steps) {
+    return (Array.isArray(steps) ? steps : []).map((st, i) => ({
+      step: Number.isFinite(Number(st?.n)) ? Number(st.n) : i + 1, correct: true, error_type: '', note: '',
+    }));
+  }
+
+  /** Same normalization as the extension's gv2NormalizeEvidenceKey, so markers and saved keys meet. */
+  function evidenceKey(key) {
+    const raw = String(key == null ? '' : key).trim().toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64);
+    return raw || String(key == null ? '' : key).trim();
+  }
+
+  /**
+   * The visual evidence the agent saved for its answer: arms.grounding.answer_evidence, one crop per
+   * key, in the order recorded. Tolerant of the older shapes (an object keyed by evidence key, or
+   * entries with `image` instead of `screenshot`).
+   */
+  function answerEvidence(arms) {
+    const raw = arms?.grounding?.answer_evidence;
+    const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.entries(raw).map(([key, v]) => Object.assign({ key }, v)) : []);
+    return list.filter(e => e && typeof e === 'object').map((e, i) => ({
+      key: evidenceKey(e.key == null ? i + 1 : e.key),
+      note: String(e.note || e.caption || ''),
+      screenshot: e.screenshot || e.image || e.crop || null,
+      step: Number.isFinite(Number(e.step)) ? Number(e.step) : null,
+      source: String(e.source || ''),
+      cited: e.cited !== false,
+    }));
+  }
+
+  /**
+   * Split an answer on its [ev:key] markers so the site can turn each into a chip that opens the
+   * matching crop. Returns [{text}] and [{ev: key}] segments in order; text with no markers is one
+   * segment.
+   */
+  function splitAnswerMarkers(text) {
+    const out = [];
+    // Any text up to the closing bracket: markers are sometimes written as the evidence's name
+    // ("[ev:Sportsplex Hours 4:00pm - 9:00pm]"), not its slug. `ev` is the normalized key the
+    // saved evidence is matched on; `raw` is what was written, for display.
+    const re = /\[ev:\s*([^\]]+?)\s*\]/g;
+    const str = String(text == null ? '' : text);
+    let last = 0, m;
+    while ((m = re.exec(str))) {
+      if (m.index > last) out.push({ text: str.slice(last, m.index) });
+      out.push({ ev: evidenceKey(m[1]), raw: m[1] });
+      last = m.index + m[0].length;
+    }
+    if (last < str.length || !out.length) out.push({ text: str.slice(last) });
+    return out;
+  }
+
+  /** The fields the researcher may edit on a published run. Everything else is what the agent did. */
+  const TRAJECTORY_EDITABLE = ['source_task_id', 'title', 'goal', 'agent_answer', 'in_annotation'];
+
+  /**
+   * Apply a researcher's patch to a trajectory — the local twin of the SQL
+   * update_pageguide_annotation_trajectory, so local mode and Supabase mode end up with the same
+   * row. Only the keys present in `patch` change; the agent answer is mirrored into
+   * arms.grounding.answer so the grading view (which falls back to the arm) never shows a stale
+   * answer. Returns a new object; neither argument is mutated.
+   */
+  function applyTrajectoryPatch(t, patch) {
+    const out = Object.assign({}, t || {});
+    const p = patch || {};
+    if ('source_task_id' in p) out.source_task_id = String(p.source_task_id == null ? '' : p.source_task_id).trim() || null;
+    if ('title' in p) out.title = String(p.title == null ? '' : p.title).trim() || null;
+    if ('goal' in p) out.goal = String(p.goal == null ? '' : p.goal).trim();
+    if ('in_annotation' in p) out.in_annotation = !!p.in_annotation;
+    if ('agent_answer' in p) {
+      out.agent_answer = String(p.agent_answer == null ? '' : p.agent_answer).trim();
+      if (out.arms && typeof out.arms.grounding === 'object' && out.arms.grounding) {
+        out.arms = Object.assign({}, out.arms, { grounding: Object.assign({}, out.arms.grounding, { answer: out.agent_answer }) });
+      }
+    }
+    out.updated_at = new Date().toISOString();
+    return out;
+  }
+
+  /** The subset of a form's values that actually differ from the row — what to send, if anything. */
+  function trajectoryPatchDiff(t, form) {
+    const cur = t || {}, f = form || {};
+    const diff = {};
+    const norm = (v) => String(v == null ? '' : v).trim();
+    if ('source_task_id' in f && norm(f.source_task_id) !== norm(cur.source_task_id)) diff.source_task_id = norm(f.source_task_id);
+    if ('title' in f && norm(f.title) !== norm(cur.title)) diff.title = norm(f.title);
+    if ('goal' in f && norm(f.goal) !== norm(cur.goal)) diff.goal = norm(f.goal);
+    if ('agent_answer' in f && norm(f.agent_answer) !== norm(cur.agent_answer || cur.arms?.grounding?.answer)) diff.agent_answer = norm(f.agent_answer);
+    if ('in_annotation' in f && !!f.in_annotation !== (cur.in_annotation !== false)) diff.in_annotation = !!f.in_annotation;
+    return diff;
+  }
+
   const api = {
-    ANNOT_ERROR_TYPES, ANNOT_PROBLEM_TYPES,
-    normalizeAnnotation, annotationProblem, cohensKappa, percentAgreement,
-    pairStepLabels, agreementReport, listAnnotators, agreementCsv,
+    ANNOT_ERROR_TYPES, ANNOT_PROBLEM_TYPES, ANNOT_EVIDENCE_PROBLEMS, TRAJECTORY_EDITABLE,
+    normalizeAnnotation, annotationProblem, annotationComplete, defaultStepLabels, defaultEvidenceLabels,
+    cohensKappa, percentAgreement, pairStepLabels, pairEvidenceLabels, agreementReport, listAnnotators, agreementCsv,
+    applyTrajectoryPatch, trajectoryPatchDiff, answerEvidence, splitAnswerMarkers, evidenceKey,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (root) root.AnnotateLogic = api;
