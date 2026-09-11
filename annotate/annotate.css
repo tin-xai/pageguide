@@ -96,4 +96,6 @@ button, input, select, textarea { font: inherit; }
   .an-cols { grid-template-columns: 1fr; }
   .an-side-sticky { position: static; }
 }
+.an-row-rerun { cursor: default; border-left: 4px solid var(--an-bad); }
+.an-row-rerun .an-row-state { color: var(--an-bad); font-weight: 700; }
 [hidden] { display: none !important; }

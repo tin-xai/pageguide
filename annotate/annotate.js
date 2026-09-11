@@ -131,10 +131,34 @@
 
   // ── views ──────────────────────────────────────────────────────────────────
   function showTab(name) {
-    ['queue', 'task', 'agreement'].forEach(v => { $(`an-${v}`).hidden = v !== name; });
+    ['queue', 'task', 'agreement', 'rerun'].forEach(v => { $(`an-${v}`).hidden = v !== name; });
     document.querySelectorAll('.an-tab').forEach(b => b.classList.toggle('an-tab-on', b.dataset.tab === name));
     if (name === 'queue') renderQueue();
     if (name === 'agreement') renderAgreement();
+    if (name === 'rerun') renderRerun();
+  }
+
+  /** The 12 tasks with their verdict (annotate/tasks.json), split into rerun vs. kept. */
+  async function renderRerun() {
+    const list = $('an-rerun-list');
+    let tasks = [];
+    try { tasks = (await fetch('tasks.json', { cache: 'no-store' }).then(r => r.json())).guide || []; }
+    catch (e) { list.innerHTML = `<div class="an-empty">Could not load tasks.json: ${esc(e.message)}</div>`; return; }
+    const rerun = tasks.filter(t => t.status === 'rerun');
+    const kept = tasks.filter(t => t.status !== 'rerun');
+    const row = (t, i, cls, state) => `
+      <div class="an-row ${cls}">
+        <span class="an-row-n">${tasks.indexOf(t) + 1}</span>
+        <span class="an-row-main">
+          <span class="an-row-title">${esc(t.name)}</span>
+          <span class="an-row-meta" style="white-space:normal">${esc(t.task)}</span>
+          <span class="an-row-meta">Start at <a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.url)}</a>${t.rerun_reason ? ` · was: ${esc(t.rerun_reason)}` : ''}</span>
+        </span>
+        <span class="an-row-state">${state}</span>
+      </div>`;
+    list.innerHTML = `<div class="an-count"><strong>${rerun.length}</strong> to re-run · ${kept.length} kept</div>`
+      + rerun.map((t, i) => row(t, i, 'an-row-rerun', '↻ rerun')).join('')
+      + (kept.length ? `<div class="an-count" style="margin-top:14px">Kept (answer correct)</div>` + kept.map((t, i) => row(t, i, 'an-row-done', '✓ correct')).join('') : '');
   }
 
   function myResult(tid) {

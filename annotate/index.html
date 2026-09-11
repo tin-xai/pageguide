@@ -21,6 +21,7 @@
     <nav class="an-nav">
       <button class="an-tab an-tab-on" data-tab="queue">Queue</button>
       <button class="an-tab" data-tab="agreement">Agreement</button>
+      <button class="an-tab" data-tab="rerun">Rerun</button>
     </nav>
     <div class="an-who">
       <label for="an-annotator">Annotator ID</label>
@@ -69,6 +70,15 @@
       </div>
       <div id="an-overall" class="an-overall"></div>
       <div class="an-table-wrap"><table class="an-table" id="an-agree-table"></table></div>
+    </section>
+    <section id="an-rerun" class="an-view" hidden>
+      <!-- Which of the 12 tasks still need a fresh run (tasks.json, status = "rerun"): the study's
+           ground truth marked their answer as wrong, so they are not in the annotators' queue until
+           re-run from the extension and published. -->
+      <div class="an-toolbar">
+        <p class="an-intro">Tasks whose recorded answer was <strong>incorrect</strong>. Re-run each in the extension (⋯ → Record Annotation Trajectories → ▶), capture with 📝, then publish. Tasks marked correct are already in the queue.</p>
+      </div>
+      <div id="an-rerun-list" class="an-list"></div>
     </section>
   </main>
 

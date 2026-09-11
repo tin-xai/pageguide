@@ -2299,7 +2299,7 @@ if (typeof window !== 'undefined') {
               <div class="study-traj-row${n ? ' study-traj-row-out' : ''}${current?.id === t.id ? ' study-annot-task-current' : ''}">
                 <span class="study-traj-step-n">${i + 1}</span>
                 <div class="study-traj-main">
-                  <div class="study-traj-title">${escapeHTML(t.name)}${current?.id === t.id ? ' <span class="study-traj-filter-n">running</span>' : ''}</div>
+                  <div class="study-traj-title">${escapeHTML(t.name)}${current?.id === t.id ? ' <span class="study-traj-filter-n">running</span>' : ''}${t.status === 'rerun' ? ' <span class="study-traj-filter-n study-annot-rerun" title="The study answer was wrong — needs a fresh run">↻ rerun</span>' : (t.status === 'correct' ? ' <span class="study-traj-filter-n" title="The study answer was correct and is already in the annotation queue">✓ kept</span>' : '')}</div>
                   <div class="study-traj-meta">${escapeHTML(t.task)}</div>
                   <div class="study-traj-meta">${escapeHTML(t.url)}${n ? ` · ${n} captured` : ''}</div>
                 </div>
