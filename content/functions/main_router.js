@@ -61,14 +61,81 @@ async function safeSendMessage(message, timeoutMs = 60000) {
   }
 }
 
+// Below this, Jev's answer is treated as "unsure" and the LLM router decides instead. Confidence is
+// TypeSafe's spread-of-probabilities measure (1 = single peak, 0 = flat), not the top probability.
+const JEV_ROUTER_MIN_CONFIDENCE = 0.4;
+
+let _jevSettingsCache = null;
+async function getJevSettings() {
+  if (_jevSettingsCache && Date.now() - _jevSettingsCache.at < 5000) return _jevSettingsCache.value;
+  const value = await safeSendMessage({ action: 'getJevSettings' }, 3000);
+  _jevSettingsCache = { at: Date.now(), value: (value && !value.error) ? value : null };
+  return _jevSettingsCache.value;
+}
+
+/**
+ * Route with Jev (TypeSafe System One). Returns {handler, confidence, reason, router:'jev',
+ * probabilities} or null when Jev is off, unavailable, or not confident enough.
+ */
+async function routeQueryWithJev(query, ctx = {}) {
+  const jev = await getJevSettings();
+  if (!jev?.hasKey || !jev.routerEnabled) return null;
+  if (!PROMPTS?.JEV_ROUTER_CRITERIA) return null;
+
+  const t0 = Date.now();
+  const response = await safeSendMessage({
+    action: 'callJev',
+    state: {
+      user_query: query,
+      // Page context the LLM router never had: the router can lean on it instead of guessing from
+      // the wording alone (e.g. "summarize this" on a PDF page).
+      has_uploaded_image: !!ctx.hasImage,
+      is_pdf_page: !!ctx.isPdf,
+      page_title: (document.title || '').slice(0, 120),
+      page_host: location.hostname
+    },
+    questions: {
+      handler: {
+        type: 'choice',
+        instructions: 'Which handler should process this user query? Pick by what the user wants done, not by keywords.',
+        criteria: PROMPTS.JEV_ROUTER_CRITERIA
+      }
+    }
+  }, 8000);
+
+  if (!response || response.error) {
+    console.warn('🎯 Jev router unavailable, using LLM router:', response?.error);
+    return null;
+  }
+  const ans = response.answers?.handler;
+  const handler = ans?.choice;
+  const confidence = Number(ans?.confidence ?? 0);
+  if (!handler || !(handler in PROMPTS.JEV_ROUTER_CRITERIA)) return null;
+
+  console.log(`⚡ Jev routed to: ${handler} (conf ${confidence.toFixed(2)}, ${response.latencyMs ?? Date.now() - t0}ms)`, ans.probabilities);
+  if (confidence < JEV_ROUTER_MIN_CONFIDENCE) {
+    console.log('🎯 Jev not confident enough; deferring to LLM router');
+    return null;
+  }
+  const top = Object.entries(ans.probabilities || {}).sort((a, b) => b[1] - a[1]).slice(0, 2)
+    .map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`).join(', ');
+  return { handler, confidence, reason: `Jev: ${top}`, router: 'jev', probabilities: ans.probabilities || null };
+}
+
 /**
  * Route query using LLM-based coordinator
  * @param {string} query - User's query
  * @returns {Promise<{handler: string, confidence: number, reason: string}>}
  */
-async function routeQuery(query) {
+async function routeQuery(query, ctx = {}) {
   console.log('🎯 Routing query:', query);
-  
+
+  // Jev first: one fast Choice call. Anything short of a confident answer (or any error, or no
+  // key) falls through to the generative router below, so Jev can only make routing faster,
+  // never break it.
+  const jevRoute = await routeQueryWithJev(query, ctx);
+  if (jevRoute) return jevRoute;
+
   try {
     // Use fast router LLM (Gemini 2.5 Flash) for quick classification
     const response = await safeSendMessage({
@@ -160,7 +227,7 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
 
     // Route the query using the LLM router. We ask the router even when an image
     // is attached — it decides guide vs. image_ask vs. ask from the query's intent.
-    route = await routeQuery(query);
+    route = await routeQuery(query, { hasImage: imageAvailable, isPdf: typeof isPdfPage === 'function' && isPdfPage() });
     console.log('🎯 LLM Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
 
     // An attached image defaults to image_ask (find-this-on-the-page) UNLESS the
@@ -249,6 +316,7 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
     result.routedTo = route.handler;
     result.routeConfidence = route.confidence;
     result.routeReason = route.reason;
+    result.router = route.router || 'llm';
   }
   
   return result;

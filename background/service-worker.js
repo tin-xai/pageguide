@@ -67,6 +67,19 @@ const CONFIG = {
   defaultProvider: 'gemini'
 };
 
+// ===== Jev (TypeSafe System One) =====
+// Jev is a fast, text-only *decision* model: given a "state" and typed questions (choice / score /
+// noul) it returns a structured answer with calibrated per-option probabilities in ~100–300 ms,
+// at a fraction of a generative LLM's cost. It never writes text, so we use it only for the narrow
+// decisions where a chat LLM is overkill: routing a query to a handler, picking a tutorial,
+// grounding a step's target element. Every Jev call has an LLM fallback — it must never be the
+// reason a feature stops working. Docs: https://docs.typesafe.ai/
+const JEV = {
+  endpoint: 'https://api.typesafe.ai/v1/systemone',
+  defaultModel: 'jev-latest',
+  defaultApiKey: (typeof CONFIG_KEYS !== 'undefined' && CONFIG_KEYS.TYPESAFE_KEY) || ''
+};
+
 // Content script files (in order - dependencies first)
 const CONTENT_SCRIPTS = [
   'content/prompts.js',
@@ -408,6 +421,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Fast router - runs on whichever provider/model is selected in Settings
     callRouterLLM(request.messages, request.systemPrompt)
       .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'callJev') {
+    callJev(request.state, request.questions, request.overrides)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'getJevSettings') {
+    readJevSettings()
+      .then(s => sendResponse({ ...s, apiKey: undefined, hasKey: !!s.apiKey }))
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
@@ -1030,6 +1055,55 @@ async function callRouterLLM(messages, systemPrompt) {
   const result = await callLLM(messages, systemPrompt);
   if (result && !result.error) return { ...result, provider, model };
   return result;
+}
+
+// ===== Jev decision calls =====
+async function readJevSettings() {
+  let s = {};
+  try {
+    s = await chrome.storage.sync.get(['typesafeApiKey', 'jevModel', 'jevRouterEnabled', 'jevGroundingEnabled']);
+  } catch (e) { /* storage unavailable: fall back to defaults */ }
+  return {
+    apiKey: (s.typesafeApiKey || JEV.defaultApiKey || '').trim(),
+    model: s.jevModel || JEV.defaultModel,
+    // Router defaults ON once a key exists — it is the lowest-risk use (a single 5-way choice
+    // with an LLM fallback). Grounding is opt-in while we measure it against the text matcher.
+    routerEnabled: s.jevRouterEnabled !== false,
+    groundingEnabled: s.jevGroundingEnabled === true
+  };
+}
+
+/**
+ * One System One request. `state` is a string or JSON object; `questions` is a map of
+ * question id → {type: 'choice'|'score'|'noul', instructions, criteria}.
+ * Resolves to {answers, model, usage, latencyMs} or {error}. Never throws.
+ */
+async function callJev(state, questions, overrides = null) {
+  const jev = await readJevSettings();
+  const apiKey = (overrides?.apiKey || jev.apiKey || '').trim();
+  if (!apiKey) return { error: 'No TypeSafe API key. Add one in Settings → Jev.' };
+  if (!questions || typeof questions !== 'object' || !Object.keys(questions).length) {
+    return { error: 'callJev: no questions' };
+  }
+  const model = overrides?.model || jev.model;
+  const t0 = Date.now();
+  try {
+    const res = await fetch(JEV.endpoint, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state, model, questions })
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { error: `Jev HTTP ${res.status}: ${text.slice(0, 300)}` };
+    }
+    const data = await res.json();
+    const latencyMs = Date.now() - t0;
+    console.log(`\u{26A1} Jev (${data.model || model}) ${latencyMs}ms`, data.usage || '');
+    return { answers: data.answers || {}, model: data.model || model, usage: data.usage || null, latencyMs };
+  } catch (e) {
+    return { error: `Jev request failed: ${e.message}` };
+  }
 }
 
 // ===== Cheap Image Selection LLM =====

@@ -281,7 +281,47 @@ function _gv2UrlMatches(pageUrl, tutorialUrl) {
  * from the candidate list. Always used — no word-overlap fallback.
  * Returns { tutorial, reason } or null.
  */
+// Jev (TypeSafe) version of the tutorial matcher: a Choice over the candidates plus "none".
+// Returns {tutorial, reason} | null (no confident match, or Jev unavailable → caller falls back to
+// the LLM matcher). Tutorial lists are short (well under Jev's 255-option cap).
+async function _gv2JevPickTutorial(query, candidates) {
+  if (typeof getJevSettings !== 'function') return null;
+  const jev = await getJevSettings();
+  if (!jev?.hasKey || !jev.routerEnabled) return null;
+  if (!candidates.length || candidates.length > 200) return null;
+
+  const criteria = {};
+  candidates.forEach((t, i) => { criteria[`t${i}`] = `(${t.website}) ${t.task}`; });
+  criteria.none = 'No tutorial is a reasonable match for the query';
+
+  const response = await safeSendMessage({
+    action: 'callJev',
+    state: { user_query: query, page_host: location.hostname },
+    questions: {
+      tutorial: {
+        type: 'choice',
+        instructions: 'Which tutorial best matches the intent of the user query? Treat synonyms and paraphrases as matches ("delete" ↔ "remove", "incognito" ↔ "private session", "turn off" ↔ "disable"). Pick "none" if nothing is a reasonable match.',
+        criteria
+      }
+    }
+  }, 8000);
+  const ans = response?.answers?.tutorial;
+  if (!ans?.choice) return null;
+  if (ans.choice === 'none' || (ans.confidence ?? 0) < 0.4) {
+    console.log(`[guidev2] Jev found no confident tutorial match (${ans.choice}, conf ${(ans.confidence ?? 0).toFixed(2)})`);
+    return ans.choice === 'none' ? { tutorial: null, reason: 'jev: none' } : null;
+  }
+  const idx = Number(String(ans.choice).slice(1));
+  if (!Number.isInteger(idx) || idx < 0 || idx >= candidates.length) return null;
+  console.log(`[guidev2] ⚡ Jev picked tutorial [${idx}]: "${candidates[idx].task}" (conf ${ans.confidence.toFixed(2)}, ${response.latencyMs}ms)`);
+  return { tutorial: candidates[idx], reason: `jev conf ${ans.confidence.toFixed(2)}` };
+}
+
 async function _gv2LlmPickTutorial(query, candidates) {
+  // Jev first; only its "unsure"/unavailable cases reach the generative matcher.
+  const jevPick = await _gv2JevPickTutorial(query, candidates);
+  if (jevPick) return jevPick.tutorial ? jevPick : null;
+
   const list = candidates
     .map((t, i) => `[${i}] (${t.website}) ${t.task}`)
     .join('\n');
@@ -4245,6 +4285,10 @@ async function gv2GenerateNextStep() {
 
   if (_gv2IsStopped()) return null;
 
+  // Kept for Jev element grounding (gv2JevGroundElement), which needs the same numbered list the
+  // planner saw when its chosen index/text does not resolve.
+  g._lastIndexText = pageIndex.indexText;
+
   const curSig = (typeof gv2PageSignature === 'function')
     ? gv2PageSignature(pageIndex, window.location.href) : null;
   // Remember this page's signature so the NEXT auto-performed step has a "before" baseline.
@@ -4570,6 +4614,74 @@ function gv2FindElementByText(searchText) {
  * the LLM index also matches the search text, keep the LLM index (avoids filter chips /
  * duplicate labels stealing the target from the intended sidebar link).
  */
+// Jev element grounding (opt-in: Settings → Jev → grounding). When the planner's element does not
+// resolve — its index is stale and its text matches nothing — ask Jev to pick the element from the
+// numbered page index. Candidates are pre-filtered lexically so the Choice stays under Jev's
+// 255-option cap; the planner's instruction + element text are the state. Returns an index or null.
+const GV2_JEV_GROUND_MAX_OPTIONS = 200;
+const GV2_JEV_GROUND_MIN_CONFIDENCE = 0.35;
+
+function _gv2JevGroundCandidates(indexText, needle) {
+  const lines = String(indexText || '').split('\n').filter(l => /^\[\d+\]/.test(l));
+  if (lines.length <= GV2_JEV_GROUND_MAX_OPTIONS) return lines;
+  const toks = String(needle || '').toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length > 2);
+  const score = (l) => { const ll = l.toLowerCase(); return toks.reduce((n, t) => n + (ll.includes(t) ? 1 : 0), 0); };
+  return lines
+    .map((l, i) => ({ l, i, s: score(l) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .slice(0, GV2_JEV_GROUND_MAX_OPTIONS)
+    .sort((a, b) => a.i - b.i)
+    .map(x => x.l);
+}
+
+async function gv2JevGroundElement(step, g = window._guidev2) {
+  if (typeof getJevSettings !== 'function') return null;
+  const jev = await getJevSettings();
+  if (!jev?.hasKey || !jev.groundingEnabled) return null;
+  const indexText = g?._lastIndexText;
+  if (!indexText) return null;
+
+  const elementText = String(step?.element?.text || '').trim();
+  const instruction = String(step?.instruction || '').trim();
+  const lines = _gv2JevGroundCandidates(indexText, `${elementText} ${instruction}`);
+  if (!lines.length) return null;
+
+  const criteria = {};
+  for (const l of lines) {
+    const m = l.match(/^\[(\d+)\]\s*(.*)$/);
+    if (m) criteria[`e${m[1]}`] = m[2].slice(0, 160);
+  }
+  criteria.none = 'None of these elements is the one the step refers to';
+
+  const response = await safeSendMessage({
+    action: 'callJev',
+    state: {
+      goal: g?.question || '',
+      step_instruction: instruction,
+      step_action: step?.action || '',
+      planner_element_text: elementText,
+      page_host: location.hostname
+    },
+    questions: {
+      element: {
+        type: 'choice',
+        instructions: 'Which page element is the one this step tells the user to act on? Match by meaning (label, role, position in the instruction), not only by exact text.',
+        criteria
+      }
+    }
+  }, 8000);
+  const ans = response?.answers?.element;
+  if (!ans?.choice || ans.choice === 'none') return null;
+  const conf = Number(ans.confidence ?? 0);
+  const idx = Number(String(ans.choice).slice(1));
+  if (conf < GV2_JEV_GROUND_MIN_CONFIDENCE || !Number.isInteger(idx) || !window._pageguideIndex?.[idx]) {
+    console.log(`[guidev2] Jev grounding unsure (${ans.choice}, conf ${conf.toFixed(2)})`);
+    return null;
+  }
+  console.log(`[guidev2] ⚡ Jev grounded "${elementText || instruction}" → [${idx}] (conf ${conf.toFixed(2)}, ${response.latencyMs}ms, ${lines.length} options)`);
+  return idx;
+}
+
 function gv2PickTargetIndex(searchText, llmIndex) {
   const textIdx = gv2FindElementByText(searchText);
   if (textIdx == null) return llmIndex ?? null;
@@ -4690,10 +4802,18 @@ async function gv2ProcessResponse(content, systemPrompt = '', userPrompt = '') {
       ? gv2StepHasTarget({ action, isLastStep: step.isLastStep, element: step.element })
       : (!isFind && !step.isLastStep && action !== 'finish' && (hasIndex || hasText));
     const textMatchIdx = step.element?.text ? gv2FindElementByText(step.element.text) : null;
-    const idxToUse = hasTarget
+    let idxToUse = hasTarget
       ? (gv2PickTargetIndex(step.element?.text, step.element?.index) ?? step.element?.index ?? null)
       : null;
-    const resolvedEl = idxToUse != null ? (window._pageguideIndex?.[idxToUse] || null) : null;
+    let resolvedEl = idxToUse != null ? (window._pageguideIndex?.[idxToUse] || null) : null;
+    if (hasTarget && !resolvedEl) {
+      const jevIdx = await gv2JevGroundElement(step);
+      if (jevIdx != null) {
+        idxToUse = jevIdx;
+        resolvedEl = window._pageguideIndex[jevIdx];
+        step._jevGrounded = true;
+      }
+    }
     const resolvedDropTarget = action === 'drag_drop' ? _gv2ResolveDropTarget(step.dropTarget) : null;
 
     // Confirmation evidence: SECOND, distinct SoM elements or rects the model points to as justification

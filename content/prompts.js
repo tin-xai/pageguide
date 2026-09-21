@@ -4,6 +4,37 @@
 // Guard against double-loading
 if (typeof PROMPTS !== 'undefined') { /* already loaded */ }
 else var PROMPTS = {
+  // Jev (TypeSafe) router: the same five handlers as ROUTER, but as a Choice question. Jev picks one
+  // option from the map and returns a probability per option, so this needs no JSON parsing and no
+  // examples — just descriptions that separate the options from each other. Keep in sync with ROUTER.
+  JEV_ROUTER_CRITERIA: {
+    guide: {
+      covers: 'The user wants to LEARN or BE WALKED THROUGH how to do a task on this site, step by step: "how do I…", "help me…", "where can I change/report/delete…". Doing something, not just knowing something.',
+      not_for: 'Finding or highlighting an element that is already on screen without a multi-step task ("show me where the settings are" → ask).',
+      examples: ['How do I report this video?', 'Where can I change my password?', 'Help me delete my account']
+    },
+    hide: {
+      covers: 'The user wants to hide, remove, block, or suppress content on the page: ads, banners, popups, cookie notices, sidebars, recommendations, comments, distractions.',
+      not_for: 'Questions about what is on the page.',
+      examples: ['Hide the ads on this page', 'Remove the sidebar', 'Get rid of this popup', 'Hide recommended videos']
+    },
+    image_ask: {
+      covers: 'The user asks about THEIR OWN UPLOADED IMAGE: find it on the page, compare, locate similar items. Signals: "this", "my image", "my upload", "the image I uploaded", "do they sell this?".',
+      not_for: 'Questions about images that are on the page but not uploaded ("show me images" → ask).',
+      examples: ['Find this product on the page', 'Where can I buy the item in my image?', 'Do they sell this?']
+    },
+    pdf_ask: {
+      covers: 'Questions about a PDF / document / paper: summarize it, find where it mentions something, extract info, "what is on page 5".',
+      not_for: 'Questions about an ordinary web page.',
+      examples: ['What does this PDF say about machine learning?', 'Summarize this document', "What's on page 5?"]
+    },
+    ask: {
+      covers: 'DEFAULT. Questions about the page, information lookup, finding or highlighting content or elements, summaries, and general knowledge.',
+      not_for: 'Multi-step how-to tasks (guide), hiding content (hide), uploaded images (image_ask), PDFs (pdf_ask).',
+      examples: ['What is the price of this product?', 'Show me where the settings are', 'Summarize this page', 'What is the capital of France?']
+    }
+  },
+
   // Coordinator/Router prompt - decides which subagent handles the query
   ROUTER: `You are a query router for a web assistant. Your job is to classify the user's query and route it to the appropriate handler.
 

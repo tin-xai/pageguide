@@ -74,8 +74,15 @@ async function loadSettings() {
     'maxSteps',
     'personalizationEnabled',
     'personalizationFacts',
-    'personalizedProfile'
+    'personalizedProfile',
+    'typesafeApiKey', 'jevModel', 'jevRouterEnabled', 'jevGroundingEnabled'
   ]);
+
+  // Jev (TypeSafe)
+  document.getElementById('typesafeApiKey').value = settings.typesafeApiKey || '';
+  if (settings.jevModel) document.getElementById('jevModel').value = settings.jevModel;
+  document.getElementById('jevRouterEnabled').checked = settings.jevRouterEnabled !== false;
+  document.getElementById('jevGroundingEnabled').checked = settings.jevGroundingEnabled === true;
 
   // Set current provider
   currentProvider = settings.provider || 'gemini';
@@ -194,7 +201,11 @@ async function saveSettings() {
     personalizationFacts: document.getElementById('personalizationFacts').value.trim(),
     debugEnabled: document.getElementById('debugEnabled').checked,
     debugSteerContextEnabled: document.getElementById('debugSteerContextEnabled').checked,
-    alwaysShowPromptBtn: document.getElementById('alwaysShowPromptBtn').checked
+    alwaysShowPromptBtn: document.getElementById('alwaysShowPromptBtn').checked,
+    typesafeApiKey: document.getElementById('typesafeApiKey').value.trim(),
+    jevModel: document.getElementById('jevModel').value,
+    jevRouterEnabled: document.getElementById('jevRouterEnabled').checked,
+    jevGroundingEnabled: document.getElementById('jevGroundingEnabled').checked
   };
 
   await chrome.storage.sync.set(settings);
@@ -224,6 +235,50 @@ async function testApi() {
     }
   } catch (error) {
     resultDiv.textContent = `❌ Network error: ${error.message}`;
+    resultDiv.className = 'status error';
+  }
+}
+
+// Test Jev (TypeSafe System One): one tiny Choice question, then save on success.
+async function testJev() {
+  const resultDiv = document.getElementById('jevTestResult');
+  const apiKey = document.getElementById('typesafeApiKey').value.trim();
+  const model = document.getElementById('jevModel').value;
+  if (!apiKey) {
+    resultDiv.textContent = '❌ Please enter a TypeSafe API key';
+    resultDiv.className = 'status error';
+    return;
+  }
+  resultDiv.textContent = '⏳ Testing Jev…';
+  resultDiv.className = 'status';
+  try {
+    const t0 = Date.now();
+    const response = await fetch('https://api.typesafe.ai/v1/systemone', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        state: { user_query: 'How do I change my password?' },
+        model,
+        questions: {
+          handler: {
+            type: 'choice',
+            instructions: 'Which handler should process this query?',
+            criteria: { guide: 'Step-by-step how-to task', ask: 'Question about the page', hide: 'Hide page content' }
+          }
+        }
+      })
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+    }
+    const data = await response.json();
+    const ans = data.answers?.handler;
+    resultDiv.textContent = `✅ Jev OK (${data.model}, ${Date.now() - t0}ms): "change my password" → ${ans?.choice} (conf ${(ans?.confidence ?? 0).toFixed(2)}). Settings saved.`;
+    resultDiv.className = 'status success';
+    await saveSettings();
+  } catch (error) {
+    resultDiv.textContent = `❌ Jev test failed: ${error.message}`;
     resultDiv.className = 'status error';
   }
 }
@@ -362,6 +417,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Save and test buttons
   document.getElementById('saveBtn').addEventListener('click', saveSettings);
   document.getElementById('testApiBtn').addEventListener('click', testApi);
+  document.getElementById('testJevBtn').addEventListener('click', testJev);
 
   // Rewind capture toggle persists immediately to local storage on change.
   const rewindToggle = document.getElementById('rewindCaptureEnabled');
