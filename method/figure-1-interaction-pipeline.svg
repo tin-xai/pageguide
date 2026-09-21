@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="760" viewBox="0 0 1320 760" role="img" aria-labelledby="title desc">
+  <title id="title">PageGuide interaction pipeline</title>
+  <desc id="desc">A compact overview showing user query, router, page-state reader, and task controllers for Find and Guide.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#243042"/>
+    </marker>
+    <style>
+      .bg{fill:#fbfcfe}
+      .ink{fill:#182334}
+      .muted{fill:#526173}
+      .rail{stroke:#d8dee8;stroke-width:2}
+      .box{fill:#fff;stroke:#243042;stroke-width:2.2;rx:16}
+      .soft{fill:#f3f6fb;stroke:#8c9aab;stroke-width:1.8;rx:14}
+      .router{fill:#fff5e8;stroke:#d97706;stroke-width:2.2;rx:16}
+      .find{fill:#fff8e1;stroke:#e59f18;stroke-width:2.2;rx:16}
+      .guide{fill:#eaf2ff;stroke:#2563eb;stroke-width:2.2;rx:16}
+      .other{fill:#f5f3ff;stroke:#7c3aed;stroke-width:2.2;rx:16}
+      .page{fill:#edfdf5;stroke:#059669;stroke-width:2.2;rx:16}
+      .arrow{stroke:#243042;stroke-width:2.4;fill:none;marker-end:url(#arrow)}
+      .dash{stroke:#7a8798;stroke-width:2;fill:none;stroke-dasharray:7 7;marker-end:url(#arrow)}
+      .title{font:700 32px Arial,sans-serif;fill:#182334}
+      .subtitle{font:400 15px Arial,sans-serif;fill:#526173}
+      .h{font:700 18px Arial,sans-serif;fill:#182334}
+      .t{font:400 14px Arial,sans-serif;fill:#334155}
+      .small{font:400 12.5px Arial,sans-serif;fill:#526173}
+      .mono{font:400 12.5px "Courier New",monospace;fill:#334155}
+      .tag{font:700 13px Arial,sans-serif;fill:#182334}
+    </style>
+  </defs>
+  <rect class="bg" width="1320" height="760"/>
+  <text x="56" y="58" class="title">PageGuide Interaction Pipeline</text>
+  <text x="58" y="86" class="subtitle">Main agent components only: intent routing, live page-state reading, and task-specific controllers.</text>
+  <line x1="58" y1="118" x2="1262" y2="118" class="rail"/>
+
+  <rect x="64" y="170" width="255" height="136" class="box"/>
+  <text x="92" y="207" class="h">User query</text>
+  <text x="92" y="236" class="t">Natural-language request</text>
+  <text x="92" y="259" class="small">Example Find: “What is the return policy?”</text>
+  <text x="92" y="280" class="small">Example Guide: “How do I change my password?”</text>
+
+  <rect x="392" y="170" width="205" height="136" class="router"/>
+  <text x="422" y="207" class="h">Intent router</text>
+  <text x="422" y="235" class="mono">routeQuery()</text>
+  <text x="422" y="258" class="small">forced route, PDF bypass,</text>
+  <text x="422" y="279" class="small">image guard, LLM classifier</text>
+
+  <rect x="670" y="170" width="245" height="136" class="page"/>
+  <text x="700" y="207" class="h">Live page state</text>
+  <text x="700" y="235" class="small">Visible text, DOM index,</text>
+  <text x="700" y="256" class="small">interactive controls, URL,</text>
+  <text x="700" y="277" class="small">optional screenshot markers</text>
+
+  <rect x="990" y="142" width="236" height="76" class="find"/>
+  <text x="1018" y="174" class="h">Find controller</text>
+  <text x="1018" y="199" class="small">Read and highlight evidence</text>
+
+  <rect x="990" y="242" width="236" height="76" class="guide"/>
+  <text x="1018" y="274" class="h">Guide controller</text>
+  <text x="1018" y="299" class="small">Plan, act, observe, resume</text>
+
+  <rect x="990" y="342" width="236" height="62" class="other"/>
+  <text x="1018" y="374" class="h">Other controllers</text>
+  <text x="1018" y="395" class="small">Hide, Image, PDF</text>
+
+  <path class="arrow" d="M319 238 L392 238"/>
+  <path class="arrow" d="M597 238 L670 238"/>
+  <path class="arrow" d="M915 218 C942 205 958 189 990 180"/>
+  <path class="arrow" d="M915 238 C946 249 960 272 990 280"/>
+  <path class="dash" d="M915 262 C945 316 960 356 990 373"/>
+
+  <text x="64" y="452" class="tag">a) Find: lookup and cite evidence</text>
+  <rect x="64" y="475" width="1160" height="84" class="soft"/>
+  <rect x="100" y="499" width="160" height="36" class="find"/>
+  <text x="122" y="523" class="small">factual query</text>
+  <path class="arrow" d="M268 517 L380 517"/>
+  <rect x="390" y="499" width="180" height="36" class="page"/>
+  <text x="410" y="523" class="small">read DOM + index</text>
+  <path class="arrow" d="M580 517 L700 517"/>
+  <rect x="710" y="499" width="180" height="36" class="find"/>
+  <text x="730" y="523" class="small">answer with citations</text>
+  <path class="arrow" d="M900 517 L1010 517"/>
+  <rect x="1020" y="499" width="160" height="36" class="find"/>
+  <text x="1040" y="523" class="small">highlight spans</text>
+
+  <text x="64" y="616" class="tag">b) Guide: stepwise navigation and page manipulation</text>
+  <rect x="64" y="638" width="1160" height="84" class="soft"/>
+  <rect x="100" y="662" width="160" height="36" class="guide"/>
+  <text x="122" y="686" class="small">task goal</text>
+  <path class="arrow" d="M268 680 L380 680"/>
+  <rect x="390" y="662" width="180" height="36" class="page"/>
+  <text x="410" y="686" class="small">observe controls</text>
+  <path class="arrow" d="M580 680 L700 680"/>
+  <rect x="710" y="662" width="180" height="36" class="guide"/>
+  <text x="730" y="686" class="small">plan next action</text>
+  <path class="arrow" d="M900 680 L1010 680"/>
+  <rect x="1020" y="662" width="160" height="36" class="guide"/>
+  <text x="1040" y="686" class="small">execute / wait</text>
+</svg>

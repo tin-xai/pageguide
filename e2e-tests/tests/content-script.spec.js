@@ -5,6 +5,7 @@ const url = require('url'); // Added to handle file URLs correctly across OS
 
 const EXTENSION_PATH = path.join(__dirname, '../../');
 const FIXTURES_PATH = path.join(__dirname, 'fixtures');
+const HEADLESS = process.env.HEADFUL !== '1';
 
 /**
  * Helper to convert local path to file URL
@@ -27,8 +28,9 @@ test.describe('Content Scripts', () => {
     const userDataDir = path.join(__dirname, '../.test-user-data-content-' + Date.now());
 
     context = await chromium.launchPersistentContext(userDataDir, {
-      headless: false, // Extensions only work in headful mode
+      headless: false,
       args: [
+        ...(HEADLESS ? ['--headless=new'] : []),
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
         '--no-sandbox',

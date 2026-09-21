@@ -225,7 +225,11 @@ Now answer the question with citations:`;
   const response = await safeSendMessage({
     action: 'callLLM',
     systemPrompt: '',
-    messages: [{ role: 'user', content: prompt }]
+    messages: [{ role: 'user', content: prompt }],
+    metadata: {
+      mode: 'ask_pdf',
+      url: window.location.href
+    }
   });
   
   if (response?.error) {

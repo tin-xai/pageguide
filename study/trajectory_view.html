@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PageGuide — what the agent did</title>
+  <link rel="stylesheet" href="trajectory_view.css">
+</head>
+<body>
+  <!--
+    The left-hand half of a guide study task.
+
+    The side panel is ~400px wide, which is enough to READ a trajectory and nowhere near enough to
+    CHECK one: a participant is being asked whether the agent clicked the right thing, and at panel
+    width a cart badge and a wishlist badge are the same handful of pixels. This page is the same
+    trajectory at a size where that question can actually be answered.
+
+    It carries the whole stimulus — journey, answer, reasoning trail — laid out like the live run's
+    View Journey card. The panel beside it keeps only the questions, so one side is the material and
+    the other is the instrument, and neither repeats the other.
+
+    Reads the banked trajectory rather than the rewind store, so what it shows is exactly what was
+    authored — edits and uploaded screenshots included — and never touches the live page.
+  -->
+  <header class="tv-head">
+    <div class="tv-head-main">
+      <div class="tv-kicker">Task</div>
+      <h1 class="tv-goal" id="tv-goal">Loading…</h1>
+    </div>
+    <div class="tv-count" id="tv-count"></div>
+  </header>
+
+  <main class="tv-main">
+    <section class="tv-stage" id="tv-stage">
+      <div class="tv-empty" id="tv-empty">Loading the steps…</div>
+    </section>
+  </main>
+
+  <!-- For _stripGuideArm: the non-grounded arm is derived by the same function the recorder uses,
+       so a trajectory whose researcher never pressed Strip still shows the right thing. -->
+  <script src="../sidepanel/guide_trajectories.js"></script>
+  <script src="trajectory_view.js"></script>
+</body>
+</html>

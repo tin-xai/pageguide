@@ -87,26 +87,28 @@ function getScrollPosition() {
  * @returns {boolean} Whether scroll was possible
  */
 function scrollPage(direction) {
+  if (direction !== 'down' && direction !== 'up') return false;
+  // Whatever is actually scrollable here — an open filter popup keeps its content in its own
+  // overflow container, and the vision agent asking to "scroll down" means that content, not the
+  // page frozen behind it. gv2ScrollBy (content/functions/scroll.js) also reports whether anything
+  // moved, which is exactly the false this function has always returned to mean "nothing below".
+  if (typeof gv2ScrollBy === 'function') {
+    return gv2ScrollBy(direction, null).scrolled;
+  }
+
+  // scroll.js absent (older injected bundle on the page): the original page-only behavior.
   const viewportHeight = window.innerHeight;
   const scrollAmount = viewportHeight * 0.8; // 80% of viewport
   const maxScroll = document.documentElement.scrollHeight - viewportHeight;
-  
+
   if (direction === 'down') {
     if (window.scrollY >= maxScroll) return false;
-    window.scrollTo({ 
-      top: Math.min(window.scrollY + scrollAmount, maxScroll), 
-      behavior: 'smooth' 
-    });
-    return true;
-  } else if (direction === 'up') {
-    if (window.scrollY <= 0) return false;
-    window.scrollTo({ 
-      top: Math.max(window.scrollY - scrollAmount, 0), 
-      behavior: 'smooth' 
-    });
+    window.scrollTo({ top: Math.min(window.scrollY + scrollAmount, maxScroll), behavior: 'smooth' });
     return true;
   }
-  return false;
+  if (window.scrollY <= 0) return false;
+  window.scrollTo({ top: Math.max(window.scrollY - scrollAmount, 0), behavior: 'smooth' });
+  return true;
 }
 
 /**
@@ -199,7 +201,12 @@ async function handleAskWithVision(query) {
       action: 'callLLM',
       systemPrompt: '',
       messages: [{ role: 'user', content: prompt }],
-      imageBase64: screenshot
+      imageBase64: screenshot,
+      metadata: {
+        mode: 'ask_step',
+        step: step,
+        url: window.location.href
+      }
     });
     
     if (response?.error) {
@@ -237,19 +244,34 @@ async function handleAskWithVision(query) {
     if (parsed.canAnswer && parsed.answer) {
       console.log('👁️ Found answer at step', step);
       lastAnswer = parsed.answer;
-      
-      // Apply highlights from citations
-      const highlightCount = applyHighlightsFromCitations(parsed.answer);
+
+      // Apply highlights from citations — skipped entirely in Non-grounding baseline mode,
+      // which also strips the citation markers themselves so no clickable chips appear in the
+      // chat (parseCitations in the side panel would otherwise still turn them into chips even
+      // with no on-page highlight applied).
+      const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+      const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(parsed.answer);
+      const answerOut = nonGrounding && typeof stripNonGroundingMarkers === 'function'
+        ? stripNonGroundingMarkers(parsed.answer)
+        : parsed.answer;
       cleanupSom();
-      
+
+      // Visual evidence mode only: annotated page evidence for what the DOM cannot say (empty array
+      // in Text mode). Same helper the Guide find path uses. Skipped outright in the Non-grounding
+      // baseline — it is the one call that would run the annotator and draw marks on the page.
+      const findEvidenceShots = (!nonGrounding && typeof gv2BuildFindEvidence === 'function')
+        ? await gv2BuildFindEvidence(highlightCount > 0, query, null, parsed.answer)
+        : [];
+
       return {
         success: true,
-        answer: parsed.answer,
+        answer: answerOut,
         useVision: true,
         visionSteps: step,
         visionActions: previousActions,
         highlightCount: highlightCount,
-        hasHighlights: highlightCount > 0
+        hasHighlights: highlightCount > 0,
+        findEvidenceShots
       };
     }
     
@@ -308,7 +330,29 @@ async function handleAskWithVision(query) {
  */
 async function handleAsk(query, history = []) {
   console.log('🤖 handleAsk:', query);
-  
+
+  // Evidence: Visual already sends a screenshot with the answer call (FIND_ANSWER_VISUAL), so the
+  // vision router and its scroll loop have nothing to add — skipping them saves a call and keeps
+  // one prompt responsible for the answer. Evidence: Text keeps the router exactly as it was.
+  const visualEvidenceMode = typeof getEvidenceMode === 'function' && (await getEvidenceMode()) === 'visual';
+  if (visualEvidenceMode) {
+    const pageContent = getVisibleText(50000);
+    const pageIndex = createPageIndex(5000);
+    try {
+      const result = await handleAskWithHighlight(query, pageContent, pageIndex, history);
+      cleanupSom();
+      if (result && result.success && result.answer) {
+        result.visionDecision = { needsVision: false, confidence: 1, reason: 'Visual evidence mode: the answer call carries the screenshot' };
+        return result;
+      }
+      return result || { success: false, error: 'Failed to process query' };
+    } catch (error) {
+      cleanupSom();
+      console.log('🤖 Error:', error);
+      return { success: false, error: error.message || 'Failed to process query' };
+    }
+  }
+
   // First, check if vision is needed
   const visionRoute = await routeVisionQuery(query);
   console.log('👁️ Vision decision:', visionRoute.needsVision ? 'YES' : 'NO', 
@@ -375,10 +419,18 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
     };
   }
   
-  // Build system prompt with page content (fresh context each time)
-  const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+  // Evidence: Visual takes a different prompt and a different call — the answer sees a screenshot
+  // and returns its own evidence. Evidence: Text falls through to the lines below, unchanged.
+  const visualMode = typeof getEvidenceMode === 'function' && (await getEvidenceMode()) === 'visual';
+  const nonGrounding = typeof isNonGroundingModeOn === 'function' && await isNonGroundingModeOn();
+
+  // Build system prompt with page content (fresh context each time). Both study arms get the SAME
+  // prompt for a given evidence mode — see the note in content/prompts.js where ANSWER_NONGROUNDING
+  // used to be. Non-grounding filters the reply below instead of asking for a different reply.
+  const systemPrompt = (visualMode ? (PROMPTS.FIND_ANSWER_VISUAL || PROMPTS.ANSWER_AND_HIGHLIGHT) : PROMPTS.ANSWER_AND_HIGHLIGHT)
     .replace('{pageContent}', pageContent || '(No text content found)')
-    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)');
+    .replace('{pageIndex}', pageIndex.indexText || '(No elements indexed)')
+    .replace('{maxItems}', String(typeof GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS !== 'undefined' ? GV2_FIND_VISUAL_EVIDENCE_MAX_ITEMS : 3));
   
   // Build messages with history (history contains only Q&A, not page context)
   const messages = [
@@ -387,33 +439,134 @@ async function handleAskWithHighlight(query, pageContent, pageIndex, history = [
   ];
   
   console.log('🤖 Chat history length:', history.length);
-  
-  // LLM call with history
-  const response = await safeSendMessage({
-    action: 'callLLM',
+
+  // Visual mode: one call carrying the page text, the index AND the viewport screenshot.
+  let answerShot = null;
+  if (visualMode) {
+    try {
+      if (typeof showSetOfMarks === 'function') showSetOfMarks(pageIndex);
+      await new Promise(r => setTimeout(r, 120));
+      if (typeof captureScreenshot === 'function') answerShot = await captureScreenshot();
+    } catch (e) {
+      answerShot = null;
+    } finally {
+      try { if (typeof cleanupSom === 'function') cleanupSom(); } catch (e) {}
+    }
+  }
+
+  // Viewport + crops of the pictures this question is about (gv2BuildFindAnswerImages), so the
+  // agent can see the portrait/chart/product it is being asked about instead of guessing.
+  let answerImages = (answerShot && typeof gv2BuildFindAnswerImages === 'function')
+    ? await gv2BuildFindAnswerImages(query, answerShot)
+    : (answerShot ? [{ id: 'viewport', base64: answerShot, label: '[image_id=viewport] Page screenshot with SoM markers' }] : []);
+
+  const askVisual = (images, msgs) => safeSendMessage({
+    action: 'callLLMWithImages',
     systemPrompt: systemPrompt,
-    messages: messages
+    messages: msgs,
+    images,
+    metadata: {
+      mode: nonGrounding ? 'ask_chat_nongrounding_visual' : 'ask_chat_visual',
+      url: window.location.href,
+      findImageDiagnostics: typeof gv2FindImageDiagnostics === 'function' ? gv2FindImageDiagnostics() : [],
+      imageSelectionDiagnostics: images?.selectionDiagnostics || null
+    }
   });
+
+  if (nonGrounding) {
+    const response = answerShot
+      ? await askVisual(answerImages, messages)
+      : await safeSendMessage({
+          action: 'callLLM',
+          systemPrompt,
+          messages,
+          metadata: {
+            mode: 'ask_chat_nongrounding',
+            url: window.location.href
+          }
+        });
+    if (response?.error) {
+      return { success: false, error: response.error, answer: "Could not answer the question" };
+    }
+    // The baseline now shares the grounding prompt, so in Visual mode the reply is the JSON envelope
+    // {answer, evidence}. Unwrap it and throw the evidence away: without this the participant would
+    // read raw JSON, since stripNonGroundingMarkers only knows about markers, not about JSON.
+    const raw = (response?.content || '').trim();
+    const parsed = (visualMode && typeof gv2ParseFindAnswer === 'function')
+      ? gv2ParseFindAnswer(raw)
+      : { answer: raw };
+    const answer = parsed.answer || raw;
+    if (!answer) {
+      return { success: false, error: 'No answer from AI', answer: "Could not answer the question" };
+    }
+    return {
+      success: true,
+      answer: typeof stripNonGroundingMarkers === 'function' ? stripNonGroundingMarkers(answer) : answer,
+      highlightCount: 0,
+      hasHighlights: false,
+      findEvidenceShots: []
+    };
+  }
+
+  // LLM call with history
+  let response = answerShot
+    ? await askVisual(answerImages, messages)
+    : await safeSendMessage({
+        action: 'callLLM',
+        systemPrompt: systemPrompt,
+        messages: messages,
+        metadata: {
+          mode: 'ask_chat',
+          url: window.location.href
+        }
+      });
   
   if (response?.error) {
     return { success: false, error: response.error, answer: "Could not answer the question with highlighting" };
   }
   
-  const answer = response?.content?.trim();
-  if (!answer) {
+  let rawAnswer = response?.content?.trim();
+  if (!rawAnswer) {
     return { success: false, error: 'No answer from AI', answer: "Could not answer the question with highlighting" };
   }
-  
+
+  // Visual mode replies with {answer, evidence}; text mode replies with prose. gv2ParseFindAnswer
+  // degrades to prose-only if the envelope is missing, so a malformed reply still shows an answer.
+  //
+  // Keyed on visualMode alone, not on answerShot: the prompt is chosen by visualMode, so a run whose
+  // screenshot capture failed still asked for — and gets — the JSON envelope, and would otherwise
+  // print it raw.
+  let parsedAnswer = (visualMode && typeof gv2ParseFindAnswer === 'function')
+    ? gv2ParseFindAnswer(rawAnswer)
+    : { answer: rawAnswer, evidence: [] };
+
+  const answer = parsedAnswer.answer || rawAnswer;
+  const modelEvidence = parsedAnswer.evidence || [];
+
   console.log('🤖 Answer with citations:', answer);
-  
-  // Extract citations and apply highlights
-  const highlightCount = applyHighlightsFromCitations(answer);
-  
+
+  // Extract citations and apply highlights — skipped entirely in Non-grounding baseline mode,
+  // which also strips the citation markers themselves so no clickable chips appear in the chat
+  // (parseCitations in the side panel would otherwise still turn them into chips even with no
+  // on-page highlight applied).
+  const highlightCount = nonGrounding ? 0 : applyHighlightsFromCitations(answer);
+  const answerOut = nonGrounding && typeof stripNonGroundingMarkers === 'function'
+    ? stripNonGroundingMarkers(answer)
+    : answer;
+
+  // Visual evidence mode: a crop per cited span plus annotated page evidence for what the DOM
+  // cannot say. Returns [] in Text mode, where the citation chips are the whole story. Same helper
+  // the Guide find path uses.
+  const findEvidenceShots = typeof gv2BuildFindEvidence === 'function'
+    ? await gv2BuildFindEvidence(highlightCount > 0, query, modelEvidence, answer)
+    : [];
+
   return {
     success: true,
-    answer: answer,
+    answer: answerOut,
     highlightCount: highlightCount,
-    hasHighlights: highlightCount > 0
+    hasHighlights: highlightCount > 0,
+    findEvidenceShots
   };
 }
 
@@ -428,9 +581,9 @@ function applyHighlightsFromCitations(answer) {
   window._pageguideHighlights = [];
   
   // Normalize curly/smart quotes to straight quotes
-  const normalizedAnswer = answer
+  const normalizedAnswer = normalizeCitationMarkers(answer
     .replace(/[""]/g, '"')
-    .replace(/['']/g, "'");
+    .replace(/['']/g, "'"));
   
   // Find all citation patterns:
   // [N:"text"] or [N:'text'] - with quotes (text may contain apostrophes/quotes)
@@ -458,6 +611,40 @@ function applyHighlightsFromCitations(answer) {
   console.log('🤖 Found', matchesWithText.length, 'citations with text,', matchesSimple.length, 'simple citations');
   console.log('🤖 Available indices in _pageguideIndex:', Object.keys(window._pageguideIndex || {}).length);
   
+  // Citation ordinals, so a highlighted span knows which [N] chip in the answer it belongs to.
+  // The side panel numbers citations by their position in the answer text (parseCitations), while
+  // this function processes them grouped by quote style — without this map the crop labelled "3"
+  // could belong to the first citation in the sentence.
+  const markerPositions = [...normalizedAnswer.matchAll(/\[(\d+)(?::[^\]]*)?\]/g)]
+    .map(m => m.index)
+    .sort((a, b) => a - b);
+  const citationNumberAt = (pos) => {
+    const rank = markerPositions.indexOf(pos);
+    return rank >= 0 ? rank + 1 : null;
+  };
+  // Parallel to window._pageguideHighlights: the citation number each highlighted element serves.
+  window._pageguideHighlightNumbers = [];
+  /**
+   * Record which citation each newly created highlight serves — in the parallel array, and ON the
+   * element itself.
+   *
+   * The DOM stamp is what lets a citation reach the span it actually created. [N:"text"] wraps the
+   * quoted words in a new span INSIDE the element N points at, but only the element is in
+   * window._pageguideIndex, so resolving by index alone lands on the whole paragraph. The citation
+   * NUMBER is the discriminator, not the index: one paragraph often carries several citations —
+   * [69:"Foundation series"] and [69:"extend the human species' reach."] are both index 69 — and
+   * they must not resolve to each other.
+   */
+  const tagHighlightsSince = (startLen, citationNumber, pageIndex) => {
+    for (let i = startLen; i < window._pageguideHighlights.length; i++) {
+      window._pageguideHighlightNumbers[i] = citationNumber;
+      const el = window._pageguideHighlights[i];
+      if (!el || !el.setAttribute) continue;
+      if (citationNumber != null) el.setAttribute('data-pageguide-citation', String(citationNumber));
+      if (pageIndex != null) el.setAttribute('data-pageguide-index', String(pageIndex));
+    }
+  };
+
   const pageBg = getPageBackground();
   // highlightedElements tracks WHOLE-element highlights (simple citations / Strategy-3
   // fallbacks). Used to prevent simple citations from re-highlighting an element whose
@@ -472,7 +659,11 @@ function applyHighlightsFromCitations(answer) {
   const failedIndices = [];
   let count = 0;
 
-  // Process citations with text first (higher priority)
+  // Process citations with text first (higher priority), in the order they appear in the answer —
+  // the three quote-style patterns above are collected pattern-by-pattern, which would otherwise
+  // highlight (and number) a later single-quoted citation before an earlier double-quoted one.
+  matchesWithText.sort((a, b) => a.index - b.index);
+
   for (const match of matchesWithText) {
     const index = parseInt(match[1], 10);
     const textToHighlight = match[2];
@@ -496,19 +687,29 @@ function applyHighlightsFromCitations(answer) {
     // For text citations: only skip if a PARENT element is already whole-highlighted.
     // Siblings or children being highlighted is fine — we want every cited phrase lit up.
     let parentAlreadyHighlighted = false;
+    let highlightedParent = null;
     let parent = element.parentElement;
     while (parent) {
-      if (highlightedElements.has(parent)) { parentAlreadyHighlighted = true; break; }
+      if (highlightedElements.has(parent)) { parentAlreadyHighlighted = true; highlightedParent = parent; break; }
       parent = parent.parentElement;
     }
     if (parentAlreadyHighlighted) {
       console.log('🤖 Skipping', index, '- parent element already highlighted');
+      // The citation is still real — it is just already covered by an enclosing highlight. Point
+      // its number at that parent so the evidence strip has a chip for it; otherwise the numbers
+      // skip and the answer shows a [3] with no 3 to open.
+      const parentPos = window._pageguideHighlights.indexOf(highlightedParent);
+      if (parentPos >= 0 && window._pageguideHighlightNumbers[parentPos] == null) {
+        window._pageguideHighlightNumbers[parentPos] = citationNumberAt(match.index);
+      }
       continue;
     }
 
     // Apply highlight with specific text
     const style = getRandomHighlightStyle(pageBg.isDark);
+    const beforeLen = window._pageguideHighlights.length;
     const highlighted = applyIndexedHighlight(index, textToHighlight, style);
+    tagHighlightsSince(beforeLen, citationNumberAt(match.index), index);
 
     if (highlighted > 0) {
       // Do NOT add element to highlightedElements here — other phrases inside the
@@ -550,16 +751,20 @@ function applyHighlightsFromCitations(answer) {
       continue;
     }
     
-    // Apply highlight to entire element (no specific text)
+    // Apply highlight to entire element (no specific text). Tagged as a block highlight: it can be
+    // a whole paragraph or card, which is why evidence capture skips these — a crop of one is a
+    // wall of tint that shows nothing.
     const style = getRandomHighlightStyle(pageBg.isDark);
-    applyAnimatedHighlight(element, style.color, style.animation);
-    
+    applyAnimatedHighlight(element, style.color, style.animation, { block: true });
+
     // Force inline styles as backup (in case CSS classes don't work)
-    element.style.outline = `3px solid ${style.color}`;
-    element.style.outlineOffset = '2px';
-    element.style.backgroundColor = `${style.color}22`;
-    
+    element.style.backgroundColor = typeof pageguideHighlightTint === 'function'
+      ? pageguideHighlightTint(style.color, true)
+      : `${style.color}22`;
+
+    const simpleLen = window._pageguideHighlights.length;
     window._pageguideHighlights.push(element);
+    tagHighlightsSince(simpleLen, citationNumberAt(match.index), index);
     highlightedElements.add(element);
     count++;
     

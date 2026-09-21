@@ -3,6 +3,7 @@ const { test, expect, chromium } = require('@playwright/test');
 const path = require('path');
 
 const EXTENSION_PATH = path.join(__dirname, '../../');
+const HEADLESS = process.env.HEADFUL !== '1';
 
 test.describe('Selected Slow Tests', () => {
   /** @type {import('@playwright/test').BrowserContext} */
@@ -19,6 +20,7 @@ test.describe('Selected Slow Tests', () => {
       headless: false,
       slowMo: 2000,    // Slow down interactions to 2 seconds for each step
       args: [
+        ...(HEADLESS ? ['--headless=new'] : []),
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
         '--no-sandbox',

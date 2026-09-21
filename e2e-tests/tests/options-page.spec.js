@@ -3,6 +3,7 @@ const { test, expect, chromium } = require('@playwright/test');
 const path = require('path');
 
 const EXTENSION_PATH = path.join(__dirname, '../../');
+const HEADLESS = process.env.HEADFUL !== '1';
 
 /**
  * Test suite for options/settings page
@@ -23,6 +24,7 @@ test.describe('Options Page', () => {
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: false,
       args: [
+        ...(HEADLESS ? ['--headless=new'] : []),
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
         '--no-sandbox',

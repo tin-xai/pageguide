@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="800" viewBox="0 0 1320 800" role="img" aria-labelledby="title desc">
+  <title id="title">Find pipeline deep dive</title>
+  <desc id="desc">Detailed Find flow showing page extraction, LLM answer with citations, citation grounding, highlighting, and evidence output.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#243042"/>
+    </marker>
+    <style>
+      .bg{fill:#fbfcfe}
+      .band{fill:#fff;stroke:#d8dee8;stroke-width:2;rx:20}
+      .box{fill:#fff;stroke:#243042;stroke-width:2.1;rx:15}
+      .query{fill:#fff8e1;stroke:#e59f18;stroke-width:2.1;rx:15}
+      .dom{fill:#edfdf5;stroke:#059669;stroke-width:2.1;rx:15}
+      .llm{fill:#fff5e8;stroke:#d97706;stroke-width:2.1;rx:15}
+      .ground{fill:#eaf2ff;stroke:#2563eb;stroke-width:2.1;rx:15}
+      .out{fill:#f5f3ff;stroke:#7c3aed;stroke-width:2.1;rx:15}
+      .opt{fill:#f3f6fb;stroke:#8c9aab;stroke-width:1.8;rx:13}
+      .arrow{stroke:#243042;stroke-width:2.3;fill:none;marker-end:url(#arrow)}
+      .dash{stroke:#7a8798;stroke-width:2;fill:none;stroke-dasharray:7 7;marker-end:url(#arrow)}
+      .title{font:700 32px Arial,sans-serif;fill:#182334}
+      .subtitle{font:400 15px Arial,sans-serif;fill:#526173}
+      .h{font:700 17px Arial,sans-serif;fill:#182334}
+      .t{font:400 14px Arial,sans-serif;fill:#334155}
+      .small{font:400 12.5px Arial,sans-serif;fill:#526173}
+      .mono{font:400 12.5px "Courier New",monospace;fill:#334155}
+      .num{font:700 16px Arial,sans-serif;fill:#fff}
+      .circle{fill:#243042}
+      .note{font:700 13px Arial,sans-serif;fill:#182334}
+    </style>
+  </defs>
+  <rect class="bg" width="1320" height="800"/>
+  <text x="56" y="58" class="title">Find Pipeline: Grounded Page Reading</text>
+  <text x="58" y="86" class="subtitle">The model answers from a text-and-index view of the page; citations are resolved back to live DOM evidence.</text>
+
+  <rect x="60" y="128" width="1200" height="568" class="band"/>
+
+  <circle cx="100" cy="184" r="18" class="circle"/><text x="95" y="190" class="num">1</text>
+  <rect x="130" y="150" width="230" height="88" class="query"/>
+  <text x="158" y="184" class="h">Find request</text>
+  <text x="158" y="211" class="small">Page question or `/find` command</text>
+
+  <circle cx="430" cy="184" r="18" class="circle"/><text x="425" y="190" class="num">2</text>
+  <rect x="460" y="132" width="265" height="124" class="dom"/>
+  <text x="488" y="166" class="h">Extract readable page</text>
+  <text x="488" y="193" class="mono">getVisibleText(50000)</text>
+  <text x="488" y="216" class="mono">createPageIndex(5000,false)</text>
+  <text x="488" y="238" class="small">Content index includes paragraphs, headings, links, images</text>
+
+  <circle cx="800" cy="184" r="18" class="circle"/><text x="795" y="190" class="num">3</text>
+  <rect x="830" y="150" width="300" height="88" class="llm"/>
+  <text x="858" y="184" class="h">Reader LLM</text>
+  <text x="858" y="211" class="small">Answer using `[N:"text"]` citations from page index</text>
+
+  <rect x="250" y="314" width="290" height="116" class="ground"/>
+  <text x="278" y="348" class="h">Citation parser</text>
+  <text x="278" y="375" class="mono">applyHighlightsFromCitations()</text>
+  <text x="278" y="398" class="small">Normalize answer and extract cited index/snippet pairs</text>
+
+  <rect x="610" y="314" width="290" height="116" class="ground"/>
+  <text x="638" y="348" class="h">DOM resolver</text>
+  <text x="638" y="375" class="small">Look up `N` in `window._pageguideIndex`</text>
+  <text x="638" y="398" class="small">Find the cited text span inside that element</text>
+
+  <rect x="970" y="314" width="210" height="116" class="ground"/>
+  <text x="998" y="348" class="h">Page effect</text>
+  <text x="998" y="375" class="small">Highlight cited spans</text>
+  <text x="998" y="398" class="small">Scroll to first evidence item</text>
+
+  <rect x="155" y="528" width="260" height="92" class="out"/>
+  <text x="183" y="562" class="h">Answer card</text>
+  <text x="183" y="589" class="small">Markdown answer, citation chips, route metadata</text>
+
+  <rect x="520" y="528" width="300" height="92" class="out"/>
+  <text x="548" y="562" class="h">Visual evidence mode</text>
+  <text x="548" y="589" class="small">Crops cited spans and annotated visual regions</text>
+
+  <rect x="925" y="528" width="255" height="92" class="opt"/>
+  <text x="953" y="562" class="h">Non-grounding mode</text>
+  <text x="953" y="589" class="small">Same prompt, but citation markers and highlights are suppressed</text>
+
+  <path class="arrow" d="M360 194 L460 194"/>
+  <path class="arrow" d="M725 194 L830 194"/>
+  <path class="arrow" d="M980 238 C980 284 408 282 395 314"/>
+  <path class="arrow" d="M540 372 L610 372"/>
+  <path class="arrow" d="M900 372 L970 372"/>
+  <path class="arrow" d="M1075 430 C1040 498 382 494 285 528"/>
+  <path class="dash" d="M1075 430 C980 500 745 508 670 528"/>
+  <path class="dash" d="M670 620 C767 650 940 640 1053 620"/>
+
+  <rect x="88" y="718" width="1144" height="46" class="box"/>
+  <text x="114" y="746" class="note">Reuse in Guide:</text>
+  <text x="214" y="746" class="small">when the Guide planner emits `action="find"`, `gv2RunFind()` runs this same reader, citation resolver, and evidence capture path.</text>
+</svg>

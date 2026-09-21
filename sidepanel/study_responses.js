@@ -1,0 +1,1034 @@
+// PageGuide User Study — pre-recorded agent responses
+// ====================================================
+// Participants must read the SAME agent answer, not a fresh one: the grounding arm needs identical
+// text citations and visual evidence for everyone, and the non-grounding arm needs a matched bare
+// version of that same answer rather than an independently generated one. So the researcher records
+// each answer once (Save), curates it (Edit), and the study replays it later.
+//
+// This module is the authoring/storage half. Playback is not built yet.
+//
+// THE AUTHORING PIPELINE, driven from the study's Answer screen (sidepanel/study.js):
+//   run the task grounded → Save as Grounded → _stripStudyGrounding → edit the bare draft →
+//   Save as Non-grounded. Two records per question, derived from ONE generation, which is the whole
+//   point: the arms have to differ in grounding, not in what the agent happened to say that run.
+//
+// WHAT A RECORD MUST KEEP, and why:
+//   answer_raw  — the answer with its markers INTACT: [N:"text"] for what the agent read, [ev:key]
+//                 for what it saw. parseCitations and _expandEvidenceKeyCitations build the clickable
+//                 links out of exactly these; strip them and the grounding is gone. This is why the
+//                 existing chat-history feature (saveCurrentChat) is not a model to copy — its own
+//                 comment says it stores "Only ... text messages — no HTML or highlights".
+//   evidence    — findEvidenceShots verbatim, including `key` (binds [ev:key] to a card) and `marks`
+//                 (the geometry pageguideShowEvidenceAnnotations needs to redraw on the live page).
+//
+// TWO THINGS PLAYBACK WILL HIT, recorded here while they are fresh:
+//   1. [N] numbers are NOT durable. getIndexedElement (content/utils.js) is a bare
+//      window._pageguideIndex[idx] lookup with no text fallback, and that index is rebuilt from the
+//      DOM every run. The quoted text inside each marker is the durable anchor —
+//      gv2FindElementByText / gv2PickTargetIndex (content/tasks/guidev2.js) are the existing
+//      "trust the index only if the text agrees" resolvers to reuse.
+//   2. Annotated marks do NOT survive reflow. When an evidence item has annotations,
+//      pageguideShowEvidenceAnnotations places them purely from marks.captureGeometry plus
+//      normalised coordinates; gv2ResolveEvidenceElement is consulted only on the no-annotation
+//      branch, and marks carries no selector. Replaying at a different window width will drift.
+
+const PAGEGUIDE_STUDY_RESPONSES_KEY = 'pageguide_study_responses';
+
+/** Evidence crops wider than this are downscaled before saving — see _downscaleStudyShot. */
+const STUDY_RESPONSE_SHOT_MAX_WIDTH = 1024;
+
+/**
+ * Recordings made before the arms were collapsed to two. The Visual/Text evidence split used to get
+ * its own slot, but with the crops no longer shown anywhere in the chat the two produce the same
+ * reading experience, so 'grounding' is one arm and these are read-only fallbacks.
+ */
+const STUDY_GROUNDED_LEGACY_KEYS = ['grounding-visual', 'grounding-text'];
+
+/**
+ * The four V2 cells. Every Find item carries all of them, because V2 counterbalances on TWO axes —
+ * correctness and grounding — and deals one cell per participant from their assignment slot. See
+ * the header of supabase_schema_v2.sql; these names are the jsonb keys of `answer_variants` and
+ * the allowed values of `variant_key`, so they are spelt the schema's way and not renamed.
+ *
+ * They are also the `condition` of a banked record. The local bank is keyed "taskId::condition"
+ * and does not care what the condition says, so the four ride the existing storage unchanged.
+ */
+const STUDY_V2_VARIANTS = [
+  'correct_grounding',
+  'correct_nongrounding',
+  'incorrect_grounding',
+  'incorrect_nongrounding'
+];
+
+/** What each cell is called in the panel. Spelt once, so the tabs and the notices agree. */
+const V2_VARIANT_LABELS = {
+  correct_grounding: 'Correct \u00b7 Grounded',
+  correct_nongrounding: 'Correct \u00b7 Bare',
+  incorrect_grounding: 'Incorrect \u00b7 Grounded',
+  incorrect_nongrounding: 'Incorrect \u00b7 Bare'
+};
+
+/**
+ * Where else to look when a slot is empty. BIDIRECTIONAL on purpose.
+ *
+ * V1 banked two answers per question, both correct, under 'grounding' and 'nongrounding' — exactly
+ * the two correct V2 cells. So a V2 read finds a V1 recording, and, just as importantly, a V1 read
+ * finds a V2 one: the participant-facing playback (study.js, panel.js) still asks for 's.arm',
+ * which is a V1 name, and would otherwise have gone blank for every question recorded after this
+ * change. Neither direction rewrites anything — a bank migrated in place goes wrong once, silently.
+ */
+const STUDY_RESPONSE_ALIASES = {
+  correct_grounding: ['grounding', ...STUDY_GROUNDED_LEGACY_KEYS],
+  correct_nongrounding: ['nongrounding'],
+  grounding: ['correct_grounding', ...STUDY_GROUNDED_LEGACY_KEYS],
+  nongrounding: ['correct_nongrounding']
+};
+
+/**
+ * Does this cell keep its citation and evidence markers?
+ *
+ * Accepts the V1 arm names too. The bare V1 name is 'nongrounding' with no prefix, so a plain
+ * endsWith('_nongrounding') read it as GROUNDED — and _buildStudyArmRecord, which asks this
+ * question to decide whether to strip, then banked the V1 non-grounded arm with all its markers
+ * still in it. Anything still passing a V1 name has to keep working.
+ */
+function _variantIsGrounded(variant) {
+  const v = String(variant || '');
+  return !(v === 'nongrounding' || v.endsWith('_nongrounding'));
+}
+
+/** 'correct' | 'incorrect' — which side of the correctness axis this cell sits on. */
+function _variantCorrectness(variant) {
+  return String(variant || '').startsWith('incorrect') ? 'incorrect' : 'correct';
+}
+
+/**
+ * The bare cell that a grounded one strips into. Stripping must stay on its own row of the 2x2:
+ * a wrong answer stripped of its citations is still a wrong answer, and landing it in
+ * `correct_nongrounding` would file it as the right one.
+ */
+function _bareTwinOf(variant) {
+  return `${_variantCorrectness(variant)}_nongrounding`;
+}
+
+/** The grounded cell of the same correctness. Inverse of _bareTwinOf. */
+function _groundedTwinOf(variant) {
+  return `${_variantCorrectness(variant)}_grounding`;
+}
+
+/**
+ * The condition a record belongs to. Two arms, one per question: what the participant reads either
+ * carries its grounding markers or it does not.
+ *
+ * Kept on the V1 names because it answers a question about the PANEL — whether the live run was
+ * made in the non-grounding arm — which is unchanged by V2. Recording picks its cell explicitly.
+ *
+ * @param {boolean} nonGrounding - _isPanelNonGrounding()
+ * @returns {'nongrounding'|'grounding'}
+ */
+function _studyResponseCondition(nonGrounding) {
+  return nonGrounding ? 'nongrounding' : 'grounding';
+}
+
+/**
+ * Strip a grounded answer down to the bare version the non-grounding arm reads.
+ *
+ * The strip itself is `stripNonGroundingMarkers` (content/utils.js) — the SAME function the
+ * Non-grounding arm applies to a generated answer. Reusing it is the point: a recorded bare answer
+ * has to read exactly like a generated one, or the two arms differ in more than their grounding.
+ * All this adds is the panel's display suffix, which is appended after generation and so is never
+ * covered by the generation-time strip.
+ *
+ * The Answer screen offers an Edit step straight after, which is the safety net for the odd case
+ * the duplicate-detection heuristic reads the wrong way.
+ *
+ * @param {string} answerRaw - the grounded answer with its markers intact
+ * @returns {string}
+ */
+function _stripStudyGrounding(answerRaw) {
+  const text = String(answerRaw == null ? '' : answerRaw);
+  const bare = typeof stripNonGroundingMarkers === 'function' ? stripNonGroundingMarkers(text) : text;
+  return String(bare == null ? '' : bare)
+    .replace(/✨\s*\(\d+\s+highlighted\)/gi, '') // panel display suffix; there are no highlights here
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+/** Storage key for one (task, condition) slot. Re-saving overwrites rather than appending. */
+function _studyResponseKey(taskId, condition) {
+  return `${String(taskId || '').trim()}::${String(condition || '').trim()}`;
+}
+
+/**
+ * Build the durable record from a live answer result. Pure — this is where the "never lose the
+ * markers" rule is enforced, so it is the thing worth testing.
+ *
+ * Accepts both result shapes: the Ask route returns `answer`, a Guide find step returns `findAnswer`.
+ *
+ * @param {{taskId: string, condition: string, url?: string, question?: string, result: object}} ctx
+ * @returns {object} the record
+ */
+function _buildStudyResponseRecord(ctx) {
+  const { taskId, condition, url, question, result } = ctx || {};
+  const r = result || {};
+  // findAnswer first: a Guide find step carries BOTH, and findAnswer is the one with the markers.
+  const answer = typeof r.findAnswer === 'string' && r.findAnswer ? r.findAnswer : (r.answer || '');
+  // Kept on `key` or `marks`, NOT on `shot`. A crop is no longer shown anywhere — every marker in an
+  // answer points at the live page — so an item with marks but no picture is still a working piece
+  // of evidence. Filtering those out silently deleted their [ev:key] markers from the replayed
+  // answer, so the banked version read differently from the one the researcher approved.
+  const evidence = (Array.isArray(r.findEvidenceShots) ? r.findEvidenceShots : [])
+    .filter(item => item && (item.key || item.marks || item.shot))
+    .map(item => ({
+      shot: item.shot || null,
+      note: item.note || '',
+      index: item.index,
+      key: item.key || null,
+      source_image_id: item.source_image_id || 'viewport',
+      marks: item.marks || null
+    }));
+
+  return {
+    task_id: String(taskId || ''),
+    condition: String(condition || ''),
+    url: url || '',
+    question: question || '',
+    answer_raw: answer,
+    answer_display: answer,
+    evidence,
+    // Where each [N:"…"] citation actually points, resolved on the live page while the index that
+    // issued N was still installed. Filled by _attachCitationAnchors; null when it could not run.
+    // See content/functions/citation_anchors.js for why this is the only moment it is knowable.
+    citation_anchors: Array.isArray(ctx?.citationAnchors) ? ctx.citationAnchors : null,
+    highlight_count: Number(r.highlightCount) || 0,
+    edited: false,
+    recorded_at: new Date().toISOString(),
+    edited_at: null
+  };
+}
+
+/**
+ * The record to write for one arm of the Answer screen. Pure — it is the decision that matters, and
+ * getting it wrong is silent: the answer still saves, just without its evidence.
+ *
+ *   fresh recording  → build from the live result: text AND the evidence it was generated with.
+ *   editing a record → change ONLY the text. The evidence carries the `marks` that every [ev]
+ *                      marker in the answer scrolls to, so rebuilding from the edited text alone
+ *                      deletes the annotations and leaves just the [N:"…"] spans behind.
+ *   a bare draft     → no recording behind it (the stripped non-grounded answer), so no evidence.
+ *
+ * @param {{taskId: string, condition: string, url?: string, question?: string,
+ *          existing?: object|null, result?: object|null, text?: string}} ctx
+ * @returns {object} the record to save
+ */
+function _buildStudyArmRecord(ctx) {
+  const { taskId, condition, url, question, existing, result, text } = ctx || {};
+  const armCondition = String(condition || '');
+  // Grounded-ness, not the literal name: 'incorrect_nongrounding' has to strip too, and reading
+  // the name for 'nongrounding' exactly would have left it holding markers.
+  const normalizeArmRecord = (record) => (
+    _variantIsGrounded(armCondition)
+      ? record
+      : _stripStudyArmRecord(record, armCondition)
+  );
+  if (result) {
+    return normalizeArmRecord(_buildStudyResponseRecord({ taskId, condition, url, question, result }));
+  }
+  if (existing) {
+    return normalizeArmRecord(_applyStudyResponseEdit(existing, text));
+  }
+  return normalizeArmRecord(_applyStudyResponseEdit(
+    _buildStudyResponseRecord({
+      taskId, condition, url, question,
+      result: { answer: text, findEvidenceShots: [], highlightCount: 0 }
+    }),
+    text
+  ));
+}
+
+/**
+ * The bare version of a record, filed under the bare cell of the SAME correctness.
+ *
+ * @param {object} record
+ * @param {string} [variant] - the target cell; defaults to the V1 'nongrounding' arm
+ */
+function _stripStudyArmRecord(record, variant) {
+  const answer = _stripStudyGrounding(record?.answer_raw || record?.answer_display || '');
+  return Object.assign({}, record, {
+    condition: variant || 'nongrounding',
+    answer_raw: answer,
+    answer_display: answer,
+    evidence: [],
+    citation_anchors: null,
+    highlight_count: 0
+  });
+}
+
+/**
+ * Are these two URLs the same study page?
+ *
+ * Compared on origin + path only. A hash is a position on one page, not another page, and a
+ * trailing slash is the same page written two ways — neither should refuse a legitimate match. The
+ * query string IS kept: on plenty of sites it selects the content.
+ */
+function _sameStudyPage(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const norm = (u) => `${u.origin}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+    return norm(ua) === norm(ub);
+  } catch (e) {
+    return String(a || '') === String(b || '');
+  }
+}
+
+/** A URL short enough to read in a one-line note. */
+function _shortUrl(u) {
+  try {
+    const { hostname, pathname } = new URL(u);
+    const path = pathname.length > 28 ? `${pathname.slice(0, 27)}…` : pathname;
+    return `${hostname}${path === '/' ? '' : path}`;
+  } catch (e) {
+    return String(u || '').slice(0, 40);
+  }
+}
+
+/**
+ * Ask the page where this answer's citations point, and hang the result on the record.
+ *
+ * Runs against the tab the answer was produced on, because the numbers in `[N:"…"]` are only
+ * meaningful while that run's page index is installed — a reload discards it and it cannot be
+ * rebuilt (see content/functions/citation_anchors.js).
+ *
+ * Failure is soft and REPORTED, never thrown: a page that has since navigated, or an answer banked
+ * from a parked result, simply has no anchors, and the site falls back to text search for those
+ * citations. What must not happen is banking silently and finding out at analysis.
+ *
+ * @returns {Promise<{ok: boolean, resolved: number, total: number, reason: string|null}>}
+ */
+async function _attachCitationAnchors(record, tabId) {
+  const answer = record?.answer_raw || record?.answer_display || '';
+  if (!/\[\d+:"/.test(answer)) return { ok: true, resolved: 0, total: 0, reason: null };
+  try {
+    const id = tabId || (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+    if (!id) return { ok: false, resolved: 0, total: 0, reason: 'no active tab' };
+
+    // THE TAB MUST BE THE PAGE THIS ANSWER IS ABOUT.
+    //
+    // `[69:"…"]` is element 69 in ONE page's index. Every page has an element 69, so resolving
+    // against the wrong tab does not fail — it returns a real element from the wrong article and
+    // banks it as fact. That happened: SVSF-V1's anchors were resolved while the Public Domain
+    // Review page was open, and came back pointing at "The parodies show how the humanists'
+    // confident claims to dignity…", which is not in the Aeon article at all.
+    //
+    // A wrong locator is worse than a missing one, because the site trusts locators over text
+    // search — so this refuses rather than guesses.
+    const tab = await chrome.tabs.get(id).catch(() => null);
+    if (record?.url && tab?.url && !_sameStudyPage(tab.url, record.url)) {
+      return {
+        ok: false, resolved: 0, total: 0,
+        reason: `that tab is ${_shortUrl(tab.url)}, but this answer was recorded on `
+          + `${_shortUrl(record.url)} — open the right page first`,
+      };
+    }
+    const res = await chrome.tabs.sendMessage(id, { action: 'resolveCitationAnchors', answer });
+    if (!res || res.error) {
+      return { ok: false, resolved: 0, total: 0, reason: res?.error || 'the page did not respond' };
+    }
+    record.citation_anchors = _mergeStudyCitationAnchors(answer, res.anchors || [], record.citation_anchors);
+    return {
+      ok: res.hasIndex && res.resolved > 0,
+      resolved: res.resolved,
+      total: res.total,
+      reason: res.hasIndex ? null : 'the answer run\'s page index is gone (was the page reloaded?)',
+    };
+  } catch (e) {
+    return { ok: false, resolved: 0, total: 0, reason: e?.message || String(e) };
+  }
+}
+
+/**
+ * Apply an edited answer to a record. Pure. Only the text changes — evidence is left exactly as
+ * captured, since editing prose must never silently drop a screenshot.
+ */
+function _applyStudyResponseEdit(record, newAnswer) {
+  const answer = String(newAnswer == null ? '' : newAnswer);
+  return Object.assign({}, record, {
+    answer_raw: answer,
+    answer_display: answer,
+    citation_anchors: _reconcileStudyCitationAnchors(
+      record?.citation_anchors,
+      record?.answer_raw || record?.answer_display || '',
+      answer
+    ),
+    edited: true,
+    edited_at: new Date().toISOString()
+  });
+}
+
+function _studyCitationMarkers(answer) {
+  const markers = [];
+  // Same repair as the resolver, or a compound bracket banks zero markers for an answer that
+  // visibly carries two citations — and the reconcile below would then drop its anchors.
+  const text = (typeof normalizeCitationMarkers === 'function')
+    ? normalizeCitationMarkers(answer) : String(answer || '');
+  String(text).replace(/\[(\d+):"([^"]*)"\]/g, (m, index, quote) => {
+    markers.push({ index: Number(index), quote, key: `${Number(index)}:${quote}` });
+    return m;
+  });
+  return markers;
+}
+
+function _reconcileStudyCitationAnchors(oldAnchors, oldAnswer, newAnswer) {
+  const nextMarkers = _studyCitationMarkers(newAnswer);
+  if (!nextMarkers.length) return [];
+
+  const previousMarkers = _studyCitationMarkers(oldAnswer);
+  const sameMarkers = previousMarkers.length === nextMarkers.length
+    && previousMarkers.every((marker, i) => marker.key === nextMarkers[i].key);
+  if (sameMarkers) return Array.isArray(oldAnchors) ? oldAnchors : null;
+  if (!Array.isArray(oldAnchors) || !oldAnchors.length) return null;
+
+  const byKey = new Map();
+  oldAnchors.forEach((anchor) => {
+    const key = `${Number(anchor?.index)}:${String(anchor?.quote || '')}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(anchor);
+  });
+
+  const kept = [];
+  nextMarkers.forEach((marker) => {
+    const matches = byKey.get(marker.key);
+    if (matches && matches.length) kept.push(matches.shift());
+  });
+  return kept.length ? kept : null;
+}
+
+function _mergeStudyCitationAnchors(answer, freshAnchors, storedAnchors) {
+  const markers = _studyCitationMarkers(answer);
+  if (!markers.length) return [];
+  const fresh = _studyAnchorQueues(freshAnchors);
+  const stored = _studyAnchorQueues(storedAnchors);
+  const merged = [];
+  markers.forEach((marker) => {
+    const freshMatches = fresh.get(marker.key);
+    const storedMatches = stored.get(marker.key);
+    const anchor = freshMatches?.length
+      ? freshMatches.shift()
+      : (storedMatches?.length ? storedMatches.shift() : null);
+    if (anchor) merged.push(anchor);
+  });
+  return merged;
+}
+
+function _studyAnchorQueues(anchors) {
+  const out = new Map();
+  (Array.isArray(anchors) ? anchors : []).forEach((anchor) => {
+    const key = `${Number(anchor?.index)}:${String(anchor?.quote || '')}`;
+    if (!out.has(key)) out.set(key, []);
+    out.get(key).push(anchor);
+  });
+  return out;
+}
+
+/**
+ * Shrink one base64 JPEG to at most `maxWidth` across. Evidence crops are captured at device-pixel
+ * ratio and never downscaled by the capture path, so a retina full-viewport item can be ~1 MB —
+ * enough that a bank of them is awkward to put in a database row. Returns the input unchanged on any
+ * failure: a slightly large record beats a lost one.
+ */
+function _downscaleStudyShot(base64, maxWidth = STUDY_RESPONSE_SHOT_MAX_WIDTH) {
+  return new Promise((resolve) => {
+    if (!base64) { resolve(base64); return; }
+    // Time-box the decode: an Image that neither loads nor errors would otherwise hang the save,
+    // and the whole point of this helper is that it never costs us the record.
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    setTimeout(() => finish(base64), 2000);
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          if (!img.naturalWidth || img.naturalWidth <= maxWidth) { finish(base64); return; }
+          const scale = maxWidth / img.naturalWidth;
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          finish(canvas.toDataURL('image/jpeg', 0.86).replace(/^data:image\/\w+;base64,/, ''));
+        } catch (e) { finish(base64); }
+      };
+      img.onerror = () => finish(base64);
+      img.src = `data:image/jpeg;base64,${base64}`;
+    } catch (e) {
+      finish(base64);
+    }
+  });
+}
+
+/** Downscale every crop in a record, in place on a copy. */
+async function _downscaleStudyResponseEvidence(record) {
+  const evidence = Array.isArray(record?.evidence) ? record.evidence : [];
+  if (!evidence.length) return record;
+  const shrunk = [];
+  for (const item of evidence) {
+    shrunk.push(Object.assign({}, item, { shot: await _downscaleStudyShot(item.shot) }));
+  }
+  return Object.assign({}, record, { evidence: shrunk });
+}
+
+// ===== STORAGE =====
+// chrome.storage.local is the source of truth. manifest.json grants unlimitedStorage, so the base64
+// evidence is fine here even before downscaling.
+
+async function listStudyResponses() {
+  try {
+    const data = await chrome.storage.local.get(PAGEGUIDE_STUDY_RESPONSES_KEY);
+    const all = data[PAGEGUIDE_STUDY_RESPONSES_KEY];
+    return (all && typeof all === 'object') ? all : {};
+  } catch (e) {
+    console.warn('[StudyResponses] read failed:', e);
+    return {};
+  }
+}
+
+/**
+ * The record for one (task, condition), or null.
+ *
+ * Falls back through STUDY_RESPONSE_ALIASES, which maps the V1 arm names and the V2 correct cells
+ * onto each other in both directions, with the pre-collapse per-evidence-mode slots behind them.
+ * Read-only: nothing is rewritten under another key until it is saved again.
+ */
+async function getStudyResponse(taskId, condition) {
+  const all = await listStudyResponses();
+  const hit = all[_studyResponseKey(taskId, condition)];
+  if (hit) return hit;
+  for (const alias of (STUDY_RESPONSE_ALIASES[condition] || [])) {
+    const old = all[_studyResponseKey(taskId, alias)];
+    if (old) return old;
+  }
+  return null;
+}
+
+/**
+ * Save a record locally, then mirror it to Supabase when configured. Local write is what counts;
+ * a remote failure warns and returns, exactly like the study's own persistResult.
+ *
+ * @returns {Promise<{saved: boolean, synced: boolean, error?: string}>}
+ */
+async function saveStudyResponse(record, { downscale = true } = {}) {
+  const toStore = downscale ? await _downscaleStudyResponseEvidence(record) : record;
+  try {
+    const all = await listStudyResponses();
+    all[_studyResponseKey(toStore.task_id, toStore.condition)] = toStore;
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_RESPONSES_KEY]: all });
+  } catch (e) {
+    console.error('[StudyResponses] local save failed:', e);
+    return { saved: false, synced: false, error: e?.message || 'local save failed' };
+  }
+  const synced = await syncStudyResponse(toStore);
+  return { saved: true, synced };
+}
+
+/**
+ * Drop every record whose task no longer exists in tasks.json. A question removed from the task
+ * file is a question that will never be asked again, and leaving its recordings behind means the
+ * bank slowly fills with answers to nothing — which shows up later as a task count that does not
+ * match the number of banked pairs.
+ *
+ * Guarded on a NON-EMPTY id list on purpose: this deletes recordings, and a tasks.json that failed
+ * to load, or loaded as `{}`, would otherwise look exactly like "every task was deleted" and wipe
+ * the whole bank.
+ *
+ * @param {Array<string>} validTaskIds - every task id currently in tasks.json
+ * @returns {Promise<Array<string>>} the storage keys removed
+ */
+async function pruneStudyResponses(validTaskIds) {
+  const keep = new Set((Array.isArray(validTaskIds) ? validTaskIds : [])
+    .map(id => String(id || '').trim())
+    .filter(Boolean));
+  if (!keep.size) return [];
+  try {
+    const all = await listStudyResponses();
+    const orphaned = Object.keys(all).filter(key => !keep.has(String(all[key]?.task_id || key.split('::')[0]).trim()));
+    if (!orphaned.length) return [];
+    orphaned.forEach(key => { delete all[key]; });
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_RESPONSES_KEY]: all });
+    console.log(`[StudyResponses] pruned ${orphaned.length} record(s) for deleted tasks:`, orphaned);
+    return orphaned;
+  } catch (e) {
+    console.warn('[StudyResponses] prune failed:', e);
+    return [];
+  }
+}
+
+async function deleteStudyResponse(taskId, condition) {
+  try {
+    const all = await listStudyResponses();
+    delete all[_studyResponseKey(taskId, condition)];
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_RESPONSES_KEY]: all });
+    return true;
+  } catch (e) {
+    console.warn('[StudyResponses] delete failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Mirror one record to Supabase. Reuses study.js's supabaseInsert (exposed on window) rather than
+ * standing up a second client — it already handles the anon key and the return=representation →
+ * return=minimal retry when RLS blocks the RETURNING clause.
+ *
+ * Never throws: the local copy is the source of truth.
+ */
+async function syncStudyResponse(record) {
+  if (typeof window.supabaseInsert !== 'function') return false;
+  try {
+    const row = await window.supabaseInsert('study_canned_responses', {
+      task_id: record.task_id,
+      condition: record.condition,
+      url: record.url,
+      question: record.question,
+      answer_raw: record.answer_raw,
+      answer_display: record.answer_display,
+      evidence: record.evidence,
+      citation_anchors: record.citation_anchors || null,
+      highlight_count: record.highlight_count,
+      edited: !!record.edited
+    });
+    // supabaseInsert returns null both when Supabase is unconfigured and when the row was created
+    // without a readable RETURNING, so this is "we tried and nothing threw", not "confirmed stored".
+    return row !== undefined;
+  } catch (e) {
+    console.warn('[StudyResponses] Supabase sync failed (saved locally):', e);
+    return false;
+  }
+}
+
+// ===== EDITING =====
+
+/**
+ * Edit a block of answer text in a dialog, resolving to the new text or null if it was dismissed.
+ *
+ * Generic on purpose: the Answer screen edits three different things through it (the live answer,
+ * a banked record, an unsaved bare draft) and the caller decides what to do with the result. Reuses
+ * the #pageguide-memory-shot-lightbox shell and the .pageguide-study-edit-* classes the panel's own
+ * edit dialog already styles.
+ *
+ * @param {string} text
+ * @param {{title?: string, hint?: string}} [options]
+ * @returns {Promise<string|null>}
+ */
+function openStudyAnswerEditor(text, options = {}) {
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : (v => String(v == null ? '' : v));
+  return new Promise((resolve) => {
+    if (typeof closeMemoryShotLightbox === 'function') closeMemoryShotLightbox();
+    const overlay = document.createElement('div');
+    overlay.id = 'pageguide-memory-shot-lightbox';
+    overlay.className = 'pageguide-memory-shot-lightbox';
+    overlay.innerHTML = `
+      <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Edit answer">
+        <div class="pageguide-memory-shot-head">
+          <span>${esc(options.title || 'Edit the answer')}</span>
+          <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+        </div>
+        <div class="pageguide-recap-detail-body pageguide-study-save-body">
+          <textarea class="pageguide-study-edit-text" rows="14">${esc(String(text == null ? '' : text))}</textarea>
+          ${options.hint ? `<div class="pageguide-study-save-hint">${options.hint}</div>` : ''}
+          <div class="pageguide-study-save-actions">
+            <button type="button" class="pageguide-study-edit-apply">Apply</button>
+          </div>
+        </div>
+      </div>`;
+
+    let settled = false;
+    const close = (value) => {
+      if (settled) return;
+      settled = true;
+      overlay.remove();
+      resolve(value);
+    };
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) close(null);
+    });
+    overlay.querySelector('.pageguide-study-edit-apply')?.addEventListener('click', () => {
+      close(overlay.querySelector('.pageguide-study-edit-text')?.value ?? '');
+    });
+    document.body.appendChild(overlay);
+    overlay.querySelector('.pageguide-study-edit-text')?.focus();
+  });
+}
+
+// ===== PREVIEW =====
+
+/**
+ * Show one recorded response read-only, so the researcher can check what was banked for a task
+ * before a participant runs it. Reached from the study's task setup screen.
+ *
+ * Deliberately inert: the answer is rendered through the same parseMarkdown → parseCitations →
+ * _expandEvidenceKeyCitations chain the chat uses, so the markers look exactly as they will on the
+ * day, but nothing is bound to them — there is no live page behind this dialog to scroll. The
+ * evidence crops are shown inline instead, since that is the part worth eyeballing.
+ *
+ * Reuses the #pageguide-memory-shot-lightbox shell every other panel dialog uses.
+ */
+function openStudyResponsePreview(record, label) {
+  if (!record) return;
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : (v => String(v == null ? '' : v));
+  const answer = record.answer_display || record.answer_raw || '';
+  let body = esc(answer);
+  try {
+    if (typeof parseMarkdown === 'function' && typeof parseCitations === 'function') {
+      body = parseCitations(parseMarkdown(answer));
+      if (typeof _expandEvidenceKeyCitations === 'function') {
+        body = _expandEvidenceKeyCitations(body, Array.isArray(record.evidence) ? record.evidence : []);
+      }
+    }
+  } catch (e) {
+    body = esc(answer);
+  }
+  const shots = (Array.isArray(record.evidence) ? record.evidence : []).filter(item => item && item.shot);
+  const figures = shots.map((item) => {
+    const caption = item.note || `Evidence ${item.index}`;
+    return `<figure class="pageguide-study-preview-figure">
+      <img src="data:image/jpeg;base64,${item.shot}" alt="${esc(caption)}">
+      <figcaption>${esc(String(item.index ?? ''))} · ${esc(caption)}</figcaption>
+    </figure>`;
+  }).join('');
+
+  if (typeof closeMemoryShotLightbox === 'function') closeMemoryShotLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Saved study response">
+      <div class="pageguide-memory-shot-head">
+        <span>${esc(label || record.condition)} · ${esc(record.task_id)}</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body pageguide-study-preview-body">
+        <div class="pageguide-study-preview-meta">
+          ${esc(record.condition)} · ${shots.length} evidence image${shots.length === 1 ? '' : 's'}
+          · ${Number(record.highlight_count) || 0} highlight(s)${record.edited ? ' · edited' : ''}
+        </div>
+        <div class="pageguide-study-preview-answer">${body}</div>
+        ${figures}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) {
+      if (typeof closeMemoryShotLightbox === 'function') closeMemoryShotLightbox();
+      else overlay.remove();
+    }
+  });
+  document.body.appendChild(overlay);
+}
+
+// ===== GROUND TRUTH FOR THE SUPPORTING QUESTIONS =====
+// What a participant's picked sentence is scored against, authored the same way they answer: by
+// pointing at the page.
+//
+// A LIST per hop, not a single sentence, on purpose. The answer to a supporting question is often
+// stated in more than one place — a caption and the paragraph beside it, a claim and its restatement
+// — and marking a participant wrong for pointing at the other one would be scoring the page rather
+// than the participant. Anything in the list counts.
+
+const PAGEGUIDE_STUDY_GROUND_TRUTH_KEY = 'pageguide_study_ground_truth';
+
+/** One accepted sentence: what was picked, and where on the page it was picked from. */
+function _buildGroundTruthEntry(picked) {
+  const text = String(picked?.text || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  // "No index" has to stay null. Number(null) is 0 — a perfectly finite, perfectly wrong page index
+  // — so a typed or hand-edited entry would be filed as pointing at element 0.
+  const raw = picked?.index;
+  const index = (raw === null || raw === undefined || raw === '') ? null : Number(raw);
+  return {
+    text,
+    index: Number.isFinite(index) ? index : null,
+    url: picked?.url || '',
+    // Kept so the panel can take the researcher back to what was picked. Not part of the match —
+    // a selector is a position on one rendering of the page, the words are the answer.
+    selector: picked?.selector || ''
+  };
+}
+
+/**
+ * Build the record for one task. Pure. Entries are deduplicated on their text, since the same
+ * sentence picked twice is one accepted answer, not two.
+ *
+ * @param {string} taskId
+ * @param {object} hops - {1: [entry|picked], 2: [...]}
+ * @returns {{task_id: string, hops: object, updated_at: string}}
+ */
+function _buildGroundTruthRecord(taskId, hops) {
+  const out = {};
+  Object.keys(hops || {}).forEach(hop => {
+    const seen = new Set();
+    out[String(hop)] = (Array.isArray(hops[hop]) ? hops[hop] : [])
+      .map(_buildGroundTruthEntry)
+      .filter(entry => {
+        if (!entry) return false;
+        const key = entry.text.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  });
+  return { task_id: String(taskId || ''), hops: out, updated_at: new Date().toISOString() };
+}
+
+async function listStudyGroundTruth() {
+  try {
+    const data = await chrome.storage.local.get(PAGEGUIDE_STUDY_GROUND_TRUTH_KEY);
+    const all = data[PAGEGUIDE_STUDY_GROUND_TRUTH_KEY];
+    return (all && typeof all === 'object') ? all : {};
+  } catch (e) {
+    console.warn('[StudyGroundTruth] read failed:', e);
+    return {};
+  }
+}
+
+async function getStudyGroundTruth(taskId) {
+  const all = await listStudyGroundTruth();
+  return all[String(taskId || '').trim()] || null;
+}
+
+/** Save one task's ground truth locally, then mirror it to Supabase. Local is the source of truth. */
+async function saveStudyGroundTruth(record) {
+  try {
+    const all = await listStudyGroundTruth();
+    all[String(record?.task_id || '').trim()] = record;
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_GROUND_TRUTH_KEY]: all });
+  } catch (e) {
+    console.error('[StudyGroundTruth] local save failed:', e);
+    return { saved: false, synced: false, error: e?.message || 'local save failed' };
+  }
+  let synced = false;
+  if (typeof window.supabaseInsert === 'function') {
+    try {
+      const row = await window.supabaseInsert('study_ground_truth', {
+        task_id: record.task_id,
+        hops: record.hops
+      });
+      synced = row !== undefined;
+    } catch (e) {
+      console.warn('[StudyGroundTruth] Supabase sync failed (saved locally):', e);
+    }
+  }
+  return { saved: true, synced };
+}
+
+/** Same orphan rule as the response bank: a task deleted from tasks.json takes its ground truth. */
+async function pruneStudyGroundTruth(validTaskIds) {
+  const keep = new Set((Array.isArray(validTaskIds) ? validTaskIds : [])
+    .map(id => String(id || '').trim())
+    .filter(Boolean));
+  if (!keep.size) return [];
+  try {
+    const all = await listStudyGroundTruth();
+    const orphaned = Object.keys(all).filter(taskId => !keep.has(taskId));
+    if (!orphaned.length) return [];
+    orphaned.forEach(taskId => { delete all[taskId]; });
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_GROUND_TRUTH_KEY]: all });
+    console.log(`[StudyGroundTruth] pruned ${orphaned.length} record(s) for deleted tasks:`, orphaned);
+    return orphaned;
+  } catch (e) {
+    console.warn('[StudyGroundTruth] prune failed:', e);
+    return [];
+  }
+}
+
+// ===== FIND QUESTION EDITS =====
+//
+// tasks.json ships inside the extension, so it is read-only at runtime: a question can only be
+// changed by editing the file and reloading. That was survivable while a Find question was
+// answered from a fixed list of four options, because the question and its options were authored
+// together in one pass. It is not survivable now. V2 asks the participant to VERIFY an answer
+// instead of picking one, so a question that ends "...which of the following?" — or any wording
+// that leans on options the participant can no longer see — has to be reworded against the live
+// page, which is exactly when the researcher is standing in front of the page and not the file.
+//
+// So edits live here: an OVERLAY keyed by task id, holding only what was changed. tasks.json stays
+// the authoring source (a task deleted there still disappears, and its edit is pruned with it),
+// and the overlay is applied everywhere the bank is read — the runner, the recorder, and the
+// publish bundle — so a participant, the researcher and the analysis all see one wording.
+const PAGEGUIDE_STUDY_TASK_EDITS_KEY = 'pageguide_study_task_edits';
+
+/** The fields an edit may carry. `answer` is the string the study grades a Yes/No verdict against. */
+const STUDY_TASK_EDIT_FIELDS = ['question', 'answer'];
+
+/**
+ * Build one edit record. Pure.
+ *
+ * Only fields that DIFFER from the shipped task are stored: an edit that reverts a question to its
+ * tasks.json wording is not an edit, and keeping it would pin the old wording forever — the file
+ * could then be corrected and the overlay would silently undo it on every load.
+ *
+ * @param {object} task - the task as it comes out of tasks.json
+ * @param {{question?: string, answer?: string}} next - the edited values
+ * @returns {{task_id: string, fields: object, updated_at: string}|null} null when nothing differs
+ */
+function _buildStudyTaskEdit(task, next) {
+  const taskId = String(task?.id || '').trim();
+  if (!taskId) return null;
+  const fields = {};
+  STUDY_TASK_EDIT_FIELDS.forEach(key => {
+    if (!next || next[key] === undefined) return;
+    const value = String(next[key] == null ? '' : next[key]).trim();
+    if (!value) return;                                  // blanking a question is never the intent
+    if (value === String(task?.[key] == null ? '' : task[key]).trim()) return;
+    fields[key] = value;
+  });
+  if (!Object.keys(fields).length) return null;
+  return { task_id: taskId, fields, updated_at: new Date().toISOString() };
+}
+
+/**
+ * Lay the edits over one task. Pure, and returns the SAME object when there is nothing to apply so
+ * an unedited bank is not needlessly copied.
+ *
+ * `edited_fields` rides along on the result so the recorder can mark what it is showing without
+ * having to re-read the bank, and so a publish row can say the question was reworded.
+ */
+function _applyStudyTaskEdit(task, edit) {
+  const fields = edit?.fields;
+  if (!task || !fields || !Object.keys(fields).length) return task;
+  const out = Object.assign({}, task);
+  const applied = [];
+  STUDY_TASK_EDIT_FIELDS.forEach(key => {
+    if (typeof fields[key] !== 'string' || !fields[key]) return;
+    out[key] = fields[key];
+    applied.push(key);
+  });
+  if (!applied.length) return task;
+  out.edited_fields = applied;
+  return out;
+}
+
+/** Lay the whole overlay over a { find, guide } bank. Pure. Guide tasks are not editable here. */
+function _applyStudyTaskEdits(tasksData, edits) {
+  const all = (edits && typeof edits === 'object') ? edits : {};
+  if (!Object.keys(all).length) return tasksData;
+  const find = (tasksData?.find || []).map(t => _applyStudyTaskEdit(t, all[String(t?.id || '').trim()]));
+  return Object.assign({}, tasksData, { find });
+}
+
+async function listStudyTaskEdits() {
+  try {
+    const data = await chrome.storage.local.get(PAGEGUIDE_STUDY_TASK_EDITS_KEY);
+    const all = data[PAGEGUIDE_STUDY_TASK_EDITS_KEY];
+    return (all && typeof all === 'object') ? all : {};
+  } catch (e) {
+    console.warn('[StudyTaskEdits] read failed:', e);
+    return {};
+  }
+}
+
+async function getStudyTaskEdit(taskId) {
+  const all = await listStudyTaskEdits();
+  return all[String(taskId || '').trim()] || null;
+}
+
+/**
+ * Save one task's edit, or clear it when `record` is null / carries no changed field.
+ *
+ * Local only, deliberately: the edited question reaches Supabase through the normal publish, as
+ * part of the study_tasks row it belongs to. Writing it here as well would give the site two
+ * sources for one question and let them drift — the drift tasks.json's own comment warns about.
+ */
+async function saveStudyTaskEdit(taskId, record) {
+  const id = String(taskId || '').trim();
+  if (!id) return { saved: false, error: 'no task id' };
+  try {
+    const all = await listStudyTaskEdits();
+    if (record && record.fields && Object.keys(record.fields).length) all[id] = record;
+    else delete all[id];
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_TASK_EDITS_KEY]: all });
+    return { saved: true, cleared: !all[id] };
+  } catch (e) {
+    console.error('[StudyTaskEdits] local save failed:', e);
+    return { saved: false, error: e?.message || 'local save failed' };
+  }
+}
+
+/** Same orphan rule as the response and ground-truth banks. */
+async function pruneStudyTaskEdits(validTaskIds) {
+  const keep = new Set((Array.isArray(validTaskIds) ? validTaskIds : [])
+    .map(id => String(id || '').trim())
+    .filter(Boolean));
+  if (!keep.size) return [];
+  try {
+    const all = await listStudyTaskEdits();
+    const orphaned = Object.keys(all).filter(taskId => !keep.has(taskId));
+    if (!orphaned.length) return [];
+    orphaned.forEach(taskId => { delete all[taskId]; });
+    await chrome.storage.local.set({ [PAGEGUIDE_STUDY_TASK_EDITS_KEY]: all });
+    console.log(`[StudyTaskEdits] pruned ${orphaned.length} edit(s) for deleted tasks:`, orphaned);
+    return orphaned;
+  } catch (e) {
+    console.warn('[StudyTaskEdits] prune failed:', e);
+    return [];
+  }
+}
+
+/** Download the whole bank as JSON, so it can be committed beside user_study_data/tasks.json. */
+async function exportStudyResponses() {
+  const all = await listStudyResponses();
+  const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `study_responses_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  return Object.keys(all).length;
+}
+
+if (typeof window !== 'undefined') {
+  window.PAGEGUIDE_STUDY_RESPONSES_KEY = PAGEGUIDE_STUDY_RESPONSES_KEY;
+  window.STUDY_V2_VARIANTS = STUDY_V2_VARIANTS;
+  window.V2_VARIANT_LABELS = V2_VARIANT_LABELS;
+  window._variantIsGrounded = _variantIsGrounded;
+  window._variantCorrectness = _variantCorrectness;
+  window._bareTwinOf = _bareTwinOf;
+  window._groundedTwinOf = _groundedTwinOf;
+  window._stripStudyArmRecord = _stripStudyArmRecord;
+  window._studyResponseCondition = _studyResponseCondition;
+  window._studyResponseKey = _studyResponseKey;
+  window._stripStudyGrounding = _stripStudyGrounding;
+  window.openStudyAnswerEditor = openStudyAnswerEditor;
+  window._buildStudyResponseRecord = _buildStudyResponseRecord;
+  window._buildStudyArmRecord = _buildStudyArmRecord;
+  window._applyStudyResponseEdit = _applyStudyResponseEdit;
+  window._studyCitationMarkers = _studyCitationMarkers;
+  window._reconcileStudyCitationAnchors = _reconcileStudyCitationAnchors;
+  window._mergeStudyCitationAnchors = _mergeStudyCitationAnchors;
+  window._attachCitationAnchors = _attachCitationAnchors;
+  window._sameStudyPage = _sameStudyPage;
+  window._shortUrl = _shortUrl;
+  window.listStudyResponses = listStudyResponses;
+  window.getStudyResponse = getStudyResponse;
+  window.saveStudyResponse = saveStudyResponse;
+  window.deleteStudyResponse = deleteStudyResponse;
+  window.pruneStudyResponses = pruneStudyResponses;
+  window.PAGEGUIDE_STUDY_GROUND_TRUTH_KEY = PAGEGUIDE_STUDY_GROUND_TRUTH_KEY;
+  window._buildGroundTruthRecord = _buildGroundTruthRecord;
+  window.listStudyGroundTruth = listStudyGroundTruth;
+  window.getStudyGroundTruth = getStudyGroundTruth;
+  window.saveStudyGroundTruth = saveStudyGroundTruth;
+  window.pruneStudyGroundTruth = pruneStudyGroundTruth;
+  window.PAGEGUIDE_STUDY_TASK_EDITS_KEY = PAGEGUIDE_STUDY_TASK_EDITS_KEY;
+  window.STUDY_TASK_EDIT_FIELDS = STUDY_TASK_EDIT_FIELDS;
+  window._buildStudyTaskEdit = _buildStudyTaskEdit;
+  window._applyStudyTaskEdit = _applyStudyTaskEdit;
+  window._applyStudyTaskEdits = _applyStudyTaskEdits;
+  window.listStudyTaskEdits = listStudyTaskEdits;
+  window.getStudyTaskEdit = getStudyTaskEdit;
+  window.saveStudyTaskEdit = saveStudyTaskEdit;
+  window.pruneStudyTaskEdits = pruneStudyTaskEdits;
+  window.syncStudyResponse = syncStudyResponse;
+  window.openStudyResponsePreview = openStudyResponsePreview;
+  window.exportStudyResponses = exportStudyResponses;
+}

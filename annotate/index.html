@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PageGuide — Trajectory Annotation</title>
+  <link rel="stylesheet" href="annotate.css">
+</head>
+<body>
+  <!--
+    The annotator website. Two annotators grade each recorded Guide run — every step correct or
+    not, the final answer correct or not — and the Agreement tab compares them.
+
+    Trajectories come from Supabase (pageguide_annotation_trajectories, published from the
+    extension's ⋯ → Record Annotation Trajectories) or from a JSON file exported by the same
+    screen. Annotations go to Supabase (save_pageguide_annotation) or, without it, stay in this
+    browser and can be downloaded.
+  -->
+  <header class="an-head">
+    <div class="an-brand">📝 PageGuide Annotation</div>
+    <nav class="an-nav">
+      <button class="an-tab an-tab-on" data-tab="queue">Queue</button>
+      <button class="an-tab" data-tab="agreement">Agreement</button>
+      <button class="an-tab" data-tab="rerun">Rerun</button>
+      <button class="an-tab" data-tab="edit" id="an-tab-edit" hidden>✎ Edit</button>
+    </nav>
+    <div class="an-who">
+      <span>Annotator</span>
+      <div class="an-seg" id="an-annotator-seg" role="radiogroup" aria-label="Annotator">
+        <button type="button" class="an-seg-btn" data-annotator="A" role="radio" aria-checked="false">A</button>
+        <button type="button" class="an-seg-btn" data-annotator="B" role="radio" aria-checked="false">B</button>
+      </div>
+      <span class="an-source" id="an-source"></span>
+      <button class="an-btn an-btn-quiet" id="an-researcher" hidden title="Enter the admin password to unlock the Edit tab">🔑 Researcher</button>
+    </div>
+  </header>
+
+  <main class="an-main">
+    <section id="an-queue" class="an-view">
+      <div class="an-toolbar">
+        <p class="an-intro">Pick a trajectory and <strong>grade its evidence</strong>: for every crop the agent saved with its answer, say whether it is correct and relevant to the task (and what is wrong if not). Steps and the final answer are optional. Press <strong>Submit</strong> when all evidence is graded.</p>
+        <label class="an-file">⬇ Load exported JSON <input type="file" id="an-file" accept="application/json" multiple hidden></label>
+      </div>
+      <div id="an-queue-list" class="an-list"></div>
+    </section>
+
+    <section id="an-task" class="an-view" hidden>
+      <div class="an-task-head">
+        <button class="an-btn an-btn-quiet" id="an-back">← Queue</button>
+        <button class="an-btn an-btn-quiet" id="an-task-edit" hidden title="Edit task name, agent answer…">✎ Edit</button>
+        <div class="an-task-title">
+          <div class="an-kicker">Task</div>
+          <h1 id="an-goal"></h1>
+          <div class="an-meta" id="an-task-meta"></div>
+        </div>
+      </div>
+      <div class="an-cols">
+        <div class="an-stage" id="an-stage"></div>
+        <aside class="an-side">
+          <div class="an-side-sticky">
+            <div class="an-progress" id="an-progress"></div>
+            <div class="an-note" id="an-note"></div>
+            <button class="an-btn an-btn-primary" id="an-submit">Submit</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="an-agreement" class="an-view" hidden>
+      <div class="an-toolbar">
+        <label>Annotator A <select id="an-rater-a"></select></label>
+        <label>Annotator B <select id="an-rater-b"></select></label>
+        <button class="an-btn" id="an-refresh">⟳ Refresh</button>
+        <button class="an-btn" id="an-csv">⬇ CSV</button>
+        <button class="an-btn" id="an-download-local" title="Download annotations saved only in this browser">⬇ Local annotations</button>
+      </div>
+      <div id="an-overall" class="an-overall"></div>
+      <div class="an-table-wrap"><table class="an-table" id="an-agree-table"></table></div>
+    </section>
+    <section id="an-edit" class="an-view" hidden>
+      <!-- The researcher's tab: every published run (hidden ones included), each with a form for
+           the task name, title, task text, agent answer and visibility. Needs the V2 admin
+           password when Supabase is configured (supabase_migration_annotation_edit.sql). -->
+      <div class="an-toolbar">
+        <p class="an-intro">Fix a run without re-publishing it: pick the <strong>task name</strong> it belongs to and correct the <strong>agent's answer</strong> annotators grade. Save writes straight to Supabase.</p>
+        <button class="an-btn" id="an-edit-refresh">⟳ Refresh</button>
+        <label class="an-file" title="Upsert the runs in an exported bundle (⋯ → Record Annotation Trajectories → Export JSON) into Supabase">⬆ Publish JSON → Supabase <input type="file" id="an-edit-publish" accept="application/json" multiple hidden></label>
+        <span class="an-edit-publish-note" id="an-edit-publish-note"></span>
+      </div>
+      <div id="an-edit-list" class="an-list"></div>
+    </section>
+    <section id="an-rerun" class="an-view" hidden>
+      <!-- Which of the 12 tasks still need a fresh run (tasks.json, status = "rerun"): the study's
+           ground truth marked their answer as wrong, so they are not in the annotators' queue until
+           re-run from the extension and published. -->
+      <div class="an-toolbar">
+        <p class="an-intro">Tasks whose recorded answer was <strong>incorrect</strong>. Re-run each in the extension (⋯ → Record Annotation Trajectories → ▶), capture with 📝, then publish. Tasks marked correct are already in the queue.</p>
+      </div>
+      <div id="an-rerun-list" class="an-list"></div>
+    </section>
+  </main>
+
+  <div class="an-lightbox" id="an-lightbox" hidden><img id="an-lightbox-img" alt=""></div>
+
+  <!-- Optional, gitignored: defines SUPABASE_ANNOT_URL / SUPABASE_ANNOT_ANON_KEY. -->
+  <script src="supabase_config.js"></script>
+  <script src="annotate_logic.js"></script>
+  <script src="annotate.js"></script>
+</body>
+</html>

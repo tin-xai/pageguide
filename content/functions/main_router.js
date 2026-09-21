@@ -6,18 +6,39 @@
  * Includes timeout to prevent hanging on SPAs (X, ChatGPT, Claude, etc.)
  */
 async function safeSendMessage(message, timeoutMs = 60000) {
+  // Time agent "thinking" turns for the user study: the wall-clock of each planning LLM call.
+  // Emitted to the study tracker (ignored there unless a study task is running). Router/embedding
+  // calls are excluded so this reflects the guide agent's step reasoning.
+  const _isAgentThink = message && (message.action === 'callLLM' || message.action === 'callLLMWithImages');
+  const _thinkStart = _isAgentThink ? Date.now() : 0;
+
+  // Stamp the guide session onto every LLM call, in ONE place. It is what ties a call's cost to the
+  // journey that spent it (appendCostEntry, background/service-worker.js). Doing it here rather
+  // than at the ~20 call sites that build a `metadata` block is not just less code — it is the only
+  // version that stays true, since a new call site would otherwise be silently unattributed and its
+  // cost would quietly vanish from the journey's total. A Find outside a guide run has no session;
+  // those are attributed by debug-log position instead.
+  if (_isAgentThink && typeof window !== 'undefined' && window._guidev2?.sessionId) {
+    message = Object.assign({}, message, {
+      metadata: Object.assign({ sessionId: window._guidev2.sessionId }, message.metadata || {})
+    });
+  }
+
   try {
     // Create a timeout promise
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('Request timeout')), timeoutMs);
     });
-    
+
     // Race between the actual message and timeout
     const response = await Promise.race([
       chrome.runtime.sendMessage(message),
       timeoutPromise
     ]);
-    
+
+    if (_isAgentThink) {
+      try { chrome.runtime.sendMessage({ action: 'studyTracker_agentThink', durationMs: Date.now() - _thinkStart }); } catch (e2) {}
+    }
     return response;
   } catch (e) {
     const errorMsg = e.message || '';
@@ -100,8 +121,9 @@ async function routeQuery(query) {
  * @param {boolean} hasImage - Whether current message has an image attached
  * @param {boolean} hasImageInHistory - Whether any previous message had an image
  * @param {string} forcedRoute - Whether a specific route is requested by user ('ask'|'hide'|'guide')
+ * @param {string} cleanQuery - Query with any slash command stripped
  */
-async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false, forcedRoute = null) {
+async function handleSmartQuery(query, history = [], hasImage = false, hasImageInHistory = false, forcedRoute = null, cleanQuery = null) {
   // expandTruncatedContent is called AFTER routing (below), only for non-guide modes.
   // Calling it before routing would auto-click "See more" / "More" buttons on
   // social sites (X, LinkedIn) before guidance even starts, mutating the page
@@ -121,20 +143,6 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
     };
     console.log(`🎯 Override routing to: ${route.handler} due to forced command`);
   } else {
-    // If current message has an image attached, directly route to image_ask
-    // (don't ask the LLM router since it can't see the image)
-    if (hasImage && typeof handleImageAsk === 'function') {
-      console.log('🎯 Current message has image, routing directly to image_ask');
-      const result = await handleImageAsk(query);
-      if (result) {
-        result.routedTo = 'image_ask';
-        result.routeConfidence = 1.0;
-        result.routeReason = 'Image attached to current message';
-        return result;
-      }
-      // Fall through if image_ask fails
-    }
-    
     // Check if we're on a PDF page first (bypass router for PDF pages)
     if (typeof isPdfPage === 'function' && isPdfPage()) {
       console.log('🎯 PDF page detected, routing to pdf_ask');
@@ -149,10 +157,28 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
       }
       // Fall through to regular ask if pdf handler returns null
     }
-    
-    // Route the query using LLM
+
+    // Route the query using the LLM router. We ask the router even when an image
+    // is attached — it decides guide vs. image_ask vs. ask from the query's intent.
     route = await routeQuery(query);
     console.log('🎯 LLM Routed to:', route.handler, `(${Math.round(route.confidence * 100)}% confident - ${route.reason})`);
+
+    // An attached image defaults to image_ask (find-this-on-the-page) UNLESS the
+    // router chose an action route (guide/hide) that should consume the image
+    // itself. This is what lets Guide/Auto mode actually "see" an uploaded image
+    // instead of the image always hijacking the request into a find-on-page scroll.
+    if (hasImage && route.handler !== 'guide' && route.handler !== 'hide'
+        && typeof handleImageAsk === 'function') {
+      console.log('🎯 Image attached with non-guide route → image_ask');
+      const result = await handleImageAsk(query);
+      if (result) {
+        result.routedTo = 'image_ask';
+        result.routeConfidence = 1.0;
+        result.routeReason = 'Image attached (non-guide route)';
+        return result;
+      }
+      // Fall through if image_ask fails
+    }
   }
 
 
@@ -187,7 +213,9 @@ async function handleSmartQuery(query, history = [], hasImage = false, hasImageI
       break;
 
     case 'guide':
-      result = await handleStepByStepGuide(query);
+      // Use the clean query (file kept out) when provided — the guide ingests any
+      // attached file/image once instead of re-embedding it in every step.
+      result = await handleStepByStepGuide(cleanQuery || query);
       break;
     
     case 'image_ask':

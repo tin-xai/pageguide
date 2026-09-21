@@ -6,6 +6,7 @@ const { chromium } = require('@playwright/test');
 const path = require('path');
 
 const EXTENSION_PATH = path.join(__dirname, '../../../');
+const HEADLESS = process.env.HEADFUL !== '1';
 
 /**
  * Launch a browser with the PageGuide extension loaded
@@ -13,8 +14,9 @@ const EXTENSION_PATH = path.join(__dirname, '../../../');
  */
 async function launchBrowserWithExtension() {
   const browser = await chromium.launch({
-    headless: false, // Extensions require headed mode
+    headless: false,
     args: [
+      ...(HEADLESS ? ['--headless=new'] : []),
       `--disable-extensions-except=${EXTENSION_PATH}`,
       `--load-extension=${EXTENSION_PATH}`,
       '--no-sandbox',
