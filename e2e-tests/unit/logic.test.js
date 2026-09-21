@@ -3,6 +3,17 @@
  */
 const fs = require('fs');
 const path = require('path');
+// Some tests read the study website, a SIBLING checkout (../user_study_website) that is not part of
+// this repo. They are skipped, not failed, where that checkout is absent (CI), so the rest of the
+// suite still guards the extension.
+const SITE_DIR = path.join(__dirname, '../../../user_study_website');
+const HAS_SITE = fs.existsSync(SITE_DIR);
+const itSite = HAS_SITE ? it : it.skip;
+const testSite = HAS_SITE ? test : test.skip;
+const describeSite = HAS_SITE ? describe : describe.skip;
+// A site file's text, or '' where the sibling is absent (only tests guarded by itSite/testSite may rely on it).
+const readSite = (rel) => HAS_SITE ? fs.readFileSync(path.join(SITE_DIR, rel), 'utf8') : '';
+
 
 // Helper to load script content into JSDOM global scope
 function loadScript(filename) {
@@ -4763,14 +4774,14 @@ describe('User Study pure helpers (sidepanel/study.js)', () => {
       });
     });
 
-    test('the website writes the identical two labels', () => {
+    testSite('the website writes the identical two labels', () => {
       const site = require('fs').readFileSync(
         require('path').join(__dirname, '../../../user_study_website/app/session.js'), 'utf8');
       expect(site).toMatch(/return arm === 'nongrounding' \? 'nongrounding' : 'grounding';/);
     });
 
     // Which client produced a row is worth knowing — it is just not this column.
-    test('the client is recorded separately, not folded into the condition', () => {
+    testSite('the client is recorded separately, not folded into the condition', () => {
       const site = require('fs').readFileSync(
         require('path').join(__dirname, '../../../user_study_website/app/session.js'), 'utf8');
       expect(site).toMatch(/source: 'pageguide-web'/);
@@ -12709,7 +12720,7 @@ describe('Guide score columns (sidepanel/study.js + supabase_schema.sql)', () =>
     });
   });
 
-  test('one list feeds both the CSV and the insert', () => {
+  testSite('one list feeds both the CSV and the insert', () => {
     expect(study).toMatch(/const GUIDE_SCORE_COLUMNS = \[/);
     // Spread into both, rather than written out twice.
     expect(study.match(/\.\.\.GUIDE_SCORE_COLUMNS/g)).toHaveLength(2);
@@ -12769,7 +12780,7 @@ describe('Publish trajectories to Supabase (sidepanel/study.js + supabase_schema
 
   // A bulk insert is rejected whole, so one malformed trajectory would take the rest with it and
   // report nothing about which.
-  test('rows are published one at a time so a failure is attributable', () => {
+  testSite('rows are published one at a time so a failure is attributable', () => {
     const helper = fsp2.readFileSync(
       pathp2.join(__dirname, '../../../user_study_website/scripts/publish.mjs'), 'utf8');
     expect(helper).toMatch(/for \(const row of rows\)/);
@@ -12787,7 +12798,7 @@ describe('Publish trajectories to Supabase (sidepanel/study.js + supabase_schema
   });
 
   // The secret key lives in .env, read only by the terminal helper.
-  test('the helper reads its key from .env, not from a field', () => {
+  testSite('the helper reads its key from .env, not from a field', () => {
     const helper = fsp2.readFileSync(
       pathp2.join(__dirname, '../../../user_study_website/scripts/publish.mjs'), 'utf8');
     expect(helper).toMatch(/SUPABASE_SECRET_KEY/);
@@ -12843,12 +12854,12 @@ describe('Page snapshots (content/functions/page_snapshot.js)', () => {
   const fss = require('fs');
   const paths = require('path');
   const snap = fss.readFileSync(paths.join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
-  const site = fss.readFileSync(
-    paths.join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+  const site = readSite('app/study.js');
+
 
   // A snapshot that could run code could rewrite itself under a participant, re-fetch the live
   // article, or navigate the study away.
-  test('scripts are stripped and re-blocked by a CSP', () => {
+  testSite('scripts are stripped and re-blocked by a CSP', () => {
     expect(snap).toMatch(/querySelectorAll\('script, noscript'\)\.forEach\(el => el\.remove\(\)\)/);
     expect(snap).toMatch(/Content-Security-Policy/);
     expect(snap).toMatch(/default-src 'none'/);
@@ -12861,7 +12872,7 @@ describe('Page snapshots (content/functions/page_snapshot.js)', () => {
     expect(snap).toMatch(/link\[rel~="stylesheet"\]/);
   });
 
-  test("PageGuide's own chrome is not baked into the capture", () => {
+  testSite("PageGuide's own chrome is not baked into the capture", () => {
     expect(snap).toMatch(/\[id\^="pageguide-"\]/);
     expect(snap).toMatch(/study-overlay/);
   });
@@ -12880,13 +12891,13 @@ describe('Page snapshots (content/functions/page_snapshot.js)', () => {
     expect(snap).toMatch(/removeAttribute\('srcset'\)/);
   });
 
-  test('a password is never serialized into a snapshot', () => {
+  testSite('a password is never serialized into a snapshot', () => {
     const utils = fss.readFileSync(paths.join(__dirname, '../../content/utils.js'), 'utf8');
     expect(utils).toMatch(/never serialize password values/i);
   });
 
   // The site must frame it same-origin, or the entire exercise was pointless.
-  test('the site frames the snapshot same-origin and marks evidence in it', () => {
+  testSite('the site frames the snapshot same-origin and marks evidence in it', () => {
     expect(site).toMatch(/frame\.srcdoc = page\.html/);
     expect(site).toMatch(/frame\.contentDocument/);
     expect(site).toMatch(/createTreeWalker/);
@@ -12894,16 +12905,16 @@ describe('Page snapshots (content/functions/page_snapshot.js)', () => {
 
   // Matching by element index only works if the page re-indexes identically — one lazy image or
   // one A/B variant and every index points somewhere else. The recorded sentence is stable.
-  test('evidence is matched by text, not by element index', () => {
+  testSite('evidence is matched by text, not by element index', () => {
     expect(site).toMatch(/needle\.length < 4/);       // too short to match uniquely
     expect(site).toMatch(/markText\(doc, needle\)/);
   });
 
-  test('the non-grounded arm gets no marks — that is the arm', () => {
+  testSite('the non-grounded arm gets no marks — that is the arm', () => {
     expect(site).toMatch(/if \(arm === 'nongrounding'\) return;/);
   });
 
-  test('the snapshot table is anon-readable and published with the Find half', () => {
+  testSite('the snapshot table is anon-readable and published with the Find half', () => {
     const schema = fss.readFileSync(paths.join(__dirname, '../../supabase_schema.sql'), 'utf8');
     expect(schema).toMatch(/create table if not exists public\.study_task_pages/);
     expect(schema).toMatch(/anon can read task pages/);
@@ -12995,7 +13006,7 @@ describe('Snapshot image resolution (content/functions/page_snapshot.js)', () =>
 // A Find task renders a framed page, not a step list, so it replaces the stimulus pane wholesale.
 // The guide renderer mounts into #tv-goal/#tv-stage — which no longer existed after a Find task, so
 // a guide task following a find task rendered into nothing until the page was reloaded.
-describe('Find → Guide without a reload (user_study_website/app/study.js)', () => {
+describeSite('Find → Guide without a reload (user_study_website/app/study.js)', () => {
   const site = require('fs').readFileSync(
     require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
 
@@ -13056,15 +13067,15 @@ describe('Page snapshots replace on re-capture (sidepanel/study.js + publish.mjs
   const fsr = require('fs');
   const pathr = require('path');
   const study = fsr.readFileSync(pathr.join(__dirname, '../../sidepanel/study.js'), 'utf8');
-  const helper = fsr.readFileSync(
-    pathr.join(__dirname, '../../../user_study_website/scripts/publish.mjs'), 'utf8');
+  const helper = readSite('scripts/publish.mjs');
+
   const schema = fsr.readFileSync(pathr.join(__dirname, '../../supabase_schema.sql'), 'utf8');
 
   test('the local bank is keyed by task id, so a second capture overwrites', () => {
     expect(study).toMatch(/all\[String\(taskId\)\] = \{/);
   });
 
-  test('publishing upserts on task_id rather than inserting a duplicate', () => {
+  testSite('publishing upserts on task_id rather than inserting a duplicate', () => {
     expect(helper).toMatch(/study_task_pages: 'task_id'/);
     expect(helper).toMatch(/resolution=merge-duplicates/);
   });
@@ -13080,7 +13091,7 @@ describe('Page snapshots replace on re-capture (sidepanel/study.js + publish.mjs
 // [ev:key] points at saved evidence. Rendered as plain text those markers are visible garbage —
 // "[43:"El pedante"]" — and nothing on the page is marked, so the grounded arm shows a participant
 // exactly what the non-grounded one does.
-describe('Find citation rendering and marking (user_study_website/app/study.js)', () => {
+describeSite('Find citation rendering and marking (user_study_website/app/study.js)', () => {
   const site = require('fs').readFileSync(
     require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
 
@@ -13141,7 +13152,7 @@ describe('Find citation rendering and marking (user_study_website/app/study.js)'
 // at the same affordance: the same tint, the same outline, and the same "PageGuide highlight" badge
 // naming what is being pointed at. A lookalike would be one more difference between the arms that
 // nobody is measuring.
-describe('Find grounding matches the extension (user_study_website/app/study.js)', () => {
+describeSite('Find grounding matches the extension (user_study_website/app/study.js)', () => {
   const fsx2 = require('fs');
   const px2 = require('path');
   const site = fsx2.readFileSync(px2.join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
@@ -13193,7 +13204,7 @@ describe('Find grounding matches the extension (user_study_website/app/study.js)
 });
 
 // ===== THE CITED PHRASE, AND THE BADGE ON AN IMAGE =====
-describe('Find citation display parity (user_study_website)', () => {
+describeSite('Find citation display parity (user_study_website)', () => {
   const fsy = require('fs');
   const py = require('path');
   const site = fsy.readFileSync(py.join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
@@ -13243,7 +13254,7 @@ describe('Find citation display parity (user_study_website)', () => {
 // MUFC-V1 and MUFC-V1-TEXT are the same Wikipedia article asked under the two Find conditions.
 // A snapshot is multi-megabyte, so storing it twice wastes space — and, worse, lets the two copies
 // drift, which would make the conditions differ in the PAGE rather than only in the grounding.
-describe('Shared page snapshots (sidepanel/study.js + user_study_website)', () => {
+describeSite('Shared page snapshots (sidepanel/study.js + user_study_website)', () => {
   const fsz = require('fs');
   const pz = require('path');
   const study = fsz.readFileSync(pz.join(__dirname, '../../sidepanel/study.js'), 'utf8');
@@ -13295,8 +13306,8 @@ describe('Shared page snapshots (sidepanel/study.js + user_study_website)', () =
 describe('Snapshot size control (content/functions/page_snapshot.js)', () => {
   const snap = require('fs').readFileSync(
     require('path').join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
-  const helper = require('fs').readFileSync(
-    require('path').join(__dirname, '../../../user_study_website/scripts/publish.mjs'), 'utf8');
+  const helper = readSite('scripts/publish.mjs');
+
 
   test('inlined images are downscaled', () => {
     expect(snap).toMatch(/PG_SNAPSHOT_IMG_MAX_WIDTH = 1600/);
@@ -13353,7 +13364,7 @@ describe('Snapshot size control (content/functions/page_snapshot.js)', () => {
   });
 
   // 57014 means the insert was slow, not wrong — a page snapshot is genuinely megabytes.
-  test('a timed-out upload is retried once and named', () => {
+  testSite('a timed-out upload is retried once and named', () => {
     expect(helper).toMatch(/57014/);
     expect(helper).toMatch(/retrying once/);
     expect(helper).toMatch(/failedIds/);
@@ -13362,7 +13373,7 @@ describe('Snapshot size control (content/functions/page_snapshot.js)', () => {
 });
 
 // ===== THE ANSWER READS AS AN ANSWER =====
-describe('Find answer rendering (user_study_website)', () => {
+describeSite('Find answer rendering (user_study_website)', () => {
   const fsw = require('fs');
   const pw = require('path');
   const site = fsw.readFileSync(pw.join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
@@ -13405,7 +13416,7 @@ describe('Find answer rendering (user_study_website)', () => {
 });
 
 // ===== SAVED EVIDENCE, AND IMAGES THAT COULD NOT BE INLINED =====
-describe('Evidence markers and missing images', () => {
+describeSite('Evidence markers and missing images', () => {
   const fsv = require('fs');
   const pv = require('path');
   const site = fsv.readFileSync(pv.join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
@@ -13455,7 +13466,7 @@ describe('Evidence markers and missing images', () => {
 // is deciding (answerable from the agent's answer alone) and find_supporting_answer_ms is hunting
 // (needs the page). Grounding should help the second far more than the first, and averaging them
 // together hides exactly that.
-describe('Find participant flow (user_study_website)', () => {
+describeSite('Find participant flow (user_study_website)', () => {
   const fsq2 = require('fs');
   const pq2 = require('path');
   const dir = pq2.join(__dirname, '../../../user_study_website');
@@ -13526,7 +13537,7 @@ describe('Find participant flow (user_study_website)', () => {
     expect(study).toMatch(/if \(S\.state\.adminReview\) \{[\s\S]{0,400}Review mode/);
   });
 
-  test('admin review can jump directly to any task', () => {
+  testSite('admin review can jump directly to any task', () => {
     const css = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/styles/site.css'), 'utf8');
     expect(study).toMatch(/id="admin-task-jump"/);
@@ -13547,9 +13558,9 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
   const fsa = require('fs');
   const pa = require('path');
   const snap = fsa.readFileSync(pa.join(__dirname, '../../content/functions/page_snapshot.js'), 'utf8');
-  const site = fsa.readFileSync(pa.join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
+  const site = readSite('app/study.js');
 
-  test('citation targets are stamped from the index the citations refer to', () => {
+  testSite('citation targets are stamped from the index the citations refer to', () => {
     expect(snap).toMatch(/function _pgStampAnchors/);
     expect(snap).toMatch(/setAttribute\('data-pg-index'/);
     // The ANSWER RUN's index, reused — never rebuilt. createPageIndex renumbers from the live DOM
@@ -13577,7 +13588,7 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
     expect(snap).toMatch(/stamped\.forEach\(\(\[el, attr\]\) => el\.removeAttribute\(attr\)\)/);
   });
 
-  test('the site resolves by anchor BEFORE any text search', () => {
+  testSite('the site resolves by anchor BEFORE any text search', () => {
     const fn = site.match(/function markFindCitation[\s\S]*?\n\}/)[0];
     const anchor = fn.indexOf('data-pg-index');
     const textSearch = fn.indexOf('markText(doc, needle)');
@@ -13587,7 +13598,7 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
     expect(fn).toMatch(/CSS\.escape/);
   });
 
-  test('evidence annotations prefer the stamped image', () => {
+  testSite('evidence annotations prefer the stamped image', () => {
     expect(site).toMatch(/data-pg-image-id="\$\{CSS\.escape\(id\)\}/);
     // Positional counting survives only as the fallback for older snapshots.
     // Falls back to counting only when there IS a number to count to — "viewport" has none, and
@@ -13596,7 +13607,7 @@ describe('Snapshot anchors (page_snapshot.js + user_study_website)', () => {
   });
 
   // Snapshots captured before stamping existed must keep working.
-  test('the text search survives as a fallback', () => {
+  testSite('the text search survives as a fallback', () => {
     const fn = site.match(/function markFindCitation[\s\S]*?\n\}/)[0];
     expect(fn).toMatch(/if \(index != null\)/);
     expect(fn).toMatch(/markText\(doc, needle\)/);
@@ -13682,7 +13693,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
 
   // The recorder writes locators with its normalizer and the site matches them with normText. A
   // divergence — a curly apostrophe folded on one side only — makes every locator miss silently.
-  test('the recorder and the site normalize text identically', () => {
+  testSite('the recorder and the site normalize text identically', () => {
     const anchors = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
     const site = require('fs').readFileSync(
@@ -13880,7 +13891,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // SVSF-V1's citation resolved correctly onto "Musk has spoken of how science fiction shaped his
   // ambitions…", then the climb found a Cybertruck picture in a shared wrapper and outlined it.
   // The data was right; the marking went looking. Proven against the published snapshot.
-  test('a text citation never outlines a picture that merely shares an ancestor', () => {
+  testSite('a text citation never outlines a picture that merely shares an ancestor', () => {
     const site = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
     const fn = site.match(/function markElement[\s\S]*?\n\}/)[0];
@@ -13910,7 +13921,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // DOM). So re-deriving through a LATER index produces an anchor that resolves perfectly and points
   // somewhere else: SVSF-V1's [70] landed on "The novels are genuinely extraordinary…", which does
   // not contain its own quote anywhere. Verified against the real published row.
-  test('an anchor is only trusted when the element carries its quote', () => {
+  testSite('an anchor is only trusted when the element carries its quote', () => {
     const anchors = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
     const fn = anchors.match(/function pgResolveCitationAnchors[\s\S]*?\n\}/)[0];
@@ -13932,7 +13943,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
       .toMatch(/needle\.length > 40 \? needle\.slice\(0, 40\) : needle/);
   });
 
-  test('semantic-only anchors land on their visible evidence container', () => {
+  testSite('semantic-only anchors land on their visible evidence container', () => {
     const anchors = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
     const site = require('fs').readFileSync(
@@ -13968,7 +13979,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // back to text search on its own quote — "Foundation series" is short enough to hit an image
   // caption, "extend the human species' reach." rare enough to hit nothing. Same target, two
   // answers, one confidently wrong.
-  test('citations sharing an index resolve to the same element', () => {
+  testSite('citations sharing an index resolve to the same element', () => {
     const site = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
     // The first to resolve an index decides it; the rest reuse rather than searching again.
@@ -13995,7 +14006,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // PEDANT-V1, MUFC-V1 and TREE-V1 are all {x:0,y:0,w:1,h:1} — "this whole picture" — and filtering
   // on annotations alone dropped every one, so the [ev:key] chip appeared with nothing on the page
   // while the extension drew the box and label for the same record.
-  test('evidence with a region but no annotations is still drawn', () => {
+  testSite('evidence with a region but no annotations is still drawn', () => {
     const site = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
     expect(site).toMatch(/annotations\?\.length \|\| e\?\.marks\?\.region_bbox/);
@@ -14106,7 +14117,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // image sits inside that capture. SVSF's shot took in both book covers, so region_bbox is
   // {x:0.598, w:0.402} and the "spaceman" ellipse is at x=0.803: 80% across the capture, but
   // (0.803-0.598)/0.402 = 51% across the cover. Drawn raw it landed at 80% of the cover.
-  test('annotation coordinates are mapped from capture space into the image', () => {
+  testSite('annotation coordinates are mapped from capture space into the image', () => {
     const site = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
     const fn = site.match(/function overlayAnnotations[\s\S]*?\n\}/)[0];
@@ -14124,7 +14135,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // The svg is preserveAspectRatio="none" so a normalized bbox lands on any aspect ratio, and that
   // same stretch distorts glyphs. Survivable for a one-word tag, not for a sentence — and these
   // notes are sentences. SVG text does not wrap either.
-  test('the region note is HTML, not stretched SVG text', () => {
+  testSite('the region note is HTML, not stretched SVG text', () => {
     const site = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
     const fn = site.match(/function overlayAnnotations[\s\S]*?\n\}/)[0];
@@ -14138,7 +14149,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
   // REGRESSION. "viewport" has no trailing digits, so `Number(id.match(/(\d+)$/)?.[1] || 1)` gave 1
   // and every viewport-anchored annotation was drawn over the FIRST picture on the page — a wrong
   // answer presented as a right one, which a participant cannot tell from a right one.
-  test('unplaceable evidence is skipped and reported, never drawn on a guessed image', () => {
+  testSite('unplaceable evidence is skipped and reported, never drawn on a guessed image', () => {
     const site = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
     const fn = site.match(/function drawEvidenceMarks[\s\S]*?\n\}/)[0];
@@ -14152,7 +14163,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
 
   // Three copies of one rule: the recorder writes the ordinal, the extension replays it, the site
   // resolves it. They must count identically or a locator written by one misses in the others.
-  test('the extension replays a locator exactly as the site resolves it', () => {
+  testSite('the extension replays a locator exactly as the site resolves it', () => {
     const anchorsSrc = require('fs').readFileSync(
       require('path').join(__dirname, '../../content/functions/citation_anchors.js'), 'utf8');
     const site = require('fs').readFileSync(
@@ -14193,7 +14204,7 @@ describe('Snapshot pruning (content/functions/page_snapshot.js)', () => {
 
   // The recorded locator wins over the stamped one, which wins over text search. A stamped anchor
   // belongs to ONE capture; the locator belongs to the answer and outlives every re-capture.
-  test('the site prefers the recorded locator over the stamp, and the stamp over text search', () => {
+  testSite('the site prefers the recorded locator over the stamp, and the stamp over text search', () => {
     const site = require('fs').readFileSync(
       require('path').join(__dirname, '../../../user_study_website/app/study.js'), 'utf8');
     const fn = site.match(/function markFindCitation[\s\S]*?\n\}/)[0];
