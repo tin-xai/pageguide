@@ -1,6 +1,8 @@
 # API Keys - DO NOT COMMIT
 config.js
 keys.py
+sidepanel/supabase_config.js
+.private/
 
 # Dependencies
 node_modules/
@@ -34,3 +36,28 @@ CODEX.md
 
 # Scripts
 scripts/
+
+.env
+
+password/
+
+.venv-eval/
+
+# Flask evaluation saved trajectories
+eval_server/saved_trajectories/
+
+eval.bash
+
+eval_server/
+
+eval_tool/
+
+data-guide/
+
+evaluation-coding.md
+# A superseded copy kept locally for reference; not part of the extension.
+content/tasks/guide.js.stale
+
+# Annotator website config
+annotate/supabase_config.js
+annotate/annotation_trajectories.json

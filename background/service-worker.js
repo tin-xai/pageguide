@@ -3,6 +3,27 @@
 
 console.log('🤖 PageGuide Service Worker started');
 
+// ===== Session storage: let content scripts read and write it =====
+//
+// chrome.storage.session is TRUSTED-ONLY by default: a content script's get/set throws "Access to
+// storage is not allowed from this context". guidev2.js keeps the guide's resume state there
+// (gv2SaveFallback / gv2LoadFallback, content/tasks/guidev2.js) with the throw swallowed, so
+// without this grant the fallback silently stored nothing and read back nothing.
+//
+// That is the whole reason Pause could not be undone. Resume asks _gv2HydrateResumeState for the
+// run: it returns window._guidev2 when the page still has it, and otherwise rebuilds from this
+// storage. Every navigation the agent makes destroys window._guidev2 — so once the run had moved
+// pages, the only copy of it was in a store the content script could not read, and Resume answered
+// "Guide not active" for a guide that was merely parked.
+//
+// Set at the top level: it applies for the life of the browser session and has to be re-applied
+// each time the worker restarts, which is exactly when this file is evaluated.
+try {
+  chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' });
+} catch (e) {
+  console.warn('[pageguide] could not open session storage to content scripts:', e);
+}
+
 // ===== Keep-Alive Mechanism =====
 // Prevents service worker from going inactive during long LLM calls
 let keepAliveInterval = null;
@@ -50,17 +71,19 @@ const CONFIG = {
 const CONTENT_SCRIPTS = [
   'content/prompts.js',
   'content/utils.js',
+  'rewind/rewind_store.js',
   'content/functions/capture_screenshot.js',
   'content/functions/highlight.js',
   'content/functions/highlight_pdf.js',
   'content/functions/scroll.js',
+  'content/functions/page_snapshot.js',
   'content/functions/main_router.js',
   'content/tasks/protection.js',
-  'content/tasks/guide.js',
   'content/tasks/guidev2.js',
   'content/tasks/ask.js',
   'content/tasks/ask_pdf.js',
   'content/tasks/image_ask.js',
+  'content/study_tracker.js',
   'content/content.js'
 ];
 
@@ -71,9 +94,17 @@ let sidePanelOpen = false;
 // Primary state store — survives page navigations as long as the SW is alive.
 // Content scripts read this by connecting a 'guidev2' port on every page load.
 // Session storage in guidev2.js is the fallback if the SW was killed.
-let _gv2State = null;   // { active, question, previousSteps, pendingResume, lastUrl }
-let _gv2TabId = null;   // Tab ID that owns the active guidance session
-let _gv2PreClickTs = 0; // Timestamp of last guided click — used to catch new tabs when openerTabId is absent
+//
+// Keyed by tabId (NOT a single global) so multiple tabs can each run their own,
+// fully isolated guide session at the same time. Before this, _gv2State/_gv2TabId were single
+// globals: starting (or even just resetting the chat on) a second tab would silently overwrite
+// the first tab's entry, so the first guide would fail to resume after its next navigation, or
+// briefly become "ownerless" and think it had been stopped elsewhere.
+let _gv2Sessions = new Map(); // tabId -> { active, question, previousSteps, pendingResume, lastUrl }
+// Per-tab timestamps for the "guided click about to open a new tab" watch window — used to
+// transfer ownership to the new tab when openerTabId is unavailable (e.g. noopener links).
+// Also keyed by tabId so two tabs guiding concurrently don't stomp on each other's click watch.
+let _gv2PreClickTsByTab = new Map(); // tabId -> timestamp
 
 // ===== Extension Icon Click - Toggle Side Panel =====
 chrome.action.onClicked.addListener(async (tab) => {
@@ -147,12 +178,11 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'guidev2') {
     // A content script just loaded on a (possibly new) page.
     // Send it the current guidance state immediately so it can decide whether to resume.
-    // Only share state with the tab that owns the guidance session.
+    // Only share state with THIS tab's own session — each tab has its own map entry, so one
+    // tab's content script can never see or resume another tab's in-progress guide.
     const senderTabId = port.sender?.tab?.id;
-    const stateForThisTab =
-      (senderTabId && senderTabId === _gv2TabId && _gv2State?.active)
-        ? _gv2State
-        : null;
+    const session = senderTabId ? _gv2Sessions.get(senderTabId) : null;
+    const stateForThisTab = session?.active ? session : null;
 
     try {
       port.postMessage({ type: 'swState', state: stateForThisTab });
@@ -163,26 +193,209 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // ===== New Tab Detection for Guidance =====
-// When the guided tab opens a link in a new tab (target="_blank" or window.open),
+// When a guided tab opens a link in a new tab (target="_blank" or window.open),
 // openerTabId on the created tab identifies the originating tab.
-// We transfer guidance ownership so the new tab's content script can resume.
+// We transfer THAT tab's session to the new tab so its content script can resume — every other
+// tab's session (there may be several running concurrently) is left completely untouched.
 chrome.tabs.onCreated.addListener((tab) => {
-  if (!(_gv2State?.active && _gv2TabId)) return;
-  // Transfer guidance when the new tab was opened from the guided tab.
-  // Two detection paths:
-  //   1. openerTabId — reliable when Chrome sets it (most target="_blank" links)
-  //   2. _gv2PreClickTs — fallback for links where openerTabId is absent
-  //      (e.g. window.open with noopener, JS-redirected links)
-  const byOpener = tab.openerTabId === _gv2TabId;
-  const byPreClick = _gv2PreClickTs > 0 && (Date.now() - _gv2PreClickTs < 2000);
-  if (byOpener || byPreClick) {
-    console.log('[SW guidev2] New tab', tab.id, 'opened from guided tab', _gv2TabId,
-      byOpener ? '(openerTabId)' : '(preClick watch)', '— transferring guidance');
-    _gv2TabId = tab.id;
-    _gv2State = { ..._gv2State, pendingResume: true };
-    _gv2PreClickTs = 0; // consume the flag — one transfer per click
+  // 1. openerTabId — reliable when Chrome sets it (most target="_blank" links).
+  let sourceTabId = (tab.openerTabId != null && _gv2Sessions.get(tab.openerTabId)?.active)
+    ? tab.openerTabId
+    : null;
+
+  // 2. Fallback for links where openerTabId is absent (e.g. window.open with noopener,
+  //    JS-redirected links): the most recently-armed pre-click watch, if still within 2s.
+  if (sourceTabId == null) {
+    let newestTs = 0;
+    for (const [tabId, ts] of _gv2PreClickTsByTab) {
+      if (Date.now() - ts < 2000 && ts > newestTs && _gv2Sessions.get(tabId)?.active) {
+        newestTs = ts;
+        sourceTabId = tabId;
+      }
+    }
+  }
+
+  if (sourceTabId == null) return;
+
+  const detectedBy = tab.openerTabId === sourceTabId ? '(openerTabId)' : '(preClick watch)';
+  console.log('[SW guidev2] New tab', tab.id, 'opened from guided tab', sourceTabId, detectedBy, '— transferring guidance');
+  const session = _gv2Sessions.get(sourceTabId);
+  _gv2Sessions.delete(sourceTabId);
+  _gv2Sessions.set(tab.id, { ...session, pendingResume: true });
+  _gv2PreClickTsByTab.delete(sourceTabId); // consume the flag — one transfer per click
+  detachDebugger(sourceTabId); // the old tab is no longer the agent's — drop its debugger session
+});
+
+// ===== User Study Behavior Tracker =====
+// Accumulates per-task behavioral events (from content/study_tracker.js) across page
+// navigations, since a single task can span multiple pages. Reset by studyTracker_start,
+// read + cleared by studyTracker_getData (called once the participant hits "Done").
+let _studyTracker = null; // { active, scrollUser, scrollAgent, ctrlF, textSelect, click, mouseMove, agentThinkMs: [], pages: [{url, ts}] }
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (_studyTracker && _studyTracker.active && changeInfo.url) {
+    _studyTracker.pages.push({ url: changeInfo.url, ts: Date.now() });
   }
 });
+
+// Append a debug prompt history entry, capping at 50 to avoid quota storage issues.
+// Returns the entry id so the caller can attach the model's response once the call settles.
+let _debugPromptSeq = 0;
+// ===== COST ACCOUNTING (OpenRouter) =====
+// What a run cost, in the provider's own numbers.
+//
+// OpenRouter is the only provider that returns a PRICE. Asked with `usage: {include: true}`, its
+// response carries `usage.cost` — the actual credits that call spent, already accounting for the
+// model, the cache discount and the image surcharge. Everything else here is derived from that one
+// number; nothing is estimated from a local price table, which would silently rot every time a
+// model's price changed. Gemini and OpenAI return token counts but no price, so their entries are
+// logged with tokens and a null cost rather than a guess.
+const COST_LEDGER_KEY = 'pageguideCostLedger';
+// Entries are a few dozen bytes each (no prompts, no images), so the cap is about keeping the ledger
+// from growing without bound over months, not about space. A long guide run is ~20 calls.
+const COST_LEDGER_MAX = 2000;
+
+/**
+ * Normalize a provider response's usage block. Pure.
+ *
+ * @param {object|null} data - the raw provider JSON
+ * @param {string} provider - 'openrouter' | 'gemini' | 'openai'
+ * @param {string} model - the model actually asked for
+ * @returns {object|null} {provider, model, promptTokens, completionTokens, totalTokens, costUsd}
+ */
+function normalizeUsage(data, provider, model) {
+  const u = data?.usage;
+  if (!u) return null;
+  const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+  const prompt = num(u.prompt_tokens) ?? num(u.input_tokens) ?? num(u.promptTokenCount);
+  const completion = num(u.completion_tokens) ?? num(u.output_tokens) ?? num(u.candidatesTokenCount);
+  const total = num(u.total_tokens) ?? num(u.totalTokenCount)
+    ?? ((prompt != null && completion != null) ? prompt + completion : null);
+  return {
+    provider: provider || '',
+    model: model || '',
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: total,
+    // Only OpenRouter reports a price. `cost` is in USD credits; cost_details carries the breakdown.
+    costUsd: num(u.cost),
+  };
+}
+
+/**
+ * Record what one call cost, against the run it belongs to.
+ *
+ * `sessionId` is the guide session (stamped onto every LLM message by safeSendMessage), which is
+ * what ties a row to a journey. A Find outside a guide run has none — those are attributed by
+ * debug-log position instead, the same range the 🐞 chip already uses, so both surfaces work
+ * without every call site having to learn about cost.
+ */
+async function appendCostEntry({ usage, metadata, action, debugId }) {
+  if (!usage) return;
+  const entry = {
+    ts: Date.now(),
+    debugId: debugId || null,
+    sessionId: metadata?.sessionId || null,
+    mode: metadata?.mode || action || '',
+    step: metadata?.step != null ? metadata.step : null,
+    provider: usage.provider || '',
+    model: usage.model || '',
+    promptTokens: usage.promptTokens,
+    completionTokens: usage.completionTokens,
+    costUsd: usage.costUsd,
+  };
+  try {
+    const result = await chrome.storage.local.get(COST_LEDGER_KEY);
+    const list = Array.isArray(result[COST_LEDGER_KEY]) ? result[COST_LEDGER_KEY] : [];
+    list.push(entry);
+    while (list.length > COST_LEDGER_MAX) list.shift();
+    await chrome.storage.local.set({ [COST_LEDGER_KEY]: list });
+  } catch (e) {
+    console.error('[SW cost] Failed to append cost entry:', e);
+  }
+}
+
+async function appendDebugPrompt(promptData) {
+  const id = `${Date.now()}-${++_debugPromptSeq}`;
+  const entry = { id, ...promptData };
+  try {
+    const result = await chrome.storage.local.get('debugPrompts');
+    const list = Array.isArray(result.debugPrompts) ? result.debugPrompts : [];
+    list.push(entry);
+    if (list.length > 50) {
+      list.shift(); // remove oldest entries
+    }
+    await chrome.storage.local.set({
+      debugPrompts: list,
+      lastDebugPrompt: entry
+    });
+  } catch (e) {
+    console.error('[SW debug] Failed to append debug prompt:', e);
+  }
+  return id;
+}
+
+/**
+ * Attach the model's answer to a debug entry once the call settles. Debugging a wrong answer means
+ * reading the prompts AND what came back; the entry is written before the call, so the response has
+ * to be patched in afterwards.
+ *
+ * @param {Promise<string>|string} idPromise - id from appendDebugPrompt
+ * @param {{rawResponse?: string, ok?: boolean, durationMs?: number}} patch
+ */
+async function updateDebugPrompt(idPromise, patch) {
+  try {
+    const id = await idPromise;
+    if (!id) return;
+    const result = await chrome.storage.local.get(['debugPrompts', 'lastDebugPrompt']);
+    const list = Array.isArray(result.debugPrompts) ? result.debugPrompts : [];
+    const idx = list.findIndex(e => e && e.id === id);
+    if (idx === -1) return; // rolled off the 50-entry cap
+    list[idx] = { ...list[idx], ...patch };
+    const update = { debugPrompts: list };
+    if (result.lastDebugPrompt && result.lastDebugPrompt.id === id) {
+      update.lastDebugPrompt = list[idx];
+    }
+    await chrome.storage.local.set(update);
+  } catch (e) {
+    console.error('[SW debug] Failed to update debug prompt:', e);
+  }
+}
+
+/** Wrap an LLM call so its result (or error) lands on the debug entry. Never changes the result. */
+function _withDebugResponse(idPromise, startedAt, promise, request = null) {
+  return promise.then(
+    (res) => {
+      updateDebugPrompt(idPromise, {
+        rawResponse: res?.content != null ? res.content : (res?.error || ''),
+        ok: !res?.error,
+        durationMs: Date.now() - startedAt,
+        // On the entry as well as in the ledger: the debug dialog shows one call at a time and
+        // reads what it needs from the entry it is already holding.
+        usage: res?.usage || null
+      }).catch(() => {});
+      // The ledger is what the journey/answer totals are summed from. Keyed by the debug id so a
+      // row can be traced back to the exact prompt that spent it.
+      if (res?.usage) {
+        Promise.resolve(idPromise).then(debugId => appendCostEntry({
+          usage: res.usage,
+          metadata: request?.metadata,
+          action: request?.action,
+          debugId
+        })).catch(() => {});
+      }
+      return res;
+    },
+    (err) => {
+      updateDebugPrompt(idPromise, {
+        rawResponse: err?.message || String(err),
+        ok: false,
+        durationMs: Date.now() - startedAt
+      }).catch(() => {});
+      throw err;
+    }
+  );
+}
 
 // ===== Message Handler =====
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -192,43 +405,135 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'callRouterLLM') {
-    // Fast router - always uses Gemini 2.5 Flash for quick routing decisions
+    // Fast router - runs on whichever provider/model is selected in Settings
     callRouterLLM(request.messages, request.systemPrompt)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
+  if (request.action === 'callImageSelectionLLM') {
+    const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
+    const debugId = appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'callImageSelectionLLM',
+      systemPrompt: request.systemPrompt || '',
+      userPrompt: userPrompt,
+      messages: request.messages || [],
+      metadata: request.metadata || {}
+    }).catch(() => null);
+
+    _withDebugResponse(debugId, Date.now(), callImageSelectionLLM(request.messages, request.systemPrompt), request)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   if (request.action === 'callLLM') {
-    callLLM(request.messages, request.systemPrompt, request.imageBase64)
+    const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
+    const debugId = appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'callLLM',
+      systemPrompt: request.systemPrompt || '',
+      userPrompt: userPrompt,
+      messages: request.messages || [],
+      imageBase64: request.imageBase64 || null,
+      metadata: request.metadata || {}
+    }).catch(() => null);
+
+    _withDebugResponse(debugId, Date.now(), callLLM(request.messages, request.systemPrompt, request.imageBase64, request.overrides || null), request)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
   if (request.action === 'callLLMWithImages') {
-    callLLMWithImages(request.messages, request.systemPrompt, request.images)
+    const userPrompt = request.messages?.length > 0 ? request.messages[request.messages.length - 1].content : '';
+    const debugId = appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'callLLMWithImages',
+      systemPrompt: request.systemPrompt || '',
+      userPrompt: userPrompt,
+      messages: request.messages || [],
+      images: request.images || null,
+      metadata: request.metadata || {}
+    }).catch(() => null);
+
+    _withDebugResponse(debugId, Date.now(), callLLMWithImages(request.messages, request.systemPrompt, request.images), request)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'watchVideo') {
+    const debugId = appendDebugPrompt({
+      timestamp: Date.now(),
+      action: 'watchVideo',
+      systemPrompt: '',
+      userPrompt: request.query || '',
+      messages: [],
+      videoUrl: request.videoUrl || '',
+      metadata: request.metadata || {}
+    }).catch(() => null);
+
+    _withDebugResponse(debugId, Date.now(), watchVideoWithGemini(request.videoUrl, request.query, request.metadata || {}), request)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'callEmbed') {
+    callOpenAIEmbeddings(request.texts || [])
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
   if (request.action === 'captureScreenshot') {
-    captureScreenshot(request.tabId)
+    const targetTabId = request.tabId || sender.tab?.id;
+    const targetWindowId = sender.tab?.windowId;
+    captureScreenshot(targetTabId, targetWindowId)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'fetchImageAsBase64') {
+    fetchImageAsBase64(request.url)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
+  if (request.action === 'studyTracker_start') {
+    _studyTracker = { active: true, scrollUser: 0, scrollAgent: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, agentThinkMs: [], pages: [] };
+    sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === 'studyTracker_batch') {
+    if (_studyTracker && _studyTracker.active) {
+      _studyTracker.scrollUser  += request.scrollUser  || 0;
+      _studyTracker.scrollAgent += request.scrollAgent || 0;
+      _studyTracker.ctrlF       += request.ctrlF       || 0;
+      _studyTracker.textSelect  += request.textSelect  || 0;
+      _studyTracker.click       += request.click       || 0;
+      _studyTracker.mouseMove   += request.mouseMove   || 0;
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === 'studyTracker_agentThink') {
+    // One entry per agent LLM "thinking" turn (ms), emitted from safeSendMessage.
+    if (_studyTracker && _studyTracker.active) {
+      _studyTracker.agentThinkMs.push(request.durationMs || 0);
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+  if (request.action === 'studyTracker_getData') {
+    const data = _studyTracker
+      ? { scrollUser: _studyTracker.scrollUser, scrollAgent: _studyTracker.scrollAgent, ctrlF: _studyTracker.ctrlF, textSelect: _studyTracker.textSelect, click: _studyTracker.click, mouseMove: _studyTracker.mouseMove, agentThinkMs: [..._studyTracker.agentThinkMs], pages: [..._studyTracker.pages] }
+      : { scrollUser: 0, scrollAgent: 0, ctrlF: 0, textSelect: 0, click: 0, mouseMove: 0, agentThinkMs: [], pages: [] };
+    _studyTracker = null;
+    sendResponse(data);
     return true;
   }
   if (request.action === 'extractPdfText') {
     extractPdfText(request.pdfUrl, request.maxPages || 15)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
-    return true;
-  }
-  if (request.action === 'getVisionSetting') {
-    chrome.storage.sync.get(['visionEnabled'])
-      .then(settings => {
-        // Default to true if not set
-        sendResponse({ visionEnabled: settings.visionEnabled !== false });
-      })
-      .catch(err => sendResponse({ visionEnabled: true, error: err.message }));
     return true;
   }
   if (request.action === 'openOptions') {
@@ -263,33 +568,72 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.action === 'guidanceV2_setState') {
-    // Content script saves guidance state to SW memory.
-    // Kept in sync by guidev2.js whenever the step changes.
-    _gv2State = request.state || null;
-    _gv2TabId = sender.tab?.id ?? _gv2TabId;
+    // Content script saves guidance state to SW memory, keyed by ITS OWN tab id.
+    // Kept in sync by guidev2.js whenever the step changes. Setting/clearing one tab's entry
+    // never touches any other tab's — that's the whole point of keying by tabId.
+    const targetTabId = request.tabId ?? sender.tab?.id;
+    if (targetTabId != null) {
+      if (request.state) _gv2Sessions.set(targetTabId, request.state);
+      else _gv2Sessions.delete(targetTabId);
+    }
     // Synchronous response — do NOT return true (that keeps the channel open and
     // causes "message channel closed before response received" warnings).
     sendResponse({ success: true });
     return false;
   }
   if (request.action === 'guidanceV2_clearState') {
-    _gv2State = null;
-    _gv2TabId = null;
+    // Messages from a content script carry no explicit tabId (sender.tab.id is authoritative);
+    // messages from the side panel (no sender.tab) must pass one explicitly — see panel.js's
+    // stopGuide/stopPausedGuideWithRecap/resetChat, which all target guideTabId/currentTabId.
+    const targetTabId = request.tabId ?? sender.tab?.id;
+    // A clear names the run it is ending when it can. Stopping one run and starting the next are
+    // unordered async messages, and a clear from the OLD run arriving after the NEW run registered
+    // used to delete the new run's session — which then failed to resume on its first navigation
+    // and answered "Guide not active". A clear with no sessionId still clears unconditionally: that
+    // is a reset, which means "whatever is there".
+    const clearingSession = request.sessionId ? String(request.sessionId) : null;
+    const liveSession = targetTabId != null ? _gv2Sessions.get(targetTabId) : null;
+    const staleClear = !!(clearingSession && liveSession?.sessionId
+      && String(liveSession.sessionId) !== clearingSession);
+    if (staleClear) {
+      console.log('[SW guidev2] ignoring clear for finished session', clearingSession,
+        '— tab', targetTabId, 'is running', liveSession.sessionId);
+      sendResponse({ success: true, ignored: true });
+      return false;
+    }
+    if (targetTabId != null) {
+      _gv2Sessions.delete(targetTabId);
+      detachDebugger(targetTabId); // release any background-capture debugger session for this tab
+    }
+    chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
     sendResponse({ success: true });
     return false;
   }
+  if (request.action === 'guidanceV2_getState') {
+    // "What was this tab running?" — asked by a content script that has lost window._guidev2 to a
+    // navigation and needs the run back in order to pause or resume it. The port handshake only
+    // offers state at page load, and a paused run is deliberately not resumed there, so a pause that
+    // outlives one navigation had no way to be picked up again. Keyed by the sender's own tab, like
+    // every other entry in this map.
+    const senderTabId = request.tabId ?? sender.tab?.id;
+    const session = senderTabId != null ? _gv2Sessions.get(senderTabId) : null;
+    sendResponse({ state: session?.active ? session : null });
+    return false;
+  }
   if (request.action === 'guidanceV2_isOwner') {
-    // Content script asks: does this tab still own the active guidance session?
-    // Used to detect when a click transferred guidance to a new tab.
+    // Content script asks: does this tab still have an active guidance session?
+    // Used to detect when a click transferred guidance to a new tab (see chrome.tabs.onCreated
+    // above, which deletes the source tab's entry as part of the transfer).
     const senderTabId = sender.tab?.id;
-    sendResponse({ isOwner: !!senderTabId && senderTabId === _gv2TabId });
+    sendResponse({ isOwner: !!senderTabId && !!_gv2Sessions.get(senderTabId)?.active });
     return false;
   }
   if (request.action === 'guidanceV2_preClick') {
     // Content script signals that a guided click is about to fire.
-    // Arm the pre-click watch window so onCreated can transfer guidance
+    // Arm this tab's pre-click watch window so onCreated can transfer guidance
     // even when tab.openerTabId is not available.
-    _gv2PreClickTs = Date.now();
+    const senderTabId = sender.tab?.id;
+    if (senderTabId != null) _gv2PreClickTsByTab.set(senderTabId, Date.now());
     sendResponse({ success: true });
     return false;
   }
@@ -348,42 +692,266 @@ async function extractPdfText(pdfUrl, maxPages = 15) {
 }
 
 // ===== Screenshot Capture =====
-async function captureScreenshot(tabId) {
+// Chrome rate-limits chrome.tabs.captureVisibleTab to ~2 calls/sec. In Guide mode we capture a
+// BEFORE shot and an AFTER shot per step (plus an initial-state shot), and step N's before-shot
+// fires right after step N-1's after-shot — so back-to-back calls otherwise hit
+// "MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND" and the second one (typically step 2's screenshot)
+// comes back empty. Serialize every capture through a single chain and enforce a minimum gap so
+// no call is ever dropped.
+const _CAPTURE_MIN_GAP_MS = 650;
+let _captureChain = Promise.resolve();
+let _lastCaptureTs = 0;
+
+function captureScreenshot(tabId, windowId) {
+  const run = _captureChain.then(() => _doCaptureScreenshot(tabId, windowId));
+  // Keep the chain alive regardless of individual success/failure.
+  _captureChain = run.then(() => {}, () => {});
+  return run;
+}
+
+// ===== Background-tab screenshots via chrome.debugger (CDP) =====
+// chrome.tabs.captureVisibleTab can only grab the *front* tab of a window. When the agent's tab is
+// backgrounded — the user switched to another tab in the same window to do their own thing — we
+// attach the debugger to the agent's tab and use Page.captureScreenshot, so the guide keeps seeing
+// its own page without stealing the user's focus. Attach is lazy (first background capture only),
+// so if the user never switches away, no debugger and no "…is debugging this browser" banner.
+const _debuggerAttached = new Set(); // tabIds we currently hold a debugger session on
+const _DEBUGGER_PROTOCOL = '1.3';
+
+async function _ensureDebuggerAttached(tabId) {
+  if (_debuggerAttached.has(tabId)) return true;
   try {
-    // Get the current active tab if no tabId provided
+    await chrome.debugger.attach({ tabId }, _DEBUGGER_PROTOCOL);
+    _debuggerAttached.add(tabId);
+    return true;
+  } catch (e) {
+    // "Another debugger is already attached" → something else (e.g. open DevTools) owns the tab; we
+    // can't drive it. Any other failure (restricted page, tab gone) is also non-recoverable here.
+    console.warn('[SW capture] debugger attach failed:', e?.message || e);
+    return false;
+  }
+}
+
+async function detachDebugger(tabId) {
+  if (tabId == null || !_debuggerAttached.has(tabId)) return;
+  _debuggerAttached.delete(tabId);
+  try { await chrome.debugger.detach({ tabId }); } catch (e) { /* tab may already be gone */ }
+}
+
+async function _captureViaDebugger(tabId) {
+  const ok = await _ensureDebuggerAttached(tabId);
+  if (!ok) return { error: 'Could not attach debugger to capture background tab' };
+  try {
+    const res = await chrome.debugger.sendCommand({ tabId }, 'Page.captureScreenshot', { format: 'jpeg', quality: 80 });
+    if (res && res.data) return { success: true, imageBase64: res.data, format: 'jpeg' };
+    return { error: 'Debugger capture returned no data' };
+  } catch (e) {
+    return { error: `Debugger capture failed: ${e?.message || e}` };
+  }
+}
+
+// If the user dismisses the debugging banner (or the tab closes), drop our bookkeeping so we
+// re-attach cleanly next time rather than assuming a stale session is still live.
+if (chrome.debugger?.onDetach) {
+  chrome.debugger.onDetach.addListener((source) => {
+    if (source?.tabId != null) _debuggerAttached.delete(source.tabId);
+  });
+}
+// Detach if the agent's tab is closed while we hold a debugger session on it.
+chrome.tabs.onRemoved.addListener((tabId) => { detachDebugger(tabId); });
+
+async function _doCaptureScreenshot(tabId, windowId) {
+  try {
     if (!tabId) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       tabId = tab?.id;
+      if (!windowId) windowId = tab?.windowId;
     }
-    
-    if (!tabId) {
-      return { error: 'No active tab found' };
+    if (!tabId) return { error: 'No active tab found' };
+
+    // chrome.tabs.captureVisibleTab takes a windowId, NOT a tabId — it always grabs whichever tab
+    // is currently the active/visible one in that window. When the tab we actually want a shot of
+    // (tabId, the tab the guide is working on) is NOT the front tab — the user switched to another
+    // tab in the same window to do their own thing — captureVisibleTab would grab that OTHER tab.
+    // In that case we screenshot the agent's real tab directly via the debugger (CDP) instead, so
+    // the guide keeps working on the right page without pulling the user's focus.
+    let targetIsActive = true;
+    try {
+      const targetTab = await chrome.tabs.get(tabId);
+      targetIsActive = targetTab?.active !== false;
+      if (!windowId) windowId = targetTab?.windowId;
+    } catch (e) {
+      // Tab may have been closed since; let the capture calls below surface their own error.
     }
-    
-    // Capture the visible area of the tab
-    const dataUrl = await chrome.tabs.captureVisibleTab(null, {
-      format: 'jpeg',
-      quality: 80  // Good balance between quality and size
-    });
-    
-    // Remove the data URL prefix to get just the base64
+
+    if (!targetIsActive) {
+      const dbg = await _captureViaDebugger(tabId);
+      _lastCaptureTs = Date.now();
+      if (dbg.success) {
+        console.log('📸 Background-tab screenshot via debugger, size:', Math.round(dbg.imageBase64.length / 1024), 'KB');
+      }
+      return dbg; // success, or an error the caller falls back on (cached/placeholder)
+    }
+
+    // Front tab → fast path, no debugger attach (and no banner).
+    // Throttle: ensure at least _CAPTURE_MIN_GAP_MS since the previous capture.
+    const since = Date.now() - _lastCaptureTs;
+    if (since < _CAPTURE_MIN_GAP_MS) {
+      await new Promise(r => setTimeout(r, _CAPTURE_MIN_GAP_MS - since));
+    }
+
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId || null, { format: 'jpeg', quality: 80 });
+    _lastCaptureTs = Date.now();
     const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    
     console.log('📸 Screenshot captured, size:', Math.round(base64.length / 1024), 'KB');
-    
-    return { 
-      success: true, 
-      imageBase64: base64,
-      format: 'jpeg'
-    };
+    return { success: true, imageBase64: base64, format: 'jpeg' };
   } catch (error) {
+    _lastCaptureTs = Date.now();
     console.error('📸 Screenshot error:', error);
     return { error: `Screenshot failed: ${error.message}` };
   }
 }
 
+async function fetchImageAsBase64(url) {
+  const rawUrl = String(url || '').trim();
+  if (!rawUrl) return { error: 'Missing image URL' };
+  let parsed = null;
+  try { parsed = new URL(rawUrl); } catch (e) {
+    return { error: 'Invalid image URL' };
+  }
+  if (!/^https?:$/i.test(parsed.protocol) && !/^data:$/i.test(parsed.protocol)) {
+    return { error: `Unsupported image URL protocol: ${parsed.protocol}` };
+  }
+  if (/^data:/i.test(parsed.protocol)) {
+    const m = rawUrl.match(/^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/i);
+    if (!m) return { error: 'Unsupported data image URL' };
+    return {
+      success: true,
+      imageBase64: m[2] || '',
+      contentType: m[1] || 'image/jpeg',
+      sourceUrl: rawUrl.slice(0, 500)
+    };
+  }
+  try {
+    const response = await fetch(rawUrl, {
+      credentials: 'omit',
+      cache: 'force-cache',
+      redirect: 'follow'
+    });
+    if (!response.ok) return { error: `Image fetch failed: HTTP ${response.status}` };
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    if (!/^image\//i.test(contentType)) return { error: `URL did not return an image: ${contentType}` };
+    const buf = await response.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return {
+      success: true,
+      imageBase64: btoa(binary),
+      contentType,
+      sourceUrl: rawUrl
+    };
+  } catch (e) {
+    return { error: `Image fetch failed: ${e?.message || e}` };
+  }
+}
+
+async function callOpenAIEmbeddings(texts = []) {
+  let settings = {};
+  try {
+    settings = await chrome.storage.sync.get(['provider', 'openrouterApiKey', 'openaiApiKey']);
+  } catch (e) {
+    return { error: 'Failed to load embedding settings' };
+  }
+
+  const input = (Array.isArray(texts) ? texts : [texts])
+    .map(t => String(t || '').trim())
+    .filter(Boolean);
+  if (!input.length) return { embeddings: [] };
+
+  // Route the embedding call by provider. text-embedding-ada-002 is served by the OpenAI-compatible
+  // /embeddings endpoint on BOTH OpenAI and OpenRouter — Gemini has no such endpoint here, so when
+  // the LLM provider is Gemini (or lacks a key) we still send embeddings to whichever of OpenAI /
+  // OpenRouter is configured. The model id differs per endpoint (OpenRouter needs the "openai/"
+  // prefix). Previously this only hit OpenAI, so OpenRouter-only users silently fell back to 0.0.
+  const provider = settings.provider || CONFIG.defaultProvider;
+  const openaiKey = (settings.openaiApiKey || CONFIG.providers.openai.defaultApiKey || '').trim();
+  const openrouterKey = (settings.openrouterApiKey || CONFIG.providers.openrouter.defaultApiKey || '').trim();
+
+  let endpoint, apiKey, model;
+  if (provider === 'openai' && openaiKey) {
+    endpoint = 'https://api.openai.com/v1/embeddings';
+    apiKey = openaiKey;
+    model = 'text-embedding-ada-002';
+  } else if (openrouterKey) {
+    endpoint = 'https://openrouter.ai/api/v1/embeddings';
+    apiKey = openrouterKey;
+    model = 'openai/text-embedding-ada-002';
+  } else if (openaiKey) {
+    endpoint = 'https://api.openai.com/v1/embeddings';
+    apiKey = openaiKey;
+    model = 'text-embedding-ada-002';
+  } else {
+    return { error: 'Embedding API key not configured (OpenAI or OpenRouter). Click ⚙️ Settings.' };
+  }
+
+  startKeepAlive();
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'chrome-extension://pageguide',
+        'X-Title': 'PageGuide'
+      },
+      body: JSON.stringify({ model, input })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      return { error: `Embedding API error: ${data.error?.message || response.status}` };
+    }
+    const embeddings = Array.isArray(data.data)
+      ? data.data.slice().sort((a, b) => (a.index || 0) - (b.index || 0)).map(item => item.embedding || [])
+      : [];
+    return { embeddings, model };
+  } catch (error) {
+    return { error: `Embedding network error: ${error.message}` };
+  } finally {
+    stopKeepAlive();
+  }
+}
+
 // ===== Multi-Image LLM Router =====
 // Supports multiple images for comparison tasks (e.g., image_ask)
+// Output budget for a single step. Guide steps carry thought + instruction + evidence sidecars +
+// annotations, and on reasoning models the hidden reasoning tokens count against this too, so 1024
+// silently truncated the JSON mid-string and surfaced as "Could not parse step JSON". 4096 was still
+// hit by reasoning models, so the budget is generous and the reasoning effort is capped below.
+const LLM_MAX_OUTPUT_TOKENS = 16384;
+
+// A guide step is a small structured decision, not a proof: cap the hidden reasoning so it does not
+// eat the output budget (and the user's wait). OpenRouter ignores this on models without reasoning.
+const OPENROUTER_REASONING = { effort: 'low' };
+
+/** OpenAI direct: only the reasoning families accept reasoning_effort; gpt-4o rejects it. */
+function _openaiReasoningParams(model) {
+  return /^(o\d|gpt-5|gpt-6)/.test(String(model || '')) ? { reasoning_effort: 'low' } : {};
+}
+
+/**
+ * OpenAI-compatible responses report `finish_reason: "length"` when max_tokens cut the output off.
+ * A cut-off JSON object can't be parsed, so report the real cause instead of handing back a partial.
+ */
+function _truncatedOutputError(data, providerLabel) {
+  const finish = data?.choices?.[0]?.finish_reason;
+  if (finish !== 'length') return null;
+  return { error: `${providerLabel} response was truncated (max_tokens reached). Try a shorter goal or a model with a larger output budget.` };
+}
+
 async function callLLMWithImages(messages, systemPrompt, images = []) {
   // Start keep-alive to prevent service worker from going inactive
   startKeepAlive();
@@ -428,73 +996,67 @@ async function callLLMWithImages(messages, systemPrompt, images = []) {
   return result;
 }
 
-// ===== Fast Router LLM =====
-// Prefers Gemini 2.5 Flash for fast routing. If no Gemini key is set (e.g. an
-// OpenRouter-only or OpenAI-only user), falls back to the user's selected provider
-// so routing still works without requiring a separate Gemini key.
-async function callRouterLLM(messages, systemPrompt) {
-  const config = CONFIG.providers.gemini;
-  const routerModel = 'gemini-2.5-flash';
-
-  // Load all relevant settings in one call
+// ===== Selected provider/model =====
+// The one place that answers "which model did the user pick?". Every Find task — routing, image
+// selection, Ask — runs on this, so switching the model in Settings switches it everywhere rather
+// than only for the main answer call. Pure.
+function selectedProviderModel(settings) {
+  const provider = (settings && settings.provider) || CONFIG.defaultProvider;
+  const config = CONFIG.providers[provider];
+  const picked = provider === 'gemini' ? settings?.geminiModel
+    : provider === 'openrouter' ? settings?.openrouterModel
+    : provider === 'openai' ? settings?.openaiModel
+    : '';
+  return { provider, model: String(picked || config?.defaultModel || '') };
+}
+/** The provider/model the user picked, read from storage. Falls back to the defaults on error. */
+async function readSelectedProviderModel() {
   let settings = {};
   try {
     settings = await chrome.storage.sync.get([
-      'geminiApiKey', 'provider',
-      'openrouterApiKey', 'openrouterModel',
-      'openaiApiKey', 'openaiModel'
+      'provider', 'geminiModel', 'openrouterModel', 'openaiModel'
     ]);
-  } catch (e) { /* ignore */ }
+  } catch (e) { /* fall through to defaults */ }
+  return selectedProviderModel(settings);
+}
 
-  const apiKey = (settings.geminiApiKey || config.defaultApiKey || '').trim();
+// ===== Fast Router LLM =====
+// Routing runs on the model selected in Settings, same as every other Find step. It used to be
+// pinned to Gemini 2.5 Flash, which meant a user who switched to (say) an OpenRouter model still
+// had their routing decided by Gemini — and silently needed a second API key for it.
+async function callRouterLLM(messages, systemPrompt) {
+  const { provider, model } = await readSelectedProviderModel();
+  console.log(`\u{1F3AF} Router LLM (${provider} ${model})`);
+  const result = await callLLM(messages, systemPrompt);
+  if (result && !result.error) return { ...result, provider, model };
+  return result;
+}
 
-  // If no Gemini key, route via the user's selected provider instead
-  if (!apiKey) {
-    console.log('🎯 No Gemini key for router — using selected provider as fallback');
-    return callLLM(messages, systemPrompt);
-  }
-  
-  const url = `${config.endpoint}/${routerModel}:generateContent?key=${apiKey}`;
-  
-  try {
-    let userContent = systemPrompt ? `[Instructions]\n${systemPrompt}\n\n` : '';
-    if (messages?.length > 0) {
-      userContent += messages[messages.length - 1].content;
-    }
-    
-    console.log('🎯 Router LLM (Gemini 2.5 Flash) - prompt length:', userContent.length);
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: userContent }] }],
-        generationConfig: { 
-          temperature: 0.1, 
-          maxOutputTokens: 256 // Router responses are short
-        }
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return { error: `Router API error: ${data.error?.message || response.status}` };
-    }
-    
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      return { error: 'Empty response from router' };
-    }
-    
-    return { content: text };
-  } catch (error) {
-    return { error: `Router network error: ${error.message}` };
-  }
+// ===== Cheap Image Selection LLM =====
+// Text-only prefilter for Find/Ask visual image attachments: it only ever sees candidate
+// ids/titles, never image pixels, so a text-only model is fine here. It runs on the selected
+// model too, so one Find run does not span two vendors.
+async function callImageSelectionLLM(messages, systemPrompt) {
+  const { provider, model } = await readSelectedProviderModel();
+  console.log(`\u{1F5BC}\u{FE0F} Image selector LLM (${provider} ${model})`);
+  const result = await callLLM(messages, systemPrompt);
+  if (result && !result.error) return { ...result, provider, model };
+  return result;
+}
+
+/** Pin provider/model for one call. Pure. Unknown providers are ignored; keys are never overridden. */
+function _applyModelOverride(settings, overrides) {
+  const base = Object.assign({}, settings || {});
+  const provider = String(overrides?.provider || '').trim();
+  const model = String(overrides?.model || '').trim();
+  if (!['gemini', 'openrouter', 'openai'].includes(provider)) return base;
+  base.provider = provider;
+  if (model) base[`${provider}Model`] = model;
+  return base;
 }
 
 // ===== Main LLM Router =====
-async function callLLM(messages, systemPrompt, imageBase64 = null) {
+async function callLLM(messages, systemPrompt, imageBase64 = null, overrides = null) {
   // Start keep-alive to prevent service worker from going inactive
   startKeepAlive();
   
@@ -510,6 +1072,9 @@ async function callLLM(messages, systemPrompt, imageBase64 = null) {
     stopKeepAlive();
     return { error: 'Failed to load settings' };
   }
+  // A caller may pin the provider/model for this one call (the LLM judge in Model Comparison runs
+  // on a model chosen in that screen, not the one the agent is set to). Keys still come from settings.
+  settings = _applyModelOverride(settings, overrides);
 
   const provider = settings.provider || CONFIG.defaultProvider;
 
@@ -625,6 +1190,90 @@ async function callGemini(messages, systemPrompt, settings, imageBase64 = null) 
   }
 }
 
+// ===== Gemini Video URL Call =====
+// Uses Gemini's fileData support for video URLs (for example YouTube links) to answer a query
+// from both visual and audio content. This intentionally uses the Gemini key even when the user's
+// selected chat provider is OpenRouter/OpenAI, because provider support for direct video URLs varies.
+async function watchVideoWithGemini(videoUrl, query, metadata = {}) {
+  startKeepAlive();
+
+  let settings;
+  try {
+    settings = await chrome.storage.sync.get(['geminiApiKey', 'geminiModel']);
+  } catch (e) {
+    stopKeepAlive();
+    return { error: 'Failed to load Gemini settings' };
+  }
+
+  const config = CONFIG.providers.gemini;
+  const apiKey = (settings.geminiApiKey || config.defaultApiKey || '').trim();
+  if (!apiKey) {
+    stopKeepAlive();
+    return { error: 'Gemini API key not configured. Add a Gemini key in Settings to use watch_video.' };
+  }
+
+  const urlText = String(videoUrl || '').trim();
+  if (!/^https?:\/\//i.test(urlText)) {
+    stopKeepAlive();
+    return { error: 'watch_video needs a valid http(s) video URL.' };
+  }
+
+  const model = settings.geminiModel || config.defaultModel;
+  const endpoint = `${config.endpoint}/${model}:generateContent?key=${apiKey}`;
+  const prompt = `Watch the video and answer the user's query using only information supported by the video content (visuals, speech, captions, or on-screen text).
+
+User query:
+${String(query || 'Summarize the important information in this video.').trim()}
+
+Return a concise answer. If the video does not answer the query, say so directly.`;
+
+  try {
+    console.log('🎬 Gemini watch_video request:', { model, videoUrl: urlText, url: metadata?.url || '' });
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { fileData: { fileUri: urlText } },
+            { text: prompt }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 4096
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' }
+        ]
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return { error: `Video API error: ${data.error?.message || response.status}` };
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
+    if (!text) {
+      const finishReason = data.candidates?.[0]?.finishReason;
+      if (finishReason === 'SAFETY') return { error: 'Video response blocked by safety filters' };
+      if (data.promptFeedback?.blockReason) return { error: `Video prompt blocked: ${data.promptFeedback.blockReason}` };
+      return { error: `Empty video response from Gemini (reason: ${finishReason || 'unknown'})` };
+    }
+
+    return { content: text };
+  } catch (error) {
+    return { error: `Video network error: ${error.message}` };
+  } finally {
+    stopKeepAlive();
+  }
+}
+
 // ===== OpenRouter API Call =====
 async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = null) {
   const config = CONFIG.providers.openrouter;
@@ -669,22 +1318,28 @@ async function callOpenRouter(messages, systemPrompt, settings, imageBase64 = nu
         model: model,
         messages: chatMessages,
         temperature: 0.1,
-        max_tokens: 1024
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
+        reasoning: OPENROUTER_REASONING,
+        // Ask OpenRouter to price the call. Without this the response carries token counts but no
+        // `usage.cost`, and cost would have to be guessed from a local price table.
+        usage: { include: true }
       })
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
     }
-    
+
+    const truncated = _truncatedOutputError(data, 'OpenRouter');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenRouter' };
     }
-    
-    return { content: text };
+
+    return { content: text, usage: normalizeUsage(data, 'openrouter', model) };
   } catch (error) {
     return { error: `OpenRouter network error: ${error.message}` };
   }
@@ -731,7 +1386,8 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        max_completion_tokens: 1024,
+        max_completion_tokens: LLM_MAX_OUTPUT_TOKENS,
+        ..._openaiReasoningParams(model),
         // o-series models (o1, o3, o4-mini, …) don't support temperature
         ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
       })
@@ -743,6 +1399,8 @@ async function callOpenAI(messages, systemPrompt, settings, imageBase64 = null) 
       return { error: `OpenAI API error: ${data.error?.message || response.status}` };
     }
 
+    const truncated = _truncatedOutputError(data, 'OpenAI');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenAI' };
@@ -883,22 +1541,28 @@ async function callOpenRouterMultiImage(messages, systemPrompt, settings, images
         model: model,
         messages: chatMessages,
         temperature: 0.1,
-        max_tokens: 1024
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
+        reasoning: OPENROUTER_REASONING,
+        // Same as the single-image path: this is what makes `usage.cost` come back. Images are the
+        // expensive half of a guide step, so a run priced without them would be badly wrong.
+        usage: { include: true }
       })
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       return { error: `OpenRouter API error: ${data.error?.message || response.status}` };
     }
-    
+
+    const truncated = _truncatedOutputError(data, 'OpenRouter');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenRouter' };
     }
-    
-    return { content: text };
+
+    return { content: text, usage: normalizeUsage(data, 'openrouter', model) };
   } catch (error) {
     return { error: `OpenRouter network error: ${error.message}` };
   }
@@ -948,7 +1612,8 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
       body: JSON.stringify({
         model: model,
         messages: chatMessages,
-        max_completion_tokens: 1024,
+        max_completion_tokens: LLM_MAX_OUTPUT_TOKENS,
+        ..._openaiReasoningParams(model),
         // o-series models (o1, o3, o4-mini, …) don't support temperature
         ...(/^o\d/.test(model) ? {} : { temperature: 0.1 })
       })
@@ -960,6 +1625,8 @@ async function callOpenAIMultiImage(messages, systemPrompt, settings, images = [
       return { error: `OpenAI API error: ${data.error?.message || response.status}` };
     }
 
+    const truncated = _truncatedOutputError(data, 'OpenAI');
+    if (truncated) return truncated;
     const text = data.choices?.[0]?.message?.content;
     if (!text) {
       return { error: 'Empty response from OpenAI' };

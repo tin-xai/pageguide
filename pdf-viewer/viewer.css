@@ -6,13 +6,13 @@
   --bg-secondary: #151518;
   --bg-tertiary: #1c1c21;
   --bg-hover: #252529;
-  --text-primary: #f0f0f2;
+  --text-primary: #f2f1f0;
   --text-secondary: #9898a0;
   --text-muted: #5f5f67;
-  --accent: #7c5cff;
-  --accent-light: #9d82ff;
-  --accent-dim: rgba(124, 92, 255, 0.15);
-  --highlight: #a78bfa;
+  --accent: #ffa95c;
+  --accent-light: #ffbe82;
+  --accent-dim: rgba(255, 169, 92, 0.15);
+  --highlight: #fac28b;
   --highlight-bg: transparent;
   --border: #2a2a30;
   --success: #4caf50;
@@ -409,18 +409,18 @@ body {
   border-radius: 3px;
   pointer-events: none;
   z-index: 10;
-  box-shadow: 0 0 12px rgba(167, 139, 250, 0.4);
+  box-shadow: 0 0 12px rgba(250, 194, 139, 0.4);
   animation: highlightPulse 1.5s ease-in-out 3;
 }
 
 @keyframes highlightPulse {
   0%, 100% { 
     opacity: 1; 
-    box-shadow: 0 0 12px rgba(167, 139, 250, 0.4);
+    box-shadow: 0 0 12px rgba(250, 194, 139, 0.4);
   }
   50% { 
     opacity: 0.85; 
-    box-shadow: 0 0 18px rgba(167, 139, 250, 0.6);
+    box-shadow: 0 0 18px rgba(250, 194, 139, 0.6);
   }
 }
 

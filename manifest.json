@@ -6,10 +6,12 @@
   "permissions": [
     "activeTab",
     "storage",
+    "unlimitedStorage",
     "scripting",
     "tabs",
     "sidePanel",
-    "offscreen"
+    "offscreen",
+    "debugger"
   ],
   "side_panel": {
     "default_path": "sidepanel/panel.html"
@@ -31,24 +33,32 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "<all_urls>"
+      ],
       "js": [
         "content/prompts.js",
         "content/utils.js",
+        "rewind/rewind_store.js",
         "content/functions/scroll.js",
+        "content/functions/page_snapshot.js",
+        "content/functions/citation_anchors.js",
         "content/functions/capture_screenshot.js",
         "content/functions/highlight.js",
+        "content/functions/study_pick.js",
         "content/functions/highlight_pdf.js",
         "content/functions/main_router.js",
         "content/tasks/ask.js",
         "content/tasks/ask_pdf.js",
-        "content/tasks/guide.js",
         "content/tasks/guidev2.js",
         "content/tasks/protection.js",
         "content/tasks/image_ask.js",
+        "content/study_tracker.js",
         "content/content.js"
       ],
-      "css": ["content/content.css"],
+      "css": [
+        "content/content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -60,8 +70,17 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "lib/*", "pdf-viewer/*", "guide_tutorials.json"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "icons/*",
+        "lib/*",
+        "pdf-viewer/*",
+        "guide_tutorials.json",
+        "rewind/*",
+        "user_study_data/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

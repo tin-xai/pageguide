@@ -6,9 +6,10 @@
  */
 if (typeof PDF_CONFIG === 'undefined') {
   var PDF_CONFIG = {
-    highlightColor: 'rgba(255, 235, 59, 0.4)',  // Yellow highlight
-    highlightBorder: '2px solid #FFC107',
-    animationDuration: 2000,  // ms for highlight pulse animation
+    // Same orange family and same flat treatment as the web highlight (content/content.css) —
+    // it used to be yellow and pulse three times, so a PDF answer looked like a different feature.
+    highlightColor: 'rgba(255, 166, 87, 0.16)',
+    highlightBorder: '1px solid rgba(255, 166, 87, 0.35)',
     scrollPadding: 100  // px padding when scrolling to highlight
   };
 }
@@ -62,25 +63,15 @@ function showPdfSearchNotification(pageNumber, searchText) {
     const style = document.createElement('style');
     style.id = 'pageguide-pdf-notification-styles';
     style.textContent = `
+      /* Fade only — the notice used to slide in from the right, which reads as motion in the
+         corner of the eye while you are trying to read the page. */
       @keyframes pageguide-slide-in {
-        from {
-          opacity: 0;
-          transform: translateX(100px);
-        }
-        to {
-          opacity: 1;
-          transform: translateX(0);
-        }
+        from { opacity: 0; }
+        to { opacity: 1; }
       }
       @keyframes pageguide-slide-out {
-        from {
-          opacity: 1;
-          transform: translateX(0);
-        }
-        to {
-          opacity: 0;
-          transform: translateX(100px);
-        }
+        from { opacity: 1; }
+        to { opacity: 0; }
       }
     `;
     document.head.appendChild(style);
@@ -235,77 +226,6 @@ function getPdfJsApp() {
   }
   
   return null;
-}
-
-/**
- * Get current PDF page number from PDF.js viewer or Chrome native viewer
- * @returns {number} Current page number (1-indexed)
- */
-function getCurrentPdfPage() {
-  const pdfApp = getPdfJsApp();
-  if (pdfApp?.page) {
-    return pdfApp.page;
-  }
-  
-  // Check for Chrome native PDF viewer page indicator
-  // Chrome shows "1 / 15" format in a toolbar input
-  const chromePageInput = document.querySelector('input[type="text"][aria-label*="Page"]') ||
-                          document.querySelector('input#page-selector') ||
-                          document.querySelector('cr-input');
-  
-  if (chromePageInput?.value) {
-    const match = chromePageInput.value.match(/(\d+)/);
-    if (match) return parseInt(match[1], 10);
-  }
-  
-  // Fallback: look for page indicator in DOM
-  const pageInput = document.getElementById('pageNumber') ||
-                    document.querySelector('input[title*="Page"]') ||
-                    document.querySelector('[class*="pageNumber"]');
-  
-  if (pageInput?.value) {
-    return parseInt(pageInput.value, 10) || 1;
-  }
-  
-  // Try to find page text like "1 / 15"
-  const pageText = document.body.innerText?.match(/(\d+)\s*\/\s*\d+/);
-  if (pageText) {
-    return parseInt(pageText[1], 10) || 1;
-  }
-  
-  return 1;
-}
-
-/**
- * Get total number of pages in PDF
- * @returns {number} Total page count
- */
-function getTotalPdfPages() {
-  const pdfApp = getPdfJsApp();
-  if (pdfApp?.pagesCount) {
-    return pdfApp.pagesCount;
-  }
-  
-  // Check for Chrome native PDF viewer - look for "X / Y" format
-  const pageText = document.body.innerText?.match(/\d+\s*\/\s*(\d+)/);
-  if (pageText) {
-    return parseInt(pageText[1], 10) || 1;
-  }
-  
-  // Fallback: look for page count in DOM
-  const pageCount = document.getElementById('numPages') ||
-                    document.querySelector('[class*="numPages"]');
-  
-  if (pageCount?.textContent) {
-    const match = pageCount.textContent.match(/(\d+)/);
-    if (match) return parseInt(match[1], 10);
-  }
-  
-  // Count page elements
-  const pages = document.querySelectorAll('.page, [data-page-number]');
-  if (pages.length > 0) return pages.length;
-  
-  return 1;
 }
 
 /**
@@ -493,7 +413,6 @@ function createPdfHighlight(pageNumber, bbox, text) {
     border-radius: 2px;
     pointer-events: none;
     z-index: 10;
-    animation: pageguide-pdf-pulse 1.5s ease-in-out 3;
   `;
   
   // Ensure page container has relative positioning
@@ -514,44 +433,38 @@ function createPdfHighlight(pageNumber, bbox, text) {
 }
 
 /**
- * Add CSS animation for PDF highlights
+ * Styles for PDF highlights. Deliberately motionless — the highlight is a colour, nothing else
+ * (the pulse keyframes that used to live here ran three times on every citation).
  */
 function injectPdfHighlightStyles() {
   if (document.getElementById('pageguide-pdf-styles')) return;
-  
+
   const style = document.createElement('style');
   style.id = 'pageguide-pdf-styles';
   style.textContent = `
-    @keyframes pageguide-pdf-pulse {
-      0%, 100% {
-        background-color: rgba(255, 235, 59, 0.4);
-        box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
-      }
-      50% {
-        background-color: rgba(255, 235, 59, 0.7);
-        box-shadow: 0 0 10px 5px rgba(255, 193, 7, 0.3);
-      }
-    }
-    
     .pageguide-pdf-highlight {
       transition: opacity 0.3s ease;
     }
     
     .pageguide-pdf-highlight:hover {
       opacity: 0.8;
+      box-shadow: 0 0 0 4px rgba(255, 166, 87, 0.14), 0 12px 32px rgba(255, 166, 87, 0.22);
     }
     
     .pageguide-pdf-highlight-tooltip {
       position: absolute;
-      background: #333;
+      background: rgba(32, 26, 55, 0.96);
       color: white;
-      padding: 8px 12px;
-      border-radius: 4px;
+      padding: 8px 12px 8px 26px;
+      border-radius: 999px;
       font-size: 12px;
       max-width: 300px;
       z-index: 1000;
       pointer-events: none;
       white-space: pre-wrap;
+      border: 1px solid rgba(255, 190, 132, 0.36);
+      box-shadow: 0 14px 34px rgba(98, 65, 34, 0.25);
+      background-image: radial-gradient(circle at 13px 50%, transparent 0 3px, #ffce9c 3px 5px, transparent 5px);
     }
   `;
   
@@ -626,44 +539,6 @@ async function applyPdfHighlights(highlights) {
   
   console.log('📄 Applied', count, 'PDF highlights');
   return count;
-}
-
-/**
- * Get visible text from PDF page (for sending to backend)
- * Uses text layer from PDF.js if available
- * @param {number} pageNumber - Page number (1-indexed), or null for all visible pages
- * @returns {string} Extracted text
- */
-function getPdfPageText(pageNumber = null) {
-  let textLayers;
-  
-  if (pageNumber) {
-    const pageEl = document.querySelector(`[data-page-number="${pageNumber}"]`) ||
-                   document.querySelectorAll('.page')[pageNumber - 1];
-    textLayers = pageEl ? [pageEl.querySelector('.textLayer')] : [];
-  } else {
-    textLayers = document.querySelectorAll('.textLayer');
-  }
-  
-  const texts = [];
-  
-  textLayers.forEach((layer, idx) => {
-    if (!layer) return;
-    
-    const pageNum = pageNumber || idx + 1;
-    const spans = layer.querySelectorAll('span');
-    const pageText = Array.from(spans)
-      .map(span => span.textContent)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    
-    if (pageText) {
-      texts.push(`[Page ${pageNum}]\n${pageText}`);
-    }
-  });
-  
-  return texts.join('\n\n');
 }
 
 /**

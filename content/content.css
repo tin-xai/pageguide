@@ -1,785 +1,93 @@
 /* PageGuide Content Script Styles */
 
-/* Guide highlight effect */
-.pageguide-guide-highlight {
-  outline: 3px solid #00ff88 !important;
-  outline-offset: 3px !important;
-  box-shadow: 0 0 20px rgba(0, 255, 136, 0.5) !important;
-  animation: pageguide-pulse 1.5s ease-in-out infinite !important;
-}
-
-@keyframes pageguide-pulse {
-  0%, 100% { box-shadow: 0 0 10px rgba(0, 255, 136, 0.5); }
-  50% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.8); }
-}
-
-/* Tooltip */
-.pageguide-tooltip {
-  position: fixed;
-  background: #1a1a2e;
-  color: #fff;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 12px;
-  z-index: 999999;
-  max-width: 250px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(0, 217, 255, 0.3);
-}
-
-.pageguide-tooltip::before {
-  content: '';
-  position: absolute;
-  top: -6px;
-  left: 20px;
-  border-width: 0 6px 6px 6px;
-  border-style: solid;
-  border-color: transparent transparent #1a1a2e transparent;
-}
-
-/* Arrow indicator */
-.pageguide-arrow {
-  position: fixed;
-  pointer-events: none;
-  z-index: 999998;
-}
-
-/* Warning overlay */
-.pageguide-warning-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
-  z-index: 999997;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pageguide-warning-box {
-  background: #1a1a2e;
-  border: 2px solid #ff4444;
-  border-radius: 12px;
-  padding: 24px;
-  max-width: 400px;
-  text-align: center;
-  color: #fff;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-}
-
-.pageguide-warning-box h2 {
-  color: #ff4444;
-  margin-bottom: 12px;
-}
-
-.pageguide-warning-box button {
-  margin: 8px;
-  padding: 10px 20px;
-  border-radius: 6px;
-  border: none;
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.pageguide-warning-box .btn-danger {
-  background: #ff4444;
-  color: white;
-}
-
-.pageguide-warning-box .btn-safe {
-  background: #00ff88;
-  color: #000;
-}
-
-/* Blurred explicit content */
-.pageguide-blurred {
-  filter: blur(20px) !important;
-  transition: filter 0.3s;
-}
-
-.pageguide-blurred:hover {
-  filter: blur(10px) !important;
-}
-
-/* Element index labels */
-.pageguide-index-label {
-  position: absolute;
-  background: #00d9ff;
-  color: #000;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: bold;
-  font-family: monospace;
-  z-index: 999996;
-  pointer-events: none;
-}
-
-/* ===== CHAT PANEL ===== */
-#pageguide-chat-panel {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 380px;
-  height: 100vh;
-  background: linear-gradient(180deg, #0d0d1a 0%, #1a1a2e 100%);
-  border-left: 1px solid rgba(0, 217, 255, 0.2);
-  z-index: 999990;
-  display: flex;
-  flex-direction: column;
-  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  box-shadow: -5px 0 30px rgba(0, 0, 0, 0.5);
-  transform: translateX(100%);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-#pageguide-chat-panel.open {
-  transform: translateX(0);
-}
-
-/* Chat Header */
-.pageguide-chat-header {
-  padding: 16px 20px;
-  background: linear-gradient(135deg, rgba(0, 217, 255, 0.1) 0%, rgba(0, 255, 136, 0.05) 100%);
-  border-bottom: 1px solid rgba(0, 217, 255, 0.2);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.pageguide-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.pageguide-logo {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-}
-
-.pageguide-header-text h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  background: linear-gradient(135deg, #00d9ff, #00ff88);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.pageguide-header-text p {
-  margin: 2px 0 0 0;
-  font-size: 10px;
-  color: #888;
-}
-
-.pageguide-header-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.pageguide-settings-btn,
-.pageguide-close-btn {
-  background: rgba(255, 255, 255, 0.1);
-  border: none;
-  color: #888;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 6px 10px;
-  border-radius: 6px;
-  transition: all 0.2s;
-}
-
-.pageguide-settings-btn:hover {
-  background: rgba(0, 217, 255, 0.2);
-  color: #00d9ff;
-}
-
-.pageguide-close-btn:hover {
-  background: rgba(255, 100, 100, 0.2);
-  color: #ff6666;
-}
-
-/* Chat Messages Container */
-.pageguide-chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.pageguide-chat-messages::-webkit-scrollbar {
-  width: 6px;
-}
-
-.pageguide-chat-messages::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.pageguide-chat-messages::-webkit-scrollbar-thumb {
-  background: rgba(0, 217, 255, 0.3);
-  border-radius: 3px;
-}
-
-/* Message Bubbles */
-.pageguide-message {
-  max-width: 85%;
-  padding: 12px 16px;
-  border-radius: 16px;
-  font-size: 14px;
-  line-height: 1.5;
-  animation: pageguide-message-in 0.3s ease-out;
-}
-
-@keyframes pageguide-message-in {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.pageguide-message.user {
-  align-self: flex-end;
-  background: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%);
-  color: #000;
-  border-bottom-right-radius: 4px;
-}
-
-.pageguide-message.assistant {
-  align-self: flex-start;
-  background: rgba(255, 255, 255, 0.08);
-  color: #e0e0e0;
-  border-bottom-left-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.pageguide-message.system {
-  align-self: center;
-  background: rgba(0, 255, 136, 0.1);
-  color: #00ff88;
-  font-size: 12px;
-  padding: 8px 16px;
-  border-radius: 20px;
-  border: 1px solid rgba(0, 255, 136, 0.2);
-}
-
-.pageguide-message.error {
-  align-self: center;
-  background: rgba(255, 100, 100, 0.1);
-  color: #ff6666;
-  font-size: 12px;
-  padding: 8px 16px;
-  border-radius: 20px;
-  border: 1px solid rgba(255, 100, 100, 0.2);
-}
-
-/* Action message - shows executed actions */
-.pageguide-message.action {
-  align-self: center;
-  background: linear-gradient(135deg, rgba(255, 200, 0, 0.15), rgba(255, 150, 0, 0.15));
-  color: #ffcc00;
-  font-size: 12px;
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 200, 0, 0.3);
-}
-
-/* Guide message - step-by-step instructions */
-.pageguide-message.guide {
-  align-self: flex-start;
-  background: linear-gradient(135deg, rgba(110, 72, 255, 0.15), rgba(59, 130, 246, 0.15));
-  color: #e0e0e0;
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(110, 72, 255, 0.3);
-  max-width: 90%;
-}
-
-.pageguide-guide-step {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.pageguide-step-badge {
-  background: linear-gradient(135deg, #6e48ff, #3b82f6);
-  color: white;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.pageguide-step-text {
-  flex: 1;
-  line-height: 1.5;
-}
-
-.pageguide-next-hint {
-  margin-top: 10px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  font-size: 12px;
-  color: #a0a0a0;
-}
-
-.pageguide-guide-waiting {
-  margin-top: 10px;
-  font-size: 11px;
-  color: #6bcfff;
-  animation: pageguide-waiting-pulse 2s ease-in-out infinite;
-}
-
-@keyframes pageguide-waiting-pulse {
-  0%, 100% { opacity: 0.7; }
-  50% { opacity: 1; }
-}
-
-/* Clickable answer message - scroll to highlight */
-.pageguide-message.pageguide-clickable {
-  cursor: pointer;
-  position: relative;
-  transition: all 0.2s ease;
-  border: 1px solid rgba(0, 217, 255, 0.3);
-}
-
-.pageguide-message.pageguide-clickable:hover {
-  background: rgba(0, 217, 255, 0.15);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 217, 255, 0.2);
-}
-
-/* Typing Indicator */
-.pageguide-typing {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  border-bottom-left-radius: 4px;
-  align-self: flex-start;
-}
-
-.pageguide-typing span {
-  width: 8px;
-  height: 8px;
-  background: #00d9ff;
-  border-radius: 50%;
-  animation: pageguide-typing-dot 1.4s infinite;
-}
-
-.pageguide-typing span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.pageguide-typing span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes pageguide-typing-dot {
-  0%, 60%, 100% {
-    opacity: 0.3;
-    transform: scale(0.8);
-  }
-  30% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* Chat Input Area */
-.pageguide-chat-input-area {
-  padding: 16px;
-  background: rgba(0, 0, 0, 0.3);
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.pageguide-quick-actions {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-
-.pageguide-quick-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #aaa;
-  padding: 6px 12px;
-  border-radius: 16px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.pageguide-quick-btn:hover {
-  background: rgba(0, 217, 255, 0.15);
-  border-color: rgba(0, 217, 255, 0.3);
-  color: #00d9ff;
-}
-
-.pageguide-input-row {
-  display: flex;
-  gap: 8px;
-}
-
-.pageguide-chat-input {
-  flex: 1;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 24px;
-  padding: 12px 18px;
-  color: #fff;
-  font-size: 14px;
-  outline: none;
-  transition: all 0.2s;
-}
-
-.pageguide-chat-input::placeholder {
-  color: #666;
-}
-
-.pageguide-chat-input:focus {
-  border-color: rgba(0, 217, 255, 0.5);
-  box-shadow: 0 0 20px rgba(0, 217, 255, 0.1);
-}
-
-.pageguide-send-btn {
-  background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
-  border: none;
-  border-radius: 50%;
-  width: 44px;
-  height: 44px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  transition: all 0.2s;
-}
-
-.pageguide-send-btn:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 20px rgba(0, 217, 255, 0.4);
-}
-
-.pageguide-send-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
-}
-
-/* Panel overlays page - no shifting needed */
-
-/* ===== HIGHLIGHT ANIMATIONS ===== */
-
-/* Pulse - Gentle pulsing glow */
-.pageguide-highlight-pulse {
-  animation: pageguide-pulse 2s ease-in-out infinite;
-}
-
-@keyframes pageguide-pulse {
-  0%, 100% { 
-    box-shadow: 0 0 5px var(--pageguide-color, #ffd93d);
-    opacity: 1;
-  }
-  50% { 
-    box-shadow: 0 0 25px var(--pageguide-color, #ffd93d), 0 0 50px var(--pageguide-color, #ffd93d);
-    opacity: 0.9;
-  }
-}
-
-/* Spotlight - Bright spotlight effect */
-.pageguide-highlight-spotlight {
-  animation: pageguide-spotlight 1.5s ease-out forwards;
-  position: relative;
-}
-
-@keyframes pageguide-spotlight {
-  0% {
-    box-shadow: 0 0 0 0 var(--pageguide-color, #ffd93d);
-    background-color: transparent;
-  }
-  30% {
-    box-shadow: 0 0 60px 20px var(--pageguide-color, #ffd93d);
-  }
-  100% {
-    box-shadow: 0 0 20px 5px var(--pageguide-color, #ffd93d);
-    background-color: color-mix(in srgb, var(--pageguide-color, #ffd93d) 25%, transparent);
-  }
-}
-
-/* Shimmer - Moving highlight sweep */
-.pageguide-highlight-shimmer {
-  position: relative;
-  display: inline-block;
-  overflow: hidden;
-  background-color: color-mix(in srgb, var(--pageguide-color, #ffd93d) 20%, transparent);
-  border-radius: 3px;
-  padding: 0 2px;
-}
-
-.pageguide-highlight-shimmer::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 50%;
-  height: 100%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--pageguide-color, #ffd93d) 60%, white),
-    transparent
-  );
-  animation: pageguide-shimmer 1.5s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@keyframes pageguide-shimmer {
-  0% { left: -50%; }
-  100% { left: 100%; }
-}
-
-/* Shimmer for block elements */
-.pageguide-highlight-shimmer-block {
-  position: relative;
-  overflow: hidden;
-}
-
-.pageguide-highlight-shimmer-block::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--pageguide-color, #ffd93d) 40%, transparent),
-    transparent
-  );
-  animation: pageguide-shimmer-move 2s linear infinite;
-}
-
-@keyframes pageguide-shimmer-move {
-  0% { left: -100%; }
-  100% { left: 100%; }
-}
-
-/* Bounce - Bouncing attention */
-.pageguide-highlight-bounce {
-  animation: pageguide-bounce 1s ease infinite;
-}
-
-@keyframes pageguide-bounce {
-  0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
-  40% { transform: translateY(-10px); }
-  60% { transform: translateY(-5px); }
-}
-
-/* Rainbow - Color cycling border */
-.pageguide-highlight-rainbow {
-  animation: pageguide-rainbow 3s linear infinite;
-  border: 3px solid transparent;
-  border-radius: 4px;
-}
-
-@keyframes pageguide-rainbow {
-  0% { border-color: #ff6b6b; box-shadow: 0 0 15px #ff6b6b; }
-  16% { border-color: #ffd93d; box-shadow: 0 0 15px #ffd93d; }
-  33% { border-color: #6bcf63; box-shadow: 0 0 15px #6bcf63; }
-  50% { border-color: #4ecdc4; box-shadow: 0 0 15px #4ecdc4; }
-  66% { border-color: #6bcfff; box-shadow: 0 0 15px #6bcfff; }
-  83% { border-color: #a855f7; box-shadow: 0 0 15px #a855f7; }
-  100% { border-color: #ff6b6b; box-shadow: 0 0 15px #ff6b6b; }
-}
-
-/* Underline - Animated underline */
-.pageguide-highlight-underline {
-  position: relative;
-  text-decoration: none !important;
-}
-
-.pageguide-highlight-underline::after {
-  content: '';
-  position: absolute;
-  bottom: -2px;
-  left: 0;
-  width: 100%;
-  height: 3px;
-  background: var(--pageguide-color, #ffd93d);
-  animation: pageguide-underline 0.5s ease-out forwards, pageguide-underline-pulse 2s ease-in-out 0.5s infinite;
-  transform-origin: left;
-}
-
-@keyframes pageguide-underline {
-  0% { transform: scaleX(0); }
-  100% { transform: scaleX(1); }
-}
-
-@keyframes pageguide-underline-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
-/* Glow - Steady glowing outline */
+/* ===== HIGHLIGHT ===== */
+
+/*
+ * The highlight is a color, nothing else. It used to pick a random color out of three and a
+ * random animation out of four per citation (pulse / spotlight / left-to-right shimmer sweep /
+ * glow), so a single answer covered the page in several colors moving in several ways at once.
+ * Now every cited span gets the same accent (getRandomHighlightStyle in
+ * content/functions/highlight.js) and the same flat tint. No animation at all — no fade, no glow,
+ * no outline, no sweep. Anything that moves pulls the eye away from the text being read.
+ *
+ * The legacy effect class names are kept as aliases of this style so a stale class string left
+ * anywhere can never bring the motion back.
+ */
+.pageguide-highlight,
+.pageguide-highlight-soft,
+.pageguide-highlight-pulse,
+.pageguide-highlight-spotlight,
+.pageguide-highlight-shimmer,
+.pageguide-highlight-shimmer-block,
 .pageguide-highlight-glow {
-  outline: 3px solid var(--pageguide-color, #ffd93d);
-  outline-offset: 3px;
-  box-shadow: 
-    0 0 10px var(--pageguide-color, #ffd93d),
-    0 0 20px var(--pageguide-color, #ffd93d),
-    inset 0 0 10px color-mix(in srgb, var(--pageguide-color, #ffd93d) 20%, transparent);
-  animation: pageguide-glow 2s ease-in-out infinite;
-}
-
-@keyframes pageguide-glow {
-  0%, 100% { 
-    box-shadow: 
-      0 0 10px var(--pageguide-color, #ffd93d),
-      0 0 20px var(--pageguide-color, #ffd93d);
-  }
-  50% { 
-    box-shadow: 
-      0 0 20px var(--pageguide-color, #ffd93d),
-      0 0 40px var(--pageguide-color, #ffd93d),
-      0 0 60px var(--pageguide-color, #ffd93d);
-  }
-}
-
-/* Focus Ring - Draws attention with expanding ring */
-.pageguide-highlight-ring {
-  position: relative;
-}
-
-.pageguide-highlight-ring::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 100%;
-  height: 100%;
-  border: 2px solid var(--pageguide-color, #ffd93d);
-  border-radius: 8px;
-  transform: translate(-50%, -50%);
-  animation: pageguide-ring 1.5s ease-out infinite;
-}
-
-@keyframes pageguide-ring {
-  0% {
-    width: 100%;
-    height: 100%;
-    opacity: 1;
-  }
-  100% {
-    width: 150%;
-    height: 150%;
-    opacity: 0;
-  }
-}
-
-/* Arrow pointer - Points to element */
-.pageguide-highlight-arrow::before {
-  content: '👉';
-  position: absolute;
-  left: -30px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 20px;
-  animation: pageguide-arrow 1s ease-in-out infinite;
-}
-
-@keyframes pageguide-arrow {
-  0%, 100% { transform: translateY(-50%) translateX(0); }
-  50% { transform: translateY(-50%) translateX(5px); }
-}
-
-/* Base highlight style - always applied */
-.pageguide-highlight {
+  background-color: color-mix(in srgb, var(--pageguide-color, #ffa657) 16%, transparent);
   border-radius: 3px;
   padding: 1px 3px;
   margin: 0 1px;
-  transition: all 0.3s ease;
+  box-shadow: none;
+  outline: none;
+  animation: none;
+  transition: none;
 }
 
-/* ===== PROTECTION / DARK PATTERN BADGES ===== */
+/* Whole-element highlights sit *behind* cited phrases, so they stay lighter — otherwise the
+   paragraph tint and the phrase tint read as the same block of color. */
+.pageguide-highlight-block {
+  background-color: color-mix(in srgb, var(--pageguide-color, #ffa657) 8%, transparent);
+  padding: 2px 4px;
+  margin: 0;
+}
 
-.pageguide-dark-pattern-badge {
+/* ===== EVIDENCE CAPTURE MODE =====
+   While a Find answer's evidence crops are being taken, exactly ONE span is highlighted: the one
+   being captured. Every other highlight is muted for the duration, so each crop answers "which
+   text is this evidence?" on its own instead of showing a page full of identical tints. The page
+   is restored the moment the last capture finishes (gv2CaptureFindEvidenceShots).
+   !important because the highlight background is also set inline per span. */
+html.pageguide-evidence-capture .pageguide-highlight {
+  background-color: transparent !important;
+}
+
+html.pageguide-evidence-capture .pageguide-highlight.pageguide-highlight-active {
+  background-color: color-mix(in srgb, var(--pageguide-color, #ffa657) 38%, transparent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pageguide-color, #ffa657) 55%, transparent) !important;
+  border-radius: 3px;
+}
+
+[data-pageguide-styled] {
+  position: relative;
+}
+
+[data-pageguide-styled]:hover,
+.pageguide-preview-target {
+  outline-color: #ffa657 !important;
+  box-shadow: 0 0 0 4px rgba(255, 166, 87, 0.14), 0 12px 32px rgba(255, 166, 87, 0.22) !important;
+}
+
+/* The same badge the page already shows on a highlight, raised from the side panel: hovering a
+   citation in the answer names the span it points at, in the vocabulary the page has already
+   taught. See pageguidePreviewIndex. */
+[data-pageguide-styled]:hover::after,
+.pageguide-preview-target::after {
+  content: 'PageGuide highlight';
   position: absolute;
-  top: -12px;
-  right: -8px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 2147483647;
+  padding: 6px 9px 6px 24px;
+  border: 1px solid rgba(255, 190, 132, 0.36);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 12px 50%, transparent 0 3px, #ffce9c 3px 5px, transparent 5px),
+    rgba(32, 26, 55, 0.96);
+  color: #fff;
+  box-shadow: 0 14px 34px rgba(98, 65, 34, 0.25);
+  font: 700 11px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   white-space: nowrap;
-  z-index: 10000;
-  animation: pageguide-badge-pop 0.3s ease-out;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
 }
 
-@keyframes pageguide-badge-pop {
-  0% { transform: scale(0); opacity: 0; }
-  50% { transform: scale(1.1); }
-  100% { transform: scale(1); opacity: 1; }
-}
-
-.pageguide-dark-pattern-badge[data-severity="danger"] {
-  background: linear-gradient(135deg, #ff4757, #ff6b81);
-  color: white;
-}
-
-.pageguide-dark-pattern-badge[data-severity="warning"] {
-  background: linear-gradient(135deg, #ffa502, #ff7f50);
-  color: #000;
-}
-
-.pageguide-dark-pattern-badge[data-severity="info"] {
-  background: linear-gradient(135deg, #1e90ff, #00d9ff);
-  color: white;
-}
-
-.pageguide-dp-icon {
-  font-size: 14px;
-}
-
-.pageguide-dp-label {
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pageguide-dp-info {
-  cursor: help;
-  opacity: 0.7;
-  font-size: 12px;
-}
-
-.pageguide-dp-info:hover {
-  opacity: 1;
-}
+/* ===== PROTECTION ===== */
 
 /* Protection scan animation */
 @keyframes pageguide-scan {
@@ -815,3 +123,162 @@
   z-index: 10001;
 }
 
+/* ═══════════════════════════════════════════════════════
+   USER STUDY — pick a sentence off the page (study_pick.js)
+   The outline follows the pointer and never eats the click; only the confirm bar takes input.
+   ═══════════════════════════════════════════════════════ */
+
+.pageguide-study-pick-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 2147483600;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* One box per client rect: a sentence wraps across lines, so the outline is several boxes, not one. */
+.pageguide-study-pick-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.pageguide-study-pick-box {
+  position: absolute;
+  border: 2px solid #ffa657;
+  border-radius: 3px;
+  background: rgba(255, 166, 87, 0.14);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.pageguide-study-pick-box.is-chosen {
+  border-color: #16a34a;
+  background: rgba(22, 163, 74, 0.14);
+}
+
+.pageguide-study-pick-hint {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #221c3a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.pageguide-study-pick-bar {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, 90vw);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+}
+
+.pageguide-study-pick-text {
+  color: #111;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pageguide-study-pick-bar button {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 166, 87, 0.35);
+  background: rgba(255, 166, 87, 0.1);
+  color: #c0732f;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.pageguide-study-pick-bar .pageguide-study-pick-done {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+/* ═══════════════════════════════════════════════════════
+   CITATION HOVER PREVIEW (pageguidePreviewIndex)
+   Hovering [N] in the panel points at the span on the page. No new effect is invented for it: it
+   borrows the outline and the "PageGuide highlight" badge above, so the thing being pointed at looks
+   like what it is — a PageGuide highlight — instead of introducing a second visual language.
+   ═══════════════════════════════════════════════════════ */
+
+.pageguide-preview-target {
+  position: relative;
+  outline: 2px solid #ffa657 !important;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   WHILE PICKING (study_pick.js)
+   PageGuide's own marks step back for the duration. They are the loudest thing on the page, and the
+   pick outline has to be read against them — which is why choosing a sentence inside an already
+   highlighted region looked like nothing was selectable. Restored the moment the pick ends.
+   ═══════════════════════════════════════════════════════ */
+
+html.pageguide-picking .pageguide-highlight {
+  background-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* The annotator's boxes and their labels sit over the text they mark; nothing to choose under one. */
+html.pageguide-picking #pageguide-evidence-overlay {
+  display: none !important;
+}
+
+/* No "PageGuide highlight" badge on hover either — the pick outline is the only thing pointing. */
+html.pageguide-picking [data-pageguide-styled]:hover::after,
+html.pageguide-picking .pageguide-preview-target::after {
+  content: none !important;
+}
+
+html.pageguide-picking [data-pageguide-styled]:hover,
+html.pageguide-picking .pageguide-preview-target {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* The evidence preview is a box drawn over the region the annotator marked (an image, usually), so
+   it can carry the same badge an element does. See pageguidePreviewEvidenceMark. */
+#pageguide-preview-box {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2147483646;
+}
+
+/* The non-grounded arm reads the same answer with no grounding shown. The spans the run drew stay in
+   the page — hidden, not removed — because re-applying them later resolves [N] against an index that
+   has since been rebuilt, and they come back in the wrong places. See setAnswerHighlightsVisible. */
+html.pageguide-highlights-off .pageguide-highlight {
+  background-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+html.pageguide-highlights-off #pageguide-evidence-overlay {
+  display: none !important;
+}

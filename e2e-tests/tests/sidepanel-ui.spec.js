@@ -3,6 +3,7 @@ const { test, expect, chromium } = require('@playwright/test');
 const path = require('path');
 
 const EXTENSION_PATH = path.join(__dirname, '../../');
+const HEADLESS = process.env.HEADFUL !== '1';
 
 /**
  * Test suite for side panel UI interactions
@@ -23,6 +24,7 @@ test.describe('Side Panel UI', () => {
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: false,
       args: [
+        ...(HEADLESS ? ['--headless=new'] : []),
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
         '--no-sandbox',
@@ -76,6 +78,21 @@ test.describe('Side Panel UI', () => {
 
     await input.fill('Hello, PageGuide!');
     await expect(input).toHaveValue('Hello, PageGuide!');
+  });
+
+  test('working tab chip appears and can be hidden without clearing chat', async () => {
+    const chip = panelPage.locator('#pageguide-tab-chip');
+    const title = panelPage.locator('#pageguide-tab-chip-title');
+    const input = panelPage.locator('#pageguide-input');
+
+    await expect(chip).toBeVisible({ timeout: 10000 });
+    await expect(title).not.toHaveText('');
+
+    await input.fill('keep this draft');
+    await panelPage.locator('#pageguide-tab-chip-close').click();
+
+    await expect(chip).toBeHidden();
+    await expect(input).toHaveValue('keep this draft');
   });
 
   test('send button is clickable', async () => {
@@ -177,6 +194,26 @@ test.describe('Side Panel UI', () => {
 
     const pageExists = await panelPage.locator('body').count();
     expect(pageExists).toBe(1);
+  });
+
+  test('goal card is hidden for Find and Hide modes', async () => {
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      renderGoalCard({ prompt: 'what is the cast of the movie?', route: 'find' });
+    });
+    await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
+
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      renderGoalCard({ prompt: 'hide this section', route: 'hide' });
+    });
+    await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
+
+    await panelPage.evaluate(() => {
+      // @ts-ignore
+      renderGoalCard({ prompt: 'walk me through this', route: 'guide', step: 1, total: 2 });
+    });
+    await expect(panelPage.locator('#pageguide-goal')).toBeVisible();
   });
 
   test('placeholder text is present', async () => {

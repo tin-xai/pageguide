@@ -4,18 +4,107 @@
 let chatMessages = [];
 let conversationHistory = []; // Stores {role: 'user'|'assistant', content: string, hasImage?: boolean}
 let currentTabId = null;
-let uploadedImageBase64 = null; // Stores the uploaded image
+let uploadedImageBase64 = null; // Stores the uploaded image (pure base64, no data-URL prefix)
+let uploadedImageDataUrl = null; // Full data URL for the chip thumbnail
+let uploadedImageMeta = null;   // { name, type, size } for the image chip label
 let hasImageInConversation = false; // Track if image was used in conversation
 let uploadedFileContent = null; // Text content of an attached file
 let uploadedFileName = null;    // Display name of the attached file
+let uploadedFileSize = null;    // Byte size of the attached file (for the chip label)
 let currentSelectedText = null; // Stores text selected on the webpage
 let guideActive = false; // True while guide is generating steps (shows stop button)
+let guidePaused = false; // True when an active guide is paused and can be resumed
+// Monotonic counter of pauses observed. Resume snapshots it before awaiting so it can tell a
+// pause that landed *during* the resume (guide re-tripped a guard) from a clean resume.
+let guidePauseSeq = 0;
+// Tab id the guide is actually running on (from the sender of its guide* messages), as opposed
+// to currentTabId which tracks whatever tab the user currently has focused. These can diverge:
+// the user is free to switch to a different tab while the guide keeps working in the background.
+let guideTabId = null;
 let noPageContext = false; // When true, skip page scraping and answer from AI knowledge only
+let panelForcedMode = null; // Sticky route chosen by Find / Guide / Hide tabs; null = Auto
+let panelLastRoute = null;  // Last route returned by the router, used only for tab highlight
+let currentGoal = null;
+let currentGuidePlan = [];
+let currentGuideTitle = '';
+let currentGuideStep = 0;
+let currentGuideRecords = [];
+let currentGuideInitial = null; // Phase 1: the "Initial state" node (step 0), kept out of the dot count
+let currentGuideSessionId = null;
+let currentGuideVerifications = {};
+let currentGuideWarnings = {};
+let currentGuideWorkingStatus = '';
+let currentGuideStatusShownAt = 0;
+let currentGuideStatusTimer = null;
+let pendingGuideWorkingStatus = '';
+const GUIDE_WORKING_STATUS_MIN_MS = 1200;
+let goalDotsExpanded = false;
+let guideTimelineCheckpointSteps = null;
+// Whether the CURRENTLY DISPLAYED tab's guide has finished (drives the green "done" state on
+// the working-tab chip). Per-tab, so it round-trips through _saveTabSession/_restoreTabSession
+// just like the rest of the guide state — switching tabs must never leak one tab's completion
+// badge onto another tab.
+let tabChipDone = false;
+// Bumped once per real user submission (sendMessage()). Tags each View Journey card with the
+// ask it belongs to, so internal phase changes within ONE ask can be told apart from the user
+// genuinely starting a new one — see resetLiveGuideTimelineForSession.
+let _currentAskId = 0;
+let _lastFindMessageStep = null; // Step number whose find answer was already posted to chat
+let _lastVisualHighlightStep = null; // Step whose visual_highlight image was already posted to chat
+let _lastWatchVideoMessageStep = null; // Step number whose watch_video answer was already posted to chat
+let _lastRecapKey = null; // sessionId:step of the last recap posted, so it isn't posted twice
+let _lastAnswerCardKey = null; // sessionId:step of the last finish(answer) card posted
+let panelRunning = false;        // True while the agent is generating (send button shows Stop)
+let cancelRequested = false;     // Set when the user hits Stop during a non-guide run
+let guideStopped = false;        // True after Stop: drop late "still working" messages from an
+                                 // in-flight content script until a new send / user-initiated steer
+const _journeyBtnSessions = new Set(); // Guide sessions that already have a "View journey" button
+const _journeysBySession = {}; // sessionId -> { title, steps:[meta] } accumulated from guideStepRecord
+let visibleJourneySessionId = null;
+let visibleJourneyTitle = '';
+let visibleJourneyRecalled = false;
+let currentTreeScale = 1.0;
+let isPanning = false;
+let startX = 0;
+let startY = 0;
+let scrollLeft = 0;
+let scrollTop = 0;
+let wasDragging = false;
+let guideConfidenceThreshold = 0.7;
+
+// Panel-side mirror of the Non-grounding baseline flag (content scripts read the same
+// chrome.storage.local key via isNonGroundingModeOn in content/functions/highlight.js). Kept as a
+// plain synchronous boolean because every render path that needs it — the timeline row builder,
+// the answer/evidence HTML builders, the reasoning trail, the recap card — is synchronous and
+// runs on a hot path, so it can't await storage. Seeded at init and kept fresh by the toggle
+// itself and by a storage.onChanged listener, so flipping it applies to the next render.
+let panelNonGrounding = false;
+function _isPanelNonGrounding() { return panelNonGrounding; }
+
+// Same synchronous mirror for the evidence mode (Visual/Text): the click delegate has to decide
+// what a citation does without awaiting storage. Seeded at init, kept fresh by the toggle and the
+// storage.onChanged listener.
+let panelEvidenceMode = 'visual';
+function _isPanelVisualEvidence() { return panelEvidenceMode !== 'text'; }
+window._isPanelVisualEvidence = _isPanelVisualEvidence;
+
+function _normalizeConfidenceThreshold(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.7;
+}
 
 // Per-tab chat sessions so switching back to a tab restores its conversation.
 // Keys are tab IDs; values are { chatMessages, conversationHistory, hasImageInConversation, html }.
 // Cleared when the tab is closed, navigates to a new URL, or the user manually resets.
 const _tabSessions = new Map();
+const _hiddenTabChips = new Set();
+// A guide can keep running on a tab after the user switches away from it. Its step/finish/recap
+// messages arrive here regardless of which tab is currently on screen — queue them per source
+// tab instead of rendering them into whatever OTHER tab's chat currently happens to be live, and
+// replay them (see _drainPendingGuideMessages) once the user actually switches back to that tab.
+// This is what previously let a background tab's completion/answer card "leak" into the tab the
+// user had switched to. Cleared when that tab is closed.
+const _pendingBackgroundGuideMessages = new Map();
 
 // Open a persistent port to the service worker.
 // When the panel is closed (by any means — X button, keyboard shortcut, etc.)
@@ -23,25 +112,2263 @@ const _tabSessions = new Map();
 // clearing the page highlights. This is more reliable than beforeunload + sendMessage.
 chrome.runtime.connect({ name: 'sidepanel' });
 
+const ROUTE_ICONS = { ask: '🔍', find: '🔍', guide: '🔒', hide: '🙈', image_ask: '🖼️', pdf_ask: '📄', pdf_viewer: '📄' };
+const UI_ICONS = {
+  attach: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.4 11.6-8.8 8.8a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></span>',
+  image: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="m21 15-5-5L5 19"/></svg></span>',
+  file: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>',
+  globe: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20"/><path d="M12 2a15 15 0 0 0 0 20"/></svg></span>',
+  pageOff: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 2.2A10 10 0 0 1 21.8 13.4"/><path d="M13.4 21.8A10 10 0 0 1 2.2 10.6"/><path d="M2 12h10"/><path d="M12 2a15 15 0 0 1 2.3 9.8"/></svg></span>',
+  bolt: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7Z"/></svg></span>',
+  hand: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 11V7a2 2 0 0 0-4 0v4"/><path d="M14 10V5a2 2 0 0 0-4 0v7"/><path d="M10 11V6a2 2 0 0 0-4 0v8"/><path d="M6 14v-2a2 2 0 0 0-4 0v3a7 7 0 0 0 7 7h4a7 7 0 0 0 7-7v-4a2 2 0 0 0-2-2Z"/></svg></span>',
+  quote: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10"/><path d="M7 12h7"/><path d="M5 20h14"/><path d="M4 4h16v12H4z"/></svg></span>',
+  gauge: '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a4 4 0 1 0-4-4"/><path d="M12 14v-4"/><path d="M3 21a9 9 0 0 1 18 0"/></svg></span>'
+};
+
+function _truncateText(text, max = 72) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+/**
+ * True when a step record was captured in Text evidence mode. Records written before this mode
+ * existed have no `evidenceMode` and always carried a screenshot, so the absence of the field
+ * means Visual — never guess from a missing shot alone.
+ */
+function _isTextEvidenceRecord(rec) {
+  return String(rec?.evidenceMode || '') === 'text';
+}
+window._isTextEvidenceRecord = _isTextEvidenceRecord;
+
+/**
+ * Void step: one that produced no screenshot and therefore nothing to show — dropped from the
+ * timeline and the journey. Text evidence mode never has a screenshot BY DESIGN, so those steps
+ * are perfectly valid and must survive this filter; otherwise the whole text arm renders empty.
+ * The initial-state node (step 0) is never void either.
+ */
+function _isVoidStepMeta(meta) {
+  if (!meta) return false;
+  if (meta.isInitial || Number(meta.step) === 0) return false;
+  if (_isTextEvidenceRecord(meta)) return false;
+  return meta.hasShot === false;
+}
+window._isVoidStepMeta = _isVoidStepMeta;
+
+/**
+ * The Text-mode replacement for an evidence screenshot: what the step touched, in words. Fields
+ * that don't apply are dropped rather than shown empty — a button usually has an aria-label and no
+ * text, a link the other way round.
+ *
+ * @param {object|null} textual - {text, ariaLabel, selector, url} from gv2TextualEvidence
+ * @param {object|null} rec - step record, used to fill in the page URL when textual has none
+ * @param {string} title - heading for the block
+ */
+function _textualEvidenceHtml(textual, rec, title = 'Target') {
+  const t = textual || {};
+  const rows = [
+    ['node text', t.text],
+    ['aria-label', t.ariaLabel],
+    ['selector', t.selector],
+    ['page', t.url || rec?.url]
+  ].filter(([, v]) => String(v || '').trim());
+  if (!rows.length) return '<div class="pageguide-recap-pop-empty">No target recorded for this step</div>';
+  const body = rows.map(([label, value]) =>
+    `<div class="pageguide-textual-evidence-row"><span class="pageguide-textual-evidence-label">${escapeHtml(label)}</span><span class="pageguide-textual-evidence-value">${escapeHtml(_truncateText(value, 160))}</span></div>`
+  ).join('');
+  return `<div class="pageguide-textual-evidence">
+    <div class="pageguide-textual-evidence-title">${escapeHtml(title)}</div>
+    ${body}
+  </div>`;
+}
+window._textualEvidenceHtml = _textualEvidenceHtml;
+
+function _savedEvidencePreviewEntries(meta, rec) {
+  const out = [];
+  const push = (item) => {
+    if (!item) return;
+    const key = String(item.key || item.evidenceKey || '').trim();
+    const note = String(item.note || item.evidenceNote || '').replace(/\s+/g, ' ').trim();
+    if (!key && !note) return;
+    out.push({ key, note });
+  };
+  (Array.isArray(rec?.savedEvidenceEntries) ? rec.savedEvidenceEntries : []).forEach(push);
+  (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : []).forEach(push);
+  if (rec?.evidenceKey || rec?.evidenceNote) push({ key: rec.evidenceKey, note: rec.evidenceNote });
+  if (meta?.evidenceKey || meta?.evidenceNote) push({ key: meta.evidenceKey, note: meta.evidenceNote });
+  const seen = new Set();
+  return out.filter(item => {
+    const k = `${item.key}|${item.note}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function _savedEvidencePreviewHtml(meta, rec) {
+  const entries = _savedEvidencePreviewEntries(meta, rec);
+  if (!entries.length) return '';
+  const count = entries.length;
+  const first = entries[0].note || entries[0].key || 'Saved evidence';
+  const clippedRaw = first.length > 100 ? `${first.slice(0, 97).trim()}...` : first;
+  const clipped = clippedRaw.replace(/[.!?]+$/g, '');
+  return `<div class="pageguide-goal-step-evidence">
+    <b>${escapeHtml(count === 1 ? 'Saved evidence' : `Saved ${count} evidence`)}</b>
+    <span>${escapeHtml(clipped)}</span>
+  </div>`;
+}
+
+function _savedAnnotationsPreviewEntries(meta, rec) {
+  const out = [];
+  const push = (item, force = false) => {
+    if (!item) return;
+    const isAnn = force || item.need_annotation || item.needAnnotation || (Array.isArray(item.annotations) && item.annotations.length > 0) || item.annotation_prompt || item.annotationPrompt;
+    if (!isAnn) return;
+    const key = String(item.key || item.evidenceKey || '').trim();
+    const note = String(item.note || item.evidenceNote || '').replace(/\s+/g, ' ').trim();
+    if (!key && !note) return;
+    out.push({ key, note });
+  };
+  (Array.isArray(rec?.savedEvidenceEntries) ? rec.savedEvidenceEntries : []).forEach(item => push(item));
+  (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : []).forEach(item => push(item));
+  (Array.isArray(rec?.visualEvidenceItems) ? rec.visualEvidenceItems : []).forEach(item => push(item));
+  (Array.isArray(rec?.annotations) ? rec.annotations : []).forEach(item => push(item, true));
+  (Array.isArray(meta?.annotations) ? meta.annotations : []).forEach(item => push(item, true));
+  if (meta?.evidenceKey || meta?.evidenceNote) {
+    if (meta.need_annotation || meta.needAnnotation) {
+      push({ key: meta.evidenceKey, note: meta.evidenceNote });
+    }
+  }
+  const seen = new Set();
+  return out.filter(item => {
+    const k = `${item.key}|${item.note}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function _savedAnnotationsPreviewHtml(meta, rec) {
+  const entries = _savedAnnotationsPreviewEntries(meta, rec);
+  if (!entries.length) return '';
+  const count = entries.length;
+  const first = entries[0].note || entries[0].key || 'Visual annotation';
+  const clippedRaw = first.length > 100 ? `${first.slice(0, 97).trim()}...` : first;
+  const clipped = clippedRaw.replace(/[.!?]+$/g, '');
+  return `<div class="pageguide-goal-step-annotations">
+    <b>${escapeHtml(count === 1 ? 'Annotated' : `Annotated ${count} items`)}</b>
+    <span>${escapeHtml(clipped)}</span>
+  </div>`;
+}
+
+function _tabChipFallbackIcon() {
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#ffa657"/><path d="M7 7h10v10H7z" fill="white" opacity=".9"/></svg>'
+  );
+}
+
+function hideWorkingTabChip() {
+  if (currentTabId != null) _hiddenTabChips.add(currentTabId);
+  const chip = document.getElementById('pageguide-tab-chip');
+  if (chip) chip.style.display = 'none';
+}
+
+function _isGuideWorkingContext() {
+  return !!(guideActive || currentGuideWorkingStatus || currentGoal?.route === 'guide' || currentGuideStep || currentGuidePlan.length || currentGuideRecords.length);
+}
+
+function updateTypingIndicatorText(text = '') {
+  const typing = document.querySelector('.pageguide-typing');
+  if (!typing) return;
+  const label = typing.querySelector('.pageguide-typing-text');
+  if (label) label.textContent = text || 'Agent thinking…';
+}
+
+function setGuideWorkingStatus(status = '') {
+  const next = String(status || '').trim();
+  if (!next) {
+    if (currentGuideStatusTimer) {
+      clearTimeout(currentGuideStatusTimer);
+      currentGuideStatusTimer = null;
+    }
+    pendingGuideWorkingStatus = '';
+    currentGuideWorkingStatus = '';
+    currentGuideStatusShownAt = 0;
+    return;
+  }
+  const apply = (value) => {
+    currentGuideWorkingStatus = value;
+    currentGuideStatusShownAt = Date.now();
+    if (panelRunning) showTyping(value);
+    else updateTypingIndicatorText(value);
+  };
+  if (!currentGuideWorkingStatus) {
+    apply(next);
+    return;
+  }
+  if (next === currentGuideWorkingStatus) return;
+  pendingGuideWorkingStatus = next;
+  const elapsed = Date.now() - currentGuideStatusShownAt;
+  const wait = Math.max(0, GUIDE_WORKING_STATUS_MIN_MS - elapsed);
+  if (currentGuideStatusTimer) clearTimeout(currentGuideStatusTimer);
+  currentGuideStatusTimer = setTimeout(() => {
+    currentGuideStatusTimer = null;
+    const pending = pendingGuideWorkingStatus;
+    pendingGuideWorkingStatus = '';
+    if (pending) apply(pending);
+  }, wait);
+}
+
+function renderWorkingTabChip(tab) {
+  const chip = document.getElementById('pageguide-tab-chip');
+  if (!chip || !tab || _hiddenTabChips.has(tab.id)) {
+    if (chip) chip.style.display = 'none';
+    return;
+  }
+  const title = tab.title || tab.url || 'Current tab';
+  const url = tab.url || '';
+  const favicon = document.getElementById('pageguide-tab-chip-favicon');
+  const label = document.getElementById('pageguide-tab-chip-title');
+  if (favicon) {
+    favicon.src = tab.favIconUrl || _tabChipFallbackIcon();
+    favicon.style.display = '';
+  }
+  if (label) label.textContent = `Working on “${_truncateText(title, 58)}”`;
+  chip.title = [title, url].filter(Boolean).join('\n');
+  chip.style.display = '';
+  chip.classList.toggle('pageguide-tab-chip--done', tabChipDone);
+}
+
+// Marks (or clears) the working-tab chip's "done" (green) state for whichever tab is currently
+// displayed. Called at the guide-finish edge (last step / stop-with-recap) and reset back to
+// false whenever a fresh guide session starts or the goal card is cleared. This is per-tab state
+// (round-trips through _saveTabSession/_restoreTabSession below) so switching tabs always shows
+// the correct completion badge for THAT tab, never a leftover from another tab.
+function updateTabChipDoneState(done) {
+  tabChipDone = !!done;
+  const chip = document.getElementById('pageguide-tab-chip');
+  if (chip) chip.classList.toggle('pageguide-tab-chip--done', tabChipDone);
+}
+
+async function refreshWorkingTabChip(tabId = currentTabId) {
+  try {
+    let tab = null;
+    if (tabId != null && chrome.tabs?.get) {
+      try { tab = await chrome.tabs.get(tabId); } catch (e) {}
+    }
+    if (!tab) {
+      const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = active || null;
+      if (tab?.id != null) currentTabId = tab.id;
+    }
+    renderWorkingTabChip(tab);
+  } catch (e) {
+    const chip = document.getElementById('pageguide-tab-chip');
+    if (chip) chip.style.display = 'none';
+  }
+}
+
+function _normalizeRouteForTab(route) {
+  if (route === 'image_ask' || route === 'pdf_ask' || route === 'pdf_viewer') return 'ask';
+  if (route === 'protection') return 'hide';
+  return route;
+}
+
+function updateRouteTabs() {
+  // Route tabs were removed from the visible UI; routing stays automatic, with
+  // slash commands still able to force a route for one message.
+}
+
+function getGuideStepMeta(step) {
+  return currentGuideRecords.find(r => Number(r.step) === Number(step) || Number(r.planStep) === Number(step)) || null;
+}
+
+function getGuideStepLabel(step) {
+  const meta = getGuideStepMeta(step);
+  const plan = currentGuidePlan.find(p => Number(p.n) === Number(step));
+  return meta?.instruction || plan?.goal || `Step ${step}`;
+}
+
+function hideGoalStepPreview() {
+  document.getElementById('pageguide-goal-step-preview')?.remove();
+}
+
+// Hover support for the checkpoint (goal-dot) preview: a short grace period on mouse-out so the
+// user can move from the dot onto the preview card without it vanishing. Reused by both the
+// dots and the preview card itself.
+let _goalPreviewHideTimer = null;
+function _cancelGoalPreviewHide() {
+  if (_goalPreviewHideTimer) { clearTimeout(_goalPreviewHideTimer); _goalPreviewHideTimer = null; }
+}
+function _scheduleGoalPreviewHide() {
+  _cancelGoalPreviewHide();
+  _goalPreviewHideTimer = setTimeout(() => hideGoalStepPreview(), 220);
+}
+function _attachDotHoverPreview(dot, step) {
+  dot.addEventListener('mouseenter', () => { _cancelGoalPreviewHide(); showGoalStepPreview(step, dot); });
+  dot.addEventListener('mouseleave', () => { _scheduleGoalPreviewHide(); });
+}
+
+function closeMemoryShotLightbox() {
+  document.getElementById('pageguide-memory-shot-lightbox')?.remove();
+}
+
+function openMemoryShotLightbox(base64, title = 'Before action — what PageGuide saw before this step') {
+  if (!base64) return;
+  closeMemoryShotLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <div class="pageguide-memory-shot-head">
+        <span>${escapeHtml(title)}</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close screenshot preview">×</button>
+      </div>
+      <img src="data:image/jpeg;base64,${base64}" alt="${escapeHtml(title)}">
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
+}
+
+const RECAP_PLACEHOLDER_SHOT = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+function _recapPickShot(v) { return (!v || v === RECAP_PLACEHOLDER_SHOT) ? null : v; }
+
+// Pick the pre-action "marked" evidence for a step. The region crop has the SoM marker baked
+// into its pixels (the "region of action"), so it is the primary evidence and needs no overlay.
+// Falls back to the full aligned shot (with an overlay box from targetNormRect), then before/after.
+// Returns { src, marker } — marker is a normalized rect to overlay, or null when already baked in.
+function _recapMarkedEvidence(rec) {
+  if (!rec) return null;
+  const region = _recapPickShot(rec.regionShot);
+  if (region) return { src: `data:image/jpeg;base64,${region}`, marker: null };
+  const marked = _recapPickShot(rec.markedShot);
+  if (marked && rec.targetNormRect) return { src: `data:image/jpeg;base64,${marked}`, marker: rec.targetNormRect };
+  const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
+  if (before) return { src: `data:image/jpeg;base64,${before}`, marker: rec.targetNormRect || null };
+  const after = _recapPickShot(rec.screenshotAfter);
+  if (after) return { src: `data:image/jpeg;base64,${after}`, marker: null };
+  return null;
+}
+
+// Pick the SEPARATE visual-evidence shot for a step (the on-page proof that justifies the action,
+// e.g. a "Sort by: Price: Low to High" control). The crop already has a pink SoM marker baked in,
+// so it needs no overlay; falls back to a normRect overlay on the before-shot. Returns { src, marker }.
+function _recapVisualEvidence(rec) {
+  if (!rec) return null;
+  const shot = _recapPickShot(rec.visualEvidenceShot);
+  if (shot) return { src: `data:image/jpeg;base64,${shot}`, marker: null };
+  const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
+  if (before && rec.visualEvidenceNormRect) return { src: `data:image/jpeg;base64,${before}`, marker: rec.visualEvidenceNormRect };
+  return null;
+}
+
+function _recapVisualEvidenceItems(rec) {
+  if (!rec) return [];
+  const before = _recapPickShot(rec.screenshotBefore || rec.screenshot);
+  // Keep only items backed by real evidence (a captured crop or a marker rect), so a hovered or
+  // clicked link's data-evidence-item index lines up with this list. Reason-only items are excluded
+  // (they'd be "fake" links that show nothing).
+  const rawItems = (Array.isArray(rec.visualEvidenceItems) ? rec.visualEvidenceItems.slice(0, 5) : [])
+    .filter(item => item && (item.visualEvidenceShot || item.visualEvidenceNormRect));
+  const items = rawItems.map((item) => {
+    const shot = _recapPickShot(item.visualEvidenceShot);
+    const marker = item.visualEvidenceNormRect || null;
+    const ev = shot
+      ? { src: `data:image/jpeg;base64,${shot}`, marker: null }
+      : (before && marker ? { src: `data:image/jpeg;base64,${before}`, marker } : null);
+    return {
+      ev,
+      number: item.visualEvidenceIndex != null ? item.visualEvidenceIndex : null,
+      reason: item.visualEvidenceReason || '',
+      text: item.visualEvidenceText || ''
+    };
+  });
+  if (items.length) return items;
+  const single = _recapVisualEvidence(rec);
+  if (!single) return [];
+  return [{
+    ev: single,
+    number: rec.visualEvidenceIndex != null ? rec.visualEvidenceIndex : null,
+    reason: rec.visualEvidenceReason || '',
+    text: rec.visualEvidenceText || ''
+  }];
+}
+
+/**
+ * Text evidence mode counterpart of _recapSavedEvidenceCapture: the textual target stored for a
+ * saved-evidence key, falling back to the step's own target when the key isn't found.
+ */
+function _recapSavedEvidenceTextual(rec, key) {
+  const needle = String(key || '').trim().toLowerCase();
+  if (!rec) return null;
+  const cap = (Array.isArray(rec.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+    .find(item => item && needle && String(item.key || '').trim().toLowerCase() === needle);
+  return cap?.textualEvidence || rec.targetEvidence || null;
+}
+
+function _recapSavedEvidenceCapture(rec, key) {
+  const needle = String(key || '').trim().toLowerCase();
+  if (!rec || !needle) return null;
+  const cap = (Array.isArray(rec.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+    .find(item => item && String(item.key || '').trim().toLowerCase() === needle);
+  const confirmationCap = (Array.isArray(rec.visualEvidenceItems) ? rec.visualEvidenceItems : [])
+    .find(item => item && String(item.key || '').trim().toLowerCase() === needle);
+  const shot = _recapPickShot(cap?.shot || confirmationCap?.visualEvidenceShot);
+  if (!shot) return null;
+  const originalShot = _recapPickShot(
+    cap?.originalShot ||
+    cap?.annotationOriginalShot ||
+    confirmationCap?.visualEvidenceOriginalShot ||
+    // Older saved evidence did not store a same-crop clean image, so keep the previous fallback.
+    cap?.annotationScreenshot ||
+    rec?.screenshotBefore ||
+    rec?.screenshot
+  );
+  // Saved evidence crops already have the visual proof baked in: DOM/SoM captures include the
+  // highlighted marker, while bbox captures include the region marker and relationship annotations.
+  return {
+    src: `data:image/jpeg;base64,${shot}`,
+    originalSrc: originalShot ? `data:image/jpeg;base64,${originalShot}` : null,
+    marker: null,
+    number: null,
+    note: cap?.note || confirmationCap?.note || ''
+  };
+}
+
+// SOM marker overlay: an absolutely-positioned box + number badge, placed from a normalized
+// { x, y, w, h } rect (fractions of the image). Empty string when there's no geometry.
+function _recapMarkerHtml(normRect, number) {
+  if (!normRect) return '';
+  const pct = (v) => (Math.max(0, Math.min(1, Number(v) || 0)) * 100).toFixed(2) + '%';
+  const num = (number != null && number !== '')
+    ? `<span class="pageguide-recap-marker-num">${escapeHtml(String(number))}</span>` : '';
+  return `<span class="pageguide-recap-marker-box" style="left:${pct(normRect.x)};top:${pct(normRect.y)};width:${pct(normRect.w)};height:${pct(normRect.h)};">${num}</span>`;
+}
+
+// An <img> wrapped in a positioned figure with the marker overlay drawn on top.
+function _recapFigureHtml(src, marker, number, alt) {
+  return `<span class="pageguide-recap-figure"><img src="${src}" alt="${escapeHtml(alt || '')}">${_recapMarkerHtml(marker, number)}</span>`;
+}
+
+// Hover popover shown when the pointer is over an inline recap phrase-link. A short grace timer
+// lets the pointer travel from the link onto the popover without it vanishing.
+let _recapEvidenceHideTimer = null;
+function _cancelRecapEvidenceHide() { if (_recapEvidenceHideTimer) { clearTimeout(_recapEvidenceHideTimer); _recapEvidenceHideTimer = null; } }
+function hideRecapEvidencePopover() { document.getElementById('pageguide-recap-evidence-pop')?.remove(); }
+function _scheduleRecapEvidenceHide() { _cancelRecapEvidenceHide(); _recapEvidenceHideTimer = setTimeout(hideRecapEvidencePopover, 200); }
+
+async function _showRecapEvidencePopover(anchor, sessionId, step) {
+  // Final guard for the Non-grounding baseline: no screenshot popover is ever shown, no matter
+  // which path reaches here (hover delegate, click handler, or older markup still in the chat).
+  if (_isPanelNonGrounding()) return;
+  _cancelRecapEvidenceHide();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  // A visual-evidence link (the justification text) shows the SEPARATE proof region + its reason;
+  // the milestone-phrase links keep showing the action's targeted region + Action line.
+  const isVisual = anchor?.dataset?.evidence === 'visual';
+  const isScratchpad = anchor?.dataset?.evidence === 'scratchpad';
+  const visualItems = isVisual ? _recapVisualEvidenceItems(rec) : [];
+  const requestedItem = Number(anchor?.dataset?.evidenceItem);
+  const selectedVisual = Number.isFinite(requestedItem) && requestedItem >= 0 && requestedItem < visualItems.length
+    ? visualItems[requestedItem]
+    : visualItems[0];
+  let scratchEv = null;
+  if (isScratchpad) {
+    let bbox = null;
+    try { bbox = JSON.parse(anchor?.dataset?.bbox || 'null'); } catch (e) { bbox = null; }
+    scratchEv = _recapSavedEvidenceCapture(rec, anchor?.dataset?.key);
+    if (!scratchEv && bbox) {
+      const shot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+      if (shot) scratchEv = { src: `data:image/jpeg;base64,${shot}`, marker: bbox };
+    }
+  }
+  const ev = isScratchpad ? (scratchEv || _recapMarkedEvidence(rec)) : (isVisual ? (selectedVisual?.ev || null) : _recapMarkedEvidence(rec));
+  const number = isScratchpad ? null : (isVisual ? selectedVisual?.number : (rec?.target?.resolvedIndex ?? rec?.resolvedIndex));
+  const caption = isScratchpad ? 'Saved evidence' : (isVisual ? 'Visual evidence' : 'Targeted region');
+  const detail = isScratchpad
+    ? `<div class="pageguide-recap-pop-action"><b>Evidence:</b> ${escapeHtml(anchor?.dataset?.note || 'Saved evidence')}</div>`
+    : (isVisual
+    ? (selectedVisual
+        ? `<div class="pageguide-recap-pop-action"><b>Why:</b> ${escapeHtml(selectedVisual.reason || selectedVisual.text || 'Visual evidence')}</div>`
+        : '')
+    : `<div class="pageguide-recap-pop-action"><b>Action:</b> ${_recapActionHtml(rec)}</div>`);
+  const pop = document.createElement('div');
+  pop.id = 'pageguide-recap-evidence-pop';
+  pop.className = 'pageguide-recap-evidence-pop' + (isVisual ? ' is-visual' : '');
+  const beforeFig = ev
+    ? `<figure class="pageguide-recap-pop-fig"><figcaption>${caption}</figcaption>${_recapFigureHtml(ev.src, ev.marker, number, caption.toLowerCase())}</figure>` : '';
+  // Text evidence mode: this step has no screenshot by design — the popup shows the target in
+  // words (node text / aria-label / selector / page), which IS the evidence in that condition.
+  if (_isTextEvidenceRecord(rec)) {
+    const textual = (isScratchpad ? _recapSavedEvidenceTextual(rec, anchor?.dataset?.key) : null) || rec?.targetEvidence;
+    pop.innerHTML = `${_textualEvidenceHtml(textual, rec, `Step ${step} — ${isScratchpad ? 'saved evidence' : 'target'}`)}${detail}<div class="pageguide-recap-pop-cap">Step ${escapeHtml(String(step))} · click to inspect</div>`;
+  } else {
+  pop.innerHTML = (ev || (isVisual && visualItems.length))
+    ? `${beforeFig}${detail}<div class="pageguide-recap-pop-cap">Step ${escapeHtml(String(step))} · click to inspect</div>`
+    : `<div class="pageguide-recap-pop-empty">No screenshot for step ${escapeHtml(String(step))}</div>`;
+  }
+  pop.addEventListener('mouseenter', _cancelRecapEvidenceHide);
+  pop.addEventListener('mouseleave', _scheduleRecapEvidenceHide);
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  const top = Math.min(window.innerHeight - pop.offsetHeight - 8, r.bottom + 8);
+  pop.style.top = Math.max(8, top) + 'px';
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+}
+
+// The color-matched "Action: click ⟨N⟩ "text"" line for a step. The ⟨N⟩ badge and the text use the
+// SoM marker color (--pg-som) so they match the marker in the screenshot and the recap links.
+function _recapActionHtml(rec) {
+  const number = rec?.target?.resolvedIndex ?? rec?.resolvedIndex;
+  const action = rec?.action || '';
+  const typeText = rec?.typeText || '';
+  const targetText = rec?.target?.text || rec?.domElementText || rec?.llmElementText || '';
+  if (!action) return '<span class="pageguide-recap-action-val">—</span>';
+  const numHtml = (number != null && number !== '') ? ` <span class="pageguide-recap-marker-num inline">${escapeHtml(String(number))}</span>` : '';
+  const textHtml = targetText ? ` <span class="pageguide-recap-action-target">“${escapeHtml(targetText)}”</span>` : '';
+  const typeHtml = (action === 'type' && typeText) ? `: <span class="pageguide-recap-action-target">“${escapeHtml(typeText)}”</span>` : '';
+  const navigateUrl = rec?.navigateUrl || '';
+  const navigateHtml = ((action === 'goto_url' || action === 'navigate') && navigateUrl) ? `: <span class="pageguide-recap-action-target">${escapeHtml(navigateUrl)}</span>` : '';
+  return `<span class="pageguide-recap-action-verb">${escapeHtml(action)}</span>${numHtml}${textHtml}${typeHtml}${navigateHtml}`;
+}
+
+// Checkpoint detail overlay: the marked pre-action shot (SOM box on the chosen element) + the
+// post-action outcome shot, plus the step instruction and the action taken. Reuses the shared
+// memory-shot lightbox shell (so Escape / backdrop close still work).
+async function _recapNavigationSteps(sessionId, preferredSteps) {
+  const clean = (arr) => Array.from(new Set((Array.isArray(arr) ? arr : [])
+    .map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
+  let steps = clean(preferredSteps);
+  if (steps.length) return steps;
+  try {
+    if (sessionId && typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(sessionId);
+      steps = clean((idx?.steps || []).filter(m => !m.isInitial).map(m => m.step));
+    }
+  } catch (e) {}
+  return steps;
+}
+
+async function openRecapCheckpoint(sessionId, step, stepList) {
+  closeMemoryShotLightbox();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  const navSteps = await _recapNavigationSteps(sessionId, stepList);
+  const navIndex = navSteps.indexOf(Number(step));
+  const prevStep = navIndex > 0 ? navSteps[navIndex - 1] : null;
+  const nextStep = navIndex >= 0 && navIndex < navSteps.length - 1 ? navSteps[navIndex + 1] : null;
+  const ev = _recapMarkedEvidence(rec);
+  const number = rec?.target?.resolvedIndex ?? rec?.resolvedIndex;
+  const after = _recapPickShot(rec?.screenshotAfter);
+  const instruction = rec?.instruction || '';
+  const actionLabel = _recapActionHtml(rec);
+  // The SEPARATE visual evidence (proof that justified the action), shown as a third figure.
+  const visualItems = _recapVisualEvidenceItems(rec);
+  const visReason = visualItems.map((item, i) => `${i + 1}. ${item.reason || item.text || 'Visual evidence'}`).join('\n');
+  const visualFiguresHtml = visualItems.map((item, i) => item.ev
+    ? `<figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig"><figcaption>Why ${escapeHtml(String(i + 1))} — visual evidence</figcaption>${_recapFigureHtml(item.ev.src, item.ev.marker, item.number, 'visual evidence')}</figure>`
+    : ''
+  ).join('');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.dataset.recapSession = sessionId || '';
+  overlay.dataset.recapStep = String(step);
+  overlay.dataset.recapSteps = JSON.stringify(navSteps);
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Step ${escapeHtml(String(step))} detail">
+      <div class="pageguide-memory-shot-head">
+        <span>Step ${escapeHtml(String(step))} — visual evidence</span>
+        <div class="pageguide-recap-nav">
+          <button type="button" class="pageguide-recap-nav-btn" data-step="${prevStep == null ? '' : escapeHtml(String(prevStep))}" aria-label="Previous checkpoint" ${prevStep == null ? 'disabled' : ''}>‹</button>
+          <button type="button" class="pageguide-recap-nav-btn" data-step="${nextStep == null ? '' : escapeHtml(String(nextStep))}" aria-label="Next checkpoint" ${nextStep == null ? 'disabled' : ''}>›</button>
+          <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+        </div>
+      </div>
+      <div class="pageguide-recap-detail-body">
+        <div class="pageguide-recap-detail-shots">
+          <figure class="pageguide-recap-detail-fig">
+            <figcaption>Before — chosen element</figcaption>
+            ${ev ? _recapFigureHtml(ev.src, ev.marker, number, 'before action') : '<div class="pageguide-recap-pop-empty">No screenshot</div>'}
+          </figure>
+          <figure class="pageguide-recap-detail-fig">
+            <figcaption>After — result</figcaption>
+            ${after ? `<span class="pageguide-recap-figure"><img src="data:image/jpeg;base64,${after}" alt="after action"></span>` : '<div class="pageguide-recap-pop-empty">No screenshot</div>'}
+          </figure>
+          ${visualFiguresHtml}
+        </div>
+        <div class="pageguide-recap-detail-text">
+          ${instruction ? `<div class="pageguide-recap-detail-instruction">${escapeHtml(instruction)}</div>` : ''}
+          <div class="pageguide-recap-detail-action"><b>Action:</b> ${actionLabel}</div>
+          ${visReason ? `<div class="pageguide-recap-detail-evidence"><b>Why:</b> ${escapeHtml(visReason).replace(/\n/g, '<br>')}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    const nav = e.target.closest('.pageguide-recap-nav-btn');
+    if (nav && nav.dataset.step) {
+      e.stopPropagation();
+      openRecapCheckpoint(sessionId, Number(nav.dataset.step), navSteps);
+      return;
+    }
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
+}
+
+async function openScratchpadEvidenceView(anchor, sessionId, step) {
+  closeMemoryShotLightbox();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  let bbox = null;
+  try { bbox = JSON.parse(anchor?.dataset?.bbox || 'null'); } catch (e) { bbox = null; }
+  const note = anchor?.dataset?.note || 'Saved evidence';
+  const saved = _recapSavedEvidenceCapture(rec, anchor?.dataset?.key);
+  const fallbackShot = _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+  const ev = saved || (fallbackShot ? { src: `data:image/jpeg;base64,${fallbackShot}`, marker: bbox } : null);
+  const canToggleOriginal = !!(ev?.originalSrc && ev.originalSrc !== ev.src);
+  const toggleHtml = canToggleOriginal
+    ? `<div class="pageguide-evidence-view-toggle" role="group" aria-label="Evidence screenshot view">
+        <button type="button" class="active" data-view="annotated">Annotated</button>
+        <button type="button" data-view="original">Original</button>
+      </div>`
+    : '';
+  const imgHtml = ev
+    ? `<div class="pageguide-evidence-shot-wrap" data-annotated-src="${escapeHtml(ev.src)}" data-original-src="${escapeHtml(ev.originalSrc || '')}">
+        ${toggleHtml}
+        ${_recapFigureHtml(ev.src, ev.marker, ev.number ?? null, 'saved evidence')}
+      </div>`
+    : '<div class="pageguide-recap-pop-empty">No screenshot</div>';
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Saved evidence">
+      <div class="pageguide-memory-shot-head">
+        <span>Saved evidence — step ${escapeHtml(String(step))}</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body">
+        ${imgHtml}
+        <div class="pageguide-recap-detail-text">
+          <div class="pageguide-recap-detail-evidence"><b>Evidence:</b> ${escapeHtml(note)}</div>
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+    const btn = e.target.closest('.pageguide-evidence-view-toggle button');
+    if (btn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const wrap = btn.closest('.pageguide-evidence-shot-wrap');
+      const fig = wrap?.querySelector('.pageguide-recap-figure');
+      const img = fig?.querySelector('img');
+      if (!wrap || !fig || !img) return;
+      const view = btn.dataset.view === 'original' ? 'original' : 'annotated';
+      const src = view === 'original' ? wrap.dataset.originalSrc : wrap.dataset.annotatedSrc;
+      if (!src) return;
+      img.src = src;
+      fig.classList.toggle('hide-marker', view === 'original');
+      wrap.querySelectorAll('.pageguide-evidence-view-toggle button').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+    }
+  });
+  document.body.appendChild(overlay);
+}
+
+// Draw the model's Final-State annotations (bounding boxes + text labels) over a screenshot, as
+// absolutely-positioned overlays from normalized {x,y,w,h} rects. Colored with --pg-som.
+function _recapAnnotationsHtml(annotations) {
+  if (!Array.isArray(annotations) || !annotations.length) return '';
+  const pct = (v) => (Math.max(0, Math.min(1, Number(v) || 0)) * 100).toFixed(2) + '%';
+  return annotations.map((a, i) => {
+    const label = a && a.label ? a.label : '';
+    const labelHtml = label ? `<span class="pageguide-recap-annot-label">${escapeHtml(label)}</span>` : '';
+    return `<span class="pageguide-recap-annot-box" style="left:${pct(a.x)};top:${pct(a.y)};width:${pct(a.w)};height:${pct(a.h)};">${labelHtml}</span>`;
+  }).join('');
+}
+
+const RECAP_VERDICTS = {
+  completed: { icon: '✅', label: 'Completed', cls: 'ok' },
+  failed:    { icon: '❌', label: 'Incompleted', cls: 'fail' },
+  unclear:   { icon: '⚠️', label: 'Unsure', cls: 'unclear' }
+};
+
+function _recapStatusText(recap) {
+  const verdictKey = recap?.final?.verdict || recap?.finalVerdict || 'unclear';
+  const verdict = RECAP_VERDICTS[verdictKey] || RECAP_VERDICTS.unclear;
+  const summary = String(recap?.summary || '').trim();
+  const lower = summary.toLowerCase();
+  let title = summary;
+  if (lower.startsWith('i have completed the task.')) title = summary.slice('I have completed the task.'.length).trim();
+  if (lower.startsWith('i could not complete the task.')) title = summary.slice('I could not complete the task.'.length).trim();
+  title = title || summary || verdict.label;
+  return { verdictKey, verdict, title, summary };
+}
+
+function _recapFinalButtonHtml(sessionId, step, verdictKey) {
+  const verdict = RECAP_VERDICTS[verdictKey] || RECAP_VERDICTS.unclear;
+  return `<button type="button" class="pageguide-recap-final-link pageguide-recap-final-btn ${verdict.cls}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}" title="Final state: ${escapeHtml(verdict.label)}">F</button>`;
+}
+
+// Final State view: the final page screenshot annotated with the model's bounding-box evidence,
+// plus the completed/failed verdict and reason. Reuses the memory-shot lightbox shell.
+async function openFinalStateView(sessionId, step) {
+  closeMemoryShotLightbox();
+  hideRecapEvidencePopover();
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  const shot = _recapPickShot(rec?.finalShot) || _recapPickShot(rec?.screenshotAfter) || _recapPickShot(rec?.screenshot) || _recapPickShot(rec?.screenshotBefore);
+  const verdict = RECAP_VERDICTS[rec?.finalVerdict] || RECAP_VERDICTS.unclear;
+  const reason = rec?.finalReason || '';
+  const annotations = Array.isArray(rec?.finalAnnotations) ? rec.finalAnnotations : [];
+  const imgHtml = shot
+    ? `<span class="pageguide-recap-figure pageguide-final-figure"><img src="data:image/jpeg;base64,${shot}" alt="final state">${_recapAnnotationsHtml(annotations)}</span>`
+    : '<div class="pageguide-recap-pop-empty">No final screenshot</div>';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Final state">
+      <div class="pageguide-memory-shot-head">
+        <span>Final State — visual evidence</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body">
+        <div class="pageguide-final-verdict ${verdict.cls}">${verdict.icon} ${escapeHtml(verdict.label)}</div>
+        ${reason ? `<div class="pageguide-final-reason">${escapeHtml(reason)}</div>` : ''}
+        ${imgHtml}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  document.body.appendChild(overlay);
+}
+
+// Standalone Final-State card for failed/stopped runs (no recap milestones). A one-line verdict
+// with a View button that opens the annotated final-state view.
+function renderGuideFinalStateCard(message) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !message || message.step == null) return;
+  const verdict = RECAP_VERDICTS[message.verdict] || RECAP_VERDICTS.unclear;
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap" data-session="${escapeHtml(String(message.sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify([Number(message.step)].filter(Number.isFinite)))}">
+      <div class="pageguide-recap-final">${_recapFinalButtonHtml(message.sessionId, message.step, message.verdict)}<span class="pageguide-final-verdict ${verdict.cls} inline">${escapeHtml(verdict.label)}</span></div>
+      ${message.reason ? `<div class="pageguide-final-reason">${escapeHtml(message.reason)}</div>` : ''}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(`[${verdict.label}] ${message.reason || ''}`);
+}
+
+// Render a visual_highlight answer as a persistent assistant bubble: the cropped screenshot region
+// (with the pink evidence box baked in) plus its caption. Reuses the recap figure/bubble styling.
+function renderVisualHighlightAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result || !result.visualHighlightImage) return;
+  const src = `data:image/jpeg;base64,${result.visualHighlightImage}`;
+  const caption = result.visualHighlightCaption || '';
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-visual-highlight" style="border: 2px solid var(--pg-som);">
+      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
+        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Visual Highlight Answer</div>
+      </div>
+      <div style="padding: 16px; background: var(--pg-bg); display: flex; flex-direction: column; gap: 8px;">
+        <figure class="pageguide-recap-detail-fig pageguide-recap-detail-evidence-fig" style="margin: 0;">${_recapFigureHtml(src, null, null, caption || 'visual answer')}</figure>
+        ${caption ? `<div style="font-size: 13px; line-height: 1.4; color: var(--pg-text); font-weight: 500;"><b>Why:</b> ${escapeHtml(caption)}</div>` : ''}
+        ${_debugAnswerChipRow()}
+      </div>
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(caption);
+}
+
+/**
+ * Turn the answer's [ev:key] citations into a numbered marker that jumps to the mark drawn on the
+ * live page.
+ *
+ * In Visual mode the model cites what it SAW as [ev:key] (FIND_ANSWER_VISUAL), alongside the usual
+ * [N:"text"] citations for what it READ. Every marker in the answer leads to the page and nowhere
+ * else: a [N] scrolls to its highlighted span, an [ev] to its annotation. There used to be a picture
+ * button beside each [ev] opening the captured crop, but a crop re-encoded out of a JPEG viewport
+ * screenshot is soft enough that it read as worse evidence than the page it came from — so the
+ * answer points at the real thing instead.
+ *
+ * Keys only mean something to the model, so they are mapped to the chip numbers assigned during
+ * capture; a key with no captured evidence has its marker dropped rather than shown as raw text.
+ *
+ * @param {string} html - answer HTML (already through parseMarkdown/parseCitations)
+ * @param {Array<object>} shots - captured evidence, each {key, index}
+ * @returns {string}
+ */
+function _expandEvidenceKeyCitations(html, shots) {
+  const text = String(html || '');
+  if (!text.includes('[ev:')) return text;
+  const byKey = new Map();
+  (Array.isArray(shots) ? shots : []).forEach((s) => {
+    if (s && s.key) byKey.set(String(s.key).trim().toLowerCase(), s.index);
+  });
+
+  // The reader sees ONE sequence of numbers, so evidence markers are numbered where they appear,
+  // continuing after the text citations parseCitations has already numbered 1..K.
+  //
+  // The capture-time number cannot be shown: it was assigned when the evidence was taken, and an
+  // answer that has since been edited — a marker removed, evidence dropped for having no crop —
+  // then reads "[1] … [4]" with 2 and 3 nowhere, which looks like missing evidence rather than
+  // renumbered evidence. It survives on data-evidence-num, which is what scrollToEvidenceMark
+  // resolves against; only the label is renumbered.
+  let shown = _countRenderedCitations(text);
+
+  return text.replace(/\[ev:\s*([^\]]+)\]/gi, (match, rawKey) => {
+    const num = byKey.get(String(rawKey).trim().toLowerCase());
+    if (num == null) return ''; // cited evidence never made it past capture — don't show the marker
+    shown++;
+    return `<span class="pageguide-citation pageguide-citation-idx pageguide-evidence-citation" data-evidence-num="${num}" title="Go to this evidence on the page"><sup class="citation-index">[${shown}]</sup></span>`;
+  });
+}
+
+/**
+ * How many citations parseCitations has already numbered in `html`. Web citations carry
+ * `.citation-index`, PDF ones `.pageguide-pdf-citation`; the two branches are exclusive, so summing
+ * them is the count either way.
+ */
+function _countRenderedCitations(html) {
+  const text = String(html || '');
+  const web = (text.match(/class="citation-index"/g) || []).length;
+  const pdf = (text.match(/class="pageguide-pdf-citation"/g) || []).length;
+  return web + pdf;
+}
+window._countRenderedCitations = _countRenderedCitations;
+window._expandEvidenceKeyCitations = _expandEvidenceKeyCitations;
+
+// The captured evidence crops (result.findEvidenceShots) are no longer rendered in the chat at all.
+// They used to appear as an "Evidence on the page" card of numbered chips opening a lightbox, but a
+// crop is a canvas re-encode of a JPEG viewport screenshot and read as blurrier than the page it came
+// from — so every affordance in an answer now points at the live page instead (see
+// _expandEvidenceKeyCitations). The crops are still carried on the result object, where the study
+// recorder banks them (_buildStudyResponseRecord) and the response preview shows them.
+
+// Render a find answer as a persistent assistant bubble using the recap styling.
+function renderFindAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result || !result.findAnswer) return;
+  const answerText = _expandEvidenceKeyCitations(
+    parseCitations(parseMarkdown(result.findAnswer)),
+    result.findEvidenceShots
+  );
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-find-answer" style="border: 2px solid var(--pg-som);">
+      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
+        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Highlight Answer</div>
+      </div>
+      <div style="font-size: 14px; line-height: 1.5; color: var(--pg-text); padding: 16px; background: var(--pg-bg); font-weight: 500;">
+        ${answerText}
+      </div>
+      ${_debugAnswerChipRow()}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(result.findAnswer);
+  _parkAnswerPayload(result, {});
+}
+
+function renderWatchVideoAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result) return;
+  const raw = result.watchVideoAnswer || result.watchVideoError || '';
+  if (!raw) return;
+  const answerText = result.watchVideoError
+    ? escapeHtml(result.watchVideoError)
+    : parseCitations(parseMarkdown(raw));
+  const videoUrl = result.watchVideoUrl
+    ? `<div style="font-size: 12px; line-height: 1.4; color: var(--pg-muted); padding: 0 16px 14px; background: var(--pg-bg); overflow-wrap: anywhere;">${escapeHtml(result.watchVideoUrl)}</div>`
+    : '';
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-find-answer" style="border: 2px solid var(--pg-som);">
+      <div class="pageguide-recap-hero" style="background: color-mix(in srgb, var(--pg-som) 12%, var(--pg-bg)); border-bottom: 1px solid color-mix(in srgb, var(--pg-som) 30%, var(--pg-border)); padding: 12px 16px;">
+        <div class="pageguide-recap-kicker" style="color: var(--pg-som); font-size: 11px;">Video Answer</div>
+      </div>
+      <div style="font-size: 14px; line-height: 1.5; color: var(--pg-text); padding: 16px; background: var(--pg-bg); font-weight: 500;">
+        ${answerText}
+      </div>
+      ${videoUrl}
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(raw);
+}
+
+function _compactAnswerMarkdown(text) {
+  let s = String(text || '').replace(/\r\n/g, '\n');
+  // Keep paragraph breaks generally, but collapse blank lines between adjacent bullets so the
+  // answer card reads like a compact summary instead of spaced-out sections.
+  s = s.replace(/\n{2,}(\s*[-*]\s+)/g, '\n$1');
+  s = s.replace(/(\n\s*[-*]\s+[^\n]+)\n{2,}(?=\s*[-*]\s+)/g, '$1\n');
+  return s.trim();
+}
+
+function _buildAnswerEvidenceModel(answer, scratchpad, answerEvidence) {
+  // Non-grounding baseline and Text evidence mode: no final-answer evidence chips. Strip the
+  // [ev:key] markers so the Guide final answer reads as plain prose. Text mode may still show
+  // textual evidence in the reasoning trail/journey, but the final answer itself is not linked.
+  if (_isPanelNonGrounding() || !_isPanelVisualEvidence()) {
+    const plain = _compactAnswerMarkdown(_stripEvidenceRefs(answer));
+    return { answerHtml: parseMarkdown(plain), evidence: [] };
+  }
+  const normEvKey = (value) => {
+    if (typeof gv2NormalizeEvidenceKey === 'function') return gv2NormalizeEvidenceKey(value);
+    return String(value || '').toLowerCase();
+  };
+  const byKey = {};
+  (Array.isArray(scratchpad) ? scratchpad : []).forEach(e => {
+    const key = normEvKey(e?.key);
+    if (e && key) byKey[key] = e;
+  });
+  const answerEvidenceList = Array.isArray(answerEvidence) ? answerEvidence : [];
+  const answerEvidenceByKey = {};
+  answerEvidenceList.forEach(it => {
+    if (!it || !it.key || !Number.isFinite(Number(it.step))) return;
+    const key = normEvKey(it.key);
+    if (!key || answerEvidenceByKey[key]) return;
+    answerEvidenceByKey[key] = {
+      ref_step_id: Number(it.step),
+      region_bbox: it.region_bbox || null,
+      note: it.note || it.key || 'Visual evidence',
+      key,
+      source: it.source || ''
+    };
+  });
+  const confirmationQueue = answerEvidenceList
+    .filter(it => it && it.source === 'confirmation' && Number.isFinite(Number(it.step)))
+    .map(it => ({
+      ref_step_id: Number(it.step),
+      region_bbox: it.region_bbox || null,
+      note: it.note || 'Confirmation',
+      key: normEvKey(it.key),
+      source: it.source || ''
+    }));
+  let confirmationQueueIndex = 0;
+  const evidence = [];
+  const byEvidenceKey = {};
+  const text = (typeof gv2ExpandBareEvidenceCitations === 'function')
+    ? gv2ExpandBareEvidenceCitations(answer, scratchpad)
+    : String(answer || '');
+  const compactText = _compactAnswerMarkdown(text);
+  const re = /\[ev:([a-zA-Z0-9_-]+)\]/g;
+  const chips = [];
+  const tokenized = compactText.replace(re, (full, rawKey) => {
+    const key = normEvKey(rawKey);
+    const fallbackConfirmation = confirmationQueue[confirmationQueueIndex] || null;
+    const ev = byKey[key] || answerEvidenceByKey[key] || fallbackConfirmation;
+    if (ev && ev.ref_step_id != null) {
+      if (!byKey[key] && !answerEvidenceByKey[key] && fallbackConfirmation) confirmationQueueIndex += 1;
+      if (!byEvidenceKey[key]) {
+        const entry = Object.assign({}, ev, { key: ev.key || key });
+        byEvidenceKey[key] = { number: evidence.length + 1, key, entry };
+        evidence.push(byEvidenceKey[key]);
+      }
+      const item = byEvidenceKey[key];
+      const label = ev.note || key;
+      const bbox = ev.region_bbox ? JSON.stringify(ev.region_bbox) : '';
+      const chip = `<span class="pageguide-recap-link pageguide-answer-citation-chip" data-evidence="scratchpad" data-key="${escapeHtml(key)}" data-step="${escapeHtml(String(ev.ref_step_id))}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(label)}" title="${escapeHtml(label)}">📷 ${escapeHtml(String(item.number))}</span>`;
+      const idx = chips.push(chip) - 1;
+      return `\uE000${idx}\uE001`;
+    }
+    const idx = chips.push(`<span class="pageguide-evidence-missing" hidden></span>`) - 1;
+    return `\uE000${idx}\uE001`;
+  });
+  let answerHtml = parseMarkdown(tokenized)
+    .replace(/\uE000(\d+)\uE001/g, (_, idx) => chips[Number(idx)] || '');
+  const appended = [];
+  const hasSavedAnswerEvidence = answerEvidenceList.some(it => it && (it.source === 'cited' || it.source === 'scratchpad'));
+  answerEvidenceList.forEach((it) => {
+    if (!it || !Number.isFinite(Number(it.step))) return;
+    const source = String(it.source || '');
+    const key = normEvKey(it.key);
+    if ((source === 'cited' || source === 'scratchpad') && key && byEvidenceKey[key]) return;
+    if (source === 'confirmation' && (hasSavedAnswerEvidence || evidence.length)) return;
+    const step = Number(it.step);
+    const ev = key ? (byKey[key] || answerEvidenceByKey[key]) : null;
+    const note = it.note || ev?.note || key || (source === 'confirmation' ? 'Confirmation' : 'Visual evidence');
+    const bboxObj = it.region_bbox || ev?.region_bbox || null;
+    const bbox = bboxObj ? JSON.stringify(bboxObj) : '';
+    let label = '';
+    if (source === 'cited' || source === 'scratchpad') {
+      const num = evidence.length + 1;
+      if (key && !byEvidenceKey[key]) {
+        byEvidenceKey[key] = { number: num, key, entry: ev || { ref_step_id: step, region_bbox: bboxObj, note, key } };
+        evidence.push(byEvidenceKey[key]);
+      }
+      label = `📷 ${escapeHtml(String(num))}`;
+    } else {
+      label = appended.length ? '📷' : '📷';
+    }
+    appended.push(`<span class="pageguide-recap-link pageguide-answer-citation-chip" data-evidence="scratchpad" data-key="${escapeHtml(key)}" data-step="${escapeHtml(String(step))}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(note)}" title="${escapeHtml(note)}">${label}</span>`);
+  });
+  if (appended.length) {
+    answerHtml += ` <span class="pageguide-answer-evidence-tail"><span>Evidence:</span> ${appended.join(' ')}</span>`;
+  }
+  return { answerHtml, evidence };
+}
+
+function _stripEvidenceRefs(text) {
+  return String(text || '').replace(/\s*\[ev:[a-zA-Z0-9_-]+\]/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+function _answerVerdictInfo(result) {
+  const recap = result?.recap || {};
+  // Verdict is deterministic: a finish answer is a completed run. Fall back to that when the recap
+  // (which only builds with Visual Recap on) is absent, rather than showing "Unsure".
+  const verdictKey = recap?.final?.verdict || recap?.finalVerdict || (result?.isFinish ? 'completed' : 'unclear');
+  const verdict = RECAP_VERDICTS[verdictKey] || RECAP_VERDICTS.unclear;
+  return { verdictKey, verdict };
+}
+
+function _answerReasoningTrailHtml(recap, sessionId) {
+  const milestones = Array.isArray(recap?.milestones) ? recap.milestones.filter(m => m && m.goalRelated !== false) : [];
+  const summaryHtml = _answerTrailSummaryHtml(recap, sessionId, milestones);
+  if (!milestones.length && !summaryHtml) return '';
+  const rows = milestones.map((m, idx) => {
+    const step = m.firstStep != null ? m.firstStep : m.step;
+    const stepLabel = Number.isFinite(Number(step)) ? String(Number(step)) : String(idx + 1);
+    const status = String(m.status || '').toLowerCase();
+    const cls = status === 'wrong' ? 'is-wrong' : (status === 'unclear' ? 'is-unclear' : 'is-ok');
+    const score = m.errorLabel ? `<span class="pageguide-answer-trail-pill">${escapeHtml(m.errorLabel)}</span>` : '';
+    const completed = status === 'wrong' ? '' : (status === 'unclear'
+      ? '<span class="pageguide-answer-trail-pill is-unclear">Review</span>'
+      : (idx === milestones.length - 1 ? '<span class="pageguide-answer-trail-pill is-complete">Completed</span>' : ''));
+    // Non-grounding baseline: the trail still lists what the agent did, but the step text is
+    // inert (no pageguide-recap-link class / data-session / data-step), so there's nothing to
+    // hover or click through to a screenshot.
+    const textHtml = _isPanelNonGrounding()
+      ? `<span class="pageguide-answer-trail-text">${escapeHtml(m.text || '')}</span>`
+      : `<span class="pageguide-recap-link pageguide-answer-trail-text" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}">${escapeHtml(m.text || '')}</span>`;
+    return `<div class="pageguide-answer-trail-row ${cls}">
+      <span class="pageguide-answer-trail-dot">${escapeHtml(stepLabel)}</span>
+      <span class="pageguide-answer-trail-text-wrap">
+        ${textHtml}
+      </span>
+      ${score || completed}
+    </div>`;
+  }).join('');
+  return `<details class="pageguide-reasoning-trail">
+    <summary><span>Reasoning Trail</span><span class="pageguide-reasoning-trail-chevron">⌄</span></summary>
+    <div class="pageguide-reasoning-trail-body">${summaryHtml}${rows}</div>
+  </details>`;
+}
+
+function _answerStepScreenshotChip(sessionId, step, label = '') {
+  if (_isPanelNonGrounding()) return ''; // no "📷 Step N" screenshot chips in the baseline
+  const n = Number(step);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const chipLabel = label || `Step ${n}`;
+  return `<span class="pageguide-recap-link pageguide-answer-summary-chip pageguide-answer-trail-shot" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(n))}" title="Open ${escapeHtml(chipLabel)} screenshot">📷 ${escapeHtml(chipLabel)}</span>`;
+}
+
+function _answerSummarySegmentLink(segment, sessionId, label) {
+  // Non-grounding baseline: the summary sentence stays, but its phrases aren't linked to
+  // screenshots, so it renders as plain text.
+  if (_isPanelNonGrounding()) return escapeHtml(label);
+  const step = Number(segment?.step);
+  if (!Number.isFinite(step) || step <= 0) return escapeHtml(label);
+  const evidenceKey = String(segment?.evidenceKey || segment?.evidence_key || '').trim();
+  const bbox = segment?.region_bbox ? JSON.stringify(segment.region_bbox) : '';
+  const note = segment?.note || segment?.text || label;
+  const evidenceAttrs = evidenceKey
+    ? ` data-evidence="scratchpad" data-key="${escapeHtml(evidenceKey)}" data-bbox="${escapeHtml(bbox)}" data-note="${escapeHtml(note)}"`
+    : '';
+  return `<span class="pageguide-recap-link pageguide-answer-summary-ref" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step))}"${evidenceAttrs}>${escapeHtml(label)}</span>`;
+}
+
+function _answerSummarySegmentHtml(segment, sessionId) {
+  const text = String(segment?.text || '').trim();
+  if (!text) return '';
+  const phrase = String(segment?.phrase || '').trim();
+  if (phrase && text.toLowerCase().includes(phrase.toLowerCase())) {
+    const idx = text.toLowerCase().indexOf(phrase.toLowerCase());
+    return `${escapeHtml(text.slice(0, idx))}${_answerSummarySegmentLink(segment, sessionId, text.slice(idx, idx + phrase.length))}${escapeHtml(text.slice(idx + phrase.length))}`;
+  }
+  return _answerSummarySegmentLink(segment, sessionId, text);
+}
+
+function _answerLinkedSummaryHtml(summaryText, segments, sessionId) {
+  const text = String(summaryText || '').trim();
+  if (!text) return '';
+  const lower = text.toLowerCase();
+  const ranges = [];
+  (Array.isArray(segments) ? segments : []).forEach((segment) => {
+    const phrase = String(segment?.phrase || '').trim();
+    if (!phrase) return;
+    const start = lower.indexOf(phrase.toLowerCase());
+    if (start < 0) return;
+    const end = start + phrase.length;
+    if (ranges.some(r => start < r.end && end > r.start)) return;
+    ranges.push({ start, end, segment });
+  });
+  if (!ranges.length) return escapeHtml(text);
+  ranges.sort((a, b) => a.start - b.start);
+  let out = '';
+  let cursor = 0;
+  ranges.forEach((range) => {
+    out += escapeHtml(text.slice(cursor, range.start));
+    out += _answerSummarySegmentLink(range.segment, sessionId, text.slice(range.start, range.end));
+    cursor = range.end;
+  });
+  out += escapeHtml(text.slice(cursor));
+  return out;
+}
+
+function _answerConciseSummaryText(recap) {
+  const summary = String(recap?.summary || '').trim();
+  const statusInfo = _recapStatusText(recap || {});
+  let text = String(statusInfo.title || summary || '').trim();
+  text = text.replace(/^I have completed (?:the|your) task\.?\s*/i, '').trim();
+  text = text.replace(/^I completed (?:the|your) task\.?\s*/i, '').trim();
+  text = text.replace(/^I could not complete (?:the|your) task\.?\s*/i, '').trim();
+  text = text || summary;
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+  text = sentences.slice(0, 2).join(' ').replace(/\s+/g, ' ').trim();
+  if (text.length > 220) text = text.slice(0, 217).replace(/\s+\S*$/, '') + '...';
+  return text;
+}
+
+function _answerTrailSummaryHtml(recap, sessionId, milestones = []) {
+  const meaningful = milestones
+    .filter(m => m && Number.isFinite(Number(m.firstStep != null ? m.firstStep : m.step)))
+    .slice(0, 4);
+  const segments = (Array.isArray(recap?.summarySegments) ? recap.summarySegments : [])
+    .filter(s => s && String(s.text || '').trim() && Number.isFinite(Number(s.step)))
+    .slice(0, 5);
+  const summaryText = _answerConciseSummaryText(recap);
+  if (!summaryText && !meaningful.length && !segments.length) return '';
+  const linkedSummaryLine = summaryText
+    ? `<div class="pageguide-answer-trail-summary-text">${_answerLinkedSummaryHtml(summaryText, segments, sessionId)}</div>`
+    : (segments.length
+      ? `<div class="pageguide-answer-trail-summary-text">${segments.map(s => _answerSummarySegmentHtml(s, sessionId)).filter(Boolean).join(' ')}</div>`
+      : '');
+  const summaryLine = (!linkedSummaryLine && summaryText)
+    ? `<div class="pageguide-answer-trail-summary-text">${escapeHtml(summaryText)}</div>`
+    : '';
+  const visualLine = (!linkedSummaryLine && meaningful.length)
+    ? `<div class="pageguide-answer-trail-summary-steps">${meaningful.map((m) => {
+        const step = m.firstStep != null ? m.firstStep : m.step;
+        const text = String(m.phrase || m.text || `Step ${step}`).trim();
+        return `<span class="pageguide-answer-trail-summary-step"><span>${escapeHtml(text)}</span>${_answerStepScreenshotChip(sessionId, step, `Step ${step}`)}</span>`;
+      }).join('')}</div>`
+    : '';
+  return `<section class="pageguide-answer-trail-summary">${linkedSummaryLine || summaryLine}${visualLine}</section>`;
+}
+
+async function _answerEvidenceFigureHtml(item, sessionId) {
+  const entry = item?.entry || {};
+  const step = Number(entry.ref_step_id);
+  let rec = null;
+  try { if (sessionId && Number.isFinite(step) && typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+  const savedCapture = (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+    .find(cap => cap && entry.key && String(cap.key || '').toLowerCase() === String(entry.key || '').toLowerCase());
+  const confirmationCapture = (Array.isArray(rec?.visualEvidenceItems) ? rec.visualEvidenceItems : [])
+    .find(cap => cap && entry.key && String(cap.key || '').toLowerCase() === String(entry.key || '').toLowerCase());
+  const dedicatedShot = _recapPickShot(savedCapture?.shot || confirmationCapture?.visualEvidenceShot);
+  const shot = dedicatedShot || _recapPickShot(rec?.screenshotBefore || rec?.screenshot || rec?.markedShot || rec?.regionShot);
+  const bbox = entry.region_bbox || confirmationCapture?.visualEvidenceNormRect || null;
+  const note = entry.note || entry.key || 'Saved evidence';
+  const bboxData = bbox ? JSON.stringify(bbox) : '';
+  const marker = dedicatedShot ? null : bbox;
+  const markerNumber = dedicatedShot ? null : (confirmationCapture?.visualEvidenceIndex ?? savedCapture?.som_id ?? null);
+  // Text evidence mode: there is no screenshot by design, so show what the step actually touched
+  // — node text, aria-label, selector, page — instead of an empty-screenshot placeholder.
+  if (_isTextEvidenceRecord(rec)) {
+    const textual = savedCapture?.textualEvidence || rec?.targetEvidence || null;
+    return `<section class="pageguide-answer-evidence-item">
+      ${_textualEvidenceHtml(textual, rec, `Checkpoint ${step || ''}`)}
+      <div class="pageguide-answer-evidence-caption">${escapeHtml(note)}</div>
+      <div class="pageguide-answer-evidence-links">
+        <span>Captured at checkpoint ${escapeHtml(String(step || ''))}</span>
+      </div>
+    </section>`;
+  }
+  const figure = shot
+    ? _recapFigureHtml(`data:image/jpeg;base64,${shot}`, marker, markerNumber, note)
+    : '<div class="pageguide-recap-pop-empty">No screenshot for this evidence</div>';
+  return `<section class="pageguide-answer-evidence-item">
+    <div class="pageguide-answer-evidence-shot">${figure}</div>
+    <div class="pageguide-answer-evidence-caption">${escapeHtml(note)}</div>
+    <div class="pageguide-answer-evidence-links">
+      <span>Captured at checkpoint ${escapeHtml(String(step || ''))}</span>
+      <span class="pageguide-recap-link" data-evidence="scratchpad" data-key="${escapeHtml(String(entry.key || ''))}" data-session="${escapeHtml(String(sessionId || ''))}" data-step="${escapeHtml(String(step || ''))}" data-bbox="${escapeHtml(bboxData)}" data-note="${escapeHtml(note)}">Open full screenshot ↗</span>
+    </div>
+  </section>`;
+}
+
+async function _fallbackActionEvidenceHtml(result, sessionId) {
+  const recap = result?.recap || {};
+  const finalStep = Number.isFinite(Number(recap.finalStep)) ? Number(recap.finalStep) : Number(result?.step);
+  if (!sessionId || !Number.isFinite(finalStep)) return '';
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, finalStep); } catch (e) {}
+  const ev = _recapMarkedEvidence(rec) || (() => {
+    const shot = _recapPickShot(rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot);
+    return shot ? { src: `data:image/jpeg;base64,${shot}`, marker: null } : null;
+  })();
+  const caption = rec?.instruction || 'Final task evidence';
+  // Text evidence mode: no screenshot exists, but the step's target still grounds the answer.
+  if (_isTextEvidenceRecord(rec)) {
+    return `<section class="pageguide-answer-evidence-item">
+      ${_textualEvidenceHtml(rec?.targetEvidence, rec, `Step ${finalStep} — target`)}
+      <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+      <div class="pageguide-answer-evidence-links">
+        <span>Captured at checkpoint ${escapeHtml(String(finalStep))}</span>
+      </div>
+    </section>`;
+  }
+  if (!ev) return '';
+  return `<section class="pageguide-answer-evidence-item">
+    <div class="pageguide-answer-evidence-shot">${_recapFigureHtml(ev.src, ev.marker, rec?.target?.resolvedIndex ?? rec?.resolvedIndex, caption)}</div>
+    <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+    <div class="pageguide-answer-evidence-links">
+      <span>Captured at checkpoint ${escapeHtml(String(finalStep))}</span>
+      <span class="pageguide-recap-link" data-session="${escapeHtml(String(sessionId))}" data-step="${escapeHtml(String(finalStep))}">Open full screenshot ↗</span>
+    </div>
+  </section>`;
+}
+
+// Render a single action-grounding figure (the SoM-marked screenshot of a clicked/targeted step).
+// Used for the "action-fallback" descriptor — navigate-only tasks or answers the model did not
+// cite — so the card always has a visual link even with no saved scratchpad evidence.
+async function _answerActionGroundingHtml(step, note, sessionId) {
+  const stepNum = Number(step);
+  if (!sessionId || !Number.isFinite(stepNum)) return '';
+  let rec = null;
+  try { if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(sessionId, stepNum); } catch (e) {}
+  const ev = _recapMarkedEvidence(rec) || (() => {
+    const shot = _recapPickShot(rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot);
+    return shot ? { src: `data:image/jpeg;base64,${shot}`, marker: null } : null;
+  })();
+  const caption = note || rec?.instruction || 'Final task evidence';
+  // Text evidence mode: the step never had a screenshot — show the target in words instead.
+  if (_isTextEvidenceRecord(rec)) {
+    return `<section class="pageguide-answer-evidence-item">
+      ${_textualEvidenceHtml(rec?.targetEvidence, rec, `Step ${stepNum} — target`)}
+      <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+      <div class="pageguide-answer-evidence-links">
+        <span>Captured at checkpoint ${escapeHtml(String(stepNum))}</span>
+      </div>
+    </section>`;
+  }
+  const figure = ev
+    ? _recapFigureHtml(ev.src, ev.marker, rec?.target?.resolvedIndex ?? rec?.resolvedIndex, caption)
+    : '<div class="pageguide-recap-pop-empty">No screenshot for this step</div>';
+  return `<section class="pageguide-answer-evidence-item">
+    <div class="pageguide-answer-evidence-shot">${figure}</div>
+    <div class="pageguide-answer-evidence-caption">${escapeHtml(caption)}</div>
+    <div class="pageguide-answer-evidence-links">
+      <span>Captured at checkpoint ${escapeHtml(String(stepNum))}</span>
+      <span class="pageguide-recap-link" data-evidence="scratchpad" data-session="${escapeHtml(String(sessionId))}" data-step="${escapeHtml(String(stepNum))}" data-note="${escapeHtml(caption)}">Open full screenshot ↗</span>
+    </div>
+  </section>`;
+}
+
+// Render the guaranteed evidence strip from a gv2BuildAnswerEvidence() descriptor list. Cited /
+// scratchpad items resolve to a screenshot cropped to their region_bbox; action-fallback items
+// resolve to the clicked step's marked screenshot. Non-empty whenever `items` is non-empty.
+async function _answerEvidenceStripHtml(items, sessionId) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return '';
+  const parts = await Promise.all(list.map((it) => {
+    if (it && it.source === 'action-fallback') {
+      return _answerActionGroundingHtml(it.step, it.note, sessionId);
+    }
+    const item = {
+      number: it.number || null,
+      key: it.key || '',
+      entry: { ref_step_id: it.step, region_bbox: it.region_bbox || null, note: it.note, key: it.key || '' }
+    };
+    return _answerEvidenceFigureHtml(item, sessionId);
+  }));
+  return parts.join('');
+}
+
+async function renderGuideFinalAnswer(result) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !result || !result.finalAnswer) return;
+  const sessionId = result.sessionId || result.recap?.sessionId || '';
+  if (result.recap) _rememberGuideRecap(Object.assign({ sessionId }, result.recap));
+  const model = _buildAnswerEvidenceModel(result.finalAnswer, result.evidenceScratchpad || [], result.answerEvidence || []);
+  const { verdict, verdictKey } = _answerVerdictInfo(result);
+  const trailHtml = _answerReasoningTrailHtml(result.recap, sessionId);
+  const checkpointSteps = Array.isArray(result.recap?.milestones)
+    ? result.recap.milestones.map(m => Number(m.step)).filter(n => Number.isFinite(n) && n > 0)
+    : [];
+  if (checkpointSteps.length) {
+    guideTimelineCheckpointSteps = checkpointSteps;
+    goalDotsExpanded = false;
+    if (currentGuideStep) renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
+  }
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-message assistant pageguide-recap-message';
+  msg.innerHTML = `
+    <div class="pageguide-recap pageguide-answer-card" data-session="${escapeHtml(String(sessionId || ''))}" data-steps="${escapeHtml(JSON.stringify(result.recap?.steps || result.recap?.milestones?.map(m => m.step) || []))}">
+      <div class="pageguide-answer-head">
+        <div class="pageguide-recap-kicker">${escapeHtml(result.kicker || 'Answer')}</div>
+        <span class="pageguide-answer-status ${escapeHtml(verdict.cls)}">${escapeHtml(verdict.label)}</span>
+      </div>
+      <div class="pageguide-answer-copy">${model.answerHtml}</div>
+      ${trailHtml}
+      <span class="pageguide-answer-verdict-key" hidden>${escapeHtml(verdictKey)}</span>
+    </div>`;
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+  _recordAssistantMessage(result.finalAnswer);
+}
+
+
+
+/**
+ * The card for a run that ENDED WITHOUT AN ANSWER — stopped by the user, capped, or a read-only
+ * terminal. Same card as a finished run, because it is the same material.
+ *
+ * There used to be a second card for this: a "TASK INCOMPLETE" hero, a flat list of milestone rows,
+ * and a strip of numbered Checkpoints. It predated the summariser, and it showed the same run in a
+ * different shape — the milestones without the summary's linked phrases, always expanded, and with
+ * the per-step screenshots reachable only through a row of numbers that said nothing about what was
+ * at each one. A reader who stopped a run got a layout they had never seen, at exactly the moment
+ * they were trying to work out what went wrong.
+ *
+ * The recap's summary IS the summarising agent's output, so it becomes the answer text, and the
+ * verdict comes from the recap rather than from having finished — a stopped run reads "Incompleted"
+ * on the same badge a completed one reads "Completed".
+ */
+async function renderGuideRecapCard(recap, kicker = 'Summary') {
+  if (!recap || !recap.summary) return;
+  const sessionId = recap.sessionId || '';
+  await renderGuideFinalAnswer({
+    finalAnswer: recap.summary,
+    sessionId,
+    recap,
+    kicker,
+    evidenceScratchpad: [],
+    answerEvidence: [],
+    isFinish: false,
+  });
+}
+window.renderGuideRecapCard = renderGuideRecapCard;
+
+// Compute all three confidence formula versions for a step from its stored LLM signals
+// (grounded/loop/progress). Pure — no LLM call — so Full vs No-progress vs No-loop can be compared
+// at a glance. Returns { full, reduced, noloop } (each 0..1 or null), or null when no signals.
+function _dualConfidence(rec) {
+  if (!rec || typeof gv2ComputeConfidence !== 'function') return null;
+  if (rec.grounded == null && rec.loop == null && rec.progress == null) return null;
+  const signals = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
+  const full = gv2ComputeConfidence(signals, 'full').confidence;
+  const reduced = gv2ComputeConfidence(signals, 'reduced').confidence;
+  const noloop = gv2ComputeConfidence(signals, 'noloop').confidence;
+  if (full == null && reduced == null && noloop == null) return null;
+  return { full, reduced, noloop };
+}
+
+function _shouldShowGuideActionScores(source = {}, isInitialNode = false) {
+  if (isInitialNode) return false;
+  const action = String(source.action || '').toLowerCase();
+  const pageTargetActions = new Set(['click', 'type', 'clear_text', 'drag_drop']);
+  if (!pageTargetActions.has(action)) return false;
+  const hasScore = [source.mechGrounding, source.grounded, source.mechLoop, source.loop]
+    .some(v => typeof v === 'number' && Number.isFinite(v));
+  return hasScore;
+}
+
+function _guideStepReviewInfo(source = {}) {
+  const grounding = source?.mechGrounding ?? source?.grounding ?? source?.grounded;
+  const loop = source?.mechLoop ?? source?.loop;
+  const labels = [];
+  const provided = Array.isArray(source?.reviewLabels) ? source.reviewLabels : [];
+  if (provided.includes('misgrounded')) labels.push({ key: 'misgrounded', label: 'Misgrounded', detail: 'Grounding is below the review threshold.' });
+  if (provided.includes('loop')) labels.push({ key: 'loop', label: 'Loop', detail: 'Loop score is above the review threshold.' });
+  if (typeof grounding === 'number' && Number.isFinite(grounding) && grounding < 0.5) {
+    const existing = labels.find(item => item.key === 'misgrounded');
+    if (existing) existing.detail = `Grounding ${grounding.toFixed(2)} is below 0.50.`;
+    else labels.push({ key: 'misgrounded', label: 'Misgrounded', detail: `Grounding ${grounding.toFixed(2)} is below 0.50.` });
+  }
+  if (typeof loop === 'number' && Number.isFinite(loop) && loop >= 0.3) {
+    const existing = labels.find(item => item.key === 'loop');
+    if (existing) existing.detail = `Loop ${loop.toFixed(2)} is at or above 0.30.`;
+    else labels.push({ key: 'loop', label: 'Loop', detail: `Loop ${loop.toFixed(2)} is at or above 0.30.` });
+  }
+  return labels;
+}
+
+function _timelineWordClip(text, maxWords = 50) {
+  const full = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!full) return { full: '', short: '', clipped: false };
+  const words = full.split(' ');
+  if (words.length <= maxWords) return { full, short: full, clipped: false };
+  return { full, short: `${words.slice(0, maxWords).join(' ')}...`, clipped: true };
+}
+
+function _timelineDetailTextHtml(label, text) {
+  const clipped = _timelineWordClip(text, 50);
+  if (!clipped.full) return '';
+  if (!clipped.clipped) {
+    return `<div>${escapeHtml(label)}: <b>${escapeHtml(clipped.short)}</b></div>`;
+  }
+  return `<div class="pageguide-goal-step-score-text">
+    ${escapeHtml(label)}:
+    <b>${escapeHtml(clipped.short)}</b>
+    <details class="pageguide-goal-step-expandable">
+      <summary>Show full text</summary>
+      <div>${escapeHtml(clipped.full)}</div>
+    </details>
+  </div>`;
+}
+
+/**
+ * The mechanism-score rows under a step card — debug mode only.
+ *
+ * Grounding, Loop, Plan and the two element texts are researcher instrumentation: they only mean
+ * anything next to the confidence formula. The card a participant sees is a plain record of what
+ * happened, so outside debug mode this block is not rendered at all.
+ */
+function _guideStepScoresHtml(scoreSource = {}, isInitialNode = false, planTotalFallback = 0) {
+  if (!window.__pgDebugEnabled) return '';
+  if (!_shouldShowGuideActionScores(scoreSource, isInitialNode)) return '';
+  const fmtScore = (v) => (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '\u2014';
+  const loopMatches = scoreSource.loopMatches != null ? Number(scoreSource.loopMatches) : null;
+  const planDone = scoreSource.planCompleted != null ? Number(scoreSource.planCompleted) : null;
+  const planTotal = scoreSource.planTotal != null ? Number(scoreSource.planTotal) : planTotalFallback;
+  return `<div class="pageguide-goal-step-scores">
+        <div>Grounding: <b>${fmtScore(scoreSource.mechGrounding ?? scoreSource.grounded)}</b></div>
+        <div>Loop: <b>${fmtScore(scoreSource.mechLoop)}</b>${loopMatches != null ? ` (${loopMatches}/10 matches)` : ''}</div>
+        <div>Plan: <b>${Number.isFinite(planDone) && planTotal ? `${Math.min(planDone, planTotal)}/${planTotal}` : '\u2014'}</b></div>
+        ${_timelineDetailTextHtml('LLM text', scoreSource.llmElementText)}
+        ${_timelineDetailTextHtml('DOM text', scoreSource.domElementText)}
+      </div>`;
+}
+window._guideStepScoresHtml = _guideStepScoresHtml;
+
+async function showGoalStepPreview(step, anchor) {
+  // Final guard for the Non-grounding baseline — the View Journey step popover (screenshot +
+  // saved/annotated evidence + "Inspect more") is a grounding affordance. _buildGoalTimelineRow
+  // already skips wiring the listeners; this also covers rows built before the toggle flipped.
+  if (_isPanelNonGrounding()) return;
+  hideGoalStepPreview();
+  const isInitialNode = Number(step) === 0;
+  const meta = isInitialNode ? currentGuideInitial : getGuideStepMeta(step);
+  const label = isInitialNode ? 'Initial state' : getGuideStepLabel(step);
+  let rec = null;
+  try {
+    if (meta && typeof rewindGetRecord === 'function') {
+      rec = await rewindGetRecord(meta.sessionId, meta.step != null ? meta.step : (isInitialNode ? 0 : step));
+    }
+  } catch (e) {}
+
+  // Outside debug mode the card is deliberately plain: the screenshot, which step it is, and what
+  // the step did. Everything that grades or re-runs the step — the confidence badge, the score
+  // block, the review status, the raw URL, the timing, the before-action shot, "Inspect more" and
+  // "Restore here" — is researcher instrumentation and appears only under debug.
+  const debug = !!window.__pgDebugEnabled;
+
+  // Confidence status (green ≥70%, yellow <70%) — no red for confidence.
+  const conf = meta?.confidence;
+  const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf, guideConfidenceThreshold) : null;
+  // Confidence pinned to the top-left corner of the card.
+  const confHtml = (debug && tier && conf != null)
+    ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
+    : '';
+  // Debug-only: all three formula versions side by side (Full / No-progress / No-loop).
+  const dual = window.__pgDebugEnabled ? _dualConfidence(meta) : null;
+  const pctOf = (c) => (c != null) ? Math.round(c * 100) + '%' : '—';
+  const dualHtml = dual
+    ? `<div class="pageguide-goal-step-dual">🐞 Full: <b>${pctOf(dual.full)}</b> · No-progress: <b>${pctOf(dual.reduced)}</b> · No-loop: <b>${pctOf(dual.noloop)}</b></div>`
+    : '';
+  const scoreSource = rec || meta || {};
+  const reviewInfo = debug ? _guideStepReviewInfo(scoreSource) : [];
+  const reviewHtml = reviewInfo.length
+    ? `<div class="pageguide-goal-step-review-status">
+        <div>Status: ${reviewInfo.map(item => `<b>${escapeHtml(item.label)}</b>`).join(' · ')}</div>
+        ${reviewInfo.map(item => `<div>${escapeHtml(item.detail)}</div>`).join('')}
+      </div>`
+    : '';
+  const scoreHtml = _guideStepScoresHtml(scoreSource, isInitialNode, currentGuidePlan.length);
+  const url = meta?.url || rec?.url || '';
+  // Show the URL as a compact "link" hyperlink rather than the full (often long) address.
+  const urlHtml = (debug && url) ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
+  const evidenceHtml = _savedEvidencePreviewHtml(meta, rec);
+  const annotationsHtml = _savedAnnotationsPreviewHtml(meta, rec);
+  const allowSteer = debug && !!meta && !isInitialNode;
+
+  // Card layout: the REGION-around-the-target crop is the picture on top; the full BEFORE-action
+  // screenshot is tucked into a collapsible below it. (Falls back to the before-shot on top when
+  // there's no region crop — e.g. the initial-state node.) The AFTER-action shot is in "Inspect more".
+  const PLACEHOLDER_SHOT = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  let beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
+  if (beforeShot === PLACEHOLDER_SHOT) beforeShot = null;
+  let regionShot = rec?.regionShot || null;
+  if (regionShot === PLACEHOLDER_SHOT) regionShot = null;
+  let afterShot = rec?.screenshotAfter || null;
+  if (afterShot === PLACEHOLDER_SHOT) afterShot = null;
+  const topShot = regionShot || beforeShot || afterShot;
+  const topImg = topShot
+    ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && (beforeShot || afterShot)) ? `class="pageguide-memory-shot-trigger" data-shot-kind="${beforeShot ? 'before' : 'after'}"` : ''}>`
+    : '';
+  // Only show the collapsible before-shot when it isn't already the top image.
+  const beforeHtml = (debug && beforeShot && regionShot)
+    ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
+        <img class="pageguide-memory-shot-trigger" data-shot-kind="before" src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
+    : '';
+
+  const preview = document.createElement('div');
+  preview.id = 'pageguide-goal-step-preview';
+  preview.className = 'pageguide-goal-step-preview' + (debug ? '' : ' simple');
+  preview.innerHTML = `
+    ${confHtml}
+    ${topImg}
+    <div class="pageguide-goal-step-preview-title">${isInitialNode ? 'Initial state' : 'Step ' + step}</div>
+    <div class="pageguide-goal-step-preview-text">${escapeHtml(label)}</div>
+    ${evidenceHtml}
+    ${annotationsHtml}
+    ${reviewHtml}
+    ${scoreHtml}
+    ${dualHtml}
+    ${urlHtml}
+    ${beforeHtml}
+    ${(debug && meta?.durationMs != null) ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(meta.durationMs)}</div>` : ''}
+    ${(debug && meta) ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
+    ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">Restore here</button>' : ''}
+  `;
+
+  preview.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const target = e.target;
+    // Let the "link" hyperlink open normally; don't also open the inspector.
+    if (target.closest('.pageguide-goal-step-link')) return;
+    if (target.closest('.pageguide-memory-shot-trigger')) {
+      openMemoryShotLightbox(beforeShot, isInitialNode ? 'Initial state — saved page memory' : 'Before action — what PageGuide saw before this step');
+      return;
+    }
+    // Let the collapsible "Before action" toggle natively; don't open the inspector.
+    if (target.closest('.pageguide-goal-step-before')) return;
+    if (target.closest('.pageguide-goal-step-expandable')) return;
+    if (target.closest('.pageguide-goal-step-steer')) {
+      const restoreBtn = target.closest('button');
+      if (restoreBtn) restoreBtn.disabled = true;
+      guideStopped = false;
+      if (meta && typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
+        await RewindTimeline.steerFromStep(meta, '');
+      }
+      hideGoalStepPreview();
+      return;
+    }
+    // "Inspect more" opens the full-page inspector tab (full memory record: restore log,
+    // captured state, URL, raw JSON). Has its own handler so it isn't conflated with a
+    // generic card click.
+    if (target.closest('.pageguide-goal-step-inspect')) {
+      hideGoalStepPreview();
+      if (meta && typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.openFullPageStep === 'function') {
+        RewindTimeline.openFullPageStep(meta);
+      }
+      return;
+    }
+
+    // Clicks inside the steer box (e.g. the textarea) should not open the inspector.
+    // Default: open the in-panel inspector (snapshot + Restore here), which restores THIS
+    // working tab and still offers "Open detailed view ↗" for the full-page view. That is the same
+    // affordance as the hidden "Inspect more" button, so outside debug mode the card is inert.
+    if (debug && meta && typeof RewindTimeline !== 'undefined') {
+      hideGoalStepPreview();
+      if (typeof RewindTimeline.openStep === 'function') RewindTimeline.openStep(meta);
+      else if (typeof RewindTimeline.openFullPageStep === 'function') RewindTimeline.openFullPageStep(meta);
+    }
+  });
+
+  // Keep the preview open while the pointer is over it (hover flow); hide shortly after leaving.
+  preview.addEventListener('mouseenter', _cancelGoalPreviewHide);
+  preview.addEventListener('mouseleave', _scheduleGoalPreviewHide);
+
+  // This function is async (awaits rewindGetRecord), so hover-mouseenter and click can each have
+  // an in-flight call. Remove any preview appended by an earlier call right before appending, so
+  // only the latest card survives (the initial hide at the top runs before the awaits).
+  hideGoalStepPreview();
+  document.body.appendChild(preview);
+  const r = anchor.getBoundingClientRect();
+  const top = Math.min(window.innerHeight - preview.offsetHeight - 8, r.bottom + 10);
+  preview.style.top = Math.max(8, top) + 'px';
+  preview.style.left = Math.max(8, Math.min(r.left - 98, window.innerWidth - preview.offsetWidth - 8)) + 'px';
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest?.('#pageguide-goal-step-preview, .pageguide-goal-dot, #pageguide-memory-shot-lightbox')) {
+    hideGoalStepPreview();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeMemoryShotLightbox(); hideRecapEvidencePopover(); return; }
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const overlay = document.getElementById('pageguide-memory-shot-lightbox');
+  if (!overlay || !overlay.dataset.recapSession) return;
+  let steps = [];
+  try { steps = JSON.parse(overlay.dataset.recapSteps || '[]'); } catch (err) { steps = []; }
+  const current = Number(overlay.dataset.recapStep);
+  const idx = steps.indexOf(current);
+  const target = e.key === 'ArrowLeft' ? steps[idx - 1] : steps[idx + 1];
+  if (Number.isFinite(Number(target))) {
+    e.preventDefault();
+    openRecapCheckpoint(overlay.dataset.recapSession, Number(target), steps);
+  }
+});
+
+// Builds one row of the vertical step timeline: a status dot on the left, the step's
+// action/label text on the right. Hover/click on the dot reuses the existing
+// showGoalStepPreview screenshot popover, so the "hover a dot to see the screenshot"
+// behavior is identical to the old horizontal dot row.
+function _buildGoalTimelineRow(step, label, st, rec, isInitial) {
+  const row = document.createElement('div');
+  row.className = 'pageguide-goal-row' + (isInitial ? ' initial' : '');
+  row.dataset.step = String(step);
+
+  const debug = !!window.__pgDebugEnabled;
+  const dot = document.createElement('span');
+  dot.className = 'pageguide-goal-row-dot' + (debug ? '' : ' simple');
+  if (st.status === 'done') dot.classList.add('done');
+  else if (st.status === 'current') dot.classList.add('current');
+  // How a step SCORED is researcher instrumentation: the confidence ring (green ≥70%, yellow <70%),
+  // the review ring and the verify colors. Outside debug mode the trail is plain progress — a step
+  // that ran is neutral gray whatever it scored — so a participant is not reading a grade.
+  const reviewInfo = debug ? _guideStepReviewInfo(rec || st || {}) : [];
+  if (debug) {
+    const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(rec?.confidence, guideConfidenceThreshold) : null;
+    if (tier === 'high') dot.classList.add('conf-high');
+    else if (tier === 'med') dot.classList.add('conf-med');
+    if (reviewInfo.length) dot.classList.add('review');
+    if (st.verify) dot.classList.add(`verify-${st.verify}`);
+  }
+
+  const text = document.createElement('span');
+  text.className = 'pageguide-goal-row-text';
+  text.textContent = label;
+
+  row.title = reviewInfo.length ? `${label} — ${reviewInfo.map(item => item.label).join(', ')}` : label;
+  row.appendChild(dot);
+  row.appendChild(text);
+  // Non-grounding baseline: the step's screenshot popover is a grounding affordance, so the row
+  // stays as plain text with no hover/click preview at all.
+  if (!_isPanelNonGrounding()) {
+    row.addEventListener('click', (e) => { e.stopPropagation(); showGoalStepPreview(step, dot); });
+    _attachDotHoverPreview(dot, step);
+  }
+  return row;
+}
+window._buildGoalTimelineRow = _buildGoalTimelineRow;
+
+// Vertical, live-updating step timeline: a dot on the left, the action on the right.
+// Tucked inside a native <details> so it can be collapsed once the guide finishes,
+// leaving only the final answer visible in the chat (per-tab state, so it naturally
+// stays isolated the same way currentGuideRecords/currentGuideStep already are).
+function renderGoalTimeline(current, total) {
+  const container = document.getElementById('pageguide-goal-timeline');
+  if (!container) return;
+
+  let details = container.querySelector('details.pageguide-goal-timeline-details');
+  let summary, list;
+  if (!details) {
+    details = document.createElement('details');
+    details.className = 'pageguide-goal-timeline-details';
+    details.open = true;
+    summary = document.createElement('summary');
+    summary.className = 'pageguide-goal-timeline-summary';
+    list = document.createElement('div');
+    list.className = 'pageguide-goal-timeline-list';
+    details.appendChild(summary);
+    details.appendChild(list);
+    container.innerHTML = '';
+    container.appendChild(details);
+  } else {
+    summary = details.querySelector('.pageguide-goal-timeline-summary');
+    list = details.querySelector('.pageguide-goal-timeline-list');
+  }
+
+  // Auto-collapse exactly once, right at the moment the guide stops being active (finished
+  // or stopped), so the step list tucks away into "View Journey" and only the final answer
+  // shows in chat. We never force it open again on our own afterward — the user can still
+  // click "View Journey" to re-expand the vertical trail.
+  //
+  // Note: this does NOT seal the card. A compound ask can be internally decomposed into
+  // several back-to-back phases, each with its own isLastStep:true — sealing right here would
+  // free the card's id before the NEXT phase (same ask) ever gets a chance to find and replace
+  // it via resetLiveGuideTimelineForSession, which is exactly what produced duplicate bubbles.
+  // Sealing only happens once we know for sure a genuinely different ask has started.
+  const justFinished = !guideActive && container.dataset.wasActive === '1';
+  if (justFinished) details.open = false;
+  container.dataset.wasActive = guideActive ? '1' : '0';
+
+  // Derive each row's state by PLAN step, aggregating the concrete step records that
+  // belong to it. gv2DotState is the unit-tested pure helper shared from content/utils.js.
+  const states = (typeof gv2DotState === 'function')
+    ? gv2DotState({
+        plan: currentGuidePlan,
+        records: currentGuideRecords,
+        verifications: currentGuideVerifications,
+        current,
+        guideActive
+      })
+    : [];
+
+  const count = Math.max(total || 0, states.length);
+  summary.textContent = guideActive
+    ? `Working… step ${Math.max(1, Math.min(current, count))} of ${count}`
+    : 'View Journey';
+
+  list.innerHTML = '';
+
+  // Initial-state node (step 0): a distinct first row, never counted as a step.
+  if (currentGuideInitial) {
+    list.appendChild(_buildGoalTimelineRow(0, 'Initial state', { status: 'done' }, currentGuideInitial, true));
+  }
+
+  for (let i = 1; i <= count; i++) {
+    const st = states[i - 1] || { status: i < current ? 'done' : (i === current ? 'current' : 'pending'), review: false, verify: null };
+    const rec = getGuideStepMeta(i);
+    list.appendChild(_buildGoalTimelineRow(i, getGuideStepLabel(i), st, rec, false));
+  }
+
+  if (guideActive && list.lastElementChild && typeof list.lastElementChild.scrollIntoView === 'function') {
+    list.lastElementChild.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+const CONF_CHART_SPECS = {
+  full: { label: 'Full (G·loop·progress)', color: '#ffa657' },
+  reduced: { label: 'No-progress (G·loop)', color: '#ff2d78' },
+  noloop: { label: 'No-loop (G·progress)', color: '#1bbf9c' }
+};
+let confChartVisibleVersions = { full: true, reduced: true, noloop: true };
+
+function _normalizeChartVisible(next, changedKey) {
+  const clean = {
+    full: next?.full !== false,
+    reduced: next?.reduced !== false,
+    noloop: next?.noloop !== false
+  };
+  if (!clean.full && !clean.reduced && !clean.noloop) clean[changedKey || 'full'] = true;
+  return clean;
+}
+
+function _confidenceChartRows(records) {
+  if (typeof gv2ComputeConfidence !== 'function') return [];
+  return (Array.isArray(records) ? records : [])
+    .slice()
+    .sort((a, b) => Number(a.step) - Number(b.step))
+    .map(r => {
+      if (r.grounded == null && r.loop == null && r.progress == null) return null;
+      const signals = { grounded: r.grounded, loop: r.loop, progress: r.progress };
+      const full = gv2ComputeConfidence(signals, 'full').confidence;
+      const reduced = gv2ComputeConfidence(signals, 'reduced').confidence;
+      const noloop = gv2ComputeConfidence(signals, 'noloop').confidence;
+      return (full != null || reduced != null || noloop != null) ? { step: r.step, full, reduced, noloop } : null;
+    })
+    .filter(Boolean);
+}
+
+function _confChartFilterHtml() {
+  return `<div class="pageguide-conf-chart-filters" role="group" aria-label="Confidence chart versions">
+    ${Object.keys(CONF_CHART_SPECS).map(key => `
+      <button type="button" class="pageguide-conf-chart-filter${confChartVisibleVersions[key] ? ' active' : ''}" data-chart-version="${key}" aria-pressed="${confChartVisibleVersions[key] ? 'true' : 'false'}">
+        <i style="background:${CONF_CHART_SPECS[key].color}"></i>${escapeHtml(CONF_CHART_SPECS[key].label)}
+      </button>`).join('')}
+  </div>`;
+}
+
+function _buildConfChartSvg(data, visible = confChartVisibleVersions) {
+  visible = _normalizeChartVisible(visible);
+  const keys = Object.keys(CONF_CHART_SPECS).filter(k => visible[k]);
+  const W = 300, H = 130, padL = 26, padR = 10, padT = 12, padB = 22;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const n = data.length;
+  const xAt = (i) => n <= 1 ? padL + innerW / 2 : padL + (i / (n - 1)) * innerW;
+  const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, Number(v) || 0))) * innerH;
+  const validFor = (key) => data.filter(d => d[key] != null);
+  const line = (key) => {
+    const pts = data.map((d, i) => d[key] == null ? null : `${xAt(i).toFixed(1)},${yAt(d[key]).toFixed(1)}`).filter(Boolean);
+    return pts.length ? `<polyline data-version="${key}" points="${pts.join(' ')}" fill="none" stroke="${CONF_CHART_SPECS[key].color}" stroke-width="1.8"/>` : '';
+  };
+  const dots = (key) => validFor(key).map(d => {
+    const i = data.indexOf(d);
+    return `<circle data-version="${key}" cx="${xAt(i).toFixed(1)}" cy="${yAt(d[key]).toFixed(1)}" r="2.4" fill="${CONF_CHART_SPECS[key].color}"/>`;
+  }).join('');
+  const grid = [0, 0.5, 1].map(v => {
+    const y = yAt(v).toFixed(1);
+    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(128,128,128,.25)" stroke-width="1"/>`
+      + `<text x="${padL - 4}" y="${(yAt(v) + 3).toFixed(1)}" text-anchor="end" font-size="8" fill="currentColor" opacity=".55">${Math.round(v * 100)}</text>`;
+  }).join('');
+  const xlabels = data.map((d, i) => `<text x="${xAt(i).toFixed(1)}" y="${H - 7}" text-anchor="middle" font-size="8" fill="currentColor" opacity=".55">${escapeHtml(String(d.step))}</text>`).join('');
+  return `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Confidence comparison chart">
+      ${grid}
+      ${keys.map(line).join('')}
+      ${keys.map(dots).join('')}
+      ${xlabels}
+    </svg>
+    <div class="pageguide-conf-chart-legend">
+      ${keys.map(k => `<span><i style="background:${CONF_CHART_SPECS[k].color}"></i>${escapeHtml(CONF_CHART_SPECS[k].label)}</span>`).join('')}
+    </div>`;
+}
+
+async function _refreshConfChartFromStore() {
+  if (!visibleJourneySessionId || typeof rewindGetIndex !== 'function') return;
+  try {
+    let idx = null;
+    if (typeof rewindVerifyScreenshots === 'function') idx = await rewindVerifyScreenshots(visibleJourneySessionId);
+    else idx = await rewindGetIndex(visibleJourneySessionId);
+    if (idx && Array.isArray(idx.steps)) {
+      currentGuideRecords = idx.steps.filter(m => !(m.isInitial || Number(m.step) === 0)).map(m => Object.assign({}, m, { sessionId: visibleJourneySessionId }));
+      currentGuideInitial = idx.steps.find(m => m.isInitial || Number(m.step) === 0) || currentGuideInitial;
+    }
+  } catch (e) {}
+}
+
+function _renderConfChartBody() {
+  const body = document.getElementById('pageguide-conf-chart-body');
+  if (!body) return;
+  const data = _confidenceChartRows(currentGuideRecords);
+  if (!data.length) {
+    body.innerHTML = '<div class="pageguide-conf-chart-empty">No steps with confidence signals yet.</div>';
+    return;
+  }
+  body.innerHTML = _buildConfChartSvg(data, confChartVisibleVersions);
+}
+
+// Debug-only chart: collapsed by default and rendered lazily when opened.
+function renderConfChart() {
+  const box = document.getElementById('pageguide-conf-chart');
+  if (!box) return;
+  if (!window.__pgDebugEnabled) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const data = _confidenceChartRows(currentGuideRecords);
+  if (!data.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const wasOpen = !!box.querySelector('#pageguide-conf-chart-wrap')?.open;
+  box.innerHTML = `
+    <details id="pageguide-conf-chart-wrap" ${wasOpen ? 'open' : ''}>
+      <summary class="pageguide-conf-chart-summary">📈 Confidence chart</summary>
+      <div class="pageguide-conf-chart-title">Confidence by step — Full vs No-progress vs No-loop</div>
+      <div class="pageguide-conf-chart-actions">
+        <button type="button" class="pageguide-conf-chart-refresh" id="pageguide-conf-chart-refresh">Refresh chart</button>
+      </div>
+      ${_confChartFilterHtml()}
+      <div id="pageguide-conf-chart-body"></div>
+    </details>`;
+  const wrap = box.querySelector('#pageguide-conf-chart-wrap');
+  const drawIfOpen = () => { if (wrap.open) _renderConfChartBody(); };
+  wrap.addEventListener('toggle', drawIfOpen);
+  box.querySelector('#pageguide-conf-chart-refresh')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!window.confirm('Refresh the confidence chart from the latest saved step data?')) return;
+    await _refreshConfChartFromStore();
+    _renderConfChartBody();
+  });
+  box.querySelectorAll('[data-chart-version]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.chartVersion;
+      confChartVisibleVersions = _normalizeChartVisible({ ...confChartVisibleVersions, [key]: !confChartVisibleVersions[key] }, key);
+      renderConfChart();
+    });
+  });
+  if (wasOpen) _renderConfChartBody();
+  box.style.display = '';
+}
+
+// Creates (or returns the existing) "View Journey" bubble INSIDE the chat message stream,
+// at the position corresponding to whenever the current guide session started — this is
+// what replaces the old fixed card pinned above the chat. There is only ever one LIVE/
+// interactive instance of it at a time (id="pageguide-goal"); once a session finishes or a
+// new one starts, the old one is "sealed" (see _sealGoalCardMessage) so its id frees up and
+// a brand-new bubble is created fresh for the next session, further down the chat.
+// The recap — the agent's summary, its milestones and its final verdict — is the one part of a run
+// that rewind does NOT persist (rewind_store.js keeps steps and screenshots; _gv2BuildRecap's output
+// is rendered and then lives only in the volatile per-tab session). It is also exactly what the guide
+// study asks about, so it is kept here per session for the capture button to pick up.
+const _lastRecapBySession = new Map();
+function _rememberGuideRecap(recap) {
+  const sid = recap?.sessionId || currentGuideSessionId;
+  if (sid && recap) _lastRecapBySession.set(String(sid), recap);
+}
+window._rememberGuideRecap = _rememberGuideRecap;
+
+function ensureGoalCardMessage() {
+  let card = document.getElementById('pageguide-goal');
+  if (card) return card;
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return null;
+  card = document.createElement('div');
+  card.id = 'pageguide-goal';
+  card.className = 'pageguide-goal pageguide-goal--chat';
+  card.dataset.askId = String(_currentAskId);
+  card.innerHTML = `
+    <div class="pageguide-goal-main">
+      <div class="pageguide-goal-title-row">
+        <div class="pageguide-goal-title" id="pageguide-goal-title"></div>
+        <div class="pageguide-goal-journey-actions" id="pageguide-goal-journey-actions">
+          <button class="pageguide-quick-btn pageguide-card-export-btn" id="pageguide-card-export-pdf" title="Export the guide journey as a PDF">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12"/>
+                <path d="m7 10 5 5 5-5"/>
+                <path d="M5 21h14"/>
+              </svg>
+            </span>
+          </button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-save-trajectory-btn" id="pageguide-card-save-trajectory" title="Save this guide trajectory to current repo" style="display:none;">
+            <span class="pageguide-inline-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </span>
+          </button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-study" title="Capture this trajectory for the user study" style="display:none;">🎬</button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-annotation" title="Capture this trajectory for the annotator website" style="display:none;">📝</button>
+          <button class="pageguide-quick-btn pageguide-card-export-btn pageguide-capture-study-btn" id="pageguide-card-capture-model-performance" title="Capture this trajectory for the model-performance table (with its model and cost)" style="display:none;">📈</button>
+          <span class="pageguide-journey-cost" id="pageguide-card-cost"></span>
+        </div>
+      </div>
+      <div class="pageguide-goal-timeline" id="pageguide-goal-timeline"></div>
+      <div class="pageguide-plan-list" id="pageguide-plan-list" style="display:none;"></div>
+      <div class="pageguide-conf-chart" id="pageguide-conf-chart" style="display:none;"></div>
+    </div>
+  `;
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('pageguide-card-export-pdf')?.addEventListener('click', () => exportJourneyPdf());
+  document.getElementById('pageguide-card-save-trajectory')?.addEventListener('click', () => saveTrajectoryToRepo());
+  document.getElementById('pageguide-card-capture-study')?.addEventListener('click', () => captureTrajectoryForStudy());
+  document.getElementById('pageguide-card-capture-annotation')?.addEventListener('click', () => captureTrajectoryForAnnotation());
+  document.getElementById('pageguide-card-capture-model-performance')?.addEventListener('click', () => captureTrajectoryForModelPerformance());
+  // Researcher affordances (capture-for-study, save-trajectory) are debug-mode only; a card can be
+  // built after the flag is already known, so apply it here too rather than waiting for a toggle.
+  card.querySelectorAll('.pageguide-capture-study-btn, .pageguide-save-trajectory-btn').forEach(el => {
+    el.style.display = window.__pgDebugEnabled ? '' : 'none';
+  });
+  updateJourneyCostChip(card);
+  return card;
+}
+
+/**
+ * Point this card's cost chip at the session it is showing, and price it.
+ *
+ * Called on creation and again whenever the card re-renders, because the session id is not known
+ * when the card is built — the first step has to arrive before there is a run to price. A card
+ * showing a recalled journey prices THAT journey, not the live one, which is why the session is
+ * written onto the chip rather than read from a global at fill time.
+ */
+function updateJourneyCostChip(root = document) {
+  const chip = root?.querySelector?.('#pageguide-card-cost')
+    || document.getElementById('pageguide-card-cost');
+  if (!chip) return;
+  const sid = visibleJourneySessionId || currentGuideSessionId || '';
+  if (!window.__pgDebugEnabled || !sid) {
+    chip.style.display = 'none';
+    chip.textContent = '';
+    return;
+  }
+  chip.style.display = '';
+  chip.className = 'pageguide-journey-cost pageguide-cost-chip';
+  chip.dataset.costSession = sid;
+  delete chip.dataset.costFrom;
+  refreshCostChips();
+}
+
+// Removes an empty card that never got real content (e.g. the route flipped away before any
+// step arrived). A card that already has content is left alone — once it's shown something
+// real, it's part of the chat history and should stay, matching every other chat bubble.
+function hideGoalCardMessageIfEmpty() {
+  const card = document.getElementById('pageguide-goal');
+  if (card && card.dataset.hasContent !== '1') card.remove();
+}
+
+// "Seals" the currently-live View Journey bubble: frees its id (so the next session gets a
+// fresh, fully interactive card) and strips the click/hover listeners off its rows. Old rows'
+// listeners read LIVE global state (currentGuideRecords/currentGuidePlan/etc.) via
+// showGoalStepPreview, which by definition has moved on to the NEXT session once one starts —
+// so a sealed card is left as a plain, correct static record instead of a misleading one.
+function _sealGoalCardMessage() {
+  const card = document.getElementById('pageguide-goal');
+  if (!card) return;
+  if (card.dataset.hasContent !== '1') { card.remove(); return; }
+  card.id = '';
+  card.classList.add('pageguide-goal--sealed');
+  card.querySelectorAll('.pageguide-goal-row').forEach(row => { row.replaceWith(row.cloneNode(true)); });
+  ['pageguide-goal-title', 'pageguide-goal-timeline', 'pageguide-plan-list', 'pageguide-conf-chart',
+   'pageguide-goal-journey-actions', 'pageguide-card-export-pdf', 'pageguide-card-save-trajectory',
+   'pageguide-card-capture-study', 'pageguide-goal-collapse'].forEach(id => {
+    const el = card.querySelector(`#${id}`);
+    if (el) el.id = '';
+  });
+}
+
+function renderGoalCard({ prompt, route, title, step, total } = {}) {
+  if (prompt != null || route != null) {
+    currentGoal = {
+      prompt: prompt != null ? prompt : currentGoal?.prompt || '',
+      route: route || currentGoal?.route || null
+    };
+  }
+  if (title != null) currentGuideTitle = title || '';
+  if (typeof step === 'number') currentGuideStep = step;
+  if (typeof total === 'number') {
+    currentGuidePlan = Array.from({ length: total }, (_, i) => currentGuidePlan[i] || { n: i + 1, goal: '' });
+  }
+
+  const activeRoute = currentGoal?.route || panelLastRoute || panelForcedMode;
+  const normalized = _normalizeRouteForTab(activeRoute);
+  const isGuide = normalized === 'guide' || currentGuidePlan.length > 0 || currentGuideStep > 0;
+  document.body.classList.toggle('pageguide-guide-mode', !!isGuide);
+  // The View Journey card (prompt repeated with Export/Save icons + step timeline) is a
+  // Guide-only concept. Previously only 'find'/'hide' were excluded here, which left 'ask' (the
+  // route plain Find/Q&A questions actually take) falling through and getting a card of its own.
+  if (!isGuide) {
+    hideGoalCardMessageIfEmpty();
+    refreshGuideOnlyActions();
+    return;
+  }
+  const promptText = currentGoal?.prompt || '';
+  const titleText = isGuide ? (currentGuideTitle || _truncateText(promptText)) : _truncateText(promptText);
+  if (!titleText) {
+    hideGoalCardMessageIfEmpty();
+    return;
+  }
+
+  const card = ensureGoalCardMessage();
+  if (!card) return;
+  card.dataset.hasContent = '1';
+  // The session id is not known when the card is first built — the run has to produce a step
+  // before there is anything to price — so the chip is re-pointed on every render.
+  updateJourneyCostChip(card);
+
+  const titleEl = document.getElementById('pageguide-goal-title');
+  const timeline = document.getElementById('pageguide-goal-timeline');
+  const planList = document.getElementById('pageguide-plan-list');
+
+  if (titleEl) titleEl.textContent = titleText;
+
+  const totalSteps = Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0);
+  let planCompleted = 0;
+  let highestDone = 0;
+  
+  currentGuideRecords.forEach(r => {
+    const cps = Number(r.completedPlanStep) || Number(r.meta?.completedPlanStep) || 0;
+    if (cps > highestDone) highestDone = cps;
+  });
+
+  if (isGuide && totalSteps > 0 && currentGuideStep > 0) {
+    const safeStep = Math.max(1, Math.min(currentGuideStep, totalSteps));
+    planCompleted = highestDone;
+    renderGoalTimeline(safeStep, totalSteps);
+    renderConfChart();
+  } else if (timeline) {
+    timeline.innerHTML = '';
+    delete timeline.dataset.wasActive;
+  }
+  
+  if (planList) {
+    if (isGuide && currentGuidePlan.length) {
+      planList.style.display = 'flex';
+      planList.innerHTML = currentGuidePlan.map((p, i) => {
+        const n = Number(p?.n || i + 1) || i + 1;
+        const goal = String(p?.goal || p?.description || p?.step || '').trim();
+        const isDone = n <= highestDone;
+        const isCurrent = !isDone && n === highestDone + 1;
+        const cls = isDone ? ' done' : (isCurrent ? ' current' : '');
+        return `<div class="pageguide-plan-row${cls}"><span class="pageguide-plan-num">${escapeHtml(String(n))}.</span><span class="pageguide-plan-goal">${escapeHtml(goal)}</span></div>`;
+      }).join('');
+    } else {
+      planList.style.display = 'none';
+      planList.innerHTML = '';
+    }
+  }
+
+  if (isGuide) _ensureGoalCollapseBtn();
+  refreshGuideOnlyActions();
+  checkShowBranchButton();
+}
+
+// Steer / rebranch: drop timeline steps AFTER `step` so the UI matches the truncated rewind
+// store. Steps 1…step stay; the agent appends new steps as it re-runs from step+1.
+function pruneGuideAfter(step) {
+  const n = Number(step);
+  if (!Number.isFinite(n)) return;
+  currentGuideRecords = currentGuideRecords.filter(r => Number(r.step) <= n);
+  if (Array.isArray(currentGuidePlan) && currentGuidePlan.length > n) currentGuidePlan = currentGuidePlan.slice(0, n);
+  if (currentGuideVerifications) {
+    Object.keys(currentGuideVerifications).forEach(k => { if (Number(k) > n) delete currentGuideVerifications[k]; });
+  }
+  currentGuideStep = n;
+  renderGoalCard({ route: 'guide', step: n });
+}
+if (typeof window !== 'undefined') window.pruneGuideAfter = pruneGuideAfter;
+
+function resetLiveGuideTimelineForSession(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || currentGuideSessionId === sid) return false;
+
+  // The agent sometimes splits ONE user request into multiple internal phases, each getting
+  // its own session id (e.g. "go to bbc news" as one phase, "find 2 news items" as another) —
+  // but it's still visually the same task to the user. Comparing titles turned out to be too
+  // fragile (state that feeds the title can get cleared between phases, and a user can also
+  // retype the identical prompt as a genuinely NEW ask). Instead, tag the card with the id of
+  // the user ask that created it (_currentAskId, bumped once per real sendMessage() call): a
+  // phase continuation always happens under the SAME ask id, so this is reliable regardless of
+  // title text. Only a real new ask (a fresh _currentAskId) seals the old card as history.
+  const existingCard = document.getElementById('pageguide-goal');
+  const sameAskContinuing = !!existingCard && existingCard.dataset.askId === String(_currentAskId);
+
+  currentGuideSessionId = sid;
+  currentGuidePlan = Array.isArray(options.plan) ? options.plan : [];
+  currentGuideTitle = options.title || '';
+  currentGuideStep = 0;
+  currentGuideRecords = [];
+  currentGuideInitial = null;
+  currentGuideVerifications = {};
+  currentGuideWarnings = {};
+  goalDotsExpanded = false;
+  guideTimelineCheckpointSteps = null;
+  visibleJourneySessionId = null;
+  visibleJourneyTitle = '';
+  visibleJourneyRecalled = false;
+  hideGoalStepPreview();
+  if (sameAskContinuing) {
+    existingCard.remove();
+  } else {
+    // A genuinely different task is starting (possibly right after a previous one finished, in
+    // the same chat). Seal whatever card is currently live so it's left behind as static history
+    // and this new task gets its own fresh, fully-interactive "View Journey" bubble further down
+    // the chat — never reusing/overwriting the previous task's card.
+    _sealGoalCardMessage();
+  }
+  updateTabChipDoneState(false);
+  return true;
+}
+
+function clearGoalAndStepPanel() {
+  guidePaused = false;
+  currentGoal = null;
+  currentGuidePlan = [];
+  currentGuideTitle = '';
+  currentGuideStep = 0;
+  currentGuideRecords = [];
+  currentGuideInitial = null;
+  currentGuideSessionId = null;
+  currentGuideVerifications = {};
+  currentGuideWarnings = {};
+  goalDotsExpanded = false;
+  guideTimelineCheckpointSteps = null;
+  _lastFindMessageStep = null;
+  _lastVisualHighlightStep = null;
+  _lastWatchVideoMessageStep = null;
+  _lastRecapKey = null;
+  _lastAnswerCardKey = null;
+  visibleJourneySessionId = null;
+  visibleJourneyTitle = '';
+  visibleJourneyRecalled = false;
+  hideGoalStepPreview();
+  hideGoalCardMessageIfEmpty();
+  const stepPanel = document.getElementById('pageguide-step-panel');
+  const cardExportBtn = document.getElementById('pageguide-card-export-pdf');
+  if (stepPanel) {
+    stepPanel.style.display = 'none';
+    stepPanel.innerHTML = '';
+  }
+  if (cardExportBtn) cardExportBtn.disabled = true;
+  const cardSaveBtn = document.getElementById('pageguide-card-save-trajectory');
+  if (cardSaveBtn) cardSaveBtn.disabled = true;
+  updateTabChipDoneState(false);
+  refreshGuideOnlyActions();
+}
+
+function setExportEnabled(on) {
+  const cardBtn = document.getElementById('pageguide-card-export-pdf');
+  if (cardBtn) cardBtn.disabled = !on;
+  const saveBtn = document.getElementById('pageguide-card-save-trajectory');
+  if (saveBtn) saveBtn.disabled = !on;
+  const captureBtn = document.getElementById('pageguide-card-capture-study');
+  if (captureBtn) captureBtn.disabled = !on;
+  refreshGuideOnlyActions();
+}
+
+function refreshGuideOnlyActions() {
+  const hasGuide = !!(currentGuidePlan.length || currentGuideRecords.length || currentGuideStep);
+  document.body.classList.toggle('pageguide-guide-mode', hasGuide);
+  hideMoreMenu();
+  document.querySelectorAll('.pageguide-guide-only-action').forEach(el => {
+    el.style.display = hasGuide ? '' : 'none';
+  });
+  updateGuidePauseButton();
+}
+
+function updateGuidePauseButton() {
+  const btn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
+  if (!btn) return;
+  const show = !!(guideActive || guidePaused);
+  btn.style.display = show ? '' : 'none';
+  btn.classList.toggle('is-resume', !!guidePaused);
+  btn.textContent = guidePaused ? 'Resume' : 'Pause';
+  btn.title = guidePaused ? 'Resume guide' : 'Pause guide';
+  btn.setAttribute('aria-label', guidePaused ? 'Resume guide' : 'Pause guide');
+  btn.disabled = false;
+  if (stopBtn) {
+    stopBtn.style.display = guidePaused ? '' : 'none';
+    stopBtn.disabled = false;
+  }
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const local = await chrome.storage.local.get(['guideConfidenceThreshold']);
+    guideConfidenceThreshold = _normalizeConfidenceThreshold(local.guideConfidenceThreshold);
+  } catch (e) {}
+
   // Get current tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab?.id;
+  renderWorkingTabChip(tab);
   
   // Attach event listeners
   document.getElementById('pageguide-settings')?.addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
   });
+  document.getElementById('pageguide-close')?.addEventListener('click', () => window.close());
 
   // Theme toggle (light / dark mode)
   const themeToggleBtn = document.getElementById('pageguide-theme-toggle');
+  const themeIcon = (isLight) => isLight
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8 8 0 1 1 9.5 3.5 6.5 6.5 0 0 0 20.5 14.5Z"/></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m4.9 19.1 1.4-1.4"/><path d="m17.7 6.3 1.4-1.4"/></svg>';
   const applyTheme = (isLight) => {
     document.body.classList.toggle('light-mode', isLight);
-    if (themeToggleBtn) themeToggleBtn.textContent = isLight ? '☀️' : '🌙';
+    if (themeToggleBtn) themeToggleBtn.innerHTML = themeIcon(isLight);
   };
   const savedTheme = localStorage.getItem('pageguide-theme');
-  applyTheme(savedTheme === 'light');
+  applyTheme(savedTheme ? savedTheme === 'light' : true);
   themeToggleBtn?.addEventListener('click', () => {
     const isLight = !document.body.classList.contains('light-mode');
     applyTheme(isLight);
@@ -49,8 +2376,70 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('pageguide-new-chat')?.addEventListener('click', () => resetChat());
+  document.getElementById('pageguide-tab-chip-close')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (currentGuideWorkingStatus) return;
+    hideWorkingTabChip();
+  });
+
+  document.getElementById('pageguide-show-branch-btn')?.addEventListener('click', () => {
+    const backdrop = document.getElementById('pageguide-branch-backdrop');
+    if (backdrop) backdrop.style.display = 'block';
+    showBranchTree();
+  });
   
-  document.getElementById('pageguide-send').addEventListener('click', sendMessage);
+  const closeBranchOverlay = () => {
+    _hideBranchTreeHover(true);
+    const overlay = document.getElementById('pageguide-branch-overlay');
+    const backdrop = document.getElementById('pageguide-branch-backdrop');
+    if (overlay) overlay.style.display = 'none';
+    if (backdrop) backdrop.style.display = 'none';
+  };
+
+  document.addEventListener('click', (e) => {
+    if (_branchTreeHoverCard && !e.target.closest('.pg-tree-hovercard') && !e.target.closest('.pg-tree-node')) {
+      _hideBranchTreeHover(true);
+    }
+  });
+  
+  document.getElementById('pageguide-branch-close')?.addEventListener('click', closeBranchOverlay);
+  document.getElementById('pageguide-branch-backdrop')?.addEventListener('click', closeBranchOverlay);
+
+  const updateTreeScale = (scale) => {
+    currentTreeScale = Math.max(0.5, Math.min(2.0, scale));
+    const content = document.getElementById('pg-tree-content');
+    const label = document.getElementById('pg-zoom-label');
+    if (content) content.style.transform = `scale(${currentTreeScale})`;
+    if (label) label.textContent = `${Math.round(currentTreeScale * 100)}%`;
+  };
+
+  document.getElementById('pg-zoom-in')?.addEventListener('click', () => {
+    updateTreeScale(currentTreeScale + 0.1);
+  });
+  document.getElementById('pg-zoom-out')?.addEventListener('click', () => {
+    updateTreeScale(currentTreeScale - 0.1);
+  });
+  document.getElementById('pg-zoom-reset')?.addEventListener('click', () => {
+    updateTreeScale(1.0);
+  });
+  
+  document.getElementById('pageguide-send').addEventListener('click', () => {
+    if (panelRunning) stopRun(); else sendMessage();
+  });
+  document.getElementById('pageguide-guide-pause')?.addEventListener('click', () => {
+    if (guidePaused) resumeGuideFromPanel();
+    else pauseGuide('Guide paused. Resume when you are ready.');
+  });
+  document.getElementById('pageguide-guide-stop-paused')?.addEventListener('click', () => {
+    stopPausedGuideWithRecap();
+  });
+  initGuideModeToggle();
+  initGuideVisualInputToggle();
+  initEndSummaryToggle();
+  initVisualRecapToggle();
+  initNonGroundingToggle();
+  initEvidenceModeToggle();
+  initPanelMenus();
   document.getElementById('pageguide-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
       const menu = document.getElementById('pageguide-slash-menu');
@@ -62,20 +2451,58 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   
   // Quick action buttons
-  document.querySelectorAll('.pageguide-quick-btn').forEach(btn => {
+  document.querySelectorAll('[data-action]').forEach(btn => {
     btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
   });
   
   // PDF Reader button
   document.getElementById('pageguide-pdf-reader')?.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('pdf-viewer/viewer.html') });
+    hideMoreMenu();
   });
   
   // Chat history
   document.getElementById('pageguide-open-history')?.addEventListener('click', showHistoryPanel);
   document.getElementById('pageguide-history-close')?.addEventListener('click', hideHistoryPanel);
   document.getElementById('pageguide-history-back')?.addEventListener('click', () => renderHistoryList());
-  document.getElementById('pageguide-save-chat')?.addEventListener('click', saveCurrentChat);
+  document.getElementById('pageguide-save-chat')?.addEventListener('click', async () => {
+    await saveCurrentChat();
+  });
+  // User Study (defined in study.js, loaded after this file)
+  document.getElementById('pageguide-open-study')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('study');
+  });
+  document.getElementById('pageguide-record-study')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record');
+  });
+  document.getElementById('pageguide-record-guide-study')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-guide');
+  });
+  document.getElementById('pageguide-record-annotation')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-annotation');
+  });
+  document.getElementById('pageguide-record-model-performance')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('record-model-performance');
+  });
+  document.getElementById('pageguide-model-comparison')?.addEventListener('click', () => {
+    hideMoreMenu();
+    if (typeof window.openStudyPanel === 'function') window.openStudyPanel('compare');
+  });
+  // Export PDF / Save trajectory now live on the dynamically-created "View Journey" chat
+  // bubble (see ensureGoalCardMessage), which attaches their click listeners itself at
+  // creation time since the buttons don't exist in the static HTML anymore.
+  setExportEnabled(false);
+  try {
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex();
+      setExportEnabled(!!idx?.steps?.length);
+    }
+  } catch (e) {}
 
   // No-page-context toggle
   document.getElementById('pageguide-no-page-ctx')?.addEventListener('click', () => {
@@ -83,24 +2510,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btn = document.getElementById('pageguide-no-page-ctx');
     if (btn) {
       btn.textContent = noPageContext ? '💭 Page: Off' : '🌐 Page: On';
+      btn.innerHTML = noPageContext ? `${UI_ICONS.pageOff}Page: Off` : `${UI_ICONS.globe}Page: On`;
       btn.classList.toggle('pageguide-quick-btn--active', noPageContext);
       btn.title = noPageContext
         ? 'Page context OFF — answers from AI knowledge only. Click to re-enable.'
         : 'Toggle: answer from AI knowledge only (ignore current page)';
     }
+    hideMoreMenu();
   });
 
   // Combined upload handling (images + text files share one button)
   const imageUpload = document.getElementById('pageguide-image-upload');
   const removeImageBtn = document.getElementById('pageguide-remove-image');
-  const removeFileBtn = document.getElementById('pageguide-remove-file');
-  const removeSelectedTextBtn = document.getElementById('pageguide-remove-selected-text');
 
   if (imageUpload) imageUpload.addEventListener('change', handleUpload);
   if (removeImageBtn) removeImageBtn.addEventListener('click', clearUploadedImage);
-  if (removeFileBtn) removeFileBtn.addEventListener('click', clearUploadedFile);
-  if (removeSelectedTextBtn) {
-    removeSelectedTextBtn.addEventListener('click', clearSelectedText);
+
+  // File / selected-text chips are (re)built dynamically, so their remove buttons
+  // are wired via one delegated listener on the chip row.
+  const chipRow = document.getElementById('pageguide-attachment-chips');
+  if (chipRow) {
+    chipRow.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-chip-remove]');
+      if (!btn) return;
+      const kind = btn.getAttribute('data-chip-remove');
+      if (kind === 'file') clearUploadedFile();
+      else if (kind === 'text') clearSelectedText();
+    });
   }
 
   // Paste image support (Ctrl+V / Cmd+V)
@@ -124,12 +2560,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Listen for tab changes.
   // Save the outgoing tab's session, then restore the incoming tab's session
   // (or start fresh if this is the first time visiting that tab).
-  // Guide-triggered tab transitions are left untouched (guideActive guard).
+  // Transitions onto the guide's own tab are normally left untouched (guideTabId guard) — switching
+  // to any OTHER tab always gets its own separate session, even while the guide keeps running
+  // in the background on its tab. That guard is skipped if messages were queued for the tab being
+  // activated (see hasQueuedForThisTab below), since a queue only exists if the live view had
+  // already moved on to some other tab in the meantime.
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const prevTabId = currentTabId;
     currentTabId = activeInfo.tabId;
+    _hiddenTabChips.delete(activeInfo.tabId);
+    refreshWorkingTabChip(activeInfo.tabId);
 
-    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive)) return;
+    // The guideTabId guard normally assumes landing on the guide's own tab means the live view
+    // never diverged from it (e.g. the guide itself opened/activated that tab). That assumption
+    // breaks if messages were queued for this tab (see _pendingBackgroundGuideMessages) — a queue
+    // only builds up once currentTabId has actually moved away from this tab, which means the
+    // live DOM right now belongs to whatever OTHER tab was showing, not this one. Treat that case
+    // as a real switch too, so this tab's own session gets saved-into/restored-from properly
+    // instead of drained on top of a stale, unrelated tab's chat.
+    const hasQueuedForThisTab = _pendingBackgroundGuideMessages.has(activeInfo.tabId);
+    if (!_shouldResetOnTabSwitch(prevTabId, activeInfo.tabId, guideActive, guideTabId) && !hasQueuedForThisTab) return;
 
     // Snapshot the outgoing tab's conversation
     _saveTabSession(prevTabId);
@@ -146,12 +2596,90 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       await resetChat(false);
     }
+
+    // Replay any guide progress/completion messages that arrived for this tab while it was in
+    // the background — now that currentTabId matches, they'll render into this tab's own chat
+    // instead of wherever the user was looking when they originally arrived.
+    _drainPendingGuideMessages(activeInfo.tabId);
   });
 
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (tabId !== currentTabId) return;
+    if (!('title' in changeInfo) && !('favIconUrl' in changeInfo) && !('url' in changeInfo) && changeInfo.status !== 'complete') return;
+    renderWorkingTabChip(tab);
+  });
 
   // Clean up sessions for closed tabs to avoid memory leaks
   chrome.tabs.onRemoved.addListener((tabId) => {
     _tabSessions.delete(tabId);
+    _hiddenTabChips.delete(tabId);
+    _pendingBackgroundGuideMessages.delete(tabId);
+  });
+
+  // Debug prompt button listener
+  const debugPromptBtn = document.getElementById('pageguide-debug-prompt-btn');
+  if (debugPromptBtn) {
+    debugPromptBtn.addEventListener('click', async () => {
+      try {
+        const local = await chrome.storage.local.get(['debugPrompts', 'lastDebugPrompt']);
+        const livePrompts = Array.isArray(local.debugPrompts) ? local.debugPrompts : [];
+        if (livePrompts.length === 0 && local.lastDebugPrompt) {
+          livePrompts.push(local.lastDebugPrompt);
+        }
+
+        let savedSessions = [];
+        if (typeof rewindGetSessions === 'function') {
+          try {
+            savedSessions = await rewindGetSessions();
+          } catch (e) {
+            console.warn('Failed to fetch saved sessions:', e);
+          }
+        }
+
+        if (livePrompts.length > 0 || savedSessions.length > 0) {
+          const defaultSessionId = visibleJourneySessionId || (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.getSessionId === 'function' ? RewindTimeline.getSessionId() : null);
+          openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId);
+        } else {
+          alert('No prompt has been sent or saved in this session yet.');
+        }
+      } catch (e) {
+        console.error('Failed to load debug prompts:', e);
+      }
+    });
+  }
+
+  // Load debugEnabled setting initially
+  try {
+    const settings = await chrome.storage.sync.get(['debugEnabled', 'alwaysShowPromptBtn']);
+    updateDebugButtonVisibility(settings.debugEnabled === true, settings.alwaysShowPromptBtn === true);
+  } catch (e) {}
+
+  // Listen for sync storage changes to update debug button visibility
+  chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace === 'sync' && ('debugEnabled' in changes || 'alwaysShowPromptBtn' in changes)) {
+      chrome.storage.sync.get(['debugEnabled', 'alwaysShowPromptBtn']).then(s => {
+        updateDebugButtonVisibility(s.debugEnabled === true, s.alwaysShowPromptBtn === true);
+      });
+    }
+    if (namespace === 'local' && changes.guideConfidenceThreshold) {
+      guideConfidenceThreshold = _normalizeConfidenceThreshold(changes.guideConfidenceThreshold.newValue);
+      renderGoalCard({ route: currentGoal?.route || 'guide', step: currentGuideStep });
+    }
+    // Keep the synchronous render-path mirror fresh even if the flag is changed from somewhere
+    // other than this panel's own toggle (another panel instance, or storage edited directly).
+    if (namespace === 'local' && changes[GUIDE_NON_GROUNDING_KEY]) {
+      panelNonGrounding = _normalizeNonGrounding(changes[GUIDE_NON_GROUNDING_KEY].newValue) === 'on';
+    }
+    if (namespace === 'local' && changes[GUIDE_EVIDENCE_MODE_KEY]) {
+      panelEvidenceMode = _normalizeEvidenceMode(changes[GUIDE_EVIDENCE_MODE_KEY].newValue);
+    }
+    // A call's price arrives AFTER the answer it paid for is already on screen — the service worker
+    // appends to the ledger when the response settles. Repainting on the ledger changing is what
+    // makes a journey's total climb as the run goes, instead of showing a stale number until the
+    // next render happens to come along.
+    if (namespace === 'local' && changes[PAGEGUIDE_COST_LEDGER_KEY]) {
+      refreshCostChips(changes[PAGEGUIDE_COST_LEDGER_KEY].newValue);
+    }
   });
 });
 
@@ -161,6 +2689,41 @@ document.addEventListener('DOMContentLoaded', async () => {
  * 1. Web page citations: [N:"text"] or [N] - scrolls to indexed element
  * 2. PDF citations: [Page N: "text"] - navigates to PDF page
  */
+function _citationPlainTextForComparison(s) {
+  return String(s || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function _placeholderCitationEchoesProse(before, after, span) {
+  const spanWords = _citationPlainTextForComparison(span).split(/\s+/).filter(Boolean);
+  if (!spanWords.length) return true;
+  const beforeWords = _citationPlainTextForComparison(before).split(/\s+/).filter(Boolean).join(' ');
+  const afterWords = _citationPlainTextForComparison(after).split(/\s+/).filter(Boolean).join(' ');
+  const spanText = spanWords.join(' ');
+  if (beforeWords.endsWith(spanText) || afterWords.startsWith(spanText)) return true;
+  if (spanWords.length < 3) return false;
+  const windowText = `${beforeWords} ${afterWords}`;
+  const hits = spanWords.filter(w => windowText.includes(w)).length;
+  return hits / spanWords.length >= 0.7;
+}
+
+function _stripInvalidPlaceholderCitations(text) {
+  return String(text || '').replace(/\[N\s*:\s*(?:"([^\]]*)"|'([^\]]*)'|([^\]"']+))\s*\]|\[N\]/gi,
+    (match, dq, sq, uq, offset, whole) => {
+      const span = dq || sq || uq || '';
+      if (!span) return '';
+      const before = whole.slice(Math.max(0, offset - span.length - 160), offset);
+      const after = whole.slice(offset + match.length, offset + match.length + span.length + 160);
+      return _placeholderCitationEchoesProse(before, after, span) ? '' : escapeHtml(span);
+    });
+}
+
 function parseCitations(text, isPdf = false) {
   // Normalize curly/smart quotes to straight quotes first
   const normalizedText = text
@@ -168,7 +2731,12 @@ function parseCitations(text, isPdf = false) {
     .replace(/['']/g, "'");
   
   // Use normalized text for parsing
-  text = normalizedText;
+  // Malformed-but-recoverable marker shapes are repaired BEFORE the strip, which would otherwise
+  // throw the indices away with the rest of the placeholder. Shared with the content scripts (see
+  // normalizeCitationMarkers in content/utils.js) so the panel, the highlighter and the anchor
+  // resolver all agree on what counts as a citation.
+  text = _stripInvalidPlaceholderCitations(
+    typeof normalizeCitationMarkers === 'function' ? normalizeCitationMarkers(normalizedText) : normalizedText);
   
   let result = '';
   let lastIndex = 0;
@@ -283,6 +2851,14 @@ function parseCitations(text, isPdf = false) {
   
   return result;
 }
+if (typeof window !== 'undefined') {
+  window.parseCitations = parseCitations;
+  window._stripInvalidPlaceholderCitations = _stripInvalidPlaceholderCitations;
+  // Named for the study overlay, which renders a banked answer through the same chain the chat uses
+  // — that identity is the whole point of the Grounded tab. A no-op at runtime (a top-level function
+  // is already a window property); it is here so the dependency is written down.
+  window.parseMarkdown = parseMarkdown;
+}
 
 /**
  * Escape HTML special characters
@@ -347,10 +2923,19 @@ function parseMarkdown(text) {
   // Clean up any empty paragraphs and fix structure
   result = result.replace(/<p><\/p>/g, '');
   result = result.replace(/<br><br>/g, '</p><p>');
+  result = result.replace(/<br>\s*(<ul>)/g, '$1');
+  result = result.replace(/(<\/ul>)\s*<br>/g, '$1');
   
   // Wrap in paragraph if not already wrapped with a block element
   if (!result.startsWith('<h') && !result.startsWith('<ul') && !result.startsWith('<pre') && !result.startsWith('<p')) {
-    result = '<p>' + result + '</p>';
+    if (result.includes('<ul>')) {
+      result = result.replace(/^([\s\S]*?)(<ul>)/, (full, before, listStart) => {
+        const intro = before.replace(/<br>$/g, '').trim();
+        return intro ? `<p>${intro}</p>${listStart}` : listStart;
+      });
+    } else {
+      result = '<p>' + result + '</p>';
+    }
   }
   
   return result;
@@ -417,7 +3002,46 @@ async function showModelStatus() {
  * Call once at startup (DOMContentLoaded).
  */
 function _setupMessageContainerDelegate(container) {
+  bindCitationHoverPreview(container);
   container.addEventListener('click', async (e) => {
+    // 0. "View journey" recall button. Delegated (not a per-button listener) so it keeps working
+    // after a tab switch, which restores the chat via innerHTML and would drop direct listeners.
+    const recallBtn = e.target.closest('.pageguide-journey-recall-btn');
+    if (recallBtn) {
+      e.stopPropagation();
+      const sid = recallBtn.dataset.session;
+      if (sid) showStoredJourney(sid);
+      return;
+    }
+
+    // 1. Visual recap links/checkpoints/final-state. Delegated so restored chat HTML after a
+    // tab switch still has working screenshot hover/click behavior.
+    const recapFinal = e.target.closest('.pageguide-recap-final-link');
+    if (recapFinal) {
+      e.stopPropagation();
+      const wrap = recapFinal.closest('.pageguide-recap');
+      const sid = recapFinal.dataset.session || wrap?.dataset.session || '';
+      if (sid) openFinalStateView(sid, Number(recapFinal.dataset.step));
+      return;
+    }
+
+    // .pageguide-recap-link only: the checkpoint chips and step-number buttons belonged to the
+    // deleted recap card, and nothing emits them any more.
+    const recapEl = e.target.closest('.pageguide-recap-link');
+    if (recapEl) {
+      e.stopPropagation();
+      const wrap = recapEl.closest('.pageguide-recap');
+      const sid = recapEl.dataset.session || wrap?.dataset.session || '';
+      let steps = [];
+      try { steps = JSON.parse(wrap?.dataset.steps || '[]'); } catch (err) { steps = []; }
+      if (sid && recapEl.dataset.evidence === 'scratchpad') {
+        openScratchpadEvidenceView(recapEl, sid, Number(recapEl.dataset.step));
+      } else if (sid) {
+        openRecapCheckpoint(sid, Number(recapEl.dataset.step), steps);
+      }
+      return;
+    }
+
     // 1. PDF citation → PDF navigation (with range cycling)
     const pdfCit = e.target.closest('.pageguide-pdf-citation');
     if (pdfCit) {
@@ -466,12 +3090,48 @@ function _setupMessageContainerDelegate(container) {
       return;
     }
 
-    // 2. Web citation → scroll to index
+    // 2. Per-answer debug chip (debug mode only) → the prompts, screenshots and raw response for
+    // the calls that produced this answer.
+    const debugChip = e.target.closest('.pageguide-debug-answer-chip');
+    if (debugChip) {
+      e.stopPropagation();
+      openAnswerDebugView(debugChip.dataset.debugFrom);
+      return;
+    }
+
+    // 2a. Study authoring (debug mode only): record this answer as the response for a task +
+    // condition, or edit its text first.
+    const saveChip = e.target.closest('.pageguide-study-save-chip');
+    if (saveChip) {
+      e.stopPropagation();
+      openStudySaveDialog(saveChip.dataset.answerId);
+      return;
+    }
+    const editChip = e.target.closest('.pageguide-study-edit-chip');
+    if (editChip) {
+      e.stopPropagation();
+      openStudyEditDialog(editChip.dataset.answerId);
+      return;
+    }
+
+    // 2b. [ev:key] citation inside the answer → go to the mark drawn on the live page, the same way
+    // an [N] citation goes to its highlighted span. Every marker in the answer leads to the page;
+    // the crops are reachable only from the numbered chips below.
+    const evCit = e.target.closest('.pageguide-evidence-citation');
+    if (evCit) {
+      e.stopPropagation();
+      sendToContentScript({ action: 'scrollToEvidenceMark', index: Number(evCit.dataset.evidenceNum) });
+      return;
+    }
+
+    // 2c. Web citation → scroll the page to the cited element. The same in both evidence modes: the
+    // span is highlighted on the page either way, and a crop of that highlight told the reader
+    // nothing the page did not, so Visual mode no longer diverts the click to an image.
     const webCit = e.target.closest('.pageguide-citation');
     if (webCit) {
       e.stopPropagation();
       const index = parseInt(webCit.dataset.index, 10);
-      sendToContentScript({ action: 'scrollToIndex', index });
+      sendToContentScript({ action: 'scrollToIndex', index, citation: webCit.dataset.citation });
       return;
     }
 
@@ -485,7 +3145,54 @@ function _setupMessageContainerDelegate(container) {
       msg.classList.toggle('citations-expanded');
     }
   });
+
+  container.addEventListener('mouseover', (e) => {
+    // Non-grounding baseline: the builders above already omit recap-links, but older messages
+    // rendered before the toggle was flipped still carry the markup — refuse to pop their
+    // screenshot popovers too, so the whole session is consistently grounding-free.
+    if (_isPanelNonGrounding()) return;
+    const link = e.target.closest('.pageguide-recap-link');
+    if (!link || !container.contains(link)) return;
+    if (link.contains(e.relatedTarget)) return;
+    const wrap = link.closest('.pageguide-recap');
+    const sid = link.dataset.session || wrap?.dataset.session || '';
+    if (sid) _showRecapEvidencePopover(link, sid, Number(link.dataset.step));
+  });
+
+  container.addEventListener('mouseout', (e) => {
+    const link = e.target.closest('.pageguide-recap-link');
+    if (!link || !container.contains(link)) return;
+    if (link.contains(e.relatedTarget)) return;
+    _scheduleRecapEvidenceHide();
+  });
 }
+
+/**
+ * Record an assistant answer into chatMessages (the plain-text log that Save Chat / History
+ * reads from) WITHOUT touching the DOM. Several answer cards — find, visual-highlight,
+ * watch-video, and the guide final-state/recap cards — render their own custom HTML directly
+ * (images, evidence links, etc.) instead of going through addMessage(), which is the only other
+ * place chatMessages gets appended to. Without this, those answers show up fine in the panel but
+ * are silently missing from a saved chat. Exposed on window so unit tests can call it directly.
+ */
+function _recordAssistantMessage(content) {
+  const text = String(content || '').trim();
+  if (!text) return;
+  chatMessages.push({ content: text, type: 'assistant', timestamp: Date.now() });
+}
+window._recordAssistantMessage = _recordAssistantMessage;
+// chatMessages is declared with `let`, so (unlike the functions here) it never becomes a
+// window property on its own. Expose the live array by reference so unit tests can inspect/reset
+// it without needing a dedicated setter.
+window._getChatMessages = () => chatMessages;
+// Same rationale as above, for the per-tab "done" badge and its snapshot map — both `let`/`const`
+// so they never become window properties on their own. Exposed for unit tests only.
+window._getTabChipDone = () => tabChipDone;
+window._getTabSession = (tabId) => _tabSessions.get(tabId);
+window._setCurrentTabIdForTest = (tabId) => { currentTabId = tabId; };
+window._getCurrentTabIdForTest = () => currentTabId;
+// Test-only: simulate a genuinely new user submission (sendMessage() normally bumps this).
+window._startNewAskForTest = () => { _currentAskId += 1; };
 
 /**
  * Add a message to the chat
@@ -537,20 +3244,916 @@ function addMessage(content, type = 'assistant', clickable = false, context = nu
     const markdownParsed = parseMarkdown(content);
     // Parse citations to make them clickable (handles both web and PDF citations)
     const parsedContent = parseCitations(markdownParsed);
-    innerHTML += parsedContent;
+    // [ev:key] citations point at visual evidence captured for this answer (Visual mode only).
+    innerHTML += _expandEvidenceKeyCitations(parsedContent, _lastAnswerEvidenceShots);
   } else {
     // Apply markdown parsing for non-clickable messages too
     innerHTML += parseMarkdown(content);
   }
   
+  // Debug mode only: a chip linking this answer to the calls that produced it.
+  if (type === 'assistant') innerHTML += _debugAnswerChipRow();
+
   msg.innerHTML = innerHTML;
   // Click handlers for citations and message toggle are handled by the
   // delegated listener on the container (_setupMessageContainerDelegate).
   
   container.appendChild(msg);
   container.scrollTop = container.scrollHeight;
-  
+
+  // A cost chip renders empty and is filled from the ledger. The storage listener catches every
+  // price that lands AFTER this point; this catches the ones already in the ledger by the time the
+  // answer was rendered, which is most of them.
+  if (window.__pgDebugEnabled && msg.querySelector('.pageguide-cost-chip')) refreshCostChips();
+
   chatMessages.push({ content, type, timestamp: Date.now(), context });
+}
+
+function isGuideParseError(text) {
+  return /Could not parse step JSON/i.test(String(text || ''));
+}
+
+function addGuideRetryMessage(errorText) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+  hideTyping();
+  container.querySelector('.pageguide-guide-retry-card')?.remove();
+  const card = document.createElement('div');
+  card.className = 'pageguide-guide-retry-card';
+  card.innerHTML = `
+    <div class="pageguide-guide-retry-title">Guide step could not be parsed</div>
+    <div class="pageguide-guide-retry-body">${escapeHtml(errorText || 'The agent returned an invalid step response.')}</div>
+    <button type="button" class="pageguide-step-next-btn pageguide-guide-retry-btn">Try again</button>`;
+  card.querySelector('.pageguide-guide-retry-btn')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    showTyping();
+    try {
+      const res = await sendToContentScript({ action: 'retryGuideStep' });
+      if (!res || res.success === false) throw new Error(res?.error || 'Could not retry guide step');
+      card.remove();
+    } catch (err) {
+      hideTyping();
+      btn.disabled = false;
+      addMessage(`Could not retry the guide step: ${err.message}`, 'system');
+    }
+  });
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * Append a small chat message with a "View journey" button that re-displays a past guide's
+ * task-panel journey (dots + snapshots) so its context isn't lost as new prompts come in.
+ */
+function addJourneyRecallMessage(sessionId, title, label = 'View journey') {
+  const container = document.getElementById('pageguide-messages');
+  if (!container || !sessionId) return;
+  const msg = document.createElement('div');
+  msg.className = 'pageguide-journey-recall';
+  msg.innerHTML = `
+    <button type="button" class="pageguide-journey-recall-btn" data-session="${escapeHtml(sessionId)}">
+      <span class="pageguide-journey-recall-ico">↗</span>
+      <span class="pageguide-journey-recall-text">
+        <span class="pageguide-journey-recall-title">${escapeHtml(label || 'View journey')}</span>
+        <span class="pageguide-journey-recall-sub">Replay every step of this task</span>
+      </span>
+      <span class="pageguide-journey-recall-arrow">→</span>
+    </button>`;
+  // Click is handled by the delegated container listener (_setupMessageContainerDelegate) via the
+  // button's data-session, so it survives the innerHTML restore that happens on tab switches.
+  container.appendChild(msg);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * Concise, action-first label for one restore log entry, so the checklist reads cleanly (the
+ * action up front; storage keys / selectors are secondary detail). Pure.
+ */
+function _steerActionLabel(e) {
+  if (!e) return '';
+  if (typeof gv2FriendlyRestoreAction === 'function') return gv2FriendlyRestoreAction(e);
+  const t = (e.target && e.target.text) || e.sel || 'element';
+  switch (e.kind) {
+    case 'note':           return e.value || '';
+    case 'localStorage':
+    case 'sessionStorage': return `Restored saved setting${e.key ? ` "${e.key}"` : ''}`;
+    case 'scroll':         return 'Restored scroll position';
+    case 'form':           return `Refilled ${e.sel || 'a field'}`;
+    case 'replay': {
+      const verb = ({ type: 'Typed into', clear_text: 'Cleared text in', select: 'Selected', check: 'Toggled', toggle: 'Toggled' })[e.action] || 'Clicked';
+      return `${verb} "${t}"`;
+    }
+    default:               return e.kind;
+  }
+}
+
+function _steerActionIcon(e) {
+  if (!e || e.ok === false) return '!';
+  if (e.kind === 'scroll') return '↕';
+  if (e.kind === 'form') return 'T';
+  if (e.kind === 'replay') return '↗';
+  return '•';
+}
+
+function _steerDisplayLog(log) {
+  return (Array.isArray(log) ? log : []).filter(e => {
+    if (!e) return false;
+    if ((e.kind === 'localStorage' || e.kind === 'sessionStorage') && e.ok !== false) return false;
+    const label = _steerActionLabel(e).trim().toLowerCase();
+    if (!label) return false;
+    if (label === 'restored saved page settings' || label === 'restore saved page settings') return false;
+    return true;
+  });
+}
+
+function _steerTechnicalLabel(e) {
+  if (typeof gv2RestoreTechnicalDetail === 'function') return gv2RestoreTechnicalDetail(e);
+  if (typeof gv2DescribeRestoreAction === 'function') return gv2DescribeRestoreAction(e);
+  return _steerActionLabel(e);
+}
+
+function renderRestoreComparison(comparison) {
+  const restored = Array.isArray(comparison?.restored) ? comparison.restored.filter(Boolean) : [];
+  const notRestored = Array.isArray(comparison?.notRestored) ? comparison.notRestored.filter(Boolean) : [];
+  const confidence = typeof comparison?.confidence === 'number' ? comparison.confidence : null;
+  const needsReview = notRestored.length > 0 || (confidence != null && confidence < 0.65);
+  const list = (items, empty) => items.length
+    ? `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : `<div class="pageguide-steer-compare-empty">${escapeHtml(empty)}</div>`;
+  const conf = confidence != null ? `<span>${Math.round(confidence * 100)}% confident</span>` : '';
+  return `
+    <div class="pageguide-steer-compare-card ${needsReview ? 'needs-review' : 'looks-restored'}">
+      <div class="pageguide-steer-compare-head">
+        <strong>${needsReview ? 'Needs review' : 'Looks restored'}</strong>
+        ${conf}
+      </div>
+      <div class="pageguide-steer-compare-summary">${escapeHtml(comparison?.summary || 'Comparison complete.')}</div>
+      <div class="pageguide-steer-compare-grid">
+        <div><b>Restored</b>${list(restored, 'No clear restored items were identified.')}</div>
+        <div><b>Still different</b>${list(notRestored, 'No meaningful visible differences found.')}</div>
+      </div>
+      ${comparison?.recommendation ? `<div class="pageguide-steer-compare-rec">${escapeHtml(comparison.recommendation)}</div>` : ''}
+    </div>`;
+}
+
+/**
+ * Steer restore confirmation card: after the agent rebuilds the recorded state for a steered step,
+ * it pauses and shows the target "before step N" screenshot, a clean action checklist (with
+ * advisory checkboxes), a hover snapshot of the live restored page, and recovery controls
+ * (retry once / tell the agent what's wrong). The agent does NOT continue until the user acts.
+ */
+function addSteerRestoreCard(message) {
+  const container = document.getElementById('pageguide-messages');
+  if (!container) return;
+  // Replace any stale card from a previous steer (also how retry/fix re-render in place).
+  container.querySelector('.pageguide-steer-restore')?.remove();
+
+  const log = _steerDisplayLog(message.log);
+
+  const lines = log.length
+    ? log.map((e) => {
+        const ok = e.ok !== false;
+        return `<li class="pageguide-steer-restore-item${ok ? '' : ' failed'}">
+          <span class="pageguide-steer-restore-icon" aria-hidden="true">${escapeHtml(_steerActionIcon(e))}</span>
+          <span class="pageguide-steer-restore-action">${escapeHtml(_steerActionLabel(e))}</span>
+        </li>`;
+      }).join('')
+    : '<li class="pageguide-steer-restore-empty">No page actions were needed.</li>';
+
+  const stepLabel = escapeHtml(String(message.redoStep != null ? message.redoStep : message.fromStep));
+  // The recorded "before step N" screenshot — the exact target state we're restoring to.
+  const targetImg = message.redoBeforeShot
+    ? `<div class="pageguide-steer-restore-target">
+         <div class="pageguide-steer-restore-target-cap">Target — page before step ${stepLabel}</div>
+         <img class="pageguide-memory-shot-trigger" data-shot-kind="restore-target" alt="Before step ${stepLabel}" src="data:image/jpeg;base64,${message.redoBeforeShot}">
+       </div>`
+    : '';
+  const snapBtn = message.restoreShot
+    ? `<span class="pageguide-steer-restore-snap-wrap">
+         <button type="button" class="pageguide-steer-restore-snap" title="Hover to preview the live restored page">📷 Live</button>
+         <div class="pageguide-steer-restore-snap-pop"><img alt="Restored page" src="data:image/jpeg;base64,${message.restoreShot}"></div>
+       </span>`
+    : '';
+  const errHtml = message.error
+    ? `<div class="pageguide-steer-restore-error">${escapeHtml(message.error)}</div>`
+    : '';
+  const card = document.createElement('div');
+  card.className = 'pageguide-step-card pageguide-steer-restore';
+  card.innerHTML = `
+    <div class="pageguide-guide-step pageguide-steer-restore-hdr">
+      <span class="pageguide-step-badge">Restored</span>
+      <span class="pageguide-step-text">Review the restored state before step ${stepLabel}.</span>
+      ${snapBtn}
+    </div>
+    ${targetImg}
+    ${message.url ? `<div class="pageguide-step-meta">🔗 ${escapeHtml(message.url)}</div>` : ''}
+    <ul class="pageguide-steer-restore-log">${lines}</ul>
+    ${errHtml}
+    <div class="pageguide-steer-reason-wrap" style="margin: 8px 12px; display: flex; flex-direction: column; gap: 8px;">
+      <textarea id="pageguide-steer-reason-input" class="pageguide-input" placeholder="Why did you restore at this step?" style="min-height: 50px; resize: vertical; margin: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--pg-border); background: var(--pg-bg-input); color: var(--pg-fg); font-family: inherit; font-size: 13px;"></textarea>
+      <div style="display: flex; gap: 6px; margin-bottom: 4px;">
+        <button type="button" class="pageguide-mode-btn active" id="pageguide-steer-mode-wrong" style="flex: 1; padding: 4px; font-size: 11px; border-radius: 4px; border: 1px solid var(--pg-border); background: var(--pg-bg); color: var(--pg-fg); cursor: pointer; text-align: center;">Fixing an error</button>
+        <button type="button" class="pageguide-mode-btn" id="pageguide-steer-mode-intent" style="flex: 1; padding: 4px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; background: transparent; color: var(--pg-fg-muted); cursor: pointer; text-align: center;">Updating goal</button>
+      </div>
+      <label id="pageguide-steer-fixed-wrap" style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; color: var(--pg-fg-muted);">
+        <input type="checkbox" id="pageguide-steer-fixed-cb" style="margin: 0; cursor: pointer;">
+        I already corrected the error manually
+      </label>
+    </div>
+    <div class="pageguide-step-btn-row">
+      <button type="button" class="pageguide-step-next-btn pageguide-steer-restore-confirm">Confirm</button>
+      <button type="button" class="pageguide-step-stop-btn pageguide-steer-restore-manual">Do it yourself</button>
+    </div>`;
+
+  // Re-enable the card's controls and surface an inline error when the content script can't be
+  // reached — so the buttons never get stuck disabled.
+  const recover = (msg) => {
+    hideTyping();
+    card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    let errEl = card.querySelector('.pageguide-steer-restore-error');
+    if (!errEl) {
+      errEl = document.createElement('div');
+      errEl.className = 'pageguide-steer-restore-error';
+      card.querySelector('.pageguide-step-btn-row')?.before(errEl);
+    }
+    errEl.textContent = msg;
+  };
+
+  const btnWrong = card.querySelector('#pageguide-steer-mode-wrong');
+  const btnIntent = card.querySelector('#pageguide-steer-mode-intent');
+  const fixedWrap = card.querySelector('#pageguide-steer-fixed-wrap');
+  let selectedMode = 'wrong';
+
+  if (btnWrong && btnIntent) {
+    btnWrong.addEventListener('click', () => {
+      selectedMode = 'wrong';
+      btnWrong.style.borderColor = 'var(--pg-border)';
+      btnWrong.style.background = 'var(--pg-bg)';
+      btnWrong.style.color = 'var(--pg-fg)';
+      btnIntent.style.borderColor = 'transparent';
+      btnIntent.style.background = 'transparent';
+      btnIntent.style.color = 'var(--pg-fg-muted)';
+      if (fixedWrap) fixedWrap.style.display = 'flex';
+    });
+    btnIntent.addEventListener('click', () => {
+      selectedMode = 'intent';
+      btnIntent.style.borderColor = 'var(--pg-border)';
+      btnIntent.style.background = 'var(--pg-bg)';
+      btnIntent.style.color = 'var(--pg-fg)';
+      btnWrong.style.borderColor = 'transparent';
+      btnWrong.style.background = 'transparent';
+      btnWrong.style.color = 'var(--pg-fg-muted)';
+      if (fixedWrap) fixedWrap.style.display = 'none';
+    });
+  }
+
+  card.querySelector('.pageguide-steer-restore-confirm')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    
+    const reasonText = card.querySelector('#pageguide-steer-reason-input')?.value || '';
+    const isFixed = card.querySelector('#pageguide-steer-fixed-cb')?.checked || false;
+
+    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    showTyping();
+    sendToContentScript({ 
+      action: 'confirmSteerRestore',
+      reason: reasonText,
+      mode: selectedMode,
+      isFixed: isFixed
+    });
+    card.remove();
+  });
+  card.querySelector('.pageguide-steer-restore-journey')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (message.sessionId) await showStoredJourney(message.sessionId);
+  });
+  card.querySelector('.pageguide-steer-restore-target img')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMemoryShotLightbox(message.redoBeforeShot, `Before action — saved state before step ${stepLabel}`);
+  });
+  card.querySelector('.pageguide-steer-restore-manual')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const res = await sendToContentScript({ action: 'manualRestoreHere' });
+      if (!res || res.success === false) throw new Error(res?.error || 'unavailable');
+    } catch (err) {
+      recover('Could not unlock manual restore. Try again.');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  container.appendChild(card);
+  container.scrollTop = container.scrollHeight;
+}
+
+/**
+ * Load prefix steps of a session into memory.
+ */
+async function loadSessionSteps(sessionId) {
+  let steps = null, title = '', plan = [];
+  if (sessionId && typeof rewindVerifyScreenshots === 'function') {
+    try { await rewindVerifyScreenshots(sessionId); } catch (e) {}
+  }
+  const mem = _journeysBySession[sessionId];
+  try {
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(sessionId);
+      if (idx && idx.steps && idx.steps.length) {
+        steps = idx.steps;
+        title = idx.branchLabel || idx.goal || '';
+        plan = Array.isArray(idx.guidePlan) ? idx.guidePlan : (Array.isArray(idx.plan) ? idx.plan : []);
+      }
+    }
+  } catch (e) {}
+  if ((!steps || !steps.length) && mem && mem.steps && mem.steps.length) {
+    steps = mem.steps;
+    title = mem.title || '';
+  }
+  if (!steps || !steps.length) return;
+
+  const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
+  const voidSteps = withSid.filter(_isVoidStepMeta);
+  const valid = withSid.filter(m => !voidSteps.includes(m));
+  currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
+  currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
+  currentGuideTitle = title || '';
+  currentGuidePlan = Array.isArray(plan) ? plan : [];
+  currentGuideSessionId = sessionId || currentGuideSessionId;
+}
+
+/**
+ * Re-populate the task panel with a guide session's journey (read-only). Steps come from the
+ * in-memory copy accumulated this session (robust to storage-shape changes); falls back to the
+ * persisted index. Each dot opens its snapshot via showGoalStepPreview → rewindGetRecord. On
+ * success it shows the journey card (no chat notification); only true unavailability posts an
+ * error to the chat.
+ */
+async function showStoredJourney(sessionId) {
+  let steps = null, title = '', isBranchJourney = false;
+  if (sessionId && typeof rewindVerifyScreenshots === 'function') {
+    try { await rewindVerifyScreenshots(sessionId); } catch (e) {}
+  }
+  const mem = _journeysBySession[sessionId];
+  try {
+    if (typeof rewindGetIndex === 'function') {
+      const idx = await rewindGetIndex(sessionId);
+      if (idx && idx.steps && idx.steps.length) {
+        steps = idx.steps;
+        title = idx.branchLabel || idx.goal || '';
+        isBranchJourney = !!idx.parentSessionId;
+      }
+    }
+  } catch (e) {}
+  if ((!steps || !steps.length) && mem && mem.steps && mem.steps.length) { steps = mem.steps; title = mem.title || ''; }
+  if (!steps || !steps.length) {
+    addMessage('ℹ️ That journey is no longer available.', 'system');
+    return;
+  }
+  // Attach sessionId to each meta so the dot preview can resolve its record. Split out the
+  // initial-state node (step 0) so it doesn't inflate the step/dot count.
+  const withSid = steps.map(m => Object.assign({}, m, { sessionId }));
+  const voidSteps = withSid.filter(_isVoidStepMeta);
+  const valid = withSid.filter(m => !voidSteps.includes(m));
+  currentGuideInitial = valid.find(m => m.isInitial || Number(m.step) === 0) || null;
+  currentGuideRecords = valid.filter(m => !(m.isInitial || Number(m.step) === 0));
+  currentGuidePlan = [];
+  currentGuideVerifications = {};
+  currentGuideTitle = title || 'Guide journey';
+  const lastStep = currentGuideRecords.length ? currentGuideRecords[currentGuideRecords.length - 1].step : 0;
+  currentGuideStep = lastStep;
+  guideActive = false; // recalled journey is a past, read-only view
+  guidePaused = false;
+  currentGuideSessionId = null;
+  visibleJourneySessionId = sessionId;
+  visibleJourneyTitle = currentGuideTitle;
+  visibleJourneyRecalled = true;
+  renderGoalCard({ route: 'guide', step: lastStep, title: currentGuideTitle });
+  _setJourneyRecalledMode(true);
+  updateGuidePauseButton();
+}
+if (typeof window !== 'undefined') window.showStoredJourney = showStoredJourney;
+
+function removeGuideStepRecord(sessionId, step) {
+  const n = Number(step);
+  if (!Number.isFinite(n)) return;
+  currentGuideRecords = currentGuideRecords.filter(r => Number(r.step) !== n);
+  if (currentGuideInitial && Number(currentGuideInitial.step) === n) currentGuideInitial = null;
+  if (sessionId && _journeysBySession[sessionId]?.steps) {
+    _journeysBySession[sessionId].steps = _journeysBySession[sessionId].steps.filter(s => Number(s.step) !== n);
+  }
+  const last = currentGuideRecords.length ? currentGuideRecords[currentGuideRecords.length - 1].step : 0;
+  currentGuideStep = last;
+  renderGoalCard({ route: 'guide', step: last });
+}
+if (typeof window !== 'undefined') window.removeGuideStepRecord = removeGuideStepRecord;
+
+function getActiveSessionId() {
+  return currentGuideSessionId || visibleJourneySessionId || currentGuideInitial?.sessionId || (currentGuideRecords[0] ? currentGuideRecords[0].sessionId : null);
+}
+
+async function checkShowBranchButton() {
+  const btn = document.getElementById('pageguide-show-branch-btn');
+  if (!btn) return;
+
+  // The branch tree is a researcher affordance, like the prompt viewer and the study toggles.
+  const activeSessionId = getActiveSessionId();
+  if (!activeSessionId || !window.__pgDebugEnabled) {
+    btn.style.display = 'none';
+    return;
+  }
+
+  btn.style.display = 'inline-flex';
+}
+
+let _branchTreeHoverCard = null;
+let _hovercardPinned = false;
+let _hovercardHideTimeout = null;
+let _hovercardActiveNodeEl = null;
+
+function _hideBranchTreeHover(force = false) {
+  if (_hovercardPinned && !force) return;
+  if (_branchTreeHoverCard) {
+    _branchTreeHoverCard.remove();
+    _branchTreeHoverCard = null;
+  }
+  if (force) {
+    _hovercardPinned = false;
+    _hovercardActiveNodeEl = null;
+    if (_hovercardHideTimeout) {
+      clearTimeout(_hovercardHideTimeout);
+      _hovercardHideTimeout = null;
+    }
+  }
+}
+
+async function showBranchTree(keepZoom = false) {
+  const overlay = document.getElementById('pageguide-branch-overlay');
+  const body = document.getElementById('pageguide-branch-body');
+  if (!overlay || !body) return;
+
+  if (!keepZoom) {
+    body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">Building tree view...</div>';
+  }
+  overlay.style.display = 'flex';
+
+  if (!keepZoom) {
+    // Reset scale to 1.0 when opening
+    currentTreeScale = 1.0;
+  }
+  const zoomLabel = document.getElementById('pg-zoom-label');
+  if (zoomLabel) zoomLabel.textContent = `${Math.round(currentTreeScale * 100)}%`;
+
+  const activeSessionId = getActiveSessionId();
+  if (!activeSessionId) {
+    body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">No active guide session found.</div>';
+    return;
+  }
+
+  try {
+    const sessions = await rewindGetSessions();
+    const sessionsMap = {};
+    for (const s of sessions) {
+      sessionsMap[s.sessionId] = s;
+    }
+
+    let rootSessionId = activeSessionId;
+    while (sessionsMap[rootSessionId]?.parentSessionId) {
+      rootSessionId = sessionsMap[rootSessionId].parentSessionId;
+    }
+
+    const related = sessions.filter(s => {
+      let tempId = s.sessionId;
+      while (tempId && tempId !== rootSessionId) {
+        tempId = sessionsMap[tempId]?.parentSessionId;
+      }
+      return tempId === rootSessionId;
+    });
+
+    const indices = await Promise.all(related.map(s => rewindGetIndex(s.sessionId)));
+    const validIndices = indices.filter(idx => idx && Array.isArray(idx.steps) && idx.steps.length > 0);
+
+    if (validIndices.length === 0) {
+      body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">No steps available for this tree.</div>';
+      return;
+    }
+
+    const canonicalNodes = {};
+
+    function getCanonicalKey(sessionId, stepNum) {
+      let sess = sessionsMap[sessionId];
+      while (sess && sess.parentSessionId && stepNum <= sess.branchFromStep) {
+        sessionId = sess.parentSessionId;
+        sess = sessionsMap[sessionId];
+      }
+      return `${sessionId}::${stepNum}`;
+    }
+
+    for (const idx of validIndices) {
+      for (const s of idx.steps) {
+        const stepNum = Number(s.step);
+        const key = getCanonicalKey(idx.sessionId, stepNum);
+        if (!canonicalNodes[key]) {
+          canonicalNodes[key] = {
+            key,
+            sessionId: key.split('::')[0],
+            stepNum,
+            meta: s,
+            children: new Set()
+          };
+        }
+      }
+    }
+
+    for (const idx of validIndices) {
+      const sortedSteps = idx.steps.slice().sort((a, b) => Number(a.step) - Number(b.step));
+      for (let i = 1; i < sortedSteps.length; i++) {
+        const parentStep = sortedSteps[i - 1];
+        const childStep = sortedSteps[i];
+        const parentKey = getCanonicalKey(idx.sessionId, Number(parentStep.step));
+        const childKey = getCanonicalKey(idx.sessionId, Number(childStep.step));
+        if (parentKey !== childKey) {
+          canonicalNodes[parentKey].children.add(childKey);
+        }
+      }
+    }
+
+    const rootKey = getCanonicalKey(rootSessionId, 0);
+    if (!canonicalNodes[rootKey]) {
+      const keys = Object.keys(canonicalNodes);
+      if (keys.length === 0) {
+        body.innerHTML = '<div style="opacity: 0.7; padding: 20px;">No steps available for this tree.</div>';
+        return;
+      }
+    }
+
+    function renderTreeNode(key) {
+      const node = canonicalNodes[key];
+      if (!node) return '';
+
+      const childrenKeys = Array.from(node.children).sort();
+      const isCurrent = (key === getCanonicalKey(activeSessionId, currentGuideStep));
+      const stepLabel = node.stepNum === 0 ? 'Initial' : `Step ${node.stepNum}`;
+
+      // Check if this node is the starting point of a branch diversion
+      const S = sessionsMap[node.sessionId];
+      const isBranchStart = S && S.parentSessionId && (node.stepNum === S.branchFromStep + 1);
+      let branchBadgeHtml = '';
+      if (isBranchStart) {
+        const branchTitle = S.branchLabel || S.goal || 'Diverted';
+        let ageText = '';
+        let isRecent = false;
+        if (S.startedAt) {
+          const ageMs = Date.now() - S.startedAt;
+          if (ageMs < 120000) {
+            ageText = 'just now';
+            isRecent = true;
+          } else {
+            const ageMin = Math.round(ageMs / 60000);
+            if (ageMin < 60) {
+              ageText = `${ageMin}m ago`;
+            } else {
+              const ageHr = Math.round(ageMin / 60);
+              ageText = `${ageHr}h ago`;
+            }
+          }
+        }
+        const badgeLabel = ageText ? `${branchTitle} (${ageText})` : branchTitle;
+        branchBadgeHtml = `<span class="pg-tree-branch-badge ${isRecent ? 'recent-branch' : ''}" title="${escapeHtml(branchTitle)}">${escapeHtml(badgeLabel)}</span>`;
+      }
+
+      const conf = node.meta.confidence;
+      let statusDotHtml = '';
+      if (conf != null) {
+        const isGood = conf >= guideConfidenceThreshold;
+        const color = isGood ? '#22c55e' : '#eab308';
+        const title = `Confidence: ${Math.round(conf * 100)}%`;
+        statusDotHtml = `<span class="pg-tree-node-status-dot" style="background: ${color};" title="${title}"></span>`;
+      }
+
+      const isOriginal = (node.sessionId === rootSessionId);
+
+      let childrenHtml = '';
+      if (childrenKeys.length > 0) {
+        childrenHtml = `
+          <div class="pg-tree-children ${isOriginal ? 'original-path' : 'diverted-path'}">
+            ${childrenKeys.map(childKey => renderTreeNode(childKey)).join('')}
+          </div>
+        `;
+      }
+
+      return `
+        <div class="pg-tree-branch ${isOriginal ? 'original-path' : 'diverted-path'}">
+          <div class="pg-tree-node ${isCurrent ? 'active-session-step' : ''} ${isOriginal ? 'original-path' : 'diverted-path'}" data-key="${key}">
+            ${statusDotHtml}
+            <span class="pg-tree-node-label">${stepLabel}</span>
+            <span class="pg-tree-node-desc">${escapeHtml(_truncateText(node.meta.instruction || ''))}</span>
+            ${branchBadgeHtml}
+          </div>
+          ${childrenHtml}
+        </div>
+      `;
+    }
+
+    const oldViewport = body.querySelector('#pg-tree-viewport');
+    const oldScrollLeft = oldViewport ? oldViewport.scrollLeft : 0;
+    const oldScrollTop = oldViewport ? oldViewport.scrollTop : 0;
+
+    body.innerHTML = `
+      <div class="pg-tree-viewport" id="pg-tree-viewport" style="width: 100%; height: 100%; overflow: auto;">
+        <div class="pg-tree-content" id="pg-tree-content" style="transform: scale(${currentTreeScale}); transform-origin: top left; display: inline-block; padding: 20px;">
+          ${renderTreeNode(rootKey)}
+        </div>
+      </div>
+    `;
+
+    // Canvas Panning dragging event handling
+    const viewport = body.querySelector('#pg-tree-viewport');
+    if (viewport && keepZoom) {
+      viewport.scrollLeft = oldScrollLeft;
+      viewport.scrollTop = oldScrollTop;
+    }
+    if (viewport) {
+      viewport.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        isPanning = true;
+        wasDragging = false;
+        startX = e.pageX - viewport.offsetLeft;
+        startY = e.pageY - viewport.offsetTop;
+        scrollLeft = viewport.scrollLeft;
+        scrollTop = viewport.scrollTop;
+      });
+
+      const onMouseMove = (e) => {
+        if (!isPanning) return;
+        const x = e.pageX - viewport.offsetLeft;
+        const y = e.pageY - viewport.offsetTop;
+        const walkX = x - startX;
+        const walkY = y - startY;
+        if (Math.abs(walkX) > 3 || Math.abs(walkY) > 3) {
+          wasDragging = true;
+        }
+        viewport.scrollLeft = scrollLeft - walkX;
+        viewport.scrollTop = scrollTop - walkY;
+      };
+
+      const onMouseUp = () => {
+        isPanning = false;
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    }
+
+    const showCard = async (nodeEl) => {
+      const key = nodeEl.dataset.key;
+      const node = canonicalNodes[key];
+      if (!node) return;
+
+      let rec = null;
+      try {
+        rec = await rewindGetRecord(node.sessionId, node.stepNum);
+      } catch (e) {}
+
+      if (_branchTreeHoverCard && _hovercardActiveNodeEl === nodeEl) return;
+
+      if (_branchTreeHoverCard) {
+        _branchTreeHoverCard.remove();
+        _branchTreeHoverCard = null;
+      }
+
+      const card = document.createElement('div');
+      card.className = 'pg-tree-hovercard pageguide-goal-step-preview';
+
+      const PLACEHOLDER_SHOT = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      let beforeShot = rec?.screenshotBefore || rec?.screenshot || null;
+      if (beforeShot === PLACEHOLDER_SHOT) beforeShot = null;
+      let regionShot = rec?.regionShot || null;
+      if (regionShot === PLACEHOLDER_SHOT) regionShot = null;
+      let afterShot = rec?.screenshotAfter || null;
+      if (afterShot === PLACEHOLDER_SHOT) afterShot = null;
+      const topShot = regionShot || beforeShot || afterShot;
+      const imgHtml = topShot 
+        ? `<img src="data:image/jpeg;base64,${topShot}" alt="" ${(!regionShot && (beforeShot || afterShot)) ? `class="pageguide-memory-shot-trigger" data-shot-kind="${beforeShot ? 'before' : 'after'}"` : ''}>` 
+        : '';
+
+      // Same rule as the timeline step card: plain outside debug mode.
+      const debug = !!window.__pgDebugEnabled;
+
+      const beforeHtml = (debug && beforeShot && regionShot)
+        ? `<details class="pageguide-goal-step-before"><summary>Before action screenshot</summary>
+            <img class="pageguide-memory-shot-trigger" data-shot-kind="before" src="data:image/jpeg;base64,${beforeShot}" alt="before action"></details>`
+        : '';
+
+      const conf = node.meta.confidence;
+      const tier = (typeof gv2ConfidenceTier === 'function') ? gv2ConfidenceTier(conf, guideConfidenceThreshold) : null;
+      const badgeHtml = (debug && tier && conf != null)
+        ? `<div class="pageguide-goal-step-conf ${tier === 'high' ? 'conf-high' : 'conf-med'}">Confidence: ${Math.round(conf * 100)}%</div>`
+        : '';
+
+      const actionText = node.meta.action ? `[${node.meta.action.toUpperCase()}] ` : '';
+      const instruction = node.meta.instruction || 'Initial state';
+
+      const url = node.meta.url || rec?.url || '';
+      const urlHtml = (debug && url) ? `<a class="pageguide-goal-step-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(url)}">🔗 link</a>` : '';
+      const evidenceHtml = _savedEvidencePreviewHtml(node.meta, rec);
+
+      const allowSteer = debug && node.stepNum > 0;
+
+      card.innerHTML = `
+        ${badgeHtml}
+        ${imgHtml}
+        <div class="pageguide-goal-step-preview-title">${node.stepNum === 0 ? 'Initial State' : 'Step ' + node.stepNum}</div>
+        <div class="pageguide-goal-step-preview-text"><b>${actionText}</b>${escapeHtml(instruction)}</div>
+        ${evidenceHtml}
+        ${urlHtml}
+        ${beforeHtml}
+        ${(debug && node.meta.durationMs != null) ? `<div class="pageguide-goal-step-preview-meta">${_formatDuration(node.meta.durationMs)}</div>` : ''}
+        ${debug ? '<button type="button" class="pageguide-goal-step-inspect">Inspect more</button>' : ''}
+        ${allowSteer ? '<button type="button" class="pageguide-goal-step-steer">Restore here</button>' : ''}
+      `;
+
+      if (allowSteer) {
+        const steerBtn = card.querySelector('.pageguide-goal-step-steer');
+
+        steerBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          steerBtn.disabled = true;
+          
+          if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.steerFromStep === 'function') {
+            const ok = await RewindTimeline.steerFromStep({
+              sessionId: node.sessionId,
+              step: node.stepNum,
+              url: node.meta.url
+            }, '');
+            if (ok) {
+              _hideBranchTreeHover(true);
+            } else {
+              steerBtn.disabled = false;
+            }
+          }
+        });
+      }
+
+      const inspectBtn = card.querySelector('.pageguide-goal-step-inspect');
+      if (inspectBtn) {
+        inspectBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _hideBranchTreeHover(true);
+          if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.openStep === 'function') {
+            RewindTimeline.openStep(node.meta);
+          }
+        });
+      }
+
+      card.addEventListener('click', (e) => {
+        const target = e.target;
+        if (target.closest('button') || 
+            target.closest('textarea') || 
+            target.closest('a')) {
+          return;
+        }
+        if (target.closest('.pageguide-memory-shot-trigger')) {
+          const isInitialNode = node.stepNum === 0;
+          if (typeof openMemoryShotLightbox === 'function') {
+            openMemoryShotLightbox(beforeShot, isInitialNode ? 'Initial state — saved page memory' : 'Before action — what PageGuide saw before this step');
+          }
+          return;
+        }
+        if (target.closest('.pageguide-goal-step-before')) {
+          return;
+        }
+        _hideBranchTreeHover(true);
+        if (typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.openStep === 'function') {
+          RewindTimeline.openStep(node.meta);
+        }
+      });
+
+      document.body.appendChild(card);
+      _branchTreeHoverCard = card;
+      _hovercardActiveNodeEl = nodeEl;
+
+      const r = nodeEl.getBoundingClientRect();
+      let left = r.right + 10;
+      let top = Math.max(8, Math.min(r.top, window.innerHeight - card.offsetHeight - 8));
+
+      if (left + card.offsetWidth > window.innerWidth) {
+        left = Math.max(8, r.left - card.offsetWidth - 10);
+      }
+
+      card.style.left = left + 'px';
+      card.style.top = top + 'px';
+
+      card.addEventListener('mouseenter', () => {
+        cancelHideTimer();
+      });
+      card.addEventListener('mouseleave', () => {
+        startHideTimer();
+      });
+    };
+
+    const cancelHideTimer = () => {
+      if (_hovercardHideTimeout) {
+        clearTimeout(_hovercardHideTimeout);
+        _hovercardHideTimeout = null;
+      }
+    };
+
+    const startHideTimer = () => {
+      if (_hovercardPinned) return;
+      cancelHideTimer();
+      _hovercardHideTimeout = setTimeout(() => {
+        _hideBranchTreeHover();
+      }, 300);
+    };
+
+    body.querySelectorAll('.pg-tree-node').forEach(nodeEl => {
+      nodeEl.addEventListener('mouseenter', async () => {
+        cancelHideTimer();
+        if (_hovercardPinned && _hovercardActiveNodeEl === nodeEl) return;
+        await showCard(nodeEl);
+      });
+
+      nodeEl.addEventListener('mouseleave', () => {
+        startHideTimer();
+      });
+
+      nodeEl.addEventListener('click', async (e) => {
+        if (wasDragging) return;
+        e.stopPropagation();
+        
+        cancelHideTimer();
+        _hovercardPinned = true;
+        
+        if (!_branchTreeHoverCard || _hovercardActiveNodeEl !== nodeEl) {
+          await showCard(nodeEl);
+        }
+      });
+    });
+
+  } catch (e) {
+    console.error('Failed to build branch tree:', e);
+    body.innerHTML = `<div style="color: var(--pg-danger); padding: 20px;">Failed to load branch tree: ${escapeHtml(e.message)}</div>`;
+  }
+}
+if (typeof window !== 'undefined') {
+  window.checkShowBranchButton = checkShowBranchButton;
+  window.showBranchTree = showBranchTree;
+}
+
+async function registerBranchJourney(sessionId, label) {
+  if (!sessionId) return;
+  const title = label || 'View branch journey';
+  if (!_journeysBySession[sessionId]) _journeysBySession[sessionId] = { title, steps: [] };
+  _journeysBySession[sessionId].title = title;
+  if (!_journeyBtnSessions.has(sessionId)) {
+    _journeyBtnSessions.add(sessionId);
+    addJourneyRecallMessage(sessionId, title, title);
+  }
+  checkShowBranchButton();
+}
+if (typeof window !== 'undefined') window.registerBranchJourney = registerBranchJourney;
+if (typeof window !== 'undefined') window.addJourneyRecallMessage = addJourneyRecallMessage;
+
+// Mark the goal card as a recalled (read-only) view — used only for styling (hides the caret).
+function _setJourneyRecalledMode(on) {
+  const card = document.getElementById('pageguide-goal');
+  if (card) card.classList.toggle('pageguide-goal--recalled', !!on);
+  if (!on) {
+    visibleJourneySessionId = null;
+    visibleJourneyTitle = '';
+    visibleJourneyRecalled = false;
+  }
+}
+
+// Ensure the journey/goal card has a collapse (✕) button that hides it. Present in every guide
+// mode (live or recalled), so the user can always collapse the journey.
+function _ensureGoalCollapseBtn() {
+  const card = document.getElementById('pageguide-goal');
+  if (!card || document.getElementById('pageguide-goal-collapse')) return;
+  const row = card.querySelector('.pageguide-goal-title-row');
+  if (!row) return;
+  const btn = document.createElement('button');
+  btn.id = 'pageguide-goal-collapse';
+  btn.type = 'button';
+  btn.className = 'pageguide-goal-collapse';
+  btn.title = 'Collapse journey';
+  btn.setAttribute('aria-label', 'Collapse journey');
+  btn.textContent = '✕';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    card.style.display = 'none';
+    visibleJourneySessionId = null;
+    visibleJourneyTitle = '';
+    visibleJourneyRecalled = false;
+  });
+  row.appendChild(btn);
 }
 
 /**
@@ -584,70 +4187,1030 @@ function addCollapsibleDebug(lines) {
   container.scrollTop = container.scrollHeight;
 }
 
+// ===== Guide Mode Toggle (Manual vs Auto) =====
+// Manual: the user clicks each highlighted step. Auto modes let the agent perform steps itself.
+// The "no ask" level bypasses risk/confirmation gates, while confidence and loop guards stay on.
+const GUIDE_AUTO_MODE_KEY = 'guideAutoMode';
+const GUIDE_AUTONOMY_LEVEL_KEY = 'guideAutonomyLevel';
+
+function _normalizeGuideAutonomyMode(mode, auto = false) {
+  const raw = String(mode || '').trim();
+  if (raw === 'auto_no_ask' || raw === 'auto') return raw;
+  return auto === true ? 'auto' : 'manual';
+}
+
+function _renderGuideMode(btn, mode) {
+  const normalized = _normalizeGuideAutonomyMode(mode);
+  const auto = normalized !== 'manual';
+  const label = normalized === 'auto_no_ask' ? 'Auto: No Ask' : (auto ? 'Auto: Ask' : 'Manual');
+  btn.innerHTML = auto ? `${UI_ICONS.bolt}${label} ▾` : `${UI_ICONS.hand}${label} ▾`;
+  btn.classList.toggle('pageguide-mode-auto', auto);
+  btn.classList.toggle('pageguide-mode-noask', normalized === 'auto_no_ask');
+  btn.title = normalized === 'auto_no_ask'
+    ? 'Auto: No Ask bypasses risk and confirmation pauses; confidence and loop guards remain on.'
+    : (auto
+      ? 'Auto: Ask completes low-risk steps and pauses for confirmation or sensitive actions.'
+      : 'Manual mode: you do each step yourself.');
+  document.querySelectorAll('.pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === normalized);
+  });
+}
+
+function initGuideModeToggle() {
+  const btn = document.getElementById('pageguide-mode-toggle');
+  const menu = document.getElementById('pageguide-mode-menu');
+  if (!btn) return;
+  chrome.storage.local.get([GUIDE_AUTO_MODE_KEY, GUIDE_AUTONOMY_LEVEL_KEY])
+    .then(r => _renderGuideMode(btn, _normalizeGuideAutonomyMode(r[GUIDE_AUTONOMY_LEVEL_KEY], r[GUIDE_AUTO_MODE_KEY] === true)))
+    .catch(() => _renderGuideMode(btn, 'manual'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizeGuideAutonomyMode(option.dataset.mode);
+    try {
+      await chrome.storage.local.set({
+        [GUIDE_AUTO_MODE_KEY]: mode !== 'manual',
+        [GUIDE_AUTONOMY_LEVEL_KEY]: mode
+      });
+    } catch (e) {}
+    _renderGuideMode(btn, mode);
+    menu.style.display = 'none';
+  });
+}
+
+// ===== Confidence Formula Toggle (Full / No-progress / No-loop) =====
+// Full:        C = grounded × (1 − λ_L·loop) × (1 + λ_P·progress).
+// No-progress: C = grounded × (1 − λ_L·loop)              (drops progress).
+// No-loop:     C = grounded × (1 + λ_P·progress)          (drops loop penalty).
+// Stored in chrome.storage.local so the content script (guidev2.js) reads the same value.
+const GUIDE_CONF_FORMULA_KEY = 'guideConfidenceFormula';
+const GUIDE_CONF_FORMULAS = {
+  full:    { label: 'Full',        title: 'Full: confidence = grounding × loop penalty × progress.' },
+  reduced: { label: 'No-progress', title: 'No-progress: confidence = grounding × loop penalty (no progress term).' },
+  noloop:  { label: 'No-loop',     title: 'No-loop: confidence = grounding × progress (no loop penalty).' }
+};
+
+function _normalizeConfFormula(v) {
+  return (v === 'reduced' || v === 'noloop') ? v : 'full';
+}
+
+function _renderConfFormula(btn, formula) {
+  formula = _normalizeConfFormula(formula);
+  const spec = GUIDE_CONF_FORMULAS[formula];
+  btn.innerHTML = `${UI_ICONS.gauge}Confidence: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-conf-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.formula === formula);
+  });
+}
+
+function initConfidenceFormulaToggle() {
+  const btn = document.getElementById('pageguide-conf-toggle');
+  const menu = document.getElementById('pageguide-conf-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_CONF_FORMULA_KEY)
+    .then(r => _renderConfFormula(btn, _normalizeConfFormula(r[GUIDE_CONF_FORMULA_KEY])))
+    .catch(() => _renderConfFormula(btn, 'full'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const formula = _normalizeConfFormula(option.dataset.formula);
+    try { await chrome.storage.local.set({ [GUIDE_CONF_FORMULA_KEY]: formula }); } catch (e) {}
+    _renderConfFormula(btn, formula);
+    menu.style.display = 'none';
+  });
+}
+
+// Confidence SOURCE toggle (debug-only): which score drives the timeline tier / pause / red highlight.
+const GUIDE_CONF_SOURCE_KEY = 'guideConfidenceSource';
+const GUIDE_CONF_SOURCES = {
+  llm:        { label: 'LLM',    title: 'Confidence from the model\'s self-reported grounded/loop/progress.' },
+  mechanical: { label: 'No-LLM', title: 'Rule-based confidence: SoM grounding × loop penalty (no model self-grading).' }
+};
+
+function _normalizeConfSource(v) {
+  return v === 'llm' ? 'llm' : 'mechanical';
+}
+
+function _renderConfSource(btn, source) {
+  source = _normalizeConfSource(source);
+  const spec = GUIDE_CONF_SOURCES[source];
+  btn.innerHTML = `${UI_ICONS.gauge}Source: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-confsrc-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.source === source);
+  });
+}
+
+function initConfidenceSourceToggle() {
+  const btn = document.getElementById('pageguide-confsrc-toggle');
+  const menu = document.getElementById('pageguide-confsrc-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_CONF_SOURCE_KEY)
+    .then(r => _renderConfSource(btn, _normalizeConfSource(r[GUIDE_CONF_SOURCE_KEY])))
+    .catch(() => _renderConfSource(btn, 'mechanical'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const source = _normalizeConfSource(option.dataset.source);
+    try { await chrome.storage.local.set({ [GUIDE_CONF_SOURCE_KEY]: source }); } catch (e) {}
+    _renderConfSource(btn, source);
+    menu.style.display = 'none';
+  });
+}
+
+// Target-region capture mode (debug-only): legacy vs scroll+aligned fresh crop.
+const GUIDE_REGION_CAPTURE_KEY = 'guideDebugRegionCapture';
+const GUIDE_REGION_CAPTURE_MODES = {
+  legacy: {
+    label: 'Legacy',
+    title: 'Crop the carried before-shot using immediate element bounds.',
+  },
+  aligned: {
+    label: 'Aligned',
+    title: 'Scroll the target into view, capture a fresh screenshot, then crop (before action).',
+  },
+};
+
+function _normalizeRegionCaptureMode(v) {
+  return v === 'aligned' ? 'aligned' : 'legacy';
+}
+
+function _renderRegionCaptureMode(btn, mode) {
+  mode = _normalizeRegionCaptureMode(mode);
+  const spec = GUIDE_REGION_CAPTURE_MODES[mode];
+  btn.innerHTML = `${UI_ICONS.image}Target: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-regioncap-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === mode);
+  });
+}
+
+function initRegionCaptureToggle() {
+  const btn = document.getElementById('pageguide-regioncap-toggle');
+  const menu = document.getElementById('pageguide-regioncap-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_REGION_CAPTURE_KEY)
+    .then(r => _renderRegionCaptureMode(btn, _normalizeRegionCaptureMode(r[GUIDE_REGION_CAPTURE_KEY])))
+    .catch(() => _renderRegionCaptureMode(btn, 'legacy'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizeRegionCaptureMode(option.dataset.mode);
+    try { await chrome.storage.local.set({ [GUIDE_REGION_CAPTURE_KEY]: mode }); } catch (err) {}
+    _renderRegionCaptureMode(btn, mode);
+    menu.style.display = 'none';
+  });
+}
+
+// Pass History mode (debug-only): whether to include previous steps in LLM prompt.
+const GUIDE_PASS_HISTORY_KEY = 'guideDebugPassHistory';
+const GUIDE_PASS_HISTORY_MODES = {
+  not_passing: {
+    label: 'No',
+    title: 'Do not pass history to LLM (default).',
+  },
+  passing: {
+    label: 'Yes',
+    title: 'Pass past observed number of steps and user redirection to LLM.',
+  },
+};
+
+function _normalizePassHistoryMode(v) {
+  return v === 'not_passing' ? 'not_passing' : 'passing'; // passing is default
+}
+
+function _renderPassHistoryMode(btn, mode) {
+  mode = _normalizePassHistoryMode(mode);
+  const spec = GUIDE_PASS_HISTORY_MODES[mode];
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>History: ${spec.label} ▾`;
+  btn.title = spec.title;
+  document.querySelectorAll('#pageguide-passhistory-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.mode === mode);
+  });
+}
+
+function initPassHistoryToggle() {
+  const btn = document.getElementById('pageguide-passhistory-toggle');
+  const menu = document.getElementById('pageguide-passhistory-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_PASS_HISTORY_KEY)
+    .then(r => _renderPassHistoryMode(btn, _normalizePassHistoryMode(r[GUIDE_PASS_HISTORY_KEY])))
+    .catch(() => _renderPassHistoryMode(btn, 'passing'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const mode = _normalizePassHistoryMode(option.dataset.mode);
+    try { await chrome.storage.local.set({ [GUIDE_PASS_HISTORY_KEY]: mode }); } catch (err) {}
+    _renderPassHistoryMode(btn, mode);
+    menu.style.display = 'none';
+  });
+}
+
+// Visual Recap mode (debug-only): whether to post an end-of-task recap with screenshot
+// evidence when the end summary agent is enabled. Stored in chrome.storage.local so the content
+// script (guidev2.js) reads the same value. Default ON.
+const GUIDE_VISUAL_RECAP_KEY = 'guideVisualRecap';
+const GUIDE_END_SUMMARY_KEY = 'guideEndSummaryAgent';
+
+// Send Image (debug-only): both modes use the same 5000-element Guide index; Send Image On also
+// sends a screenshot with matching numbered SoM markers. Default OFF. This is about what the MODEL
+// receives — the separate Evidence: Visual/Text toggle below is about what the USER is shown.
+const GUIDE_VISUAL_INPUT_KEY = 'guideVisualInput';
+
+function _normalizeVisualInput(v) {
+  return v === 'on' ? 'on' : 'off';
+}
+
+function _renderVisualInput(btn, val) {
+  val = _normalizeVisualInput(val);
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 21 21 8"/><path d="M15 3h6v6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></span>Send Image: ${val === 'on' ? 'On' : 'Off'} ▾`;
+  btn.title = val === 'on'
+    ? 'Guide prompts include a screenshot with up to 5000 numbered SoM markers.'
+    : 'Guide prompts are text-only with the same 5000-element PAGE INDEX.';
+  document.querySelectorAll('#pageguide-visualinput-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.visualinput === val);
+  });
+}
+
+function initGuideVisualInputToggle() {
+  const btn = document.getElementById('pageguide-visualinput-toggle');
+  const menu = document.getElementById('pageguide-visualinput-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_VISUAL_INPUT_KEY)
+    .then(r => _renderVisualInput(btn, _normalizeVisualInput(r[GUIDE_VISUAL_INPUT_KEY])))
+    .catch(() => _renderVisualInput(btn, 'off'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeVisualInput(option.dataset.visualinput);
+    try { await chrome.storage.local.set({ [GUIDE_VISUAL_INPUT_KEY]: val }); } catch (err) {}
+    _renderVisualInput(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+function _normalizeEndSummary(v) {
+  return v === 'on' ? 'on' : 'off';
+}
+
+function _renderEndSummary(btn, val) {
+  val = _normalizeEndSummary(val);
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16"/><path d="M4 12h12"/><path d="M4 19h8"/><path d="m17 16 2 2 4-4"/></svg></span>Summary: ${val === 'on' ? 'On' : 'Off'} ▾`;
+  btn.title = val === 'on'
+    ? 'Run the extra end-of-task summarizer/diagnostic agent.'
+    : 'Finish without the extra end summarization call.';
+  document.querySelectorAll('#pageguide-summaryagent-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.summaryagent === val);
+  });
+}
+
+function initEndSummaryToggle() {
+  const btn = document.getElementById('pageguide-summaryagent-toggle');
+  const menu = document.getElementById('pageguide-summaryagent-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_END_SUMMARY_KEY)
+    .then(r => _renderEndSummary(btn, _normalizeEndSummary(r[GUIDE_END_SUMMARY_KEY])))
+    .catch(() => _renderEndSummary(btn, 'off'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeEndSummary(option.dataset.summaryagent);
+    try { await chrome.storage.local.set({ [GUIDE_END_SUMMARY_KEY]: val }); } catch (err) {}
+    _renderEndSummary(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+// Non-grounding baseline mode: a user-study A/B toggle, always visible (not debug-only, unlike
+// the toggles above). Same routing/LLM answers, but the content scripts (ask.js, guidev2.js) skip
+// all on-page highlighting, marker overlays, and visual-highlight screenshots when this is 'on'.
+// Stored under the SAME key/values the content scripts read directly via isNonGroundingModeOn()
+// in content/functions/highlight.js — keep that key in sync if this one ever changes.
+// Default OFF (normal grounding behavior).
+const GUIDE_NON_GROUNDING_KEY = 'pageguideNonGrounding';
+
+function _normalizeNonGrounding(v) {
+  return v === 'on' ? 'on' : 'off'; // off (grounding on) is default
+}
+
+function _renderNonGrounding(btn, val) {
+  val = _normalizeNonGrounding(val);
+  panelNonGrounding = val === 'on'; // keep the synchronous render-path mirror in sync
+  const icon = '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h4Z"/><path d="M13 5h4a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-4Z"/><path d="M13 5v16"/></svg></span>';
+  btn.innerHTML = val === 'on' ? `${icon}Non-grounding ▾` : `${icon}Grounding: On ▾`;
+  btn.title = val === 'on'
+    ? 'Non-grounding baseline: Find/Ask/Guide answers are plain text — no highlights, markers, or visual-evidence screenshots.'
+    : 'Find/Ask/Guide answers highlight the supporting evidence on the page (default).';
+  // Reuse the existing amber "active" treatment as a visible reminder that the baseline is on,
+  // so a tester can't accidentally leave it flipped between sessions without noticing.
+  btn.classList.toggle('pageguide-quick-btn--active', val === 'on');
+  document.querySelectorAll('#pageguide-nongrounding-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.nongrounding === val);
+  });
+}
+
+function initNonGroundingToggle() {
+  const btn = document.getElementById('pageguide-nongrounding-toggle');
+  const menu = document.getElementById('pageguide-nongrounding-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_NON_GROUNDING_KEY)
+    .then(r => _renderNonGrounding(btn, _normalizeNonGrounding(r[GUIDE_NON_GROUNDING_KEY])))
+    .catch(() => _renderNonGrounding(btn, 'off'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeNonGrounding(option.dataset.nongrounding);
+    try { await chrome.storage.local.set({ [GUIDE_NON_GROUNDING_KEY]: val }); } catch (err) {}
+    _renderNonGrounding(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+// Evidence mode: the user-study axis for how evidence is SHOWN back to the user. Independent of
+// the Grounding baseline above — all four combinations are valid conditions.
+//   visual (default): Find crops a screenshot of each cited span into the answer; Guide evidence
+//                     pops up screenshots. This is what the system has always done.
+//   text:             no captures at all. Find keeps its citation links (unchanged); Guide evidence
+//                     is node text, aria-label, selector and page URL, with final-answer evidence
+//                     links stripped.
+const GUIDE_EVIDENCE_MODE_KEY = 'pageguideEvidenceMode';
+
+function _normalizeEvidenceMode(v) {
+  return v === 'text' ? 'text' : 'visual'; // visual is default
+}
+window._normalizeEvidenceMode = _normalizeEvidenceMode;
+
+function _renderEvidenceMode(btn, val) {
+  val = _normalizeEvidenceMode(val);
+  panelEvidenceMode = val; // keep the synchronous click-path mirror in sync
+  const icon = '<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>';
+  btn.innerHTML = `${icon}Evidence: ${val === 'text' ? 'Text' : 'Visual'} ▾`;
+  btn.title = val === 'text'
+    ? 'Text evidence: no screenshots anywhere. Find keeps its citation links; Guide evidence is node text, aria-label, selector and page URL. Guide final answers are plain text.'
+    : 'Visual evidence (default): Find crops a screenshot of each cited span into the answer; Guide evidence pops up screenshots.';
+  // Same amber "active" reminder the Non-grounding baseline uses, so a non-default study arm is
+  // never left flipped between sessions unnoticed.
+  btn.classList.toggle('pageguide-quick-btn--active', val === 'text');
+  document.querySelectorAll('#pageguide-evidencemode-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.evidencemode === val);
+  });
+}
+window._renderEvidenceMode = _renderEvidenceMode;
+
+function initEvidenceModeToggle() {
+  const btn = document.getElementById('pageguide-evidencemode-toggle');
+  const menu = document.getElementById('pageguide-evidencemode-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_EVIDENCE_MODE_KEY)
+    .then(r => _renderEvidenceMode(btn, _normalizeEvidenceMode(r[GUIDE_EVIDENCE_MODE_KEY])))
+    .catch(() => _renderEvidenceMode(btn, 'visual'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeEvidenceMode(option.dataset.evidencemode);
+    try { await chrome.storage.local.set({ [GUIDE_EVIDENCE_MODE_KEY]: val }); } catch (err) {}
+    _renderEvidenceMode(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+function _normalizeRecap(v) {
+  return v === 'off' ? 'off' : 'on'; // on is default
+}
+
+function _renderRecap(btn, val) {
+  val = _normalizeRecap(val);
+  btn.innerHTML = `<span class="pageguide-inline-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>Recap: ${val === 'on' ? 'On' : 'Off'} ▾`;
+  btn.title = val === 'on'
+    ? 'A visual recap with screenshot evidence is posted when a guide task finishes.'
+    : 'No recap is posted; the task ends on its final step.';
+  document.querySelectorAll('#pageguide-recap-menu .pageguide-mode-option').forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.recap === val);
+  });
+}
+
+function initVisualRecapToggle() {
+  const btn = document.getElementById('pageguide-recap-toggle');
+  const menu = document.getElementById('pageguide-recap-menu');
+  if (!btn) return;
+  chrome.storage.local.get(GUIDE_VISUAL_RECAP_KEY)
+    .then(r => _renderRecap(btn, _normalizeRecap(r[GUIDE_VISUAL_RECAP_KEY])))
+    .catch(() => _renderRecap(btn, 'on'));
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+
+  menu?.addEventListener('click', async (e) => {
+    const option = e.target.closest('.pageguide-mode-option');
+    if (!option) return;
+    e.stopPropagation();
+    const val = _normalizeRecap(option.dataset.recap);
+    try { await chrome.storage.local.set({ [GUIDE_VISUAL_RECAP_KEY]: val }); } catch (err) {}
+    _renderRecap(btn, val);
+    menu.style.display = 'none';
+  });
+}
+
+// Read the Visual Recap flag for the render path (default ON). Async — resolves the flag
+// from chrome.storage.local; used to gate the end-of-task recap message.
+async function _panelIsVisualRecapOn() {
+  try {
+    const r = await chrome.storage.local.get(GUIDE_VISUAL_RECAP_KEY);
+    return _normalizeRecap(r[GUIDE_VISUAL_RECAP_KEY]) === 'on';
+  } catch (e) {
+    return true;
+  }
+}
+
+function hideMoreMenu() {
+  const menu = document.getElementById('pageguide-more-menu');
+  if (menu) menu.style.display = 'none';
+}
+
+function initPanelMenus() {
+  const moreBtn = document.getElementById('pageguide-more-btn');
+  const moreMenu = document.getElementById('pageguide-more-menu');
+  const infoBtn = document.getElementById('pageguide-info');
+  const infoPop = document.getElementById('pageguide-info-pop');
+
+  moreBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (moreMenu) moreMenu.style.display = moreMenu.style.display === 'none' ? 'block' : 'none';
+    if (infoPop) infoPop.style.display = 'none';
+  });
+
+  infoBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (infoPop) infoPop.style.display = infoPop.style.display === 'none' ? 'block' : 'none';
+    hideMoreMenu();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.pageguide-menu-wrap')) hideMoreMenu();
+    if (!e.target.closest('.pageguide-footer')) {
+      const pop = document.getElementById('pageguide-info-pop');
+      if (pop) pop.style.display = 'none';
+    }
+    // Close any open mode/confidence dropdown whose wrap the click landed outside of.
+    document.querySelectorAll('.pageguide-mode-wrap').forEach(wrap => {
+      if (!wrap.contains(e.target)) {
+        const menu = wrap.querySelector('.pageguide-mode-menu');
+        if (menu) menu.style.display = 'none';
+      }
+    });
+  });
+}
+
+function renderStepWarning(step) {
+  const warning = currentGuideWarnings[step] || currentGuideWarnings[currentGuideStep];
+  if (!warning) return '';
+  const label = warning.status === 'blocked' ? 'Needs your attention' : 'Verification warning';
+  return `
+    <div class="pageguide-step-warning">
+      <div class="pageguide-step-warning-title">⚠️ ${escapeHtml(label)}</div>
+      ${warning.reason ? `<div class="pageguide-step-warning-reason">${escapeHtml(warning.reason)}</div>` : ''}
+    </div>`;
+}
+
+function clearGuideWarning(step) {
+  if (step == null) {
+    currentGuideWarnings = {};
+  } else {
+    delete currentGuideWarnings[step];
+    const meta = getGuideStepMeta(step);
+    if (meta?.planStep != null) delete currentGuideWarnings[meta.planStep];
+  }
+  const card = document.querySelector('#pageguide-step-panel .pageguide-step-card');
+  card?.querySelector('.pageguide-step-warning')?.remove();
+  card?.querySelector('.pageguide-step-verify-actions')?.remove();
+}
+
+function withGuideNextTimeout(promise, timeoutMs = 30000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Guide continuation timed out')), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function addGuidePausedMessage(reason = '') {
+  document.querySelector('.pageguide-guide-resume-card')?.remove();
+  if (reason) {
+    const container = document.getElementById('pageguide-messages');
+    const duplicate = container
+      ? Array.from(container.querySelectorAll('.pageguide-message.system')).some(el => el.textContent.trim() === reason)
+      : false;
+    if (!duplicate) addMessage(reason, 'system');
+  }
+  guidePaused = true;
+  guideActive = false;
+  guidePauseSeq++;
+  updateGuidePauseButton();
+}
+
+/**
+ * Pure decision helper (unit-tested): after `resumeGuide` resolved successfully, may we mark the
+ * guide as running again? Only if no new pause arrived while we were awaiting it. Resume awaits
+ * the whole next-step generation, so a guide that re-pauses mid-resume (loop / low-confidence /
+ * risk gate) delivers its `guidePaused` message *before* resume returns — blindly clearing
+ * `guidePaused` afterwards left the button showing "Pause" for a paused guide, so the next click
+ * paused instead of resuming and the guide could never be restarted.
+ */
+function _shouldApplyResumeSuccess(pauseSeqBefore, pauseSeqAfter) {
+  return pauseSeqBefore === pauseSeqAfter;
+}
+window._shouldApplyResumeSuccess = _shouldApplyResumeSuccess;
+
+/**
+ * Pure decision helper (unit-tested): after trying a guide control action on `triedTabId`, should
+ * we retry it on the tab that's actually in front? Yes only when the tried tab reported no live
+ * session ("Guide not active") and the active tab is a different, real tab — this recovers from a
+ * stale guideTabId left behind when the guide moved/opened tabs.
+ */
+function _shouldRetryGuideActionOnActiveTab(res, triedTabId, activeTabId) {
+  const notActive = (!res || res.success === false) && /not active/i.test(String(res?.error || ''));
+  return notActive && activeTabId != null && activeTabId !== triedTabId;
+}
+window._shouldRetryGuideActionOnActiveTab = _shouldRetryGuideActionOnActiveTab;
+
+/**
+ * Send a guide control message, recovering from a stale guideTabId.
+ *
+ * guideTabId goes stale whenever the run moves between tabs, and the tracked tab then answers "Guide
+ * not active" for a guide that is running perfectly well in front of the user. Resume has always
+ * retried on the frontmost tab; PAUSE DID NOT, so the button that stops a misbehaving agent was the
+ * one that gave up first — exactly backwards, since pause is what you reach for when the run has
+ * wandered somewhere you did not expect.
+ */
+/**
+ * Does this failure mean "nothing is listening on that page" rather than "the guide said no"?
+ *
+ * Reloading the extension orphans every content script already on a page: the bundle stops
+ * listening, and messaging it rejects with "Receiving end does not exist". Same for a page loaded
+ * before the extension was installed, and for "Extension context invalidated" after an update. None
+ * of these are answers from the guide — they are the absence of anyone to ask.
+ */
+function _isDeadContentScriptError(res) {
+  const msg = String(res?.error || '');
+  return /receiving end does not exist|could not establish connection|extension context invalidated|message port closed/i.test(msg);
+}
+window._isDeadContentScriptError = _isDeadContentScriptError;
+
+/**
+ * Say what the reader can do about it. "Receiving end does not exist" is a Chrome internal that
+ * describes our plumbing, not their problem — reaching it means reinjection was refused too, which
+ * on a chrome:// page, the Web Store or a PDF viewer it always will be.
+ */
+function _guideControlErrorText(message) {
+  return _isDeadContentScriptError({ error: message })
+    ? 'this page is not running PageGuide any more — reload the page (F5), then try again.'
+    : String(message || 'unknown error');
+}
+window._guideControlErrorText = _guideControlErrorText;
+
+/** Send, turning a messaging rejection into a result so callers can branch on it. */
+async function _sendGuideOnce(message, tabId) {
+  try {
+    const res = await sendToContentScript(message, tabId);
+    return res || { success: false, error: 'No response' };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * Put the content script back on a page that has lost it, so a guide can be controlled again.
+ *
+ * Injects the same bundle the manifest declares, read from the manifest itself so the two cannot
+ * drift. Only ever after a ping fails: content scripts share one global scope, and injecting a
+ * second copy over a live one is a redeclaration SyntaxError that would break the page's listener
+ * for good.
+ */
+async function _ensureContentScript(tabId) {
+  if (tabId == null) return false;
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'pageguidePing' });
+    return true;                                  // answered, so the bundle is alive
+  } catch (e) { /* nobody home — reinject below */ }
+
+  try {
+    const cs = chrome.runtime.getManifest().content_scripts?.[0] || {};
+    if (cs.css?.length) await chrome.scripting.insertCSS({ target: { tabId }, files: cs.css });
+    await chrome.scripting.executeScript({ target: { tabId }, files: cs.js || [] });
+    return true;
+  } catch (e) {
+    console.warn('[pageguide] could not reinject the content script:', e);
+    return false;   // chrome:// pages, the web store, and PDFs cannot be injected into
+  }
+}
+
+/**
+ * Send a guide control message, recovering from the two ways it goes astray.
+ *
+ * A stale guideTabId — the run moved tabs, and the tracked one answers "Guide not active" for a
+ * guide running fine in front of the user. And a dead content script — the extension was reloaded,
+ * so the page has no listener at all. Resume used to handle neither well: the first only for
+ * resume, the second not at all, which turned "reload the extension to pick up a fix" into "your
+ * paused run is gone".
+ */
+async function _sendGuideControl(action, extra = {}) {
+  const message = () => Object.assign({ action }, extra);
+
+  let res = await _sendGuideOnce(message(), guideTabId);
+
+  // The page stopped listening: put the bundle back and ask again, same tab.
+  if (_isDeadContentScriptError(res) && guideTabId != null) {
+    if (await _ensureContentScript(guideTabId)) res = await _sendGuideOnce(message(), guideTabId);
+  }
+
+  // Still nothing, or the tracked tab has no session: try the tab actually in front.
+  if (!res || res.success === false) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const worthRetrying = _shouldRetryGuideActionOnActiveTab(res, guideTabId, activeTab?.id)
+      || (_isDeadContentScriptError(res) && activeTab?.id != null && activeTab.id !== guideTabId);
+    if (worthRetrying) {
+      await _ensureContentScript(activeTab.id);
+      const retry = await _sendGuideOnce(message(), activeTab.id);
+      if (retry && retry.success !== false) { guideTabId = activeTab.id; res = retry; }
+    }
+  }
+  return res;
+}
+window._sendGuideControl = _sendGuideControl;
+
+async function resumeGuideFromPanel() {
+  const btn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
+  if (btn) btn.disabled = true;
+  if (stopBtn) stopBtn.disabled = true;
+  showTyping();
+  const pauseSeqBefore = guidePauseSeq;
+  try {
+    const res = await _sendGuideControl('resumeGuide');
+    if (!res || res.success === false) throw new Error(res?.error || 'Could not resume guide');
+    if (_shouldApplyResumeSuccess(pauseSeqBefore, guidePauseSeq)) {
+      guidePaused = false;
+      guideActive = true;
+    }
+    updateGuidePauseButton();
+  } catch (err) {
+    hideTyping();
+    if (/Guide not active/i.test(String(err.message || ''))) {
+      guidePaused = false;
+      guideActive = false;
+      guideTabId = null;
+      updateGuidePauseButton();
+    } else if (btn) {
+      btn.disabled = false;
+      if (stopBtn) stopBtn.disabled = false;
+    }
+    addMessage(`Could not resume the guide: ${_guideControlErrorText(err.message)}`, 'system');
+  }
+}
+
+async function pauseGuide(message = 'Guide paused.') {
+  const btn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
+  if (btn) btn.disabled = true;
+  if (stopBtn) stopBtn.disabled = true;
+  try {
+    const res = await _sendGuideControl('pauseGuide', { reason: message });
+    if (!res || res.success === false) throw new Error(res?.error || 'Guide not active');
+    guidePaused = true;
+    guideActive = false;
+    hideTyping();
+    updateGuidePauseButton();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    if (stopBtn) stopBtn.disabled = false;
+    addMessage(`Could not pause the guide: ${_guideControlErrorText(e.message)}`, 'system');
+  }
+}
+
+async function stopPausedGuideWithRecap() {
+  const resumeBtn = document.getElementById('pageguide-guide-pause');
+  const stopBtn = document.getElementById('pageguide-guide-stop-paused');
+  if (resumeBtn) resumeBtn.disabled = true;
+  if (stopBtn) stopBtn.disabled = true;
+  showTyping();
+  const targetTabId = guideTabId; // capture before clearing below — SW state is keyed per-tab now
+  try {
+    const res = await sendToContentScript({ action: 'stopGuideWithRecap' }, targetTabId);
+    if (!res || res.success === false) throw new Error(res?.error || 'Could not stop guide');
+    guideActive = false;
+    guidePaused = false;
+    guideStopped = true;
+    guideTabId = null;
+    hideTyping();
+    updateGuidePauseButton();
+    try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
+    try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
+    try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
+    updateTabChipDoneState(true);
+    // Force the timeline to re-render now that guideActive is false, so the "View Journey"
+    // collapse + seal happens immediately rather than waiting on some later unrelated render.
+    if (document.getElementById('pageguide-goal-timeline')) {
+      renderGoalTimeline(currentGuideStep, Math.max(currentGuidePlan.length, currentGuideRecords.length, currentGuideStep || 0));
+    }
+    if (res.recap && res.recap.summary) {
+      _rememberGuideRecap(res.recap);
+      await renderGuideRecapCard(res.recap, 'Stopped');
+    } else {
+      addMessage('⏹ Guide stopped.', 'system');
+    }
+  } catch (err) {
+    hideTyping();
+    guideStopped = false;
+    if (resumeBtn) resumeBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = false;
+    addMessage(`Could not stop the guide: ${err.message}`, 'system');
+  }
+}
+
 /**
  * Add a guide step message
  */
 function addGuideStep(result) {
-  const container = document.getElementById('pageguide-messages');
-  if (!container) return;
+  const panel = document.getElementById('pageguide-step-panel');
+  if (!panel) return;
 
-  guideActive = !result.isLastStep;
+  if (result?.sessionId && getActiveSessionId() !== result.sessionId) {
+    resetLiveGuideTimelineForSession(result.sessionId, { title: currentGoal?.prompt || result.title || result.instruction || '' });
+  }
+  if (result?.sessionId) currentGuideSessionId = result.sessionId;
+  guidePaused = !!result.paused;
+  guideActive = !result.isLastStep && !guidePaused;
+  if (result.isLastStep) {
+    guideTabId = null; // guide finished normally — no tab is "owned" anymore
+    updateTabChipDoneState(true);
+  }
   hideTyping();
-  
-  const msg = document.createElement('div');
-  msg.className = 'pageguide-message guide';
-  
-  const stepBadge = result.isLastStep ? '✅' : `Step ${result.step}`;
-  
-  msg.innerHTML = `
-    <div class="pageguide-guide-step">
-      <span class="pageguide-step-badge">${stepBadge}</span>
-      <span class="pageguide-step-text">${result.answer}</span>
-    </div>
-    ${result.nextStepHint && !result.isLastStep ? `<div class="pageguide-next-hint">💡 ${result.nextStepHint}</div>` : ''}
-  `;
+  updateGuidePauseButton();
+  _setJourneyRecalledMode(false); // a live step replaces any recalled read-only view
+
+  // Timeline is concrete-step indexed (one dot per step taken), so track the concrete step.
+  currentGuideStep = result.step || result.planStep || currentGuideStep;
+  if (result.step != null) delete currentGuideWarnings[result.step];
+  if (result.isLastStep) clearGuideWarning();
+  // This unconditional re-render is also what triggers the "View Journey" auto-collapse +
+  // seal (see renderGoalTimeline): guideActive was already flipped false above for the
+  // isLastStep case, so this call is the "next render after finishing" that catches it.
+  renderGoalCard({
+    route: 'guide',
+    step: currentGuideStep,
+    total: currentGuidePlan.length || result.totalSteps || undefined
+  });
+
+  // Auto mode hides intermediate step cards, but a find/visual_highlight answer IS the deliverable.
+  if (result.autoMode && !result.isLastStep && !result.isFind && !result.isVisualHighlight && !result.isWatchVideo) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+
+  const isFinishNotice = !!(result.isFinish || (result.isLastStep && !result.isVisualHighlight && !result.isFind && !result.isWatchVideo));
+  const stepBadge = result.isFind ? '🔎 Highlight'
+    : (result.isVisualHighlight ? '🖼 Answer' : (result.isWatchVideo ? '▶ Video' : (isFinishNotice ? '' : `Step ${result.step}`)));
+  const targetRow = (!isFinishNotice && result.targetText)
+    ? `<div class="pageguide-step-meta-row"><span>Target</span><b>${escapeHtml(result.targetText)}</b></div>`
+    : '';
+  const warning = renderStepWarning(result.step);
+  const urlRow = ((result.action === 'goto_url' || result.action === 'navigate') && result.navigateUrl)
+    ? `<div class="pageguide-step-meta-row"><span>URL</span><b>${escapeHtml(result.navigateUrl)}</b></div>`
+    : (result.isWatchVideo && result.watchVideoUrl)
+    ? `<div class="pageguide-step-meta-row"><span>Video</span><b>${escapeHtml(result.watchVideoUrl)}</b></div>`
+    : '';
+
+  // A find answer carries [N:"text"] citations and markdown; render them as clickable chips
+  // (already escaped by parseMarkdown). visual_highlight shows its caption (the image goes to the
+  // chat bubble below). Everything else stays plain escaped text.
+  let stepText = '';
+  const rawAnswer = result.findAnswer || result.answer || '';
+  const isTruncated = false;
+
+  if (result.isFind) {
+    stepText = 'I have completed your request. Please see the answer in the chatbox.';
+  } else if (result.isWatchVideo) {
+    stepText = 'I watched the video. Please see the answer in the chatbox.';
+  } else {
+    const displayAnswer = result.isVisualHighlight ? (result.visualHighlightCaption || result.answer || '') : (result.answer || '');
+    stepText = escapeHtml(_stripEvidenceRefs(displayAnswer));
+  }
+
+  const metaHtml = (targetRow || urlRow)
+    ? `<div class="pageguide-step-meta">${targetRow}${urlRow}</div>`
+    : '';
+
+  // A plain guide finish (no find/video/visual-highlight deliverable of its own) used to render a
+  // pinned card above the whole conversation reading "I have completed your task. Please see the
+  // answer in the chatbox." — the real answer already lives in the chatbox (the View Journey
+  // timeline collapses to it, and renderGuideFinalAnswer posts the full ANSWER card below), so
+  // that pointer was pure redundant chrome sitting at the very top of the panel. Just hide the
+  // step panel for that case instead of building a card whose only content was that sentence.
+  // (Note: this must NOT skip the answer/recap posting below — isFinishNotice implies isLastStep,
+  // and result.isFinish's renderGuideFinalAnswer call still needs to run.)
+  if (isFinishNotice) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+  } else {
+    panel.innerHTML = `
+      <div class="pageguide-step-card ${result.hasHighlights ? 'pageguide-clickable' : ''}">
+        <button type="button" class="pageguide-step-collapse" title="Collapse" aria-label="Collapse step panel">✕</button>
+        <div class="pageguide-guide-step">
+          ${stepBadge ? `<span class="pageguide-step-badge">${escapeHtml(stepBadge)}</span>` : ''}
+          <span class="pageguide-step-text">${stepText}</span>
+        </div>
+        ${metaHtml}
+        ${warning}
+        <div class="pageguide-step-btn-row"></div>
+      </div>
+    `;
+    panel.style.display = '';
+
+    if (isTruncated) {
+      const expandBtn = panel.querySelector('.pageguide-step-expand');
+      expandBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const contentSpan = panel.querySelector('.pageguide-step-text-content');
+        if (contentSpan) {
+          contentSpan.innerHTML = parseCitations(parseMarkdown(rawAnswer));
+        }
+        expandBtn.style.display = 'none';
+      });
+    }
+    panel.onclick = (e) => {
+      if (e.target.closest('button')) return;
+      // The messages-container delegate doesn't cover this panel, so handle find's citation
+      // chips here: a chip scrolls to its own passage, not to the first highlight.
+      const cit = e.target.closest('.pageguide-citation');
+      if (cit) {
+        e.stopPropagation();
+        sendToContentScript({ action: 'scrollToIndex', index: parseInt(cit.dataset.index, 10) });
+        return;
+      }
+      if (result.hasHighlights) sendToContentScript({ action: 'scrollToHighlight' });
+    };
+    // Collapse (✕) hides the current-step panel in guide mode.
+    panel.querySelector('.pageguide-step-collapse')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.style.display = 'none';
+    });
+  }
+
+  // Post the find answer to the chat so it survives collapsing the card or ending the guide.
+  // Keyed by step so a re-render of the same step doesn't post it twice.
+  if (result.isFind && result.findAnswer && _lastFindMessageStep !== result.step) {
+    _lastFindMessageStep = result.step;
+    renderFindAnswer(result);
+  }
+
+  // visual_highlight: the answer is a cropped screenshot region. parseMarkdown escapes <img>, so
+  // render a dedicated assistant bubble (like the recap) rather than addMessage.
+  if (result.isVisualHighlight && result.visualHighlightImage && _lastVisualHighlightStep !== result.step) {
+    _lastVisualHighlightStep = result.step;
+    renderVisualHighlightAnswer(result);
+  }
+
+  if (result.isWatchVideo && (result.watchVideoAnswer || result.watchVideoError) && _lastWatchVideoMessageStep !== result.step) {
+    _lastWatchVideoMessageStep = result.step;
+    renderWatchVideoAnswer(result);
+  }
+
+  if (result.isFinish && result.finalAnswer) {
+    const answerKey = `${result.sessionId || result.recap?.sessionId || ''}:${result.step}`;
+    if (_lastAnswerCardKey !== answerKey) {
+      _lastAnswerCardKey = answerKey;
+      renderGuideFinalAnswer(result).catch((e) => console.warn('[panel] answer card render failed:', e));
+    }
+  }
+
+  // Terminal step: post the standalone Task Review recap card (summary + hoverable per-step
+  // evidence) once. The working agent always finishes via action="finish" now, so this branch is
+  // unreachable for normal completions (they get the unified answer card above, whose Reasoning
+  // Trail already surfaces the same per-step evidence). It only still fires for find/visual_highlight
+  // terminals, which coerce isLastStep=true without going through finish. The content script only
+  // attaches result.recap when the mode is on; re-check the panel toggle too.
+  if (result.isLastStep && result.recap && result.recap.summary && !(result.isFinish && result.finalAnswer)) {
+    const recapKey = `${result.recap.sessionId || ''}:${result.step}`;
+    if (_lastRecapKey !== recapKey) {
+      _lastRecapKey = recapKey;
+      _rememberGuideRecap(result.recap);
+      renderGuideRecapCard(result.recap, 'Answer');
+    }
+  }
 
   if (!result.isLastStep) {
-    const btnRow = document.createElement('div');
-    btnRow.className = 'pageguide-step-btn-row';
+    const btnRow = panel.querySelector('.pageguide-step-btn-row');
 
-    const stopHereBtn = document.createElement('button');
-    stopHereBtn.className = 'pageguide-step-stop-btn';
-    stopHereBtn.textContent = '⏹ Stop here';
-    stopHereBtn.title = 'Stop the guide at this step';
-    stopHereBtn.addEventListener('click', (e) => {
+    const pauseBtn = document.createElement('button');
+    pauseBtn.className = 'pageguide-step-stop-btn';
+    pauseBtn.textContent = 'Pause';
+    pauseBtn.title = 'Pause the guide at this step';
+    pauseBtn.addEventListener('click', (e) => {
       e.stopPropagation(); // don't trigger scroll-to-highlight
-      stopGuide(`✅ Stopped after step ${result.step}. Ask me again whenever you need more help.`);
+      pauseGuide(`Paused after step ${result.step}. Resume when you want the agent to continue.`);
     });
 
-    if (result.action === 'click') {
-      const nextBtn = document.createElement('button');
-      nextBtn.className = 'pageguide-step-next-btn';
-      nextBtn.textContent = 'Next →';
-      nextBtn.title = 'Mark this step as done and get the next one';
-      nextBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        nextBtn.disabled = true;
-        stopHereBtn.disabled = true;
-        showTyping();
-        try {
-          await sendToContentScript({ action: 'nextGuideStep' });
-        } catch (err) { /* ignore */ }
-      });
-      btnRow.appendChild(nextBtn);
-    }
+    // Manual mode: every non-final step gets a Next button, so the user can do
+    // the action on the page and then ask for the next step.
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'pageguide-step-next-btn';
+    nextBtn.textContent = 'Next →';
+    nextBtn.title = 'Continue after you complete this step';
+    nextBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      nextBtn.disabled = true;
+      pauseBtn.disabled = true;
+      showTyping();
+      try {
+        const response = await withGuideNextTimeout(
+          sendToContentScript({ action: 'nextGuideStep', source: 'panel' })
+        );
+        if (!response || response.success === false || response.progressed === false) {
+          throw new Error(response?.error || 'Guide did not advance');
+        }
+      } catch (err) {
+        hideTyping();
+        if (nextBtn.isConnected) nextBtn.disabled = false;
+        if (pauseBtn.isConnected) pauseBtn.disabled = false;
+        if (!String(err.message || '').startsWith('Stopped after 15 steps')) {
+          addMessage(`Could not continue the guide: ${err.message}. Try Next again, or stop here.`, 'system');
+        }
+      }
+    });
+    btnRow.appendChild(nextBtn);
 
-    btnRow.appendChild(stopHereBtn);
-    msg.appendChild(btnRow);
+    if (btnRow) btnRow.appendChild(pauseBtn);
+  } else {
+    const row = panel.querySelector('.pageguide-step-btn-row');
+    if (row) row.remove();
   }
-
-  if (result.hasHighlights) {
-    msg.classList.add('pageguide-clickable');
-    // Click handler handled by delegated listener (_setupMessageContainerDelegate).
-  }
-
-  container.appendChild(msg);
-  container.scrollTop = container.scrollHeight;
 
   // On step 1, show the matched tutorial reference in a collapsible Details section
   if (result.tutorialMatch) {
@@ -702,21 +5265,54 @@ function addAskStep(result) {
 /**
  * Show typing indicator. In guide mode, appends a Stop button.
  */
-function showTyping() {
+// Morph the send button (➤) into a square Stop (■) while the agent is running, and back.
+// `panelRunning` is the single source of truth used by the click handler to route to stop.
+function setRunning(on) {
+  panelRunning = !!on;
+  const btn = document.getElementById('pageguide-send');
+  if (!btn) return;
+  btn.disabled = false; // stays clickable — it's the Stop control while running
+  btn.classList.toggle('pageguide-send-btn--stop', panelRunning);
+  btn.textContent = panelRunning ? '■' : '➤';
+  btn.title = panelRunning ? 'Stop' : 'Send';
+  btn.setAttribute('aria-label', panelRunning ? 'Stop' : 'Send');
+}
+
+// Stop whatever is running. A guide is aborted for real (stopGuide → gv2StopGuide, also clears
+// SW state); other routes just cancel the UI (the in-flight LLM result is discarded via
+// cancelRequested). stopGuide is called unconditionally because a guide may already be running
+// in the content script even before guideActive flips on the first step — harmless otherwise.
+function stopRun() {
+  cancelRequested = true;
+  setRunning(false);
+  stopGuide('⏹ Stopped.');
+}
+
+function showTyping(statusText = '') {
+  setRunning(true);
   const container = document.getElementById('pageguide-messages');
-  if (!container || container.querySelector('.pageguide-typing')) return;
+  if (!container) return;
+  // While a guide session is live, the "View Journey" timeline bubble already shows progress
+  // in-chat ("Working… step X of Y" + a pulsing current-step dot) — skip the generic typing
+  // bubble so there's exactly one "agent is working" indicator, not two. (Just remove any
+  // stray typing element; don't call the full hideTyping(), which also resets the working-
+  // status timers and flips the running/stop-button state we just turned on above.)
+  if (guideActive && document.getElementById('pageguide-goal')) {
+    container.querySelector('.pageguide-typing')?.remove();
+    return;
+  }
+  const existing = container.querySelector('.pageguide-typing');
+  const label = statusText || currentGuideWorkingStatus || (_isGuideWorkingContext() ? 'Agent thinking…' : 'Thinking…');
+  if (existing) {
+    updateTypingIndicatorText(label);
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
 
   const typing = document.createElement('div');
   typing.className = 'pageguide-typing';
-  typing.innerHTML = '<span></span><span></span><span></span>';
-
-  if (guideActive) {
-    const stopBtn = document.createElement('button');
-    stopBtn.className = 'pageguide-guide-stop-btn';
-    stopBtn.textContent = '⏹ Stop';
-    stopBtn.addEventListener('click', (e) => { e.stopPropagation(); stopGuide(); });
-    typing.appendChild(stopBtn);
-  }
+  typing.innerHTML = '<span class="pageguide-typing-spinner" aria-hidden="true"></span><span class="pageguide-typing-text"></span>';
+  typing.querySelector('.pageguide-typing-text').textContent = label;
 
   container.appendChild(typing);
   container.scrollTop = container.scrollHeight;
@@ -727,13 +5323,24 @@ function showTyping() {
  * @param {string} [message] - Optional message shown in chat; defaults to generic stop notice.
  */
 async function stopGuide(message = '⏹ Guide stopped.') {
+  const targetTabId = guideTabId; // capture before clearing below
   guideActive = false;
+  guidePaused = false;
+  guideStopped = true; // suppress any late running-state messages from an in-flight content script
+  guideTabId = null;
   hideTyping();
+  updateGuidePauseButton();
+  // Set the Stop tombstone + clear the resume fallback BEFORE messaging the content script, so
+  // Stop is authoritative even if the content script is already gone (mid-navigation): the next
+  // page load reads the tombstone and refuses to resume. Keys match guidev2.js (_GV2_STOP_KEY /
+  // _GV2_KEY).
+  try { await chrome.storage.session.set({ pageguideGuidanceV2Stopped: Date.now() }); } catch (e) {}
+  try { await chrome.storage.session.remove('pageguideGuidanceV2'); } catch (e) {}
+  // Clear SW state directly so it won't tell the next page to resume.
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: targetTabId }); } catch (e) {}
   try {
-    await sendToContentScript({ action: 'stopGuide' });
+    await sendToContentScript({ action: 'stopGuide' }, targetTabId);
   } catch (e) { /* content script may not be reachable */ }
-  // Also clear SW state directly so the next page load won't resume
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
   addMessage(message, 'system');
 }
 
@@ -742,23 +5349,37 @@ async function stopGuide(message = '⏹ Guide stopped.') {
  */
 function hideTyping() {
   document.querySelector('.pageguide-typing')?.remove();
+  if (currentGuideStatusTimer) {
+    clearTimeout(currentGuideStatusTimer);
+    currentGuideStatusTimer = null;
+  }
+  pendingGuideWorkingStatus = '';
+  currentGuideWorkingStatus = '';
+  currentGuideStatusShownAt = 0;
+  setRunning(false);
 }
 
 /**
- * Send message to content script
+ * Send message to content script.
+ * @param {object} message
+ * @param {number} [targetTabId] - Send to this tab instead of whatever tab is currently focused.
+ *   Guide control actions (pause/resume/stop) pass guideTabId here so they always reach the tab
+ *   actually running the guide, even if the user has switched focus to a different tab.
  */
-async function sendToContentScript(message) {
-  if (!currentTabId) {
+async function sendToContentScript(message, targetTabId) {
+  let tabId = targetTabId != null ? targetTabId : currentTabId;
+  if (!tabId) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    currentTabId = tab?.id;
+    tabId = tab?.id;
+    if (!targetTabId) currentTabId = tabId;
   }
-  
-  if (!currentTabId) {
+
+  if (!tabId) {
     throw new Error('No active tab found');
   }
-  
+
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(currentTabId, message, response => {
+    chrome.tabs.sendMessage(tabId, message, response => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
       } else {
@@ -766,6 +5387,312 @@ async function sendToContentScript(message) {
       }
     });
   });
+}
+
+/**
+ * Pulse the page span a citation points at, while the pointer is over that citation.
+ *
+ * Clicking [N] scrolls to its span, but a span inside an already-tinted paragraph is invisible on
+ * arrival — the jump reads as having gone nowhere. Previewing on hover says "these words" before the
+ * click, so the reader knows what the number means.
+ *
+ * One index at a time, and a short delay before arming: the pointer crosses several citations on its
+ * way to the one it wants, and firing a message for each would be noise on both ends.
+ */
+let _pgPreview = null;       // {action, index} currently marked on the page
+let _pgPreviewTimer = null;
+
+/**
+ * @param {{action: string, index: number|string}|null} target - null clears whatever is marked
+ */
+function previewCitationIndex(target, tabId) {
+  const action = target?.action || 'previewIndex';
+  const raw = target && typeof target === 'object' ? target.index : target;
+  // Number(null) is 0 — a finite, valid-looking index — so "nothing under the pointer" has to be
+  // screened out before the conversion, or moving off a citation arms element 0 instead of clearing.
+  const n = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
+  if (_pgPreviewTimer) { clearTimeout(_pgPreviewTimer); _pgPreviewTimer = null; }
+
+  if (!Number.isFinite(n)) {
+    if (_pgPreview) {
+      const was = _pgPreview;
+      _pgPreview = null;
+      sendToContentScript({ action: was.action, index: was.index, on: false }, tabId).catch(() => {});
+    }
+    return;
+  }
+  const citation = target && typeof target === 'object' ? target.citation : undefined;
+  if (_pgPreview && _pgPreview.index === n && _pgPreview.action === action) return;
+  // Clear whatever is marked before arming the next one. Moving from an [ev] marker to a [N] marks
+  // through two different mechanisms on the page, so the old one does not clear itself and would be
+  // left behind — two badges, one pointer.
+  if (_pgPreview) {
+    const was = _pgPreview;
+    _pgPreview = null;
+    sendToContentScript({ action: was.action, index: was.index, on: false }, tabId).catch(() => {});
+  }
+  _pgPreviewTimer = setTimeout(() => {
+    _pgPreview = { action, index: n };
+    sendToContentScript({ action, index: n, citation, on: true }, tabId).catch(() => {});
+  }, 90);
+}
+window.previewCitationIndex = previewCitationIndex;
+
+/**
+ * Wire citation hover-preview on a container of rendered answers. Used by the chat and by the
+ * study overlay, which show the same markup.
+ */
+function bindCitationHoverPreview(container) {
+  if (!container || container.dataset.pgHoverPreview) return;
+  container.dataset.pgHoverPreview = '1';
+  container.addEventListener('mouseover', (e) => {
+    // An [ev] marker points at a region the annotator drew — over a picture, usually — rather than
+    // at an element, so it is marked a different way on the page. From the reader's side both are
+    // "hover a number, see where it points".
+    const ev = e.target.closest?.('.pageguide-evidence-citation[data-evidence-num]');
+    if (ev) {
+      previewCitationIndex({ action: 'previewEvidenceMark', index: ev.dataset.evidenceNum });
+      return;
+    }
+    const cit = e.target.closest?.('.pageguide-citation-idx[data-index]');
+    previewCitationIndex(cit
+      ? { action: 'previewIndex', index: cit.dataset.index, citation: cit.dataset.citation }
+      : null);
+  });
+  container.addEventListener('mouseleave', () => previewCitationIndex(null));
+}
+window.bindCitationHoverPreview = bindCitationHoverPreview;
+
+/**
+ * Copy the finished run on screen into the guide-trajectory bank.
+ *
+ * Reads rewind rather than the panel's own state, because rewind has the full records — instructions,
+ * targets, before/after screenshots — while the panel only keeps the lightweight metas. Read-only on
+ * purpose: rewindVerifyScreenshots would DELETE any step whose shot is missing, and a study's source
+ * material must not be edited by looking at it.
+ */
+/**
+ * Read one session out of rewind and project it into a trajectory, without saving.
+ *
+ * Split from the capture button so the study editor can re-read a run it already banked — a
+ * trajectory captured before the projection understood something (answer evidence, the finish
+ * answer) is stale, and re-capturing from scratch would throw away the researcher's edits.
+ *
+ * @returns {Promise<object|null>} the projected trajectory, or null when the run is gone
+ */
+async function readTrajectoryFromSession(sid) {
+  if (!sid || typeof rewindGetIndex !== 'function' || typeof _buildGuideTrajectory !== 'function') return null;
+  const index = await rewindGetIndex(sid);
+  const metas = (Array.isArray(index?.steps) ? index.steps : []).filter(m => m && !m.isInitial);
+  if (!metas.length) return null;
+  const records = [];
+  // Step 0 too: it is not a step a participant is asked about, but it holds the only picture of the
+  // page BEFORE the agent touched anything. _buildGuideTrajectory keeps it out of the numbered steps
+  // and uses it as the opening bookend.
+  const initialRec = await rewindGetRecord(sid, 0);
+  if (initialRec) records.push(initialRec);
+  for (const meta of metas) {
+    const rec = await rewindGetRecord(sid, meta.step);
+    if (rec) records.push(rec);
+  }
+  return _buildGuideTrajectory(index, records, _lastRecapBySession.get(String(sid)) || null);
+}
+window.readTrajectoryFromSession = readTrajectoryFromSession;
+
+async function captureTrajectoryForStudy() {
+  const sid = typeof getActiveSessionId === 'function' ? getActiveSessionId() : currentGuideSessionId;
+  if (!sid) { addMessage('⚠️ No guide run to capture — run a guide task first.', 'error'); return; }
+
+  try {
+    const trajectory = await readTrajectoryFromSession(sid);
+    if (!trajectory) { addMessage('⚠️ That run has no steps to capture.', 'error'); return; }
+    const recap = _lastRecapBySession.get(String(sid)) || null;
+    const res = await saveGuideTrajectory(trajectory);
+    if (!res.saved) { addMessage(`❌ Could not capture: ${res.error || 'unknown error'}`, 'error'); return; }
+
+    const shots = trajectory.arms.grounding.steps.filter(st => st.screenshot).length;
+    addMessage(
+      `🎬 Captured **${trajectory.title}** — ${trajectory.arms.grounding.steps.length} step(s), ${shots} screenshot(s)` +
+      `${recap ? '' : ', no recap (the answer and trail will need writing by hand)'}. ` +
+      'Edit it under ⋯ → Record Guide User Study.',
+      'system'
+    );
+  } catch (e) {
+    addMessage(`❌ Could not capture: ${e?.message || e}`, 'error');
+  }
+}
+window.captureTrajectoryForStudy = captureTrajectoryForStudy;
+
+/**
+ * The annotator-website twin of captureTrajectoryForStudy: same run, same shape, different bank.
+ * The study copy gets edited into a stimulus; this copy is published as-is, because the annotators
+ * are grading what the agent actually did (sidepanel/annotation_trajectories.js).
+ */
+async function captureTrajectoryForAnnotation() {
+  const sid = typeof getActiveSessionId === 'function' ? getActiveSessionId() : currentGuideSessionId;
+  if (!sid) { addMessage('⚠️ No guide run to capture — run a guide task first.', 'error'); return; }
+  if (typeof saveAnnotationTrajectory !== 'function') {
+    addMessage('❌ Annotation bank is not loaded (annotation_trajectories.js).', 'error');
+    return;
+  }
+  try {
+    const trajectory = await readTrajectoryFromSession(sid);
+    if (!trajectory) { addMessage('⚠️ That run has no steps to capture.', 'error'); return; }
+    // Tag the capture with the task it was started from (▶ in Record Annotation Trajectories), so
+    // the bank and the annotator site can group runs by task.
+    try {
+      const cur = (await chrome.storage.local.get('pageguide_annotation_current_task')).pageguide_annotation_current_task;
+      if (cur?.id) { trajectory.task_id = cur.id; trajectory.task_name = cur.name || ''; }
+    } catch (e) { /* untagged is fine */ }
+    const res = await saveAnnotationTrajectory(trajectory);
+    if (!res.saved) { addMessage(`❌ Could not capture: ${res.error || 'unknown error'}`, 'error'); return; }
+    const steps = trajectory.arms.grounding.steps;
+    const shots = steps.filter(st => st.screenshot).length;
+    addMessage(
+      `📝 Captured **${trajectory.title}** for annotation — ${steps.length} step(s), ${shots} screenshot(s)` +
+      `${trajectory.arms.grounding.answer ? '' : ', no final answer recorded'}. ` +
+      'Publish it under ⋯ → Record Annotation Trajectories.',
+      'system'
+    );
+  } catch (e) {
+    addMessage(`❌ Could not capture: ${e?.message || e}`, 'error');
+  }
+}
+window.captureTrajectoryForAnnotation = captureTrajectoryForAnnotation;
+
+/**
+ * The model-performance twin of captureTrajectoryForAnnotation: same run, same shape, third bank —
+ * plus what the run cost, read off the cost ledger for this session (provider, model, calls,
+ * tokens, dollars, wall time), so runs of different models on the same task can be compared
+ * (sidepanel/model_performance_trajectories.js).
+ */
+async function captureTrajectoryForModelPerformance() {
+  const sid = typeof getActiveSessionId === 'function' ? getActiveSessionId() : currentGuideSessionId;
+  if (!sid) { addMessage('⚠️ No guide run to capture — run a guide task first.', 'error'); return; }
+  if (typeof saveModelPerformanceTrajectory !== 'function') {
+    addMessage('❌ Model-performance bank is not loaded (model_performance_trajectories.js).', 'error');
+    return;
+  }
+  try {
+    const trajectory = await readTrajectoryFromSession(sid);
+    if (!trajectory) { addMessage('⚠️ That run has no steps to capture.', 'error'); return; }
+    // Tag with the task it was started from (▶ in Record Model Performance shares the launcher key
+    // with the annotation recorder, so a run started from either screen is tagged).
+    try {
+      const cur = (await chrome.storage.local.get('pageguide_annotation_current_task')).pageguide_annotation_current_task;
+      if (cur?.id) { trajectory.task_id = cur.id; trajectory.task_name = cur.name || ''; }
+    } catch (e) { /* untagged is fine */ }
+    // The run's cost and model, from the ledger. A run with no priced calls still captures — the
+    // meta is just empty — because the trajectory itself is the record; the cost is the extra.
+    try {
+      const local = await chrome.storage.local.get(PAGEGUIDE_COST_LEDGER_KEY);
+      const entries = costEntriesForSession(local[PAGEGUIDE_COST_LEDGER_KEY], sid);
+      trajectory.run_meta = _modelPerfRunMeta(entries);
+      if (!trajectory.run_meta.model) {
+        const st = await chrome.storage.sync.get(['provider', 'openrouterModel', 'openaiModel', 'geminiModel']);
+        const prov = st.provider || '';
+        trajectory.run_meta.provider = trajectory.run_meta.provider || prov;
+        trajectory.run_meta.model = st[`${prov}Model`] || st.openrouterModel || st.geminiModel || st.openaiModel || '';
+      }
+    } catch (e) { trajectory.run_meta = trajectory.run_meta || {}; }
+    const res = await saveModelPerformanceTrajectory(trajectory);
+    if (!res.saved) { addMessage(`❌ Could not capture: ${res.error || 'unknown error'}`, 'error'); return; }
+    const steps = trajectory.arms.grounding.steps;
+    const m = trajectory.run_meta || {};
+    const cost = m.calls ? ` · ${m.model || m.provider || 'model ?'} · ${m.calls} call(s)${m.cost_usd ? ` · $${Number(m.cost_usd).toFixed(4)}` : ''}` : (m.model ? ` · ${m.model}` : '');
+    addMessage(
+      `📈 Captured **${trajectory.title}** for model performance — ${steps.length} step(s)${cost}. ` +
+      (trajectory.task_id
+        ? `Tagged as **${trajectory.task_name || trajectory.task_id}**. Publish it under ⋯ → Record Model Performance.`
+        : '⚠️ Not assigned to a task (it was not started from ▶). Assign it under ⋯ → Record Model Performance → Task, or it will not appear in Model Comparison.'),
+      'system'
+    );
+  } catch (e) {
+    addMessage(`❌ Could not capture: ${e?.message || e}`, 'error');
+  }
+}
+window.captureTrajectoryForModelPerformance = captureTrajectoryForModelPerformance;
+
+/** Human-readable byte size for chip labels. */
+function _fmtBytes(bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Rebuild the unified attachment chip row from the current attachment state
+ * (image / text file / selected text). The image chip is static so its wrapper
+ * survives region-overlay injection; the file and text chips are rebuilt each
+ * call. The whole row hides when nothing is attached.
+ */
+function renderAttachmentChips() {
+  const row = document.getElementById('pageguide-attachment-chips');
+  if (!row) return;
+
+  // --- Image chip (static element; toggled, not rebuilt) ---
+  const imageChip = document.getElementById('pageguide-image-chip');
+  const previewImg = document.getElementById('pageguide-preview-img');
+  const nameEl = document.getElementById('pageguide-image-name');
+  const metaEl = document.getElementById('pageguide-image-label');
+  const wrapper = document.getElementById('pageguide-image-wrapper');
+  if (imageChip) {
+    if (uploadedImageBase64) {
+      if (previewImg && uploadedImageDataUrl) previewImg.src = uploadedImageDataUrl;
+      if (nameEl) nameEl.textContent = uploadedImageMeta?.name || 'Pasted image';
+      // renderImageRegions() owns the label once regions are found — don't clobber it.
+      if (metaEl && !wrapper?.classList.contains('has-regions')) {
+        const parts = [];
+        if (uploadedImageMeta?.type) parts.push(uploadedImageMeta.type.replace('image/', '').toUpperCase());
+        if (uploadedImageMeta?.size) parts.push(_fmtBytes(uploadedImageMeta.size));
+        metaEl.textContent = parts.length ? parts.join(' · ') : '📷 Ready — ask about it';
+      }
+      imageChip.style.display = 'flex';
+    } else {
+      imageChip.style.display = 'none';
+    }
+  }
+
+  // --- Dynamic chips: clear then rebuild file + selected-text ---
+  row.querySelectorAll('[data-chip-dynamic]').forEach(el => el.remove());
+
+  if (uploadedFileContent != null) {
+    const chip = document.createElement('div');
+    chip.className = 'pageguide-attachment-chip pageguide-chip-file';
+    chip.setAttribute('data-chip-dynamic', 'file');
+    const metaParts = [];
+    if (uploadedFileSize) metaParts.push(_fmtBytes(uploadedFileSize));
+    chip.innerHTML = `
+      <span class="pageguide-chip-icon">📎</span>
+      <div class="pageguide-chip-info">
+        <span class="pageguide-chip-name">${escapeHtml(uploadedFileName || 'File')}</span>
+        <span class="pageguide-chip-meta">${escapeHtml(metaParts.join(' · ') || 'Text file')}</span>
+      </div>
+      <button class="pageguide-remove-image" data-chip-remove="file" title="Remove file">✕</button>`;
+    row.appendChild(chip);
+  }
+
+  if (currentSelectedText) {
+    const chip = document.createElement('div');
+    chip.className = 'pageguide-attachment-chip pageguide-chip-text';
+    chip.setAttribute('data-chip-dynamic', 'text');
+    const wordCount = currentSelectedText.split(/\s+/).filter(w => w.length > 0).length;
+    const snippet = currentSelectedText.length > 60
+      ? currentSelectedText.slice(0, 60) + '…'
+      : currentSelectedText;
+    chip.innerHTML = `
+      <span class="pageguide-chip-icon">${UI_ICONS.quote || '✎'}</span>
+      <div class="pageguide-chip-info">
+        <span class="pageguide-chip-name">Selected text</span>
+        <span class="pageguide-chip-meta" title="${escapeHtml(currentSelectedText)}">“${escapeHtml(snippet)}” · ${wordCount}w</span>
+      </div>
+      <button class="pageguide-remove-image" data-chip-remove="text" title="Clear selection context">✕</button>`;
+    row.appendChild(chip);
+  }
+
+  const anyVisible = !!uploadedImageBase64 || uploadedFileContent != null || !!currentSelectedText;
+  row.style.display = anyVisible ? 'flex' : 'none';
 }
 
 /**
@@ -796,21 +5723,18 @@ async function handlePasteImage(event) {
           const base64 = e.target.result;
           // Remove data URL prefix to get pure base64
           uploadedImageBase64 = base64.split(',')[1];
-          
-          // Show preview
-          const preview = document.getElementById('pageguide-image-preview');
-          const previewImg = document.getElementById('pageguide-preview-img');
+          uploadedImageDataUrl = base64;
+          uploadedImageMeta = { name: 'Pasted image', type: file.type, size: file.size };
+
           const uploadLabel = document.getElementById('pageguide-upload-label');
-          
-          if (preview && previewImg) {
-            previewImg.src = base64;
-            preview.style.display = 'flex';
-          }
-          
+
+          // Render the chip row (image chip becomes visible)
+          renderAttachmentChips();
+
           // Highlight upload button and show image icon
           if (uploadLabel) uploadLabel.classList.add('has-image');
           _setUploadIcon('📷');
-          
+
           // Send image to content script
           try {
             await sendToContentScript({
@@ -829,7 +5753,7 @@ async function handlePasteImage(event) {
             input.focus();
           }
 
-          addMessage('📋 Image pasted! Ask me to find it on the page.', 'system');
+          addMessage('📋 Image pasted! Ask me about it or to find it on the page.', 'system');
         };
         
         reader.readAsDataURL(file);
@@ -855,9 +5779,11 @@ async function handleUpload(event) {
 }
 
 /** Update the combined upload button icon */
-function _setUploadIcon(emoji) {
+function _setUploadIcon(kind) {
   const icon = document.getElementById('pageguide-upload-icon');
-  if (icon) icon.textContent = emoji;
+  if (!icon) return;
+  const key = kind === '📷' || kind === 'image' ? 'image' : (kind === 'file' ? 'file' : 'attach');
+  icon.innerHTML = UI_ICONS[key].replace(/^<span class="pageguide-inline-icon">|<\/span>$/g, '');
 }
 
 /**
@@ -886,17 +5812,14 @@ async function handleImageUpload(event) {
       const base64 = e.target.result;
       // Remove data URL prefix to get pure base64
       uploadedImageBase64 = base64.split(',')[1];
-      
-      // Show preview
-      const preview = document.getElementById('pageguide-image-preview');
-      const previewImg = document.getElementById('pageguide-preview-img');
+      uploadedImageDataUrl = base64;
+      uploadedImageMeta = { name: file.name, type: file.type, size: file.size };
+
       const uploadLabel = document.getElementById('pageguide-upload-label');
-      
-      if (preview && previewImg) {
-        previewImg.src = base64;
-        preview.style.display = 'flex';
-      }
-      
+
+      // Render the chip row (image chip becomes visible)
+      renderAttachmentChips();
+
       // Highlight upload button and show image icon
       if (uploadLabel) uploadLabel.classList.add('has-image');
       _setUploadIcon('📷');
@@ -918,7 +5841,7 @@ async function handleImageUpload(event) {
         input.placeholder = 'Ask about the uploaded image...';
       }
 
-      addMessage('📷 Image uploaded! Ask me to find it on the page.', 'system');
+      addMessage('📷 Image uploaded! Ask me about it or to find it on the page.', 'system');
     };
     
     reader.readAsDataURL(file);
@@ -932,25 +5855,26 @@ async function handleImageUpload(event) {
  */
 async function clearUploadedImage() {
   uploadedImageBase64 = null;
+  uploadedImageDataUrl = null;
+  uploadedImageMeta = null;
 
-  // Hide preview and clear region overlays
-  const preview = document.getElementById('pageguide-image-preview');
+  // Clear region overlays before the chip re-renders
   const wrapper = document.getElementById('pageguide-image-wrapper');
   const uploadLabel = document.getElementById('pageguide-upload-label');
   const input = document.getElementById('pageguide-input');
   const fileInput = document.getElementById('pageguide-image-upload');
   const label = document.getElementById('pageguide-image-label');
 
-  if (preview) preview.style.display = 'none';
   if (wrapper) {
     wrapper.classList.remove('has-regions');
     wrapper.querySelectorAll('.pageguide-image-region').forEach(el => el.remove());
   }
-  if (label) label.textContent = '📷 Image ready — ask about it!';
+  if (label) label.textContent = '📷 Ready — ask about it';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   _setUploadIcon('📎');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
+  renderAttachmentChips();
 
   // Clear from content script
   try {
@@ -980,18 +5904,26 @@ async function handleFileUpload(event) {
     const text = await file.text();
     uploadedFileContent = text;
     uploadedFileName = file.name;
+    uploadedFileSize = file.size;
 
-    // Show preview badge
-    const preview = document.getElementById('pageguide-file-preview');
-    const label = document.getElementById('pageguide-file-label');
     const uploadLabel = document.getElementById('pageguide-upload-label');
     const input = document.getElementById('pageguide-input');
 
-    if (preview) preview.style.display = 'flex';
-    if (label) label.textContent = `📎 ${file.name}`;
+    renderAttachmentChips();
     if (uploadLabel) uploadLabel.classList.add('has-image');
     _setUploadIcon('📎');
     if (input) input.placeholder = `Ask about ${file.name}…`;
+
+    // Forward the file text to the content script so a guide session can ingest it.
+    try {
+      await sendToContentScript({
+        action: 'setUploadedFile',
+        fileText: uploadedFileContent,
+        fileName: uploadedFileName
+      });
+    } catch (err) {
+      console.warn('📎 Could not send file to content script:', err);
+    }
 
     addMessage(`📎 File attached: ${file.name}`, 'system');
   } catch (err) {
@@ -1005,19 +5937,24 @@ async function handleFileUpload(event) {
 function clearUploadedFile() {
   uploadedFileContent = null;
   uploadedFileName = null;
+  uploadedFileSize = null;
 
-  const preview = document.getElementById('pageguide-file-preview');
-  const label = document.getElementById('pageguide-file-label');
   const uploadLabel = document.getElementById('pageguide-upload-label');
   const input = document.getElementById('pageguide-input');
   const fileInput = document.getElementById('pageguide-image-upload');
 
-  if (preview) preview.style.display = 'none';
-  if (label) label.textContent = '📎 File attached';
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   _setUploadIcon('📎');
   if (input) input.placeholder = 'Ask anything…';
   if (fileInput) fileInput.value = '';
+  renderAttachmentChips();
+
+  // Clear from content script
+  try {
+    sendToContentScript({ action: 'clearUploadedFile' });
+  } catch (err) {
+    console.warn('📎 Could not clear file in content script:', err);
+  }
 
   addMessage('🗑️ File removed', 'system');
 }
@@ -1027,8 +5964,7 @@ function clearUploadedFile() {
  */
 function clearSelectedText() {
   currentSelectedText = null;
-  const preview = document.getElementById('pageguide-selected-text-preview');
-  if (preview) preview.style.display = 'none';
+  renderAttachmentChips();
   const input = document.getElementById('pageguide-input');
   if (input) input.focus();
 }
@@ -1276,20 +6212,39 @@ function _initSlashAutocomplete() {
 async function sendMessage() {
   const input = document.getElementById('pageguide-input');
   const btn = document.getElementById('pageguide-send');
-  
-  const query = input?.value.trim() || '';
-  
+
+  if (panelRunning) return; // already running — the send button is acting as Stop
+
+  let query = input?.value.trim() || '';
+
   // Only return early if we have no query AND no attached context
   if (!query && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
     return;
   }
 
+  // User Study: study.js pre-fills the input with the clean task text (no visible slash command)
+  // and stashes the routing prefix here so the task still routes to the right mode automatically.
+  if (input?.dataset.studyPrefix) {
+    query = `${input.dataset.studyPrefix} ${query}`;
+    delete input.dataset.studyPrefix;
+  }
+
   _hideSlashMenu();
   if (input) input.value = '';
-  if (btn) btn.disabled = true;
+  cancelRequested = false;
+  guideStopped = false; // a fresh send re-arms the panel for running-state messages
+  _currentAskId += 1; // a genuinely new user ask — see resetLiveGuideTimelineForSession
+
+  // Mark where this ask starts in the debug log, so an answer's 🐞 chip can show exactly the calls
+  // that produced it (the reader pass, the visual-evidence pass, the annotator) and nothing older.
+  _markDebugAnswerStart();
 
   // Track if a specific routing is forced by the user
-  let forcedRoute = null;
+  // Default to the sticky route chosen via the Find/Guide/Hide tabs (null = Auto).
+  // A slash command in this message overrides it below.
+  let forcedRoute = panelForcedMode;
+  let displayRoute = forcedRoute;
+  let activeQuery = query;
 
   // Handle slash commands before routing to agent
   if (query.startsWith('/')) {
@@ -1297,38 +6252,31 @@ async function sendMessage() {
     const lowerQuery = query.toLowerCase();
     if (lowerQuery.startsWith('/find ') || lowerQuery === '/find') {
       forcedRoute = 'ask';
-      // Strip the command from the query the LLM sees
-      // We do not return early here so it proceeds matching routing
-      input.value = query.substring(5).trim();
-      // Re-read query
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      displayRoute = 'find';
+      activeQuery = query.substring(5).trim();
+      if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /find', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      // Reassign for downstream processing
-      input.value = '';
     } else if (lowerQuery.startsWith('/guide ') || lowerQuery === '/guide') {
       forcedRoute = 'guide';
-      input.value = query.substring(6).trim();
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      displayRoute = 'guide';
+      activeQuery = query.substring(6).trim();
+      if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /guide', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      input.value = '';
     } else if (lowerQuery.startsWith('/hide ') || lowerQuery === '/hide') {
       forcedRoute = 'hide';
-      input.value = query.substring(5).trim();
-      const newQuery = input.value;
-      if (!newQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
+      displayRoute = 'hide';
+      activeQuery = query.substring(5).trim();
+      if (!activeQuery && !uploadedFileContent && !uploadedImageBase64 && !currentSelectedText) {
         addMessage('Please provide a query after /hide', 'system');
         if (btn) btn.disabled = false;
         return;
       }
-      input.value = '';
     } else {
       // Handle normal system slash commands that bypass LLM entirely
       if (btn) btn.disabled = false;
@@ -1338,47 +6286,55 @@ async function sendMessage() {
     }
   }
   
-  // Re-evaluate query after potentially stripping forced route command
-  const activeQuery = forcedRoute ? (query.split(/\\s+/).slice(1).join(' ') || '') : query;
-  
   // Check if current message has an image attached
   const currentMessageHasImage = !!uploadedImageBase64;
   if (currentMessageHasImage) {
     hasImageInConversation = true;
   }
 
-  // If a text file is attached or text is selected, build an augmented query
+  // If a text file is attached or text is selected, build an augmented query.
   // The original user-visible message stays clean; the enriched version goes to the LLM.
-  let effectiveQuery = query;
-  
+  //   • effectiveQuery — full context (file + selection); used by ask/pdf/restricted paths.
+  //   • guideQuery     — omits the file, because a guide session ingests the file ONCE
+  //                      (summarized) instead of re-embedding it in every step's question.
+  let effectiveQuery = activeQuery;
+  let guideQuery = activeQuery;
+
   if (uploadedFileContent || currentSelectedText) {
     const parts = [];
-    
+    const guideParts = [];
+
     if (uploadedFileContent) {
       const MAX_FILE_CHARS = 40000;
       const snippet = uploadedFileContent.length > MAX_FILE_CHARS
         ? uploadedFileContent.slice(0, MAX_FILE_CHARS) + '\n… [truncated]'
         : uploadedFileContent;
       parts.push(`[Attached file: ${uploadedFileName}]\n---\n${snippet}\n---`);
+      // guideParts intentionally omits the file — delivered via ingestion.
     }
-    
+
     if (currentSelectedText) {
       const MAX_SELECTION_CHARS = 20000;
       const selectionSnippet = currentSelectedText.length > MAX_SELECTION_CHARS
         ? currentSelectedText.slice(0, MAX_SELECTION_CHARS) + '\n… [truncated]'
         : currentSelectedText;
-      parts.push(`[Selected text from page]\n---\n${selectionSnippet}\n---`);
+      const block = `[Selected text from page]\n---\n${selectionSnippet}\n---`;
+      parts.push(block);
+      guideParts.push(block); // selection is small — keep it inline for the guide
     }
-    
-    if (activeQuery) {
-      effectiveQuery = `${parts.join('\n\n')}\n\nUser question: ${activeQuery}`;
-    } else {
-      // If user hit send with just context and no question, provide a default prompt
-      effectiveQuery = `${parts.join('\n\n')}\n\nPlease analyze or explain the provided content.`;
-    }
+
+    const compose = (ps) => {
+      if (!ps.length) return activeQuery;
+      return activeQuery
+        ? `${ps.join('\n\n')}\n\nUser question: ${activeQuery}`
+        : `${ps.join('\n\n')}\n\nPlease analyze or explain the provided content.`;
+    };
+    effectiveQuery = compose(parts);
+    guideQuery = compose(guideParts);
   } else if (forcedRoute) {
     // If no context was attached, just use the stripped query
     effectiveQuery = activeQuery;
+    guideQuery = activeQuery;
   }
 
   // Add to conversation history (mark if this message has an image)
@@ -1399,7 +6355,11 @@ async function sendMessage() {
     msgContext = { type: 'image' };
   }
 
-  addMessage(query, 'user', false, msgContext);
+  addMessage(activeQuery || query, 'user', false, msgContext);
+  renderGoalCard({
+    prompt: activeQuery || query,
+    route: displayRoute || 'ask'
+  });
   showTyping();
   
   try {
@@ -1424,7 +6384,11 @@ async function sendMessage() {
         chrome.runtime.sendMessage({
           action: 'callLLM',
           systemPrompt,
-          messages
+          messages,
+          metadata: {
+            mode: 'ask_panel_knowledge',
+            url: currentTab?.url || ''
+          }
         }, (res) => {
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
           else resolve(res);
@@ -1464,38 +6428,275 @@ async function sendMessage() {
         };
       }
     } else if (currentTab?.url && (currentTab.url.startsWith('chrome://') || currentTab.url.startsWith('chrome-extension://') || currentTab.url.startsWith('edge://'))) {
-      // Restricted page - cannot run content scripts. Default to Knowledge Base fallback.
-      console.log('🛡️ Restricted page detected. Bypassing content script and using Knowledge Base.');
-      
-      const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
-        .replace('{pageContent}', '(No text content found - restricted browser page)')
-        .replace('{pageIndex}', '(No elements indexed)');
-        
-      const messages = [
-        ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
-        { role: 'user', content: effectiveQuery }
-      ];
-      
-      const response = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({
-          action: 'callLLM',
-          systemPrompt: systemPrompt,
-          messages: messages
-        }, (res) => {
-          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-          else resolve(res);
+      // Restricted page - cannot run content scripts directly.
+      let route = forcedRoute;
+      if (!route) {
+        try {
+          const routerResponse = await new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({
+              action: 'callLLM',
+              systemPrompt: PROMPTS.ROUTER,
+              messages: [{ role: 'user', content: effectiveQuery }],
+              metadata: {
+                mode: 'ask_panel_restricted_route',
+                url: currentTab?.url || ''
+              }
+            }, (res) => {
+              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+              else resolve(res);
+            });
+          });
+          const cleanRoute = (routerResponse?.content || '').trim().replace(/```json|```/g, '').trim();
+          const routeJson = JSON.parse(cleanRoute);
+          route = routeJson.route;
+        } catch (e) {
+          route = 'ask';
+        }
+      }
+
+      if (route === 'guide') {
+        console.log('🛡️ Restricted page in Guide mode. Generating initial step directly from panel.');
+        const systemPrompt = PROMPTS.GUIDE_V2_PROMPT;
+        const userPrompt = `PAGE BACKGROUND: LIGHT
+CURRENT URL: ${currentTab.url}
+VISUAL SCREENSHOT PROVIDED: no
+
+=== PAGE INDEX ===
+(No elements indexed - restricted browser page)
+
+=== USER GOAL ===
+${effectiveQuery}
+
+=== CURRENT STEP ===
+Step 1
+Previous steps: None`;
+
+        const response = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            action: 'callLLM',
+            systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+            metadata: {
+              mode: 'guide_restricted_init',
+              url: currentTab.url
+            }
+          }, (res) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(res);
+          });
         });
-      });
-      
-      if (response && !response.error) {
-        result = {
-          success: true,
-          answer: response.content || "Could not generate an answer.",
-          highlightCount: 0,
-          hasHighlights: false
-        };
+
+        if (response && !response.error) {
+          const content = response.content?.trim() || '';
+          try {
+            const cleanJson = content.replace(/```json|```/g, '').trim();
+            const step = JSON.parse(cleanJson);
+            let normalizedAction = String(step.action || '').toLowerCase().replace(/[\s-]+/g, '_');
+            if (normalizedAction === 'navigate' || normalizedAction === 'go_to_url' || normalizedAction === 'open_url') normalizedAction = 'goto_url';
+            const targetUrl = step.url;
+
+            if (normalizedAction === 'goto_url' && targetUrl) {
+              const sessionId = 'gv2-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+              const autoModeResult = await chrome.storage.local.get([GUIDE_AUTO_MODE_KEY, GUIDE_AUTONOMY_LEVEL_KEY]);
+              const autonomyLevel = _normalizeGuideAutonomyMode(autoModeResult[GUIDE_AUTONOMY_LEVEL_KEY], autoModeResult[GUIDE_AUTO_MODE_KEY] === true);
+              const autoMode = autonomyLevel !== 'manual';
+              
+              let screenshotBefore = null;
+              try {
+                const capResponse = await new Promise((resolve) => {
+                  chrome.runtime.sendMessage({ action: 'captureScreenshot' }, resolve);
+                });
+                if (capResponse && capResponse.success) {
+                  screenshotBefore = capResponse.imageBase64;
+                }
+              } catch (err) {
+                console.warn('Failed to capture initial screenshot:', err);
+              }
+
+              if (typeof rewindStartSession === 'function') {
+                await rewindStartSession(sessionId, effectiveQuery);
+              }
+
+              const initialRecord = {
+                sessionId,
+                step: 0,
+                planStep: 0,
+                timestamp: Date.now(),
+                url: currentTab.url,
+                title: currentTab.title || 'New Tab',
+                instruction: 'Initial state',
+                action: null,
+                isInitial: true,
+                isLastStep: false,
+                target: null,
+                confidence: null,
+                durationMs: 0,
+                screenshot: screenshotBefore || null,
+                screenshotBefore: screenshotBefore || null,
+                domSnapshot: '',
+                restore: null,
+                rawLlmJson: '',
+                systemPrompt: '',
+                userPrompt: ''
+              };
+              if (typeof rewindPutRecord === 'function') {
+                await rewindPutRecord(initialRecord);
+              }
+
+              const stepRecord = {
+                sessionId,
+                step: 1,
+                planStep: 1,
+                timestamp: Date.now(),
+                url: currentTab.url,
+                title: currentTab.title || 'New Tab',
+                instruction: step.instruction || `Navigate to ${targetUrl}`,
+                action: 'goto_url',
+                navigateUrl: targetUrl,
+                isLastStep: false,
+                target: null,
+                confidence: 1.0,
+                durationMs: 0,
+                screenshot: screenshotBefore || null,
+                screenshotBefore: screenshotBefore || null,
+                domSnapshot: '',
+                restore: null,
+                rawLlmJson: JSON.stringify(step),
+                systemPrompt,
+                userPrompt
+              };
+              if (typeof rewindPutRecord === 'function') {
+                await rewindPutRecord(stepRecord);
+              }
+
+              try {
+                chrome.runtime.sendMessage({
+                  action: 'guideStepRecord',
+                  meta: {
+                    sessionId,
+                    step: 0,
+                    planStep: 0,
+                    instruction: 'Initial state',
+                    isInitial: true,
+                    url: currentTab.url,
+                    title: currentTab.title || 'New Tab',
+                    timestamp: Date.now(),
+                    hasShot: !!screenshotBefore
+                  }
+                });
+
+                chrome.runtime.sendMessage({
+                  action: 'guideStepRecord',
+                  meta: {
+                    sessionId,
+                    step: 1,
+                    planStep: 1,
+                    instruction: step.instruction || `Navigate to ${targetUrl}`,
+                    url: currentTab.url,
+                    title: currentTab.title || 'New Tab',
+                    timestamp: Date.now(),
+                    action: 'goto_url',
+                    navigateUrl: targetUrl,
+                    hasShot: !!screenshotBefore
+                  }
+                });
+              } catch (e) {
+                console.warn('Failed to emit initial step records:', e);
+              }
+
+              const state = {
+                active: true,
+                question: effectiveQuery,
+                previousSteps: [`Step 1: Navigate to ${targetUrl}`],
+                sessionId,
+                captureEnabled: true,
+                autoMode: autoMode,
+                autonomyLevel,
+                currentPlanStep: 1,
+                pendingResume: true,
+                timestamp: Date.now()
+              };
+
+              await chrome.storage.session.set({ pageguideGuidanceV2: state });
+              try {
+                await new Promise((resolve) => {
+                  chrome.runtime.sendMessage({
+                    action: 'guidanceV2_setState',
+                    state: state,
+                    tabId: currentTab.id
+                  }, resolve);
+                });
+              } catch (err) {
+                console.warn('Failed to set SW state:', err);
+              }
+              chrome.tabs.update(currentTab.id, { url: targetUrl });
+
+              result = {
+                success: true,
+                isGuide: true,
+                autoMode: autoMode,
+                autonomyLevel,
+                answer: step.instruction || `Navigating to ${targetUrl}`,
+                action: 'goto_url',
+                navigateUrl: targetUrl,
+                step: 1,
+                isLastStep: false
+              };
+            } else {
+              result = {
+                success: true,
+                isGuide: true,
+                autoMode: autoMode,
+                autonomyLevel,
+                answer: step.instruction || 'Please navigate to the target site.',
+                action: step.action || 'done',
+                step: 1,
+                isLastStep: step.isLastStep || false
+              };
+            }
+          } catch (e) {
+            console.error('Failed to parse Guide step JSON:', e);
+            throw new Error('Guide generation failed: invalid response schema');
+          }
+        } else {
+          throw new Error(response?.error || 'Failed to call LLM');
+        }
       } else {
-        throw new Error(response?.error || 'Failed to call LLM');
+        console.log('🛡️ Restricted page detected. Bypassing content script and using Knowledge Base.');
+        const systemPrompt = PROMPTS.ANSWER_AND_HIGHLIGHT
+          .replace('{pageContent}', '(No text content found - restricted browser page)')
+          .replace('{pageIndex}', '(No elements indexed)');
+
+        const messages = [
+          ...conversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+          { role: 'user', content: effectiveQuery }
+        ];
+
+        const response = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            action: 'callLLM',
+            systemPrompt: systemPrompt,
+            messages: messages,
+            metadata: {
+              mode: 'ask_panel_restricted',
+              url: currentTab?.url || ''
+            }
+          }, (res) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(res);
+          });
+        });
+
+        if (response && !response.error) {
+          result = {
+            success: true,
+            answer: response.content || "Could not generate an answer.",
+            highlightCount: 0,
+            hasHighlights: false
+          };
+        } else {
+          throw new Error(response?.error || 'Failed to call LLM');
+        }
       }
     } else {
       // Normal routing via content script
@@ -1503,6 +6704,7 @@ async function sendMessage() {
       result = await sendToContentScript({
         action: 'handleQuery',
         query: effectiveQuery,
+        cleanQuery: guideQuery, // guide route uses this (file kept out; delivered via ingestion)
         history: conversationHistory.slice(0, -1),
         hasImage: currentMessageHasImage,
         hasImageInHistory: hasImageInConversation,
@@ -1511,17 +6713,29 @@ async function sendMessage() {
     }
     
     hideTyping();
-    
+
+    // User pressed Stop while this (non-guide) request was in flight → discard the result.
+    if (cancelRequested) { cancelRequested = false; return; }
+
     if (result && result.success) {
+      const routedTo = result.routedTo || forcedRoute || (noPageContext ? 'ask' : null);
+      if (routedTo) {
+        panelLastRoute = routedTo;
+        updateRouteTabs(routedTo);
+        renderGoalCard({
+          prompt: activeQuery || query,
+          route: displayRoute || routedTo
+        });
+      }
+
       // Build debug info for collapsible section
       const debugLines = [];
       
       // Routing decision
-      if (result.routedTo) {
+      if (result.routedTo && result.routedTo !== 'guide') {
         const confidence = Math.round((result.routeConfidence || 0) * 100);
         const handlerEmoji = {
           'ask': '💬',
-          'guide': '📋',
           'protection': '🛡️',
           'image_ask': '🖼️',
           'pdf_ask': '📄'
@@ -1574,8 +6788,10 @@ async function sendMessage() {
         }
       }
       
-      // Add collapsible debug section if there's debug info
-      if (debugLines.length > 0) {
+      // Add collapsible debug section if there's debug info. Routing/confidence internals are
+      // only relevant while a guide task is being set up — Find/Ask/other modes never show
+      // this box at all, regardless of debug settings.
+      if (routedTo === 'guide' && debugLines.length > 0) {
         addCollapsibleDebug(debugLines);
       }
       
@@ -1600,10 +6816,20 @@ async function sendMessage() {
           result.answer?.includes('[Page ') || 
           result.answer?.includes('[idx:')
         );
+        _lastAnswerEvidenceShots = Array.isArray(result.findEvidenceShots) ? result.findEvidenceShots : [];
         addMessage(message, 'assistant', hasHighlights || hasPdfCitations);
+        _lastAnswerEvidenceShots = [];
+        // Keep the result reachable from this answer's Save/Edit chips (authoring mode only).
+        // tabId travels with the payload: the citations can only be resolved on the tab that
+        // produced them, and by save time the researcher may be looking at a different one.
+        _parkAnswerPayload(result, {
+          url: currentTab?.url || '', question: query, tabId: currentTab?.id || null,
+        });
       }
     } else {
-      addMessage(`❌ ${result?.error || 'Unknown error'}`, 'error');
+      const errText = result?.error || 'Unknown error';
+      if (isGuideParseError(errText)) addGuideRetryMessage(`Could not parse step JSON. ${errText}`);
+      else addMessage(`❌ ${errText}`, 'error');
       // Remove failed query from history
       conversationHistory.pop();
     }
@@ -1622,13 +6848,14 @@ async function sendMessage() {
         msg.includes('No active tab')) {
       addMessage('⚠️ This extension cannot run on this page.\n\nPlease navigate to a regular website (not `chrome://` or extension pages) and try again.', 'error');
     } else {
-      addMessage(`❌ ${msg || 'Unknown error'}`, 'error');
+      if (isGuideParseError(msg)) addGuideRetryMessage(`Could not parse step JSON. ${msg}`);
+      else addMessage(`❌ ${msg || 'Unknown error'}`, 'error');
     }
     // Remove failed query from history
     conversationHistory.pop();
   }
-  
-  btn.disabled = false;
+
+  setRunning(false); // ensure the send button is restored (guide runs reset via their own flow)
   input.focus();
 }
 
@@ -1690,7 +6917,11 @@ ${pdfTextContent}`;
     const response = await chrome.runtime.sendMessage({
       action: 'callLLM',
       messages: messages,
-      systemPrompt: systemPrompt
+      systemPrompt: systemPrompt,
+      metadata: {
+        mode: 'ask_panel_pdf',
+        url: pdfContext?.pdfUrl || ''
+      }
     });
     
     if (response.error) {
@@ -1718,14 +6949,19 @@ ${pdfTextContent}`;
  * Exposed on window so unit tests can call it directly.
  *
  * Rules:
- *  - Never reset while the guide agent is active (it manages its own tab transitions).
  *  - Never reset on the very first activation (prevTabId is null).
  *  - Never reset when the same tab is re-activated (shouldn't normally happen).
- *  - Reset in every other case (user opened/switched to a real new tab).
+ *  - While the guide is active, never reset when the newly-activated tab IS the guide's own
+ *    tab (guideTabId) — that's the guide navigating/opening tabs itself, or the user coming
+ *    back to check on it, not a fresh unrelated tab.
+ *  - If the guide is active but we don't know which tab it's bound to yet, be conservative and
+ *    don't reset (matches the old behavior for that edge case).
+ *  - Reset in every other case, INCLUDING when the guide is active elsewhere: switching to any
+ *    other, unrelated tab should always get that tab's own separate session.
  */
-function _shouldResetOnTabSwitch(prevTabId, newTabId, isGuideActive) {
-  if (isGuideActive) return false;
+function _shouldResetOnTabSwitch(prevTabId, newTabId, isGuideActive, guideTabId) {
   if (!prevTabId || prevTabId === newTabId) return false;
+  if (isGuideActive && (guideTabId == null || newTabId === guideTabId)) return false;
   return true;
 }
 window._shouldResetOnTabSwitch = _shouldResetOnTabSwitch;
@@ -1740,7 +6976,20 @@ function _saveTabSession(tabId) {
     chatMessages: [...chatMessages],
     conversationHistory: [...conversationHistory],
     hasImageInConversation,
-    html: container ? container.innerHTML : ''
+    html: container ? container.innerHTML : '',
+    visibleJourneySessionId,
+    visibleJourneyTitle,
+    visibleJourneyRecalled,
+    currentGuideSessionId,
+    activeGuideRecords: [...currentGuideRecords],
+    activeGuideInitial: currentGuideInitial,
+    activeGuidePlan: [...currentGuidePlan],
+    activeGuideStep: currentGuideStep,
+    activeSessionId: typeof RewindTimeline !== 'undefined' && typeof RewindTimeline.getSessionId === 'function' ? RewindTimeline.getSessionId() : null,
+    currentGoal: currentGoal,
+    currentGuideTitle: currentGuideTitle,
+    guidePaused: guidePaused,
+    tabChipDone: tabChipDone
   });
 }
 
@@ -1759,20 +7008,57 @@ function _restoreTabSession(session) {
     container.scrollTop = container.scrollHeight;
   }
 
-  // Clear image upload UI (blobs aren't saved in the session)
+  // Clear attachment UI (blobs aren't saved in the session)
   uploadedImageBase64 = null;
-  const preview = document.getElementById('pageguide-image-preview');
-  const uploadLabel = document.getElementById('pageguide-upload-label');
-  const fileInput = document.getElementById('pageguide-image-upload');
-  if (preview) preview.style.display = 'none';
-  if (uploadLabel) uploadLabel.classList.remove('has-image');
-  if (fileInput) fileInput.value = '';
-
-  // Clear text-file upload UI
+  uploadedImageDataUrl = null;
+  uploadedImageMeta = null;
   uploadedFileContent = null;
   uploadedFileName = null;
-  const filePreview = document.getElementById('pageguide-file-preview');
-  if (filePreview) filePreview.style.display = 'none';
+  uploadedFileSize = null;
+  const uploadLabel = document.getElementById('pageguide-upload-label');
+  const fileInput = document.getElementById('pageguide-image-upload');
+  if (uploadLabel) uploadLabel.classList.remove('has-image');
+  if (fileInput) fileInput.value = '';
+  renderAttachmentChips();
+
+  visibleJourneySessionId = session.visibleJourneySessionId || null;
+  visibleJourneyTitle = session.visibleJourneyTitle || '';
+  visibleJourneyRecalled = !!session.visibleJourneyRecalled;
+  currentGuideSessionId = session.currentGuideSessionId || null;
+  if (visibleJourneyRecalled && visibleJourneySessionId) {
+    showStoredJourney(visibleJourneySessionId);
+  } else {
+    clearGoalAndStepPanel();
+    if (session.activeSessionId && session.activeGuideRecords && typeof RewindTimeline !== 'undefined') {
+      currentGuideSessionId = session.currentGuideSessionId || session.activeSessionId || null;
+      currentGuideRecords = [...session.activeGuideRecords];
+      currentGuideInitial = session.activeGuideInitial;
+      currentGuidePlan = session.activeGuidePlan ? [...session.activeGuidePlan] : [];
+      currentGuideStep = session.activeGuideStep || 0;
+      currentGoal = session.currentGoal || null;
+      currentGuideTitle = session.currentGuideTitle || '';
+      guidePaused = session.guidePaused || false;
+      
+      RewindTimeline.clear();
+      if (currentGuideInitial) RewindTimeline.addStep(currentGuideInitial);
+      for (const rec of currentGuideRecords) {
+        RewindTimeline.addStep(rec);
+      }
+      if (currentGuidePlan.length > 0) RewindTimeline.setPlan(currentGuidePlan);
+
+      // Only re-render if the restored HTML snapshot still has a LIVE (unsealed) card — a
+      // finished/sealed session is already fully represented as static history in the
+      // just-restored container.innerHTML, so re-rendering here would create a duplicate
+      // "View Journey" bubble alongside it.
+      if (currentGoal && document.getElementById('pageguide-goal')) {
+        renderGoalCard({ route: 'guide', step: currentGuideStep, title: currentGuideTitle });
+      }
+      updateGuidePauseButton();
+    }
+  }
+  // Restore this tab's own completion badge last, so it isn't clobbered by clearGoalAndStepPanel()
+  // (called above) or by the guide-restore block, both of which run before we know the saved value.
+  updateTabChipDoneState(!!session.tabChipDone);
 }
 
 /**
@@ -1785,12 +7071,29 @@ async function resetChat(showMessage = true) {
   if (_resettingChat) return;
   _resettingChat = true;
   guideActive = false;
+  guidePaused = false;
+  // Only clear the guide's tab binding if we're actually resetting the guide's own tab (e.g. the
+  // user hit "New chat" while on it). Don't clear it when this reset is initializing a fresh,
+  // unrelated tab the user just switched to — the guide may still be running in the background.
+  if (currentTabId != null && currentTabId === guideTabId) guideTabId = null;
+
+  // Rewind (Slice 1): clear the step timeline (content 'reset' clears the store).
+  if (typeof RewindTimeline !== 'undefined') RewindTimeline.clear();
+  clearGoalAndStepPanel();
+  updateGuidePauseButton();
 
   // Discard any saved session for this tab so switching away+back starts fresh
   _tabSessions.delete(currentTabId);
 
-  // Clear guide state in SW directly (doesn't depend on content script being available)
-  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState' }); } catch (e) {}
+  // Clear the debug prompts list
+  try {
+    chrome.storage.local.remove(['debugPrompts', 'lastDebugPrompt']).catch(() => {});
+  } catch (e) {}
+
+  // Clear guide state in SW directly (doesn't depend on content script being available).
+  // Scoped to currentTabId only — the SW now keeps one guide session per tab, so this can't
+  // wipe out a DIFFERENT tab's guide that's still actively running in the background.
+  try { chrome.runtime.sendMessage({ action: 'guidanceV2_clearState', tabId: currentTabId }); } catch (e) {}
 
   // Clear highlights on the active page
   try {
@@ -1817,31 +7120,31 @@ async function resetChat(showMessage = true) {
   const container = document.getElementById('pageguide-messages');
   if (container) container.innerHTML = '';
 
-  // Clear uploaded image state
+  // Clear all attachment state (image, file, selected text)
   uploadedImageBase64 = null;
-  const preview = document.getElementById('pageguide-image-preview');
+  uploadedImageDataUrl = null;
+  uploadedImageMeta = null;
+  uploadedFileContent = null;
+  uploadedFileName = null;
+  uploadedFileSize = null;
+  currentSelectedText = null;
   const uploadLabel = document.getElementById('pageguide-upload-label');
   const input = document.getElementById('pageguide-input');
   const fileInput = document.getElementById('pageguide-image-upload');
+  const wrapper = document.getElementById('pageguide-image-wrapper');
 
-  if (preview) preview.style.display = 'none';
+  if (wrapper) {
+    wrapper.classList.remove('has-regions');
+    wrapper.querySelectorAll('.pageguide-image-region').forEach(el => el.remove());
+  }
   if (uploadLabel) uploadLabel.classList.remove('has-image');
   if (input) input.placeholder = 'Ask anything...';
   if (fileInput) fileInput.value = '';
-
-  // Clear text-file upload state
-  uploadedFileContent = null;
-  uploadedFileName = null;
-  const filePreview = document.getElementById('pageguide-file-preview');
-  if (filePreview) filePreview.style.display = 'none';
-
-  // Clear selected text state
-  currentSelectedText = null;
-  const selectedTextPreview = document.getElementById('pageguide-selected-text-preview');
-  if (selectedTextPreview) selectedTextPreview.style.display = 'none';
+  renderAttachmentChips();
 
   try {
     await sendToContentScript({ action: 'clearUploadedImage' });
+    await sendToContentScript({ action: 'clearUploadedFile' });
   } catch (e) {
     // Ignore
   }
@@ -1861,7 +7164,168 @@ async function resetChat(showMessage = true) {
  */
 async function handleQuickAction(action) {
   if (action === 'reset') {
+    hideMoreMenu();
     await resetChat(true);
+  }
+}
+
+function _formatDuration(ms) {
+  if (ms == null) return '';
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+async function exportJourneyPdf() {
+  let index = null;
+  try {
+    if (typeof rewindGetIndex === 'function') index = await rewindGetIndex();
+    if (index?.sessionId && typeof rewindVerifyScreenshots === 'function') index = await rewindVerifyScreenshots(index.sessionId);
+  } catch (e) {}
+
+  if (!index?.steps?.length) {
+    addMessage('ℹ️ No guide journey to export yet.', 'system');
+    setExportEnabled(false);
+    return;
+  }
+
+  const records = [];
+  for (const meta of index.steps) {
+    let rec = null;
+    try {
+      if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(index.sessionId, meta.step);
+    } catch (e) {}
+    const shot = typeof rewindResolveScreenshot === 'function'
+      ? rewindResolveScreenshot(rec)
+      : (rec && (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter));
+    if (rec && (meta.isInitial || Number(meta.step) === 0 || shot)) records.push(rec);
+  }
+
+  const title = currentGuideTitle || index.title || _truncateText(index.goal || 'PageGuide Journey', 90);
+  const goal = index.goal || currentGoal?.prompt || '';
+  const stepHtml = records.map(rec => {
+    const bits = [];
+    if (rec.durationMs != null) bits.push(`Duration: ${_formatDuration(rec.durationMs)}`);
+    if (rec.verification?.status) bits.push(`Verification: ${rec.verification.status}`);
+    if (rec.url) bits.push(`URL: ${escapeHtml(rec.url)}`);
+    return `
+      <section class="step">
+        <h2>Step ${escapeHtml(rec.step)}</h2>
+        <p class="instruction">${escapeHtml(rec.instruction || '')}</p>
+        ${rec.target?.text ? `<p><strong>Target:</strong> ${escapeHtml(rec.target.text)}</p>` : ''}
+        ${bits.length ? `<p class="meta">${bits.join(' · ')}</p>` : ''}
+        ${(() => {
+          let shot = typeof rewindResolveScreenshot === 'function'
+            ? rewindResolveScreenshot(rec)
+            : (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter);
+          if (shot === 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7') shot = null;
+          return shot ? `<img src="data:image/jpeg;base64,${shot}" alt="Step ${escapeHtml(rec.step)} screenshot">` : '';
+        })()}
+      </section>`;
+  }).join('');
+
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:32px;color:#1f2430}
+    h1{font-size:24px;margin:0 0 6px}
+    .goal{color:#5f6778;margin:0 0 24px}
+    .step{break-inside:avoid;border-top:1px solid #d9dde7;padding:18px 0}
+    h2{font-size:16px;margin:0 0 8px}
+    .instruction{font-size:15px;font-weight:600;margin:0 0 8px}
+    .meta{color:#697386;font-size:12px}
+    img{max-width:100%;border:1px solid #d9dde7;border-radius:8px;margin-top:10px}
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+  ${goal ? `<p class="goal">${escapeHtml(goal)}</p>` : ''}
+  ${stepHtml}
+  <script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250));<\/script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) {
+    addMessage('❌ Could not open print window. Allow popups for PageGuide and try again.', 'error');
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+/**
+ * Save the current guide trajectory to local Flask server.
+ */
+async function saveTrajectoryToRepo() {
+  let index = null;
+  try {
+    if (typeof rewindGetIndex === 'function') index = await rewindGetIndex();
+    if (index?.sessionId && typeof rewindVerifyScreenshots === 'function') index = await rewindVerifyScreenshots(index.sessionId);
+  } catch (e) {}
+
+  if (!index?.steps?.length) {
+    addMessage('ℹ️ No guide journey to save yet.', 'system');
+    return;
+  }
+
+  addMessage('Saving trajectory to current repository...', 'system');
+
+  const records = [];
+  for (const meta of index.steps) {
+    let rec = null;
+    try {
+      if (typeof rewindGetRecord === 'function') rec = await rewindGetRecord(index.sessionId, meta.step);
+    } catch (e) {}
+    if (rec) records.push(rec);
+  }
+
+  const settings = await chrome.storage.sync.get(['provider', 'geminiModel', 'openrouterModel']);
+  const provider = settings.provider || 'gemini';
+  let modelStr = '';
+  if (provider === 'gemini') {
+    modelStr = settings.geminiModel || 'gemini-2.5-flash';
+  } else if (provider === 'openrouter') {
+    modelStr = settings.openrouterModel || 'google/gemini-2.5-flash';
+  } else {
+    modelStr = 'unknown';
+  }
+  const llmSource = `${provider.charAt(0).toUpperCase() + provider.slice(1)} - ${modelStr}`;
+
+  const localSettings = await chrome.storage.local.get(['guideConfidenceSource']);
+  const confSourceVal = localSettings.guideConfidenceSource || 'mechanical';
+  const confSource = confSourceVal === 'mechanical' ? 'No-LLM' : 'LLM Report';
+
+  const payload = {
+    sessionId: index.sessionId,
+    goal: index.goal || currentGoal?.prompt || '',
+    startedAt: index.startedAt || Date.now(),
+    steps: records,
+    llm_source: llmSource,
+    conf_source: confSource
+  };
+
+  try {
+    const response = await fetch('http://localhost:5000/api/save_trajectory', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      addMessage(`💾 Trajectory saved successfully to the repository! File: ${data.filename}`, 'system');
+    } else {
+      const errText = await response.text();
+      addMessage(`❌ Flask server error: ${errText}`, 'error');
+    }
+  } catch (err) {
+    console.error('Error saving trajectory:', err);
+    addMessage('❌ Could not connect to the local Flask server. Please make sure the Flask server is running on port 5000 (`python eval_server/app.py`).', 'error');
   }
 }
 
@@ -2065,11 +7529,141 @@ function loadHistoryChat(entry) {
   });
 }
 
+// Guide-lifecycle messages that come from the content script actually running the guide.
+// Their sender.tab.id is the ground truth for which tab the guide is bound to — currentTabId
+// only tells us which tab the user is currently looking at, and the two can differ.
+const GUIDE_TAB_MESSAGES = new Set(['guideStep', 'guidePlan', 'guideStepRecord', 'guidePaused', 'guideFinalState', 'guideRecap']);
+
+// Messages that render into the live chat/step panel (chat bubbles, the View Journey timeline,
+// the working-tab chip status, etc). If one of these arrives from a tab OTHER than the one
+// currently on screen, applying it immediately would paint that background tab's progress or
+// completion straight into the currently-displayed tab's chat. Instead these get queued per
+// source tab (see _pendingBackgroundGuideMessages) and replayed once the user switches back to
+// that tab, so the render logic below only ever runs against the tab it's actually about.
+const TAB_SCOPED_RENDER_MESSAGES = new Set([
+  'guideStep', 'guidePlan', 'guidePaused', 'guideStepRecord', 'steerRestoreReady',
+  'askStep', 'askComplete', 'showTyping', 'hideTyping', 'guideWorkingStatus',
+  'guideFinalState', 'guideRecap'
+]);
+
 // Listen for messages from content script and background
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+function handleContentMessage(message, sender, sendResponse) {
+  if (GUIDE_TAB_MESSAGES.has(message.action) && sender?.tab?.id != null) {
+    guideTabId = sender.tab.id;
+  }
+
+  if (
+    TAB_SCOPED_RENDER_MESSAGES.has(message.action) &&
+    sender?.tab?.id != null &&
+    currentTabId != null &&
+    sender.tab.id !== currentTabId
+  ) {
+    const tabId = sender.tab.id;
+    if (!_pendingBackgroundGuideMessages.has(tabId)) _pendingBackgroundGuideMessages.set(tabId, []);
+    _pendingBackgroundGuideMessages.get(tabId).push(message);
+    return;
+  }
+
+  // After a Stop, an in-flight content script can still emit "still working" messages. Drop them
+  // so the running animation, the red Stop button, and the timeline dots don't re-arm themselves.
+  // A new send (sendMessage) or a user-initiated steer (steerRestoreReady, handled below) clears it.
+  if (guideStopped && (
+        message.action === 'showTyping' ||
+        message.action === 'guideStep' ||
+        message.action === 'guideStepRecord' ||
+        message.action === 'askStep')) {
+    return;
+  }
   if (message.action === 'guideStep') {
     hideTyping();
     addGuideStep(message.result);
+  } else if (message.action === 'guidePlan') {
+    _setJourneyRecalledMode(false);
+    if (message.sessionId) {
+      resetLiveGuideTimelineForSession(message.sessionId, { title: message.title || currentGoal?.prompt || '', plan: message.plan });
+    }
+    currentGuidePlan = Array.isArray(message.plan) ? message.plan : [];
+    currentGuideTitle = message.title || currentGuideTitle;
+    if (message.sessionId) {
+      const j = _journeysBySession[message.sessionId] || (_journeysBySession[message.sessionId] = { title: '', steps: [] });
+      j.title = message.title || j.title || currentGoal?.prompt || '';
+      j.plan = currentGuidePlan;
+    }
+    renderGoalCard({ route: 'guide', title: currentGuideTitle, step: currentGuideStep || 1 });
+  } else if (message.action === 'guidePaused') {
+    guideStopped = false;
+    hideTyping();
+    addGuidePausedMessage(message.reason);
+  } else if (message.action === 'guideStepRecord') {
+    if (message.meta && (message.meta.isInitial || Number(message.meta.step) === 0)) {
+      // Initial-state node (step 0): tracked separately so it never inflates the step/dot count,
+      // but still accumulated into the session journey so "View journey" can show it later.
+      if (message.meta.sessionId && getActiveSessionId() !== message.meta.sessionId) {
+        resetLiveGuideTimelineForSession(message.meta.sessionId, { title: currentGoal?.prompt || message.meta.title || '' });
+      }
+      if (message.meta.sessionId) currentGuideSessionId = message.meta.sessionId;
+      _setJourneyRecalledMode(false);
+      currentGuideInitial = message.meta;
+      renderGoalCard({ route: 'guide', step: currentGuideStep });
+      const sid0 = message.meta.sessionId;
+      if (sid0) {
+        const j0 = _journeysBySession[sid0] || (_journeysBySession[sid0] = { title: '', steps: [] });
+        if (!j0.steps.some(s => Number(s.step) === 0)) j0.steps.unshift(message.meta);
+      }
+    } else if (_isVoidStepMeta(message.meta)) {
+      // Void step (no screenshot in Visual mode) — don't add it to the timeline or the journey.
+      // Text-mode steps never have a screenshot and are NOT void; see _isVoidStepMeta.
+    } else if (message.meta) {
+      const handleRecord = async () => {
+        const liveSessionId = message.meta.sessionId;
+        if (liveSessionId && getActiveSessionId() !== liveSessionId) {
+          resetLiveGuideTimelineForSession(liveSessionId, { title: currentGoal?.prompt || message.meta.title || message.meta.instruction || '' });
+          await loadSessionSteps(liveSessionId);
+        }
+        if (liveSessionId) currentGuideSessionId = liveSessionId;
+        _setJourneyRecalledMode(false); // a live step is arriving — leave recalled view
+        const existing = currentGuideRecords.findIndex(r => Number(r.step) === Number(message.meta.step));
+        if (existing >= 0) currentGuideRecords[existing] = Object.assign({}, currentGuideRecords[existing], message.meta);
+        else currentGuideRecords.push(message.meta);
+        currentGuideRecords.sort((a, b) => Number(a.step) - Number(b.step));
+        currentGuideStep = message.meta.step || currentGuideStep;
+        renderGoalCard({ route: 'guide', step: currentGuideStep });
+        setExportEnabled(true);
+
+        // Accumulate this session's journey in memory so it can always be recalled later
+        // (independent of the persisted index). Dedup by step.
+        const sid = message.meta.sessionId;
+        if (sid) {
+          const j = _journeysBySession[sid] || (_journeysBySession[sid] = { title: '', steps: [] });
+          const at = j.steps.findIndex(s => Number(s.step) === Number(message.meta.step));
+          if (at >= 0) j.steps[at] = message.meta; else j.steps.push(message.meta);
+          j.steps.sort((a, b) => Number(a.step) - Number(b.step));
+          // Label the journey by THIS prompt (currentGoal.prompt), not the stale guide title,
+          // so each prompt's button is distinguishable.
+          if (!j.title) j.title = currentGoal?.prompt || message.meta.instruction || '';
+          // No separate "View journey" recall button here anymore — the inline timeline
+          // bubble created by renderGoalCard/ensureGoalCardMessage above already IS the
+          // "View Journey" element for this live session (it collapses to that label and
+          // stays in the chat once the guide finishes), so there's nothing extra to post.
+        }
+
+        // If the branch tree overlay is open, update the tree in real time (preserving zoom/scroll)
+        const overlay = document.getElementById('pageguide-branch-overlay');
+        if (overlay && overlay.style.display !== 'none') {
+          showBranchTree(true);
+        }
+      };
+      handleRecord();
+    }
+  } else if (message.action === 'steerRestoreReady') {
+    // The agent restored a steered step's state and is waiting for the user to confirm. A steer is
+    // a deliberate user action, so it overrides a prior Stop.
+    guideStopped = false;
+    hideTyping();
+    if (message.sessionId && message.branchLabel) {
+      registerBranchJourney(message.sessionId, message.branchLabel);
+    }
+    addSteerRestoreCard(message);
   } else if (message.action === 'askStep') {
     // Ask mode step (scroll/expand)
     hideTyping();
@@ -2085,47 +7679,64 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.result.highlightCount > 0) {
         answerText += ` ✨ (${message.result.highlightCount} highlighted)`;
       }
+      _lastAnswerEvidenceShots = Array.isArray(message.result.findEvidenceShots) ? message.result.findEvidenceShots : [];
       addMessage(answerText, 'assistant', hasHighlights);
+      _lastAnswerEvidenceShots = [];
+      _parkAnswerPayload(message.result, {});
     }
   } else if (message.action === 'showTyping') {
     showTyping();
   } else if (message.action === 'hideTyping') {
     hideTyping();
+  } else if (message.action === 'guideWorkingStatus') {
+    setGuideWorkingStatus(message.status || '');
   } else if (message.action === 'addMessage') {
-    addMessage(message.content, message.type, message.clickable);
+    if (isGuideParseError(message.content)) {
+      addGuideRetryMessage(message.content);
+    } else {
+      addMessage(message.content, message.type, message.clickable);
+    }
+  } else if (message.action === 'guideFinalState') {
+    renderGuideFinalStateCard(message);
+  } else if (message.action === 'guideRecap') {
+    // Full diagnostic recap for a failed run (e.g. hit the step cap). Content only sends this when
+    // Visual Recap is on, so render it directly.
+    if (message.recap) { _rememberGuideRecap(message.recap); renderGuideRecapCard(message.recap, 'Summary'); }
   } else if (message.action === 'closePanel') {
     window.close();
   } else if (message.action === 'selectedText') {
     // Handle text selection passed from the content script
-    const preview = document.getElementById('pageguide-selected-text-preview');
-    const label = document.getElementById('pageguide-selected-text-label');
-    
     if (message.text && message.text.length > 0) {
       currentSelectedText = message.text;
-      if (preview && label) {
-        // Display snippet (max 80 chars)
-        const snippet = message.text.length > 80 
-          ? message.text.substring(0, 80) + '...' 
-          : message.text;
-        
-        // Count words for better context hint
-        const wordCount = message.text.split(/\s+/).filter(w => w.length > 0).length;
-        
-        label.textContent = `📝 "${snippet}" (${wordCount} words)`;
-        label.title = message.text; // Full text on hover
-        preview.style.display = 'flex';
-      }
+      renderAttachmentChips();
     } else if (currentSelectedText) {
       // Clear selection only if they selected empty space on purpose
       // (content script might just send empty text when clicking around)
       // To not frustrate users, we only hide it when explicitly empty string.
       if (message.text === '') {
         currentSelectedText = null;
-        if (preview) preview.style.display = 'none';
+        renderAttachmentChips();
       }
     }
   }
-});
+}
+/**
+ * Replay any guide messages that arrived for tabId while it was in the background (queued by the
+ * gate in handleContentMessage above). Must only be called after currentTabId has already been
+ * updated to tabId, so the replayed messages pass that gate and render normally this time.
+ */
+function _drainPendingGuideMessages(tabId) {
+  const pending = _pendingBackgroundGuideMessages.get(tabId);
+  _pendingBackgroundGuideMessages.delete(tabId);
+  if (pending && pending.length) {
+    pending.forEach((message) => handleContentMessage(message, { tab: { id: tabId } }, () => {}));
+  }
+}
+window._drainPendingGuideMessages = _drainPendingGuideMessages;
+window._getPendingBackgroundGuideMessages = (tabId) => _pendingBackgroundGuideMessages.get(tabId);
+
+chrome.runtime.onMessage.addListener(handleContentMessage);
+if (typeof window !== 'undefined') window.handleContentMessage = handleContentMessage;
 
 // Notify background when panel is closed.
 // The service worker clears page highlights upon receiving panelClosed.
@@ -2136,3 +7747,1106 @@ window.addEventListener('beforeunload', () => {
     // Extension context might be invalidated
   }
 });
+
+function closeDebugPromptLightbox() {
+  document.getElementById('pageguide-debug-prompt-lightbox')?.remove();
+}
+
+/** A row holding the per-answer 🐞 chip. Empty string outside debug mode. */
+function _debugAnswerChipRow() {
+  const chip = _debugAnswerChipHtml(_debugAnswerStart);
+  const cost = _costChipHtml({ from: _debugAnswerStart });
+  const author = _studyAuthorChipRow(_stampAnswerId());
+  if (!chip && !author && !cost) return '';
+  return `<div class="pageguide-debug-answer-row">${chip}${cost}${author}</div>`;
+}
+
+// ===== COST CHIPS =====
+// What the run cost, next to the run. Debug-mode only, like every other researcher affordance —
+// a participant must never see a price tag attached to their task.
+//
+// Two scopes, because the two things being priced are attributed differently (see
+// costEntriesForSession / costEntriesForAnswer in content/utils.js):
+//   • a guide journey — every call stamped with that run's session id;
+//   • one Find answer — every call logged since that question went out.
+// Both render the same chip and both are filled by refreshCostChips, so the journey total and the
+// answer totals can never be computed two different ways.
+
+/**
+ * An unfilled cost chip. The number is not known at render time — the answer is on screen before
+ * its last call has even settled — so the chip is emitted empty and filled in by refreshCostChips
+ * as the ledger lands.
+ *
+ * @param {{from?: number, session?: string}} scope - one or the other, not both
+ */
+function _costChipHtml(scope = {}) {
+  if (!window.__pgDebugEnabled) return '';
+  const attr = scope.session != null
+    ? `data-cost-session="${escapeHtml(String(scope.session))}"`
+    : `data-cost-from="${Number(scope.from) || 0}"`;
+  return `<span class="pageguide-cost-chip" ${attr} title="OpenRouter spend (loading…)">💰 …</span>`;
+}
+window._costChipHtml = _costChipHtml;
+
+/** The chip's text and tooltip for one summed slice. Pure. */
+function _costChipText(totals) {
+  if (!totals || !totals.calls) return { label: '💰 —', title: 'No priced calls recorded' };
+  const money = formatCostUsd(totals.costUsd);
+  const tokens = totals.promptTokens + totals.completionTokens;
+  const unpriced = totals.unpriced
+    ? ` · ${totals.unpriced} unpriced (only OpenRouter reports a price)`
+    : '';
+  return {
+    label: `💰 ${money}`,
+    title: `${money} over ${totals.calls} call(s) · ${tokens.toLocaleString()} tokens${unpriced}`
+  };
+}
+window._costChipText = _costChipText;
+
+/**
+ * Fill every cost chip currently on screen from the ledger.
+ *
+ * Re-reads all of them each time rather than tracking which chip is stale: a guide journey's chip
+ * changes on every step, and a chip whose answer is still running has to keep climbing. The DOM
+ * here holds tens of chips at most.
+ *
+ * @param {Array<object>|null} ledger - passed by the storage listener; re-read when omitted
+ */
+async function refreshCostChips(ledger = null) {
+  const chips = document.querySelectorAll('.pageguide-cost-chip');
+  if (!chips.length) return;
+  // Spend is a researcher affordance. A chip can outlive the toggle (it was rendered while debug
+  // was on, or by a path that did not re-check), so blank it here rather than pricing it.
+  if (!window.__pgDebugEnabled) {
+    chips.forEach(chip => { chip.style.display = 'none'; chip.textContent = ''; });
+    return;
+  }
+  let entries = ledger;
+  let debugPrompts = [];
+  try {
+    const local = await chrome.storage.local.get([PAGEGUIDE_COST_LEDGER_KEY, 'debugPrompts']);
+    if (!Array.isArray(entries)) entries = local[PAGEGUIDE_COST_LEDGER_KEY];
+    debugPrompts = Array.isArray(local.debugPrompts) ? local.debugPrompts : [];
+  } catch (e) { /* best-effort: a chip that cannot be priced stays as it is */ }
+  if (!Array.isArray(entries)) return;
+
+  chips.forEach(chip => {
+    const session = chip.dataset.costSession;
+    const slice = session
+      ? costEntriesForSession(entries, session)
+      : costEntriesForAnswer(entries, debugPrompts, Number(chip.dataset.costFrom) || 0);
+    const { label, title } = _costChipText(sumCostEntries(slice));
+    chip.textContent = label;
+    chip.title = title;
+  });
+}
+window.refreshCostChips = refreshCostChips;
+
+// ===== RECORDING STUDY ANSWERS =====
+// The researcher records each answer once per (task × condition) so every participant reads the same
+// thing. The chips below sit in the same row as the 🐞 Debug chip and are gated the same way, so a
+// participant never sees them.
+//
+// The chips need the whole result object for the answer they sit under, but the panel does not keep
+// one: _lastAnswerEvidenceShots is set immediately before addMessage and cleared immediately after.
+// So each rendered answer gets an id, and the result is parked here under that id until the researcher
+// clicks. Session-scoped and capped — everything durable goes to chrome.storage.local on Save.
+const _answerPayloads = new Map();
+const ANSWER_PAYLOAD_MAX = 50;
+let _answerIdSeq = 0;
+let _pendingAnswerId = 0;
+
+/** Allocate the id for the answer about to be rendered; read by _studyAuthorChipRow. */
+function _stampAnswerId() {
+  _pendingAnswerId = ++_answerIdSeq;
+  return _pendingAnswerId;
+}
+
+/**
+ * Park the result for the answer just rendered, so its Save/Edit chips can find it.
+ * Call immediately after the render call that produced the chip row.
+ */
+function _parkAnswerPayload(result, meta = {}) {
+  if (!window.__pgDebugEnabled) return; // nothing can read it back outside authoring mode
+  _answerPayloads.set(_pendingAnswerId, { result, ...meta });
+  while (_answerPayloads.size > ANSWER_PAYLOAD_MAX) {
+    _answerPayloads.delete(_answerPayloads.keys().next().value);
+  }
+}
+window._parkAnswerPayload = _parkAnswerPayload;
+
+/** The parked result for a rendered answer, or undefined. Read by the study's Answer screen. */
+function _getAnswerPayload(answerId) {
+  return _answerPayloads.get(Number(answerId));
+}
+window._getAnswerPayload = _getAnswerPayload;
+
+/** Save/Edit chips for one rendered answer. Empty outside debug mode, like the Debug chip. */
+function _studyAuthorChipRow(answerId) {
+  if (!window.__pgDebugEnabled) return '';
+  const id = Number(answerId) || 0;
+  return `<button type="button" class="pageguide-study-save-chip" data-answer-id="${id}" title="Save this answer as the study response for a task + condition">💾 Save</button>` +
+    `<button type="button" class="pageguide-study-edit-chip" data-answer-id="${id}" title="Edit the answer text before saving">✏️ Edit</button>`;
+}
+window._studyAuthorChipRow = _studyAuthorChipRow;
+
+/** The task list, for the Save dialog's picker. Same file the study itself runs from. */
+async function _loadStudyTaskChoices() {
+  try {
+    const data = await fetch(chrome.runtime.getURL('user_study_data/tasks.json')).then(r => r.json());
+    return (data?.find || []).map(t => ({ id: t.id, question: t.question || '', url: t.url || '' }));
+  } catch (e) {
+    return [];
+  }
+}
+
+/** The condition the CURRENT panel toggles describe — what this answer was produced under. */
+function _currentStudyCondition() {
+  const nonGrounding = typeof _isPanelNonGrounding === 'function' && _isPanelNonGrounding();
+  return typeof _studyResponseCondition === 'function'
+    ? _studyResponseCondition(nonGrounding)
+    : (nonGrounding ? 'nongrounding' : 'grounding');
+}
+
+/**
+ * Which study task an answer belongs to, for the Edit dialog — which, unlike Save, has no picker.
+ *
+ * The study overlay publishes the task it is currently running (window.__pgStudyCurrentTask), and
+ * that is the authoritative answer while a session is in progress. Outside a session the answer is
+ * matched back to tasks.json by question text, then by page URL. Returns '' when nothing matches,
+ * which the caller treats as "keep the edit in memory only".
+ */
+async function _resolveStudyTaskId(parked) {
+  const live = window.__pgStudyCurrentTask;
+  if (live?.id) return String(live.id);
+  const tasks = await _loadStudyTaskChoices();
+  if (!tasks.length) return '';
+  const question = String(parked?.question || '').trim().toLowerCase();
+  if (question) {
+    const hit = tasks.find(t => (t.question || '').trim().toLowerCase() === question);
+    if (hit) return hit.id;
+  }
+  const url = String(parked?.url || '').trim();
+  if (url) {
+    const hit = tasks.find(t => t.url && t.url === url);
+    if (hit) return hit.id;
+  }
+  return '';
+}
+
+/**
+ * Persist an edited answer straight away, so an Apply is never lost because the researcher forgot
+ * to press Save afterwards. Updates the stored record for this (task, condition) when one exists,
+ * and records a fresh one when it does not.
+ *
+ * @returns {Promise<{status: 'updated'|'created'|'unresolved'|'failed', taskId?: string, condition?: string, error?: string}>}
+ */
+async function _persistStudyAnswerEdit(parked, newAnswer) {
+  const taskId = await _resolveStudyTaskId(parked);
+  if (!taskId) return { status: 'unresolved' };
+  const condition = _currentStudyCondition();
+  const existing = await getStudyResponse(taskId, condition);
+  // Existing records already carry downscaled crops — running them through the canvas again is
+  // pure loss, so only a freshly built record gets downscaled.
+  const res = existing
+    ? await saveStudyResponse(_applyStudyResponseEdit(existing, newAnswer), { downscale: false })
+    : await saveStudyResponse(_applyStudyResponseEdit(_buildStudyResponseRecord({
+        taskId,
+        condition,
+        url: parked?.url || '',
+        question: parked?.question || '',
+        result: parked?.result
+      }), newAnswer));
+  if (!res.saved) return { status: 'failed', taskId, condition, error: res.error };
+  return { status: existing ? 'updated' : 'created', taskId, condition };
+}
+
+/**
+ * Save dialog: pick the task this answer belongs to, confirm the detected condition, write.
+ * Reuses the memory-shot lightbox shell so it looks like every other panel dialog.
+ */
+async function openStudySaveDialog(answerId) {
+  const parked = _answerPayloads.get(Number(answerId));
+  if (!parked) {
+    addMessage('⚠️ This answer is no longer in memory — re-run the question and Save again.', 'error');
+    return;
+  }
+  const detected = _currentStudyCondition();
+  const tasks = await _loadStudyTaskChoices();
+  const shots = Array.isArray(parked.result?.findEvidenceShots) ? parked.result.findEvidenceShots.length : 0;
+  // The panel toggles say what this answer was PRODUCED under, but the researcher may be banking it
+  // for a different arm (a bare answer recorded with grounding on, say). Detected is the default,
+  // not the decision.
+  const conditionChoices = [
+    { id: 'grounding', label: 'Grounded' },
+    { id: 'nongrounding', label: 'Non-grounded' }
+  ];
+
+  closeMemoryShotLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  const options = tasks.length
+    ? tasks.map(t => `<option value="${escapeAttr(t.id)}">${escapeHtml(t.id)} — ${escapeHtml(t.question.slice(0, 70))}</option>`).join('')
+    : '<option value="">(no tasks in user_study_data/tasks.json)</option>';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Save study response">
+      <div class="pageguide-memory-shot-head">
+        <span>Save this answer as a study response</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body pageguide-study-save-body">
+        <label class="pageguide-study-save-label" for="pg-study-save-task">Task</label>
+        <select id="pg-study-save-task" class="pageguide-study-save-select">${options}</select>
+        <label class="pageguide-study-save-label" for="pg-study-save-condition">Condition</label>
+        <select id="pg-study-save-condition" class="pageguide-study-save-select">
+          <option value="both">Both arms — grounded, and a bare copy for non-grounded</option>
+          ${conditionChoices.map(c => `<option value="${c.id}"${c.id === detected ? ' selected' : ''}>${escapeHtml(c.label)}${c.id === detected ? ' (detected)' : ''}</option>`).join('')}
+        </select>
+        <!-- BOTH ARMS FROM ONE ANSWER, and derived rather than re-asked. The arms must differ in
+             grounding and in NOTHING ELSE; asking the model a second time returns different prose,
+             so the two arms would differ in content as well and nothing they measure would be
+             comparable. _stripStudyGrounding is the same function the live non-grounding mode
+             applies, so a banked bare answer reads exactly like a generated one. -->
+        <div class="pageguide-study-save-meta">
+          ${shots} evidence image${shots === 1 ? '' : 's'}
+          · ${Number(parked.result?.highlightCount) || 0} highlight(s)
+        </div>
+        <div class="pageguide-study-save-hint">Saving overwrites any existing response for this task and condition.</div>
+        <div class="pageguide-study-save-actions">
+          <button type="button" class="pageguide-study-save-confirm">Save</button>
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  overlay.querySelector('.pageguide-study-save-confirm')?.addEventListener('click', async () => {
+    const taskId = overlay.querySelector('#pg-study-save-task')?.value || '';
+    if (!taskId) { addMessage('⚠️ Pick a task first.', 'error'); return; }
+    const chosen = overlay.querySelector('#pg-study-save-condition')?.value || detected;
+    const base = {
+      taskId,
+      url: parked.url || '',
+      question: parked.question || '',
+      result: parked.result,
+    };
+
+    const saves = [];
+    if (chosen === 'both') {
+      // Grounded exactly as generated; non-grounded is that same answer with its markers taken out.
+      const grounded = _buildStudyResponseRecord(Object.assign({ condition: 'grounding' }, base));
+      const bare = _applyStudyResponseEdit(
+        _buildStudyResponseRecord(Object.assign({ condition: 'nongrounding' }, base)),
+        _stripStudyGrounding(grounded.answer_raw || grounded.answer_display || '')
+      );
+      // Derived, not hand-written: `edited` would claim a researcher rewrote it.
+      bare.edited = false;
+      // A bare answer has nothing to point at, so its evidence goes with its markers.
+      bare.evidence = [];
+      bare.highlight_count = 0;
+      saves.push(grounded, bare);
+    } else {
+      saves.push(_buildStudyResponseRecord(Object.assign({ condition: chosen }, base)));
+    }
+
+    // Resolve the citations BEFORE banking, on the tab the answer was produced on. This is the last
+    // moment the mapping exists — the numbers in [N:"…"] belong to the answer run's own page index,
+    // and a reload discards it for good. Only the grounded record has markers to resolve; the bare
+    // one is defined by their absence.
+    const anchoring = [];
+    for (const record of saves) {
+      const r = await _attachCitationAnchors(record, parked.tabId);
+      if (r.total) anchoring.push(r);
+    }
+
+    const results = [];
+    for (const record of saves) results.push([record.condition, await saveStudyResponse(record)]);
+    closeMemoryShotLightbox();
+
+    // Said out loud, because an answer banked without anchors looks identical to one with them and
+    // only misbehaves later, on the study site, as evidence landing on the wrong paragraph.
+    const weak = anchoring.find(r => !r.ok || r.resolved < r.total);
+    if (weak) {
+      addMessage(`⚠️ Saved, but only ${weak.resolved}/${weak.total} citations could be anchored`
+        + `${weak.reason ? ` — ${weak.reason}` : ''}. Re-run the answer on this page and save again `
+        + 'if the evidence lands in the wrong place on the study site.', 'error');
+    }
+
+    const failed = results.filter(([, r]) => !r.saved);
+    if (failed.length) {
+      addMessage(`❌ Could not save ${failed.map(([c]) => c).join(' + ')}: `
+        + `${failed[0][1].error || 'unknown error'}`, 'error');
+      return;
+    }
+    const synced = results.every(([, r]) => r.synced);
+    addMessage(
+      `💾 Saved **${taskId}** · ${results.map(([c]) => c).join(' + ')}`
+      + `${synced ? ' (synced to Supabase)' : ' (local — publish with ⬆ Publish find)'}`,
+      'system'
+    );
+  });
+  document.body.appendChild(overlay);
+}
+window.openStudySaveDialog = openStudySaveDialog;
+
+/**
+ * Edit dialog: change the answer text before (or after) saving. Text only — evidence is left alone,
+ * because editing prose must never silently drop a screenshot.
+ */
+function openStudyEditDialog(answerId) {
+  const id = Number(answerId);
+  const parked = _answerPayloads.get(id);
+  if (!parked) {
+    addMessage('⚠️ This answer is no longer in memory — re-run the question to edit it.', 'error');
+    return;
+  }
+  const current = parked.result?.findAnswer || parked.result?.answer || '';
+
+  closeMemoryShotLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-memory-shot-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox';
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog pageguide-recap-detail" role="dialog" aria-modal="true" aria-label="Edit answer">
+      <div class="pageguide-memory-shot-head">
+        <span>Edit the agent's answer</span>
+        <button type="button" class="pageguide-memory-shot-close" aria-label="Close">×</button>
+      </div>
+      <div class="pageguide-recap-detail-body pageguide-study-save-body">
+        <textarea id="pg-study-edit-text" class="pageguide-study-edit-text" rows="12">${escapeHtml(current)}</textarea>
+        <div class="pageguide-study-save-hint">
+          Markers are live: deleting an <code>[ev:key]</code> removes that evidence chip, and changing the
+          quoted text inside <code>[N:"…"]</code> changes what gets highlighted on the page.
+        </div>
+        <div class="pageguide-study-save-actions">
+          <button type="button" class="pageguide-study-edit-apply">Apply</button>
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.pageguide-memory-shot-close')) closeMemoryShotLightbox();
+  });
+  overlay.querySelector('.pageguide-study-edit-apply')?.addEventListener('click', async () => {
+    const next = overlay.querySelector('#pg-study-edit-text')?.value ?? '';
+    // Update the parked result so a subsequent Save records the edit, and re-render the visible
+    // message so the researcher sees exactly what a participant would.
+    if (parked.result.findAnswer) parked.result.findAnswer = next;
+    parked.result.answer = next;
+    _rerenderAnswerMessage(id, parked.result);
+    closeMemoryShotLightbox();
+    // Then write it through, so the edit survives the session even without a separate Save.
+    const res = await _persistStudyAnswerEdit(parked, next);
+    if (res.status === 'unresolved') {
+      addMessage('✏️ Edit applied to this answer only — no matching study task, so use 💾 Save to record it.', 'system');
+    } else if (res.status === 'failed') {
+      addMessage(`❌ Edit applied but not saved: ${res.error || 'unknown error'}`, 'error');
+    } else {
+      addMessage(`✏️ Saved edit to **${res.taskId}** · ${res.condition}`, 'system');
+    }
+  });
+  document.body.appendChild(overlay);
+}
+window.openStudyEditDialog = openStudyEditDialog;
+
+/**
+ * Replace the body of an already-rendered answer with edited text, keeping its evidence and chips.
+ * Finds the message by the answer id stamped on its Save chip.
+ *
+ * There can be more than one copy on screen: the study overlay replays the same bubble (chips and
+ * all) on its Answer screen, and an edit made from there must update both, not just the chat.
+ */
+function _rerenderAnswerMessage(answerId, result) {
+  const chips = document.querySelectorAll(`.pageguide-study-save-chip[data-answer-id="${answerId}"]`);
+  if (!chips.length) return;
+  const text = result.findAnswer || result.answer || '';
+  const html = _expandEvidenceKeyCitations(
+    parseCitations(parseMarkdown(text)),
+    Array.isArray(result.findEvidenceShots) ? result.findEvidenceShots : []
+  );
+  chips.forEach((chip) => {
+    const msg = chip.closest('.pageguide-message');
+    if (!msg) return;
+    // The Find card keeps its answer in a styled div; a plain Ask bubble puts it straight in the
+    // message. Target whichever this is, leaving the evidence strip and chip row untouched.
+    const findBody = msg.querySelector('.pageguide-find-answer > div:nth-of-type(2)');
+    if (findBody) {
+      findBody.innerHTML = html;
+      return;
+    }
+    const chipRow = msg.querySelector('.pageguide-debug-answer-row');
+    msg.innerHTML = html + (chipRow ? chipRow.outerHTML : '');
+  });
+}
+
+// Evidence captured for the answer currently being rendered. addMessage() runs before the caller
+// can hand it the result object, so the Ask route parks the shots here for [ev:key] expansion.
+let _lastAnswerEvidenceShots = [];
+
+// Index into chrome.storage.local.debugPrompts at the moment the current ask was dispatched.
+// Everything logged after it belongs to the answer being produced.
+let _debugAnswerStart = 0;
+function _markDebugAnswerStart() {
+  if (!window.__pgDebugEnabled) return;
+  chrome.storage.local.get('debugPrompts')
+    .then(local => { _debugAnswerStart = Array.isArray(local.debugPrompts) ? local.debugPrompts.length : 0; })
+    .catch(() => { _debugAnswerStart = 0; });
+}
+
+/**
+ * The "Raw model response" block for a debug entry. Rendering it as its own section (rather than
+ * folding it into the metadata grid) keeps prompts and answer side by side, which is the whole
+ * point of opening this dialog from an answer.
+ *
+ * @param {object} p - debug entry (service worker shape)
+ * @returns {string} HTML
+ */
+function _debugRawResponseHtml(p) {
+  const hasResponse = p && p.rawResponse != null && String(p.rawResponse).length > 0;
+  const failed = p && p.ok === false;
+  const body = hasResponse
+    ? escapeHtml(String(p.rawResponse))
+    : '(pending… the call had not returned when this entry was written)';
+  const timing = p && p.durationMs != null ? ` · ${Math.round(p.durationMs)}ms` : '';
+  // What this one call cost, beside how long it took. Only OpenRouter prices a call, so this is
+  // absent for Gemini/OpenAI rather than shown as zero.
+  const cost = _debugUsageLabel(p?.usage);
+  const label = failed ? 'Raw model response — ERROR' : 'Raw model response';
+  return `
+    <details open style="margin-top: 0; display: block; border: 1px solid ${failed ? '#d32f2f' : 'var(--pg-border)'}; border-radius: 8px; padding: 8px; background: var(--pg-card);">
+      <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: ${failed ? '#d32f2f' : 'var(--pg-accent)'}; outline: none;">${label}${timing}${cost}</summary>
+      <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin-top: 6px; border: 1px solid var(--pg-border); max-height: 30vh; overflow-y: auto; color: var(--pg-text);">${body}</pre>
+    </details>
+  `;
+}
+window._debugRawResponseHtml = _debugRawResponseHtml;
+
+/**
+ * The " · $0.0021 · 1,204→180 tok" suffix for one call's usage block. Pure; '' when the provider
+ * reported nothing (Gemini and OpenAI return no price, and a failed call returns no usage at all).
+ */
+function _debugUsageLabel(usage) {
+  if (!usage) return '';
+  const bits = [];
+  if (usage.costUsd != null) bits.push(formatCostUsd(usage.costUsd));
+  if (usage.promptTokens != null || usage.completionTokens != null) {
+    bits.push(`${Number(usage.promptTokens) || 0}→${Number(usage.completionTokens) || 0} tok`);
+  }
+  return bits.length ? ` · ${escapeHtml(bits.join(' · '))}` : '';
+}
+window._debugUsageLabel = _debugUsageLabel;
+
+function _debugImageIdForAttachment(img, fallback = '') {
+  const explicit = String(img?.id || img?.image_id || img?.source_image_id || '').trim();
+  if (explicit) return explicit;
+  const label = String(img?.label || '');
+  const match = label.match(/\[image_id=([^\]\s]+)\]/i);
+  if (match) return match[1];
+  return fallback;
+}
+window._debugImageIdForAttachment = _debugImageIdForAttachment;
+
+/**
+ * The debug entries that produced one answer: everything logged between dispatching the query and
+ * rendering the answer. The panel records that window on the answer element, so a Find answer's
+ * chip covers the reader call, the Find × Visual evidence call and the annotator calls together.
+ *
+ * Defensive because `debugPrompts` is capped at 50 in the service worker: an old range can point
+ * past the end, or at entries that have since rolled off.
+ *
+ * @param {number} from - entry count when the query was sent
+ * @param {number} to - entry count when the answer rendered
+ * @param {Array<object>} entries - current debugPrompts
+ * @returns {Array<object>}
+ */
+function _debugRangeForAnswer(from, to, entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const start = Number(from);
+  const end = Number(to);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  const lo = Math.max(0, Math.min(start, list.length));
+  const hi = Math.max(lo, Math.min(end, list.length));
+  return list.slice(lo, hi);
+}
+window._debugRangeForAnswer = _debugRangeForAnswer;
+
+/**
+ * The per-answer 🐞 chip. Only exists in debug mode (window.__pgDebugEnabled, published by
+ * updateDebugButtonVisibility), so participants never see it.
+ *
+ * @param {number} from - debugPrompts length when the query went out
+ * @returns {string} HTML, or '' when debug mode is off
+ */
+function _debugAnswerChipHtml(from) {
+  if (!window.__pgDebugEnabled) return '';
+  const start = Number.isFinite(Number(from)) ? Number(from) : 0;
+  return `<button type="button" class="pageguide-debug-answer-chip" data-debug-from="${start}" title="Prompts, screenshots and raw response for this answer">🐞 Debug</button>`;
+}
+window._debugAnswerChipHtml = _debugAnswerChipHtml;
+
+/** Open the debug dialog scoped to one answer's calls. */
+async function openAnswerDebugView(from) {
+  let entries = [];
+  try {
+    const local = await chrome.storage.local.get('debugPrompts');
+    entries = Array.isArray(local.debugPrompts) ? local.debugPrompts : [];
+  } catch (e) { entries = []; }
+  // `to` is "now": everything logged since the query went out belongs to this answer.
+  const slice = _debugRangeForAnswer(from, entries.length, entries);
+  if (!slice.length) {
+    alert('No prompts were recorded for this answer (debug history may have rolled over).');
+    return;
+  }
+  openDebugPromptLightbox(slice, [], null, { answerOnly: true });
+}
+window.openAnswerDebugView = openAnswerDebugView;
+
+/**
+ * "💰 $0.0184 · 12 calls" for the set of debug entries the dialog is showing. Pure.
+ *
+ * Summed from the entries' own usage blocks rather than the ledger, because the dialog is scoped to
+ * exactly these entries — including, when opened from an answer's 🐞 chip, precisely the calls that
+ * answer paid for.
+ */
+function _debugTotalCostLabel(prompts) {
+  const list = Array.isArray(prompts) ? prompts : [];
+  const totals = sumCostEntries(list.map(p => p?.usage).filter(Boolean));
+  if (!totals.calls) return '';
+  return `💰 ${formatCostUsd(totals.costUsd)} · ${totals.calls} call${totals.calls === 1 ? '' : 's'}`;
+}
+window._debugTotalCostLabel = _debugTotalCostLabel;
+
+function openDebugPromptLightbox(livePrompts, savedSessions, defaultSessionId, opts = {}) {
+  // answerOnly: opened from an answer's 🐞 chip, so it shows just that answer's calls — no session
+  // picker to get lost in.
+  const answerOnly = !!opts.answerOnly;
+  closeDebugPromptLightbox();
+  const overlay = document.createElement('div');
+  overlay.id = 'pageguide-debug-prompt-lightbox';
+  overlay.className = 'pageguide-memory-shot-lightbox'; // reuse overlay styles for background blurring
+
+  overlay.innerHTML = `
+    <div class="pageguide-memory-shot-dialog" role="dialog" aria-modal="true" style="padding: 16px; overflow: auto; display: flex; flex-direction: column; height: 85vh; width: 90vw; max-width: 680px; box-sizing: border-box;">
+      <div class="pageguide-memory-shot-head" style="margin-bottom: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;">
+        <span style="font-size: 15px; font-weight: 800; color: var(--pg-text);">${answerOnly ? '🐞 Debug this answer' : '🐞 Debug Agent Prompt History'}</span>
+        <span id="pageguide-debug-cost-total" style="font-size: 12px; font-weight: 700; color: var(--pg-muted); margin-left: auto; margin-right: 10px;">${escapeHtml(_debugTotalCostLabel(livePrompts))}</span>
+        <button type="button" class="pageguide-memory-shot-close" id="pageguide-debug-prompt-close" aria-label="Close prompt viewer" style="font-size: 20px; border: 0; background: transparent; cursor: pointer; color: var(--pg-muted);">×</button>
+      </div>
+      <div style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;">
+        <div style="display: ${answerOnly ? 'none' : 'flex'}; align-items: center; gap: 8px;">
+          <label for="pageguide-debug-session-select" style="font-size: 12px; font-weight: bold; color: var(--pg-text); white-space: nowrap; width: 85px;">Select Session:</label>
+          <select id="pageguide-debug-session-select" style="flex: 1; padding: 6px; border-radius: 6px; background: var(--pg-bg); color: var(--pg-text); border: 1px solid var(--pg-border); outline: none; font-size: 11px; font-family: sans-serif;">
+          </select>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="pageguide-debug-step-select" style="font-size: 12px; font-weight: bold; color: var(--pg-text); white-space: nowrap; width: 85px;">${answerOnly ? 'LLM call:' : 'Select Step:'}</label>
+          <select id="pageguide-debug-step-select" style="flex: 1; padding: 6px; border-radius: 6px; background: var(--pg-bg); color: var(--pg-text); border: 1px solid var(--pg-border); outline: none; font-size: 11px; font-family: sans-serif;">
+          </select>
+        </div>
+      </div>
+      <div id="pageguide-debug-prompt-content" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; font-family: monospace; font-size: 11px;">
+      </div>
+    </div>`;
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.id === 'pageguide-debug-prompt-close' || e.target.closest('#pageguide-debug-prompt-close')) {
+      closeDebugPromptLightbox();
+    }
+  });
+
+  document.body.appendChild(overlay);
+
+  const sessionSelect = document.getElementById('pageguide-debug-session-select');
+  const stepSelect = document.getElementById('pageguide-debug-step-select');
+  const contentDiv = document.getElementById('pageguide-debug-prompt-content');
+
+  // Populate Sessions Selector
+  const sortedSaved = savedSessions.slice().sort((a, b) => b.startedAt - a.startedAt);
+
+  if (livePrompts.length > 0) {
+    const opt = document.createElement('option');
+    opt.value = 'live';
+    opt.textContent = `🟢 Active Chat Session (${livePrompts.length} steps)`;
+    sessionSelect.appendChild(opt);
+  }
+
+  sortedSaved.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.sessionId;
+    const timeStr = new Date(s.startedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const goalLabel = s.goal ? ` (${s.goal.substring(0, 30)}...)` : '';
+    opt.textContent = `💾 Saved Journey - ${timeStr}${goalLabel}`;
+    sessionSelect.appendChild(opt);
+  });
+
+  // Pre-select based on defaultSessionId or default to live/first
+  if (defaultSessionId) {
+    const optToSelect = Array.from(sessionSelect.options).find(o => o.value === defaultSessionId);
+    if (optToSelect) {
+      optToSelect.selected = true;
+    } else if (livePrompts.length > 0) {
+      sessionSelect.selectedIndex = 0;
+    }
+  } else {
+    sessionSelect.selectedIndex = 0;
+  }
+
+  let currentLoadedSteps = [];
+
+  async function handleSessionChange() {
+    const sid = sessionSelect.value;
+    stepSelect.innerHTML = '';
+    contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">Loading step list...</div>';
+
+    if (sid === 'live') {
+      currentLoadedSteps = livePrompts.map((p, idx) => ({
+        type: 'live',
+        index: idx,
+        data: p
+      }));
+      populateStepDropdown(currentLoadedSteps);
+    } else {
+      try {
+        if (typeof rewindGetIndex === 'function') {
+          const idx = await rewindGetIndex(sid);
+          if (idx && idx.steps && idx.steps.length > 0) {
+            currentLoadedSteps = idx.steps.map(s => ({
+              type: 'saved',
+              sessionId: sid,
+              stepNum: s.step,
+              planStep: s.planStep,
+              instruction: s.instruction || s.action || '',
+              action: s.action,
+              timestamp: s.timestamp
+            }));
+            populateStepDropdown(currentLoadedSteps);
+          } else {
+            currentLoadedSteps = [];
+            stepSelect.innerHTML = '<option value="">(No steps found)</option>';
+            contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">No steps recorded for this session.</div>';
+          }
+        } else {
+          throw new Error('rewindGetIndex is not available');
+        }
+      } catch (err) {
+        console.error('Failed to load session index:', err);
+        contentDiv.innerHTML = `<div style="padding: 12px; color: #d32f2f;">Error: ${err.message}</div>`;
+      }
+    }
+  }
+
+  function populateStepDropdown(stepsList) {
+    stepSelect.innerHTML = '';
+    stepsList.forEach((s, idx) => {
+      const opt = document.createElement('option');
+      opt.value = idx;
+      
+      let label = '';
+      if (s.type === 'live') {
+        const timeStr = new Date(s.data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const stepNum = s.data.metadata?.step !== undefined ? ` (Step ${s.data.metadata.step})` : '';
+        const modeLabel = s.data.metadata?.mode ? `[${s.data.metadata.mode}]` : '';
+        const actionLabel = s.data.action === 'callLLMWithImages' ? '📸' : '🤖';
+        const previewText = s.data.userPrompt ? s.data.userPrompt.substring(0, 40).replace(/\s+/g, ' ') + '...' : '(empty)';
+        label = `${actionLabel} ${timeStr} ${modeLabel}${stepNum} - ${previewText}`;
+      } else {
+        const timeStr = new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const stepNum = `Step ${s.stepNum}`;
+        const previewText = s.instruction ? s.instruction.substring(0, 40).replace(/\s+/g, ' ') + '...' : '(empty)';
+        label = `🤖 ${timeStr} ${stepNum} - ${previewText}`;
+      }
+
+      opt.textContent = label;
+      stepSelect.appendChild(opt);
+    });
+
+    stepSelect.selectedIndex = stepsList.length - 1;
+    handleStepChange();
+  }
+
+  async function handleStepChange() {
+    const idx = stepSelect.value;
+    if (idx === '' || !currentLoadedSteps[idx]) {
+      contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">No step selected.</div>';
+      return;
+    }
+
+    const stepInfo = currentLoadedSteps[idx];
+    contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">Loading step prompt details...</div>';
+
+    if (stepInfo.type === 'live') {
+      const rec = currentGuideRecords.find(r => Number(r.step) === Number(stepInfo.data.metadata?.step)) || {};
+      const promptData = {
+        ...stepInfo.data,
+        verifyResult: (rec.verifyResultSystemPrompt || rec.verifyResultUserPrompt || rec.verifyResultRawResponse || rec.verifyResultShot) ? {
+          systemPrompt: rec.verifyResultSystemPrompt || '',
+          userPrompt: rec.verifyResultUserPrompt || '',
+          rawResponse: rec.verifyResultRawResponse || '',
+          screenshot: rec.verifyResultShot || null,
+          action: rec.verifyResultAction || '',
+          scrollY: rec.verifyResultScrollY,
+          error: rec.verifyResultError || ''
+        } : null,
+        findSystemPrompt: rec.findSystemPrompt || '',
+        findUserPrompt: rec.findUserPrompt || '',
+        findRawResponse: rec.findRawResponse || '',
+        visualFallbackSystemPrompt: rec.visualFallbackSystemPrompt || '',
+        visualFallbackUserPrompt: rec.visualFallbackUserPrompt || '',
+        visualFallbackRawResponse: rec.visualFallbackRawResponse || '',
+        visualFallbackShot: rec.visualFallbackShot || null,
+      };
+      renderPromptDetails(promptData);
+    } else {
+      try {
+        if (typeof rewindGetRecord === 'function') {
+          const rec = await rewindGetRecord(stepInfo.sessionId, stepInfo.stepNum);
+          if (rec) {
+            const promptData = {
+              timestamp: rec.timestamp || stepInfo.timestamp,
+              action: rec.action ? 'callLLM' : 'unknown',
+              systemPrompt: rec.systemPrompt || '',
+              userPrompt: rec.userPrompt || rec.instruction || '',
+              messages: rec.messages || [
+                { role: 'user', content: rec.userPrompt || rec.instruction || '' }
+              ],
+              imageBase64: rec.screenshotBefore || rec.screenshot || null,
+              metadata: {
+                mode: rec.mode || 'guide',
+                step: rec.step,
+                url: rec.url
+              },
+              verifyResult: (rec.verifyResultSystemPrompt || rec.verifyResultUserPrompt || rec.verifyResultRawResponse || rec.verifyResultShot) ? {
+                systemPrompt: rec.verifyResultSystemPrompt || '',
+                userPrompt: rec.verifyResultUserPrompt || '',
+                rawResponse: rec.verifyResultRawResponse || '',
+                screenshot: rec.verifyResultShot || null,
+                action: rec.verifyResultAction || '',
+                scrollY: rec.verifyResultScrollY,
+                error: rec.verifyResultError || ''
+              } : null,
+              finalVerify: (rec.finalVerifySystemPrompt || rec.finalVerifyUserPrompt || rec.finalVerifyResponse || rec.finalShot) ? {
+                systemPrompt: rec.finalVerifySystemPrompt || '',
+                userPrompt: rec.finalVerifyUserPrompt || '',
+                rawResponse: rec.finalVerifyResponse || '',
+                screenshot: rec.finalShot || null,
+                verdict: rec.finalVerdict || ''
+              } : null,
+              findSystemPrompt: rec.findSystemPrompt || '',
+              findUserPrompt: rec.findUserPrompt || '',
+              findRawResponse: rec.findRawResponse || '',
+              visualFallbackSystemPrompt: rec.visualFallbackSystemPrompt || '',
+              visualFallbackUserPrompt: rec.visualFallbackUserPrompt || '',
+              visualFallbackRawResponse: rec.visualFallbackRawResponse || '',
+              visualFallbackShot: rec.visualFallbackShot || null,
+            };
+            renderPromptDetails(promptData);
+          } else {
+            contentDiv.innerHTML = '<div style="padding: 12px; color: var(--pg-muted);">Record not found in database.</div>';
+          }
+        } else {
+          throw new Error('rewindGetRecord is not available');
+        }
+      } catch (err) {
+        console.error('Failed to load step record:', err);
+        contentDiv.innerHTML = `<div style="padding: 12px; color: #d32f2f;">Error loading record: ${err.message}</div>`;
+      }
+    }
+  }
+
+  function renderPromptDetails(p) {
+    let html = '';
+
+    // Step Info/Metadata Block
+    const timeStr = new Date(p.timestamp).toLocaleString();
+    html += `
+      <div style="background: var(--pg-bg); border: 1px solid var(--pg-border); padding: 8px; border-radius: 8px; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; line-height: 1.4;">
+        <span style="font-weight: 700; color: var(--pg-muted);">Time:</span>
+        <span style="color: var(--pg-text);">${timeStr}</span>
+        <span style="font-weight: 700; color: var(--pg-muted);">Mode:</span>
+        <span style="color: var(--pg-text); font-weight: bold;">${p.metadata?.mode || 'unknown'}</span>
+        ${p.metadata?.step !== undefined ? `<span style="font-weight: 700; color: var(--pg-muted);">Step:</span><span style="color: var(--pg-text);">${p.metadata.step}</span>` : ''}
+        <span style="font-weight: 700; color: var(--pg-muted);">Action:</span>
+        <span style="color: var(--pg-text);">${p.action}</span>
+        <span style="font-weight: 700; color: var(--pg-muted);">URL:</span>
+        <span style="color: var(--pg-text); word-break: break-all;"><a href="${escapeHtml(p.metadata?.url || '')}" target="_blank" style="color: var(--pg-accent); text-decoration: none;">${escapeHtml(p.metadata?.url || 'N/A')}</a></span>
+      </div>
+    `;
+
+    // Raw model response. The entry is written before the call runs (appendDebugPrompt in the
+    // service worker), so this is patched in when the call settles — an entry with no response yet
+    // is either still in flight or was rolled off the 50-entry cap mid-call.
+    html += _debugRawResponseHtml(p);
+
+    const mediaDiag = Array.isArray(p.metadata?.findImageDiagnostics) ? p.metadata.findImageDiagnostics : [];
+    if (mediaDiag.length) {
+      const rows = mediaDiag.map(d => {
+        const id = d.id ? `<code style="color: var(--pg-accent);">${escapeHtml(d.id)}</code>` : '<span style="color: var(--pg-muted);">(not sent)</span>';
+        const err = d.captureError ? ` · error=${escapeHtml(d.captureError)}` : '';
+        const sel = d.selector ? `<div style="color: var(--pg-muted); word-break: break-all;">${escapeHtml(d.selector)}</div>` : '';
+        return `<div style="border-bottom: 1px solid var(--pg-border); padding: 6px 0;">
+          <div>${id} <b>${escapeHtml(d.status || 'unknown')}</b> · score=${escapeHtml(String(d.score ?? '?'))} · ${escapeHtml(d.why || '')}${err}</div>
+          <div style="color: var(--pg-text);">${escapeHtml(d.label || '')}</div>
+          ${sel}
+        </div>`;
+      }).join('');
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Media Candidate Diagnostics (${mediaDiag.length})</summary>
+          <div style="margin-top: 6px; max-height: 28vh; overflow-y: auto;">${rows}</div>
+        </details>
+      `;
+    }
+
+    const selectionDiag = p.metadata?.imageSelectionDiagnostics || null;
+    if (selectionDiag) {
+      const kept = Array.isArray(selectionDiag.selectedImageIds) ? selectionDiag.selectedImageIds.join(', ') : '';
+      const candidates = Array.isArray(selectionDiag.candidateImageIds) ? selectionDiag.candidateImageIds.join(', ') : '';
+      const dropped = Array.isArray(selectionDiag.droppedImageIds) ? selectionDiag.droppedImageIds.join(', ') : '';
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Image Selection</summary>
+          <div style="display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin-top: 6px; line-height: 1.4;">
+            <span style="font-weight: 700; color: var(--pg-muted);">Status:</span>
+            <span style="color: var(--pg-text);">${escapeHtml(selectionDiag.status || 'unknown')}</span>
+            ${candidates ? `<span style="font-weight: 700; color: var(--pg-muted);">Candidates:</span><span style="color: var(--pg-text);">${escapeHtml(candidates)}</span>` : ''}
+            <span style="font-weight: 700; color: var(--pg-muted);">Kept:</span>
+            <span style="color: var(--pg-text);">${escapeHtml(kept || '(none)')}</span>
+            ${dropped ? `<span style="font-weight: 700; color: var(--pg-muted);">Dropped:</span><span style="color: var(--pg-text);">${escapeHtml(dropped)}</span>` : ''}
+            ${selectionDiag.reason ? `<span style="font-weight: 700; color: var(--pg-muted);">Reason:</span><span style="color: var(--pg-text);">${escapeHtml(selectionDiag.reason)}</span>` : ''}
+            ${selectionDiag.error ? `<span style="font-weight: 700; color: var(--pg-muted);">Error:</span><span style="color: #d32f2f;">${escapeHtml(selectionDiag.error)}</span>` : ''}
+          </div>
+        </details>
+      `;
+    }
+
+    // System Prompt Block
+    html += `
+      <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+        <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">System Prompt</summary>
+        <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; margin-top: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.systemPrompt || '(none)')}</pre>
+      </details>
+    `;
+
+    // Complete Messages History Block
+    let messagesHtml = '';
+    if (Array.isArray(p.messages)) {
+      p.messages.forEach((m, idx) => {
+        const roleColor = m.role === 'user' ? 'var(--pg-accent)' : m.role === 'system' ? '#d32f2f' : '#388e3c';
+        messagesHtml += `
+          <div style="border-bottom: 1px solid var(--pg-border); padding: 8px 0; margin-bottom: 8px;">
+            <div style="font-weight: bold; color: ${roleColor}; margin-bottom: 4px; text-transform: uppercase;">[${m.role}] ${idx + 1}</div>
+            <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 6px; border-radius: 4px; margin: 0; color: var(--pg-text); max-height: 25vh; overflow-y: auto;">${escapeHtml(m.content || '(empty)')}</pre>
+          </div>
+        `;
+      });
+    }
+    html += `
+      <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+        <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Message List Context (${p.messages?.length || 0} turns)</summary>
+        <div style="margin-top: 6px; max-height: 40vh; overflow-y: auto;">
+          ${messagesHtml || '<div style="padding: 4px; color: var(--pg-muted);">(no messages)</div>'}
+        </div>
+      </details>
+    `;
+
+    // Images / Media Block
+    let imagesList = [];
+    if (p.imageBase64) {
+      const isPlaceholder = p.imageBase64 === 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      if (!isPlaceholder) {
+        imagesList.push({ id: 'viewport', base64: p.imageBase64, label: 'Single viewport screenshot' });
+      }
+    }
+    if (Array.isArray(p.images)) {
+      p.images.forEach((img, idx) => {
+        if (img.base64) {
+          imagesList.push({
+            id: _debugImageIdForAttachment(img, `image_${idx + 1}`),
+            base64: img.base64,
+            label: img.label || 'Image attachment'
+          });
+        }
+      });
+    }
+
+    if (imagesList.length > 0) {
+      let imgHtml = '';
+      imagesList.forEach(img => {
+        const src = img.base64.startsWith('data:') ? img.base64 : `data:image/jpeg;base64,${img.base64}`;
+        const imageId = _debugImageIdForAttachment(img);
+        imgHtml += `
+          <div style="border: 1px solid var(--pg-border); border-radius: 6px; padding: 6px; background: var(--pg-bg); display: flex; flex-direction: column; gap: 4px; align-items: flex-start;">
+            <span style="font-weight: bold; color: var(--pg-text); margin-bottom: 2px;">${imageId ? `<code style="font-size: 11px; padding: 1px 4px; border-radius: 4px; background: var(--pg-card); border: 1px solid var(--pg-border); color: var(--pg-accent);">${escapeHtml(imageId)}</code> ` : ''}${escapeHtml(img.label)}</span>
+            <img src="${src}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${src}')" title="Click to view full size" />
+          </div>
+        `;
+      });
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Attached Screenshots/Images (${imagesList.length})</summary>
+          <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 8px;">
+            ${imgHtml}
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.verifyResult) {
+      const v = p.verifyResult;
+      const vsrc = v.screenshot ? (v.screenshot.startsWith('data:') ? v.screenshot : `data:image/jpeg;base64,${v.screenshot}`) : '';
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Verify Result (Mid-journey)</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div style="font-size: 12px; color: var(--pg-muted);">Action: ${escapeHtml(v.action || 'terminal')} · Scroll Y: ${escapeHtml(String(v.scrollY ?? 'unknown'))}${v.error ? ` · Error: ${escapeHtml(v.error)}` : ''}</div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.systemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User/Page prompt sent to verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.userPrompt || '(none)')}</pre>
+            </div>
+            ${vsrc ? `<div><div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Screenshot sent to verification LLM</div><img src="${vsrc}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${vsrc}')" /></div>` : ''}
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw verification LLM response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.rawResponse || '(none)')}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.finalVerify) {
+      const v = p.finalVerify;
+      const vsrc = v.screenshot ? (v.screenshot.startsWith('data:') ? v.screenshot : `data:image/jpeg;base64,${v.screenshot}`) : '';
+      html += `
+        <details open style="margin-top: 0; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Final Verify Result</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div style="font-size: 12px; color: var(--pg-muted);">Verdict: ${escapeHtml(v.verdict || 'unclear')}</div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to final verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.systemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User/Page prompt sent to final verification LLM</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.userPrompt || '(none)')}</pre>
+            </div>
+            ${vsrc ? `<div><div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Screenshot sent to final verification LLM</div><img src="${vsrc}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${vsrc}')" /></div>` : ''}
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw final verification LLM response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(v.rawResponse || '(none)')}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.findSystemPrompt || p.findUserPrompt || p.findRawResponse) {
+      html += `
+        <details open style="margin-top: 12px; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Highlight Reader Pass Details</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to Highlight reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.findSystemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User prompt sent to Highlight reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.findUserPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw Highlight reader response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.findRawResponse || '(none)')}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    if (p.visualFallbackSystemPrompt || p.visualFallbackUserPrompt || p.visualFallbackRawResponse || p.visualFallbackShot) {
+      const fsrc = p.visualFallbackShot ? (p.visualFallbackShot.startsWith('data:') ? p.visualFallbackShot : `data:image/jpeg;base64,${p.visualFallbackShot}`) : '';
+      html += `
+        <details open style="margin-top: 12px; display: block; border: 1px solid var(--pg-border); border-radius: 8px; padding: 8px; background: var(--pg-card);">
+          <summary style="font-weight: 700; cursor: pointer; padding: 4px; color: var(--pg-accent); outline: none;">Visual Fallback Reader Details</summary>
+          <div style="margin-top: 6px; display: grid; gap: 8px;">
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">System prompt sent to Visual fallback reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.visualFallbackSystemPrompt || '(none)')}</pre>
+            </div>
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">User prompt sent to Visual fallback reader</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.visualFallbackUserPrompt || '(none)')}</pre>
+            </div>
+            ${fsrc ? `<div><div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Screenshot (with SoM) sent to Visual fallback reader</div><img src="${fsrc}" style="max-width: 100%; max-height: 250px; border-radius: 4px; border: 1px solid var(--pg-border); object-fit: contain; cursor: pointer;" onclick="window.open('${fsrc}')" /></div>` : ''}
+            <div>
+              <div style="font-weight: 700; color: var(--pg-text); margin-bottom: 4px;">Raw Visual fallback reader response</div>
+              <pre style="white-space: pre-wrap; word-break: break-word; background: var(--pg-bg); padding: 8px; border-radius: 6px; border: 1px solid var(--pg-border); max-height: 20vh; overflow-y: auto; color: var(--pg-text);">${escapeHtml(p.visualFallbackRawResponse || '(none)')}</pre>
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    contentDiv.innerHTML = html;
+  }
+
+  sessionSelect.addEventListener('change', handleSessionChange);
+  stepSelect.addEventListener('change', handleStepChange);
+
+  // Trigger initial populate
+  handleSessionChange();
+}
+
+function updateDebugButtonVisibility(enabled, alwaysShowPromptBtn = false) {
+  // Publish a global flag so other in-panel modules (e.g. the rewind inspector) can show
+  // debug-only details like the confidence breakdown without re-reading storage.
+  window.__pgDebugEnabled = !!enabled;
+  // The prompt viewer is debug-only, full stop: the composer a participant sees carries no
+  // researcher controls. (The alwaysShowPromptBtn option can no longer force it into view without
+  // debug mode — it only keeps the button when debug is on.)
+  const btn = document.getElementById('pageguide-debug-prompt-btn');
+  if (btn) {
+    btn.style.display = enabled ? 'inline-flex' : 'none';
+  }
+  const visualInputWrap = document.querySelector('.pageguide-visualinput-wrap');
+  if (visualInputWrap) {
+    visualInputWrap.style.display = enabled ? '' : 'none';
+  }
+  // The two user-study A/B axes (Grounding On/Non-grounding, Evidence Visual/Text) and the branch
+  // tree are set by the researcher, not the participant: a run's arm should not be changeable from
+  // the composer during a session. They follow the debug toggle like every other researcher control.
+  document.querySelectorAll('.pageguide-nongrounding-wrap, .pageguide-evidencemode-wrap').forEach(el => {
+    el.style.display = enabled ? '' : 'none';
+  });
+  if (!enabled) {
+    const branchBtn = document.getElementById('pageguide-show-branch-btn');
+    if (branchBtn) branchBtn.style.display = 'none';
+  } else if (typeof checkShowBranchButton === 'function') {
+    checkShowBranchButton();
+  }
+  const summaryAgentWrap = document.querySelector('.pageguide-summaryagent-wrap');
+  if (summaryAgentWrap) {
+    summaryAgentWrap.style.display = enabled ? '' : 'none';
+  }
+  const recapWrap = document.querySelector('.pageguide-recap-wrap');
+  if (recapWrap) {
+    recapWrap.style.display = enabled ? '' : 'none';
+  }
+  // Recording is the researcher's half of the study; a participant only ever sees "User Study".
+  document.querySelectorAll('.pageguide-record-study-item, .pageguide-capture-study-btn, .pageguide-save-trajectory-btn').forEach(el => {
+    el.style.display = enabled ? '' : 'none';
+  });
+  // What a run cost is researcher instrumentation too — hide every chip on screen, live or recalled.
+  if (!enabled) {
+    document.querySelectorAll('.pageguide-cost-chip, .pageguide-journey-cost').forEach(el => {
+      el.style.display = 'none';
+      el.textContent = '';
+    });
+  } else {
+    updateJourneyCostChip();
+    refreshCostChips();
+  }
+}
+window.updateDebugButtonVisibility = updateDebugButtonVisibility;

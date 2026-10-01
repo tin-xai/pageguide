@@ -1,0 +1,810 @@
+// PageGuide - Full-page Step Inspector
+// Reads ?session=<id>&step=<n>, then renders a slider-driven inspection view with
+// before-action screenshot, read-only page snapshot, after-action screenshot, and raw memory.
+
+(function () {
+  const params = new URLSearchParams(location.search);
+  let sessionId = params.get('session');
+  let step = parseInt(params.get('step'), 10);
+  let indexSteps = [];
+  let currentRecord = null;
+  let currentView = null;
+  let debugEnabled = false;
+  let chartVisibleVersions = { full: true, reduced: true, noloop: true };
+
+  const $ = id => document.getElementById(id);
+
+  try {
+    const savedTheme = localStorage.getItem('pageguide-theme');
+    if (savedTheme === 'light') document.body.classList.add('light-mode');
+    else if (savedTheme === 'dark') document.body.classList.add('dark-mode');
+  } catch (e) {}
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function fmtDuration(ms) {
+    if (ms == null) return '';
+    return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's';
+  }
+
+  function fmtCost(cost) {
+    if (!cost || cost.usd == null) return '';
+    return '$' + Number(cost.usd).toFixed(4);
+  }
+
+  function stepName(s) {
+    return (s && (s.isInitial || Number(s.step) === 0)) ? 'Initial state' : 'Step ' + (s ? s.step : step);
+  }
+
+  function currentStepIndex() {
+    const idx = indexSteps.findIndex(s => Number(s.step) === Number(step));
+    return idx >= 0 ? idx : 0;
+  }
+
+  function isFinalStepRecord(rec) {
+    if (!rec) return false;
+    if (rec.isLastStep) return true;
+    const concrete = indexSteps
+      .map(s => Number(s.step))
+      .filter(n => Number.isFinite(n) && n > 0);
+    return concrete.length ? Number(rec.step) === Math.max.apply(null, concrete) : false;
+  }
+
+  async function populateStepSelect() {
+    let index = null;
+    try {
+      index = await rewindGetIndex(sessionId || undefined);
+      if (index?.sessionId && typeof rewindVerifyScreenshots === 'function') {
+        index = await rewindVerifyScreenshots(index.sessionId);
+      }
+    } catch (e) {}
+    const sel = $('step-select');
+    sel.innerHTML = '';
+    indexSteps = (index && Array.isArray(index.steps)) ? index.steps.slice().sort((a, b) => Number(a.step) - Number(b.step)) : [];
+    if (index && !sessionId) sessionId = index.sessionId;
+    if (!indexSteps.length && Number.isFinite(step)) indexSteps = [{ sessionId, step }];
+    if (indexSteps.length && !indexSteps.some(s => Number(s.step) === Number(step))) {
+      step = Number(indexSteps[0].step);
+    }
+
+    indexSteps.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.step;
+      opt.textContent = stepName(s);
+      if (Number(s.step) === Number(step)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.onchange = () => setStep(parseInt(sel.value, 10));
+    renderTimeline();
+  }
+
+  function renderTimeline() {
+    const wrap = $('timeline');
+    const track = $('timeline-track');
+    if (!wrap || !track) return;
+
+    if (!indexSteps.length) {
+      wrap.style.display = 'none';
+      return;
+    }
+
+    const idx = currentStepIndex();
+    wrap.style.display = '';
+
+    track.innerHTML = indexSteps.map((s, i) => {
+      const conf = typeof s.confidence === 'number' ? s.confidence : null;
+      const verifyFailed = s.verification && s.verification.status && s.verification.status !== 'success';
+      const review = verifyFailed || (conf != null && conf < 0.7);
+      const cls = ['step-chip'];
+      if (i < idx) cls.push('done');
+      if (review) cls.push('review');
+      if (i === idx) cls.push('current');
+      const meta = [];
+      if (s.durationMs != null) meta.push(fmtDuration(s.durationMs));
+      if (review) meta.push('Review');
+      return `<button type="button" class="${cls.join(' ')}" data-step="${esc(s.step)}" title="${esc(stepName(s) + (s.instruction ? ' — ' + s.instruction : ''))}" aria-current="${i === idx ? 'step' : 'false'}">
+        <span class="step-dot" aria-hidden="true"></span>
+        <span>
+          <span class="step-chip-title">${esc((s.isInitial || Number(s.step) === 0) ? 'Init' : 'Step ' + s.step)}</span>
+          <span class="step-chip-text">${esc(s.instruction || stepName(s))}</span>
+          ${meta.length ? `<span class="step-chip-meta">${esc(meta.join(' · '))}</span>` : ''}
+        </span>
+      </button>`;
+    }).join('');
+    track.querySelectorAll('[data-step]').forEach(btn => {
+      btn.addEventListener('click', () => setStep(Number(btn.getAttribute('data-step'))));
+    });
+    const current = track.querySelector('.step-chip.current');
+    if (current && typeof current.scrollIntoView === 'function') {
+      try { current.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (e) {}
+    }
+  }
+
+  async function setStep(nextStep) {
+    if (!Number.isFinite(nextStep)) return;
+    step = nextStep;
+    const sel = $('step-select');
+    if (sel) sel.value = String(step);
+    currentView = null;
+    await render();
+  }
+
+  function confidencePill(confidence) {
+    if (confidence == null || !Number.isFinite(Number(confidence))) return '';
+    const val = Math.max(0, Math.min(1, Number(confidence)));
+    const review = val < 0.7;
+    return `<span class="pill ${review ? 'review' : 'ok'}">${review ? 'Needs review' : 'Confident'} · ${Math.round(val * 100)}%</span>`;
+  }
+
+  function verificationPill(verification) {
+    if (!verification || !verification.status) return '';
+    const ok = verification.status === 'success';
+    return `<span class="pill ${ok ? 'ok' : 'review'}">Verify: ${esc(verification.status)}</span>`;
+  }
+
+  // Show how confidence is composed: the three LLM signals grounded (G), loop (L), progress (P),
+  // and BOTH formula versions side by side (full = G·loop·progress, no-progress = G·loop) so they
+  // can be compared. Both are recomputed from the stored signals via the shared pure helper.
+  function confidenceBreakdown(rec) {
+    const fmt = (v) => Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '—';
+    const pct = (c) => (c != null) ? Math.round(c * 100) + '%' : '—';
+    const hasLlm = !(rec.grounded == null && rec.loop == null && rec.progress == null);
+    const hasMech = rec.mechConfidence != null || rec.mechGrounding != null || rec.mechLoop != null;
+    if (!hasLlm && !hasMech) return '';
+    const parts = [];
+    if (hasLlm) {
+      const llmActive = rec.confidenceSource !== 'mechanical';
+      parts.push(`<span class="pill">G: ${fmt(rec.grounded)}</span>`);
+      parts.push(`<span class="pill">L: ${fmt(rec.loop)}</span>`);
+      parts.push(`<span class="pill">P: ${fmt(rec.progress)}</span>`);
+      if (typeof gv2ComputeConfidence === 'function') {
+        const signals = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
+        const cFull = gv2ComputeConfidence(signals, 'full').confidence;
+        const cReduced = gv2ComputeConfidence(signals, 'reduced').confidence;
+        const cNoLoop = gv2ComputeConfidence(signals, 'noloop').confidence;
+        const active = rec.confidenceFormula || 'full';
+        parts.push(`<span class="pill ${llmActive && active === 'full' ? 'ok' : ''}">Full: ${pct(cFull)}</span>`);
+        parts.push(`<span class="pill ${llmActive && active === 'reduced' ? 'ok' : ''}">No-progress: ${pct(cReduced)}</span>`);
+        parts.push(`<span class="pill ${llmActive && active === 'noloop' ? 'ok' : ''}">No-loop: ${pct(cNoLoop)}</span>`);
+      }
+    }
+    // Mechanical ("no-LLM") confidence: rule-based grounding × loop, side by side with the LLM score.
+    if (hasMech) {
+      const mechActive = rec.confidenceSource === 'mechanical';
+      parts.push(`<span class="pill">Mech G: ${fmt(rec.mechGrounding)}</span>`);
+      parts.push(`<span class="pill">Mech L: ${fmt(rec.mechLoop)}</span>`);
+      parts.push(`<span class="pill ${mechActive ? 'ok' : ''}">No-LLM: ${pct(rec.mechConfidence)}</span>`);
+    }
+    return parts.join('');
+  }
+
+  function renderTaskPanel(rec) {
+    const cost = fmtCost(rec.cost);
+    const meta = [
+      confidencePill(rec.confidence),
+      rec.durationMs != null ? `<span class="pill">Duration: ${esc(fmtDuration(rec.durationMs))}</span>` : '',
+      cost ? `<span class="pill">Cost: ${esc(cost)}</span>` : '',
+      verificationPill(rec.verification)
+    ].filter(Boolean).join('');
+    const url = rec.url
+      ? `<a href="${esc(rec.url)}" target="_blank" rel="noreferrer">${esc(rec.url)}</a>`
+      : '';
+    const targetText = rec.target && rec.target.text ? rec.target.text : '';
+    const title = rec.isInitial || Number(rec.step) === 0 ? 'Initial page state' : (rec.instruction || 'Captured step');
+
+    const breakdownHtml = debugEnabled ? confidenceBreakdown(rec) : '';
+    // Debug developer tools, inside the task panel: download every step's data, and a collapsible
+    // chart comparing all three confidence formulas across the whole session.
+    const devToolsHtml = debugEnabled ? `
+        <div class="meta" style="margin-top:10px;">
+          <button class="tab" id="dev-download-btn" style="min-width:auto;">⬇ Download all step data</button>
+        </div>
+        <details id="dev-chart-wrap" style="margin-top:10px;">
+          <summary>📈 Confidence chart — Full vs No-progress vs No-loop (all steps)</summary>
+          <div style="margin:8px 0;"><button class="tab" id="dev-chart-btn" style="min-width:auto;">Refresh chart</button></div>
+          <div id="dev-chart-filters" class="meta"></div>
+          <div id="dev-chart"></div>
+        </details>` : '';
+
+    $('why').innerHTML = `
+      <div class="current-task">
+        <div class="task-head">
+          <span class="step-badge">${esc(stepName(rec))}</span>
+          <h2 class="task-title">${esc(title)}</h2>
+        </div>
+        <div class="task-grid">
+          <div class="task-row"><span class="task-key">Target</span><span class="task-value">${esc(rec.instruction || 'Initial state')}</span></div>
+          ${targetText ? `<div class="task-row"><span class="task-key">Element</span><span class="task-value">${esc(targetText)}</span></div>` : ''}
+          ${rec.action ? `<div class="task-row"><span class="task-key">Action</span><span class="task-value">${esc(rec.action)}${rec.typeText ? ' = "' + esc(rec.typeText) + '"' : ''}</span></div>` : ''}
+          ${url ? `<div class="task-row"><span class="task-key">Link</span><span class="task-value">${url}</span></div>` : ''}
+        </div>
+        ${meta ? `<div class="meta">${meta}</div>` : ''}
+        ${breakdownHtml ? `<div class="meta">${breakdownHtml}</div>` : ''}
+        ${devToolsHtml}
+      </div>`;
+
+    // Wire the debug tools (re-created on every render, so attach listeners each time).
+    if (debugEnabled) {
+      const dl = $('dev-download-btn');
+      if (dl) dl.addEventListener('click', downloadAllStepData);
+      const chartBox = $('dev-chart');
+      const chartBtn = $('dev-chart-btn');
+      renderChartFilters();
+      if (chartBtn) chartBtn.addEventListener('click', async () => {
+        if (!window.confirm('Refresh the confidence chart from the latest saved step data?')) return;
+        await populateStepSelect();
+        renderConfChartInto(chartBox);
+      });
+      const chartWrap = $('dev-chart-wrap');
+      if (chartWrap) chartWrap.addEventListener('toggle', () => { if (chartWrap.open) renderConfChartInto(chartBox); }, { once: true });
+    }
+  }
+
+  function renderMemoryPanel(rec) {
+    const mem = $('memory');
+    if (!mem) return;
+    const bits = [];
+
+    if (rec.title || rec.risk || rec.restore) {
+      const stateBits = [];
+      if (rec.title) stateBits.push(`<div class="memory-item"><b>Page title</b>${esc(rec.title)}</div>`);
+      if (rec.risk) stateBits.push(`<div class="memory-item"><b>Risk</b>${esc(rec.risk)}</div>`);
+      if (rec.restore) {
+        const r = rec.restore;
+        const ls = r.localStorage ? Object.keys(r.localStorage).length : 0;
+        const ss = r.sessionStorage ? Object.keys(r.sessionStorage).length : 0;
+        const fm = Array.isArray(r.forms) ? r.forms.length : 0;
+        const scroll = r.scroll ? ((r.scroll.x | 0) + ',' + (r.scroll.y | 0)) : 'none';
+        stateBits.push(`<div class="memory-item"><b>Captured state</b>${ls} localStorage · ${ss} sessionStorage · ${fm} field(s) · scroll ${esc(scroll)}</div>`);
+      }
+      if (stateBits.length) bits.push(`<div class="memory-grid">${stateBits.join('')}</div>`);
+    }
+
+    if (Array.isArray(rec.restoreLog) && rec.restoreLog.length) {
+      const fmt = (typeof gv2FriendlyRestoreAction === 'function') ? gv2FriendlyRestoreAction : ((typeof gv2DescribeRestoreAction === 'function') ? gv2DescribeRestoreAction : (e) => (e && e.kind) || '');
+      const tech = (typeof gv2RestoreTechnicalDetail === 'function') ? gv2RestoreTechnicalDetail : ((typeof gv2DescribeRestoreAction === 'function') ? gv2DescribeRestoreAction : (e) => (e && e.kind) || '');
+      const when = rec.restoredAt ? ' · ' + new Date(rec.restoredAt).toLocaleString() : '';
+      const items = rec.restoreLog.map(e => `<li>${esc(fmt(e))}</li>`).join('');
+      const techItems = rec.restoreLog.map(e => `<li>${esc(tech(e))}</li>`).join('');
+      bits.push(`<details open><summary>Restore log${esc(when)}</summary><ul class="restore-list">${items}</ul>
+        <details><summary>Technical details</summary><ul class="restore-list">${techItems}</ul></details></details>`);
+    }
+
+    if (rec.regionShot || rec.regionDom) {
+      const region = [];
+      if (rec.regionShot) {
+        region.push(`<div class="memory-item"><b>Target region</b><img src="data:image/jpeg;base64,${rec.regionShot}" alt="target region" style="width:100%;border-radius:8px;border:1px solid var(--pg-border);display:block"></div>`);
+      }
+      if (rec.regionDom) {
+        region.push(`<details class="memory-item"><summary>Region DOM snapshot</summary><iframe class="rw-region-dom" sandbox style="height:40vh;margin-top:8px"></iframe></details>`);
+      }
+      bits.push(`<div class="memory-grid">${region.join('')}</div>`);
+    }
+
+    if (!bits.length) {
+      mem.style.display = 'none';
+      mem.innerHTML = '';
+      return;
+    }
+    mem.innerHTML = bits.join('');
+    mem.style.display = '';
+    if (rec.regionDom) {
+      const frame = mem.querySelector('.rw-region-dom');
+      if (frame) frame.srcdoc = rec.regionDom;
+    }
+  }
+
+  function viewAvailability(rec) {
+    const resolved = (typeof rewindResolveScreenshot === 'function')
+      ? rewindResolveScreenshot(rec)
+      : (rec.screenshotBefore || rec.screenshot || rec.screenshotAfter || null);
+    return {
+      beforeShot: rec.screenshotBefore || rec.screenshot || resolved || null,
+      beforeSnap: rec.domSnapshot || null,
+      afterShot: rec.screenshotAfter || null
+    };
+  }
+
+  function defaultView(rec) {
+    const a = viewAvailability(rec);
+    if (a.beforeShot) return 'before';
+    if (a.afterShot) return 'after';
+    if (a.beforeSnap) return 'snap';
+    return 'before';
+  }
+
+  function showView(which) {
+    if (!currentRecord) return;
+    const a = viewAvailability(currentRecord);
+    const available = {
+      before: !!a.beforeShot,
+      snap: !!a.beforeSnap,
+      after: !!a.afterShot
+    };
+    if (!available[which]) which = defaultView(currentRecord);
+    currentView = which;
+
+    const tabs = {
+      before: $('tab-before'),
+      snap: $('tab-snap'),
+      after: $('tab-after')
+    };
+    Object.keys(tabs).forEach(k => {
+      if (!tabs[k]) return;
+      tabs[k].disabled = !available[k];
+      tabs[k].classList.toggle('active', which === k && available[k]);
+      tabs[k].onclick = () => !tabs[k].disabled && showView(k);
+    });
+
+    const view = $('view');
+    if (which === 'snap' && a.beforeSnap) {
+      view.innerHTML = `<div class="snap-wrap"><div class="snap-banner">Read-only page snapshot — before action</div><iframe sandbox></iframe></div>`;
+      view.querySelector('iframe').srcdoc = a.beforeSnap;
+    } else if (which === 'after' && a.afterShot) {
+      view.innerHTML = `<img src="data:image/jpeg;base64,${a.afterShot}" alt="${esc(stepName(currentRecord))} after action">`;
+    } else if (a.beforeShot) {
+      view.innerHTML = `<img src="data:image/jpeg;base64,${a.beforeShot}" alt="${esc(stepName(currentRecord))} before action">`;
+    } else {
+      view.innerHTML = `<div class="empty">No ${esc(which)} capture available for this step.</div>`;
+    }
+  }
+
+  async function loadInitialRecord(rec) {
+    const sid = rec?.sessionId || sessionId;
+    if (!sid || Number(rec?.step) === 0) return null;
+    try { return await rewindGetRecord(sid, 0); } catch (e) { return null; }
+  }
+
+  async function renderRecapImages(rec) {
+    let imgs = Array.isArray(rec?.recapImages) ? rec.recapImages.filter(img => img && img.base64) : [];
+    if (!imgs.length) {
+      const initial = await loadInitialRecord(rec);
+      const initialShot = initial?.screenshotBefore || initial?.screenshot || null;
+      const finalShot = rec?.finalShot || rec?.screenshotAfter || rec?.screenshotBefore || rec?.screenshot || null;
+      imgs = [];
+      if (initialShot) imgs.push({ base64: initialShot, label: 'Initial state before guide' });
+      if (finalShot) imgs.push({ base64: finalShot, label: 'Final state after guide' });
+    }
+    if (!imgs.length) return '<div class="empty" style="padding:10px">No screenshots were stored for this combined call.</div>';
+    return imgs.map((img) => {
+      if (!img || !img.base64) return '';
+      const src = String(img.base64).startsWith('data:') ? img.base64 : `data:image/jpeg;base64,${img.base64}`;
+      const label = img.label || 'Screenshot sent to LLM';
+      return `
+        <figure class="recap-image">
+          <figcaption>${esc(label)}</figcaption>
+          <img src="${src}" alt="${esc(label)}">
+        </figure>`;
+    }).join('');
+  }
+
+  function dataImage(base64) {
+    if (!base64) return '';
+    return String(base64).startsWith('data:') ? String(base64) : `data:image/jpeg;base64,${base64}`;
+  }
+
+  function pctBox(b) {
+    if (!b || typeof b !== 'object') return null;
+    const x = Number(b.x), y = Number(b.y), w = Number(b.w), h = Number(b.h);
+    if (![x, y, w, h].every(Number.isFinite) || !(w > 0) || !(h > 0)) return null;
+    const clamp = (v) => Math.max(0, Math.min(100, v * 100));
+    const x1 = clamp(x), y1 = clamp(y), x2 = clamp(x + w), y2 = clamp(y + h);
+    return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+  }
+
+  function pctPoint(p) {
+    if (!p || typeof p !== 'object') return null;
+    const x = Number(p.x), y = Number(p.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x: Math.max(0, Math.min(100, x * 100)), y: Math.max(0, Math.min(100, y * 100)) };
+  }
+
+  function annotationOverlaySvg(ev) {
+    const debug = ev?.annotationCoordinateDebug || {};
+    const region = debug.coercedRegion || ev?.region_bbox || null;
+    const annotations = Array.isArray(debug.coercedAnnotations) ? debug.coercedAnnotations : (Array.isArray(ev?.annotations) ? ev.annotations : []);
+    const parts = [];
+    const r = pctBox(region);
+    if (r) {
+      parts.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="rgba(255,184,0,0.12)" stroke="#ffb800" stroke-width="0.7" stroke-dasharray="1.5 1" vector-effect="non-scaling-stroke"/>`);
+      parts.push(`<text x="${Math.min(98, r.x + 0.8)}" y="${Math.max(3, r.y + 2.8)}" fill="#ffb800" font-size="3" font-weight="800">region</text>`);
+    }
+    annotations.slice(0, 5).forEach((ann) => {
+      const color = esc(String(ann?.color || '#ff2d78'));
+      const label = esc(String(ann?.label || '').slice(0, 60));
+      if (!ann || ann.type === 'box' || ann.type === 'rect' || ann.type === 'rectangle') {
+        const b = pctBox(ann?.bbox);
+        if (!b) return;
+        parts.push(`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="rgba(255,45,120,0.12)" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"/>`);
+        if (label) parts.push(`<text x="${Math.min(98, b.x + 0.8)}" y="${Math.max(3, b.y + 2.8)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      } else if (ann.type === 'ellipse') {
+        const b = pctBox(ann?.bbox);
+        if (!b) return;
+        parts.push(`<ellipse cx="${b.x + b.w / 2}" cy="${b.y + b.h / 2}" rx="${b.w / 2}" ry="${b.h / 2}" fill="rgba(255,45,120,0.12)" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"/>`);
+        if (label) parts.push(`<text x="${Math.min(98, b.x + 0.8)}" y="${Math.max(3, b.y + 2.8)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      } else if (ann.type === 'arrow' || ann.type === 'line') {
+        const from = pctPoint(ann.from), to = pctPoint(ann.to);
+        if (!from || !to) return;
+        const marker = ann.type === 'arrow' ? ' marker-end="url(#ann-arrow)"' : '';
+        parts.push(`<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="${color}" stroke-width="0.8" vector-effect="non-scaling-stroke"${marker}/>`);
+        if (label) parts.push(`<text x="${Math.min(98, (from.x + to.x) / 2 + 0.8)}" y="${Math.max(3, (from.y + to.y) / 2 - 1)}" fill="${color}" font-size="3" font-weight="800">${label}</text>`);
+      }
+    });
+    if (!parts.length) return '';
+    return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;">
+      <defs><marker id="ann-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ff2d78"></path></marker></defs>
+      ${parts.join('')}
+    </svg>`;
+  }
+
+  function annotatedInputFigure(src, ev) {
+    const overlay = annotationOverlaySvg(ev);
+    if (!src || !overlay) return '';
+    return `<figure class="recap-image"><figcaption>Annotator input with region + annotations overlay</figcaption><span style="position:relative;display:inline-block;max-width:100%;border:1px solid var(--pg-border);border-radius:8px;overflow:hidden;background:rgba(0,0,0,.04);"><img src="${src}" alt="Annotator input with overlay" style="width:auto;max-width:100%;max-height:260px;object-fit:contain;display:block;border:0;border-radius:0;background:transparent;">${overlay}</span></figure>`;
+  }
+
+  function annotationDebugItems(rec) {
+    const hasAnnotationDebug = ev => ev && (
+      ev.annotationSystemPrompt ||
+      ev.annotationUserPrompt ||
+      ev.annotationRawResponse ||
+      ev.annotationCoordinateDebug ||
+      ev.annotationScreenshot ||
+      ev.annotationResultShot ||
+      ev.annotationError
+    );
+    const mapItem = (ev, source, idx) => Object.assign({}, ev, {
+      annotationSource: source,
+      annotationOrdinal: idx + 1,
+      annotationResultShot: ev?.annotationResultShot || ev?.shot || ev?.visualEvidenceShot || null,
+      shot: ev?.shot || ev?.visualEvidenceShot || null,
+      region_bbox: ev?.region_bbox || ev?.visualEvidenceNormRect || null,
+      note: ev?.note || ev?.visualEvidenceReason || ev?.reason || ev?.text || ''
+    });
+    const saved = (Array.isArray(rec?.savedEvidenceCaptures) ? rec.savedEvidenceCaptures : [])
+      .filter(hasAnnotationDebug)
+      .map((ev, idx) => mapItem(ev, 'Saved evidence', idx));
+    const confirmation = (Array.isArray(rec?.visualEvidenceItems) ? rec.visualEvidenceItems : [])
+      .filter(hasAnnotationDebug)
+      .map((ev, idx) => mapItem(ev, 'Confirmation evidence', idx));
+    return saved.concat(confirmation);
+  }
+
+  function renderAnnotationDetails(rec) {
+    const items = annotationDebugItems(rec);
+    if (!items.length) {
+      return rec?.confirmationEvidenceSkippedReason
+        ? `<div class="recap-sub" style="border-top:1px solid var(--pg-border);padding-top:10px;margin-top:10px;">
+            <div class="recap-sub-label">Confirmation evidence skipped</div>
+            <div style="font:500 13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--pg-muted);">${esc(rec.confirmationEvidenceSkippedReason)}</div>
+          </div>`
+        : '';
+    }
+    return items.map((ev, idx) => {
+      const shot = dataImage(ev.annotationScreenshot);
+      const resultShot = dataImage(ev.annotationResultShot || ev.shot);
+      return `
+        <div class="recap-sub" style="border-top:1px solid var(--pg-border);padding-top:10px;margin-top:10px;">
+          <div class="recap-sub-label">${esc(ev.annotationSource || 'Evidence annotation')} · ${esc(ev.key || `Evidence ${idx + 1}`)}</div>
+          ${ev.note ? `<div style="font:500 13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--pg-muted);margin-bottom:8px;">${esc(ev.note)}</div>` : ''}
+          ${ev.annotationError ? `<div style="font:800 12px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#c43;margin-bottom:8px;">Annotation error: ${esc(ev.annotationError)}</div>` : ''}
+          ${ev.annotationSystemPrompt ? `<div class="recap-sub-label">Annotator system prompt</div><pre>${esc(ev.annotationSystemPrompt)}</pre>` : ''}
+          ${ev.annotationUserPrompt ? `<div class="recap-sub-label">Annotator user prompt</div><pre>${esc(ev.annotationUserPrompt)}</pre>` : ''}
+          ${shot ? `<div class="recap-sub-label">Screenshot sent to annotator</div><div class="recap-images"><figure class="recap-image"><figcaption>Annotator input screenshot</figcaption><img src="${shot}" alt="Annotator input screenshot"></figure>${annotatedInputFigure(shot, ev)}</div>` : ''}
+          ${ev.annotationRawResponse ? `<div class="recap-sub-label">Raw annotator response</div><pre>${esc(ev.annotationRawResponse)}</pre>` : ''}
+          ${ev.annotationCoordinateDebug ? `<div class="recap-sub-label">Coordinate debug</div><pre>${esc(JSON.stringify(ev.annotationCoordinateDebug, null, 2))}</pre>` : ''}
+          ${resultShot ? `<div class="recap-sub-label">Final annotated evidence crop</div><div class="recap-images"><figure class="recap-image"><figcaption>Annotated evidence result</figcaption><img src="${resultShot}" alt="Annotated evidence result"></figure></div>` : ''}
+        </div>`;
+    }).join('');
+  }
+
+  async function renderRawAndRecord(rec) {
+    if (rec.systemPrompt) {
+      $('prompt-system-wrap').style.display = '';
+      $('prompt-system').textContent = rec.systemPrompt;
+    } else {
+      $('prompt-system-wrap').style.display = 'none';
+    }
+
+    if (rec.userPrompt) {
+      $('prompt-user-wrap').style.display = '';
+      $('prompt-user').textContent = rec.userPrompt;
+    } else {
+      $('prompt-user-wrap').style.display = 'none';
+    }
+
+    if (rec.rawLlmJson) {
+      $('raw-wrap').style.display = '';
+      $('raw').textContent = rec.rawLlmJson;
+    } else {
+      $('raw-wrap').style.display = 'none';
+    }
+
+    // The exact SoM-marked screenshot sent to the LLM (only present when Visual input is on).
+    const somWrap = $('som-wrap');
+    if (somWrap) {
+      const somShot = rec.somInputShot || null;
+      if (somShot) {
+        somWrap.style.display = '';
+        const src = dataImage(somShot);
+        if ($('som-image')) $('som-image').innerHTML = `<figure class="recap-image"><figcaption>Viewport with SoM markers sent to LLM</figcaption><img src="${src}" alt="SoM screenshot sent to LLM"></figure>`;
+      } else {
+        somWrap.style.display = 'none';
+      }
+    }
+
+    const annotationWrap = $('annotation-wrap');
+    if (annotationWrap) {
+      const annotationHtml = renderAnnotationDetails(rec);
+      if (annotationHtml) {
+        annotationWrap.style.display = '';
+        annotationWrap.open = true;
+        if ($('annotation-content')) $('annotation-content').innerHTML = annotationHtml;
+      } else {
+        annotationWrap.style.display = 'none';
+        annotationWrap.open = false;
+        if ($('annotation-content')) $('annotation-content').innerHTML = '';
+      }
+    }
+
+    // Summarize: the end-of-task recap LLM call. On the final step, always show this
+    // section even if the call was not stored, so missing evidence is explicit instead of hidden.
+    const recapWrap = $('recap-wrap');
+    if (recapWrap) {
+      const recapSystemPrompt = rec.recapSystemPrompt || rec.finalVerifySystemPrompt || '';
+      const recapUserPrompt = rec.recapUserPrompt || rec.finalVerifyUserPrompt || '';
+      const recapResponse = rec.recapResponse || rec.finalVerifyResponse || '';
+      const shouldShowRecap = !!(recapSystemPrompt || recapUserPrompt || recapResponse || isFinalStepRecord(rec));
+      if (shouldShowRecap) {
+        recapWrap.style.display = '';
+        recapWrap.open = true;
+        if ($('recap-images')) $('recap-images').innerHTML = await renderRecapImages(rec);
+        if ($('recap-system')) $('recap-system').textContent = recapSystemPrompt || '(no summarization/evaluation system prompt was stored on this final step record)';
+        if ($('recap-user')) $('recap-user').textContent = recapUserPrompt || '(no summarization/evaluation user prompt was stored on this final step record)';
+        if ($('recap-response')) $('recap-response').textContent = recapResponse || '(no summarization/evaluation LLM response was stored on this final step record)';
+      } else {
+        recapWrap.style.display = 'none';
+        recapWrap.open = false;
+      }
+    }
+
+    // Final State verification: the vision LLM pass over the final screenshot.
+    const finalWrap = $('final-verify-wrap');
+    if (finalWrap) {
+      const combinedFinal = !!rec.recapResponse && rec.finalVerifyResponse === rec.recapResponse;
+      if (!combinedFinal && (rec.finalVerifySystemPrompt || rec.finalVerifyUserPrompt || rec.finalVerifyResponse)) {
+        finalWrap.style.display = '';
+        if ($('final-verify-system')) $('final-verify-system').textContent = rec.finalVerifySystemPrompt || '(none)';
+        if ($('final-verify-user')) $('final-verify-user').textContent = rec.finalVerifyUserPrompt || '(none)';
+        if ($('final-verify-response')) $('final-verify-response').textContent = rec.finalVerifyResponse || '(no response)';
+      } else {
+        finalWrap.style.display = 'none';
+      }
+    }
+
+    const recordWrap = $('record-wrap'), recordPre = $('record');
+    if (!recordWrap || !recordPre) return;
+    try {
+      const copy = Object.assign({}, rec);
+      for (const k of ['screenshot', 'screenshotBefore', 'screenshotAfter', 'regionShot']) {
+        if (copy[k]) copy[k] = '[base64 ' + copy[k].length + ' chars]';
+      }
+      for (const k of ['domSnapshot', 'domSnapshotAfter', 'regionDom']) {
+        if (copy[k]) copy[k] = '[html ' + copy[k].length + ' chars]';
+      }
+      for (const k of ['markedShot', 'finalShot', 'somInputShot', 'visualEvidenceShot', 'visualHighlightImage']) {
+        if (copy[k]) copy[k] = '[base64 ' + copy[k].length + ' chars]';
+      }
+      if (Array.isArray(copy.recapImages)) {
+        copy.recapImages = copy.recapImages.map(img => ({
+          label: img?.label || '',
+          base64: img?.base64 ? '[base64 ' + img.base64.length + ' chars — see Summarization]' : null
+        }));
+      }
+      if (Array.isArray(copy.savedEvidenceCaptures)) {
+        copy.savedEvidenceCaptures = copy.savedEvidenceCaptures.map(ev => {
+          const item = Object.assign({}, ev);
+          for (const k of ['shot', 'annotationScreenshot', 'annotationResultShot']) {
+            if (item[k]) item[k] = '[base64 ' + item[k].length + ' chars — see Evidence annotation]';
+          }
+          return item;
+        });
+      }
+      for (const k of ['recapSystemPrompt', 'recapUserPrompt', 'recapResponse']) {
+        if (copy[k]) copy[k] = '[text ' + copy[k].length + ' chars — see Summarization]';
+      }
+      for (const k of ['finalVerifySystemPrompt', 'finalVerifyUserPrompt', 'finalVerifyResponse']) {
+        if (copy[k]) copy[k] = '[text ' + copy[k].length + ' chars — see Final State verification]';
+      }
+      recordPre.textContent = JSON.stringify(copy, null, 2);
+      recordWrap.style.display = '';
+    } catch (e) {
+      recordWrap.style.display = 'none';
+    }
+  }
+
+  // Confidence line colors, shared by the chart + legends.
+  const CONF_COLORS = { full: '#ffa657', reduced: '#ff2d78', noloop: '#1bbf9c' };
+  const CONF_LABELS = {
+    full: 'Full (G·loop·progress)',
+    reduced: 'No-progress (G·loop)',
+    noloop: 'No-loop (G·progress)'
+  };
+
+  function normalizeChartVisible(next, changedKey) {
+    const clean = {
+      full: next?.full !== false,
+      reduced: next?.reduced !== false,
+      noloop: next?.noloop !== false
+    };
+    if (!clean.full && !clean.reduced && !clean.noloop) clean[changedKey || 'full'] = true;
+    return clean;
+  }
+
+  function renderChartFilters() {
+    const wrap = $('dev-chart-filters');
+    if (!wrap) return;
+    chartVisibleVersions = normalizeChartVisible(chartVisibleVersions);
+    wrap.innerHTML = Object.keys(CONF_LABELS).map(key => `
+      <button type="button" class="tab chart-version-filter${chartVisibleVersions[key] ? ' active' : ''}" data-chart-version="${key}" aria-pressed="${chartVisibleVersions[key] ? 'true' : 'false'}" style="min-width:auto;margin-right:6px;">
+        <span style="display:inline-block;width:12px;height:3px;border-radius:2px;background:${CONF_COLORS[key]}"></span> ${esc(CONF_LABELS[key])}
+      </button>`).join('');
+    wrap.querySelectorAll('[data-chart-version]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-chart-version');
+        chartVisibleVersions = normalizeChartVisible({ ...chartVisibleVersions, [key]: !chartVisibleVersions[key] }, key);
+        renderChartFilters();
+        renderConfChartInto($('dev-chart'));
+      });
+    });
+  }
+
+  // Build an SVG triple-line chart from per-step {step, full, reduced, noloop} confidence rows.
+  function buildConfChartSvg(data, visible = chartVisibleVersions) {
+    visible = normalizeChartVisible(visible);
+    const keys = Object.keys(CONF_LABELS).filter(k => visible[k]);
+    const W = 600, H = 220, padL = 38, padR = 16, padT = 18, padB = 30;
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+    const n = data.length;
+    const xAt = (i) => n <= 1 ? padL + innerW / 2 : padL + (i / (n - 1)) * innerW;
+    const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * innerH;
+    const line = (key) => {
+      const pts = data.map((d, i) => d[key] == null ? null : `${xAt(i).toFixed(1)},${yAt(d[key]).toFixed(1)}`).filter(Boolean);
+      return pts.length ? `<polyline data-version="${key}" points="${pts.join(' ')}" fill="none" stroke="${CONF_COLORS[key]}" stroke-width="2.2"/>` : '';
+    };
+    const dots = (key) => data.map((d, i) => d[key] == null ? '' : `<circle data-version="${key}" cx="${xAt(i).toFixed(1)}" cy="${yAt(d[key]).toFixed(1)}" r="3" fill="${CONF_COLORS[key]}"/>`).join('');
+    const grid = [0, 0.25, 0.5, 0.75, 1].map(v => {
+      const y = yAt(v).toFixed(1);
+      return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(128,128,128,.22)" stroke-width="1"/>`
+        + `<text x="${padL - 6}" y="${(yAt(v) + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="currentColor" opacity=".55">${Math.round(v * 100)}</text>`;
+    }).join('');
+    const xlabels = data.map((d, i) => `<text x="${xAt(i).toFixed(1)}" y="${H - 9}" text-anchor="middle" font-size="10" fill="currentColor" opacity=".55">${esc(String(d.step))}</text>`).join('');
+    const legendItem = (key) => `<span class="pill" style="color:${CONF_COLORS[key]}"><b style="display:inline-block;width:12px;height:3px;border-radius:2px;background:${CONF_COLORS[key]}"></b> ${CONF_LABELS[key]}</span>`;
+    return `
+      <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Confidence comparison chart">
+        ${grid}
+        ${keys.map(line).join('')}
+        ${keys.map(dots).join('')}
+        ${xlabels}
+        <text x="${padL}" y="12" font-size="10" fill="currentColor" opacity=".55">confidence %  ·  x = step</text>
+      </svg>
+      <div class="meta" style="margin-top:8px;">
+        ${keys.map(legendItem).join('')}
+      </div>`;
+  }
+
+  // Build [{step, full, reduced, noloop}] rows from the session's in-memory step index. All three
+  // formula versions are recomputed from each step's stored signals (grounded/loop/progress).
+  function _confChartRows() {
+    if (typeof gv2ComputeConfidence !== 'function') return [];
+    return (Array.isArray(indexSteps) ? indexSteps : [])
+      .slice().sort((a, b) => Number(a.step) - Number(b.step))
+      .map(m => {
+        if (m.grounded == null && m.loop == null && m.progress == null) return null;
+        const signals = { grounded: m.grounded, loop: m.loop, progress: m.progress };
+        const full = gv2ComputeConfidence(signals, 'full').confidence;
+        const reduced = gv2ComputeConfidence(signals, 'reduced').confidence;
+        const noloop = gv2ComputeConfidence(signals, 'noloop').confidence;
+        return (full != null || reduced != null || noloop != null) ? { step: m.step, full, reduced, noloop } : null;
+      })
+      .filter(Boolean);
+  }
+
+  // Render the double-line chart into the given container element.
+  function renderConfChartInto(box) {
+    if (!box) return;
+    const data = _confChartRows();
+    if (!data.length) {
+      box.innerHTML = '<div class="empty" style="padding:20px">No steps with confidence signals yet. Run a guide (after reloading the extension) so steps capture grounded/loop/progress.</div>';
+      return;
+    }
+    box.innerHTML = buildConfChartSvg(data);
+  }
+
+  // Developer export: download every step's data (agent response, prompts, confidence + both
+  // formula versions, link, target, timing) plus the comparison chart SVG, as one JSON file.
+  async function downloadAllStepData() {
+    const rows = [];
+    for (const m of (Array.isArray(indexSteps) ? indexSteps : [])) {
+      let rec = null;
+      try { rec = await rewindGetRecord(sessionId, m.step); } catch (e) {}
+      rec = rec || m;
+      let confidenceFull = null, confidenceNoProgress = null, confidenceNoLoop = null;
+      if (typeof gv2ComputeConfidence === 'function' && (rec.grounded != null || rec.loop != null || rec.progress != null)) {
+        const signals = { grounded: rec.grounded, loop: rec.loop, progress: rec.progress };
+        confidenceFull = gv2ComputeConfidence(signals, 'full').confidence;
+        confidenceNoProgress = gv2ComputeConfidence(signals, 'reduced').confidence;
+        confidenceNoLoop = gv2ComputeConfidence(signals, 'noloop').confidence;
+      }
+      rows.push({
+        step: rec.step, planStep: rec.planStep ?? null, title: rec.title || '',
+        instruction: rec.instruction || '', link: rec.url || '', action: rec.action || null,
+        target: rec.target || null,
+        confidence: rec.confidence ?? null, grounded: rec.grounded ?? null, loop: rec.loop ?? null, progress: rec.progress ?? null,
+        confidenceFormula: rec.confidenceFormula || null, confidenceFull, confidenceNoProgress, confidenceNoLoop,
+        agentResponse: rec.rawLlmJson || '', systemPrompt: rec.systemPrompt || '', userPrompt: rec.userPrompt || '',
+        durationMs: rec.durationMs ?? null, timestamp: rec.timestamp ?? null
+      });
+    }
+    const chartRows = rows.filter(r => r.confidenceFull != null)
+      .map(r => ({ step: r.step, full: r.confidenceFull, reduced: r.confidenceNoProgress, noloop: r.confidenceNoLoop }));
+    const payload = {
+      sessionId: sessionId || null,
+      generatedAt: new Date().toISOString(),
+      confidenceWeights: {
+        lambdaL: (typeof GV2_LAMBDA_L === 'number') ? GV2_LAMBDA_L : 0.8,
+        lambdaP: (typeof GV2_LAMBDA_P === 'number') ? GV2_LAMBDA_P : 0.3
+      },
+      steps: rows,
+      chartSvg: chartRows.length ? buildConfChartSvg(chartRows) : ''
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `pageguide-steps-${sessionId || 'session'}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 1000);
+  }
+
+  async function render() {
+    let rec = null;
+    try { rec = await rewindGetRecord(sessionId, step); } catch (e) {}
+    currentRecord = rec;
+
+    if (!rec) {
+      $('empty').style.display = '';
+      $('content').style.display = 'none';
+      renderTimeline();
+      return;
+    }
+
+    $('empty').style.display = 'none';
+    $('content').style.display = '';
+    $('title').textContent = stepName(rec) + ' — Inspector';
+
+    renderTimeline();
+    renderTaskPanel(rec);
+    renderMemoryPanel(rec);
+    showView(currentView || defaultView(rec));
+    await renderRawAndRecord(rec);
+  }
+
+  (async function init() {
+    try {
+      const s = await chrome.storage.sync.get('debugEnabled');
+      debugEnabled = s.debugEnabled === true;
+    } catch (e) {}
+    await populateStepSelect();
+    if (!Number.isFinite(step)) {
+      const first = indexSteps[0];
+      if (first) step = Number(first.step);
+    }
+    const sel = $('step-select');
+    if (sel && Number.isFinite(step)) sel.value = String(step);
+    await render();
+  })();
+})();

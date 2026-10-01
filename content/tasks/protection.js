@@ -79,7 +79,11 @@ async function _flushAutoHideQueue() {
       messages: [{
         role: 'user',
         content: `USER REQUEST: "${state.query}"\n\nNEW CONTENT TO CHECK:\n${indexLines.join('\n')}`
-      }]
+      }],
+      metadata: {
+        mode: 'protection_auto',
+        url: window.location.href
+      }
     });
 
     if (!response?.content) return;
@@ -180,7 +184,11 @@ async function handleProtectionQuery(query) {
       messages: [{
         role: 'user',
         content: `USER REQUEST: "${query}"\n\nPAGE: ${document.title}\n\n${visibleText}\n\nINDEXED ELEMENTS:\n${pageIndex.indexText}`
-      }]
+      }],
+      metadata: {
+        mode: 'protection_manual',
+        url: window.location.href
+      }
     });
     
     if (response?.error) {
@@ -450,7 +458,7 @@ function showHideDialog(count, message, items) {
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
               <span style="background:#ff4757;color:white;font-size:10px;font-weight:700;
                            padding:1px 7px;border-radius:999px;white-space:nowrap;flex-shrink:0;">🛡️ ${num}</span>
-              ${reason ? `<span style="color:#a78bfa;font-size:11px;line-height:1.4;">${reason}</span>` : ''}
+              ${reason ? `<span style="color:#fac28b;font-size:11px;line-height:1.4;">${reason}</span>` : ''}
             </div>
             <div style="color:#ccc;font-size:12px;line-height:1.45;word-break:break-word;">
               &ldquo;${snippet}${(item.snippet || '').length > 120 ? '&hellip;' : ''}&rdquo;
@@ -470,7 +478,7 @@ function showHideDialog(count, message, items) {
                     max-width:460px;width:100%;color:white;font-family:system-ui,sans-serif;
                     box-shadow:0 8px 32px rgba(0,0,0,0.6);">
 
-          <h3 style="margin:0 0 4px;font-size:17px;color:#a78bfa;">🛡️ Found ${count} item${count !== 1 ? 's' : ''} to hide</h3>
+          <h3 style="margin:0 0 4px;font-size:17px;color:#fac28b;">🛡️ Found ${count} item${count !== 1 ? 's' : ''} to hide</h3>
           <p style="margin:0 0 14px;color:#aaa;font-size:13px;">${_escDialog(message || 'Uncheck any item you want to keep visible.')}</p>
 
           <!-- checklist -->

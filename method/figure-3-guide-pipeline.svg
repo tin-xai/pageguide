@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="760" viewBox="0 0 1320 760" role="img" aria-labelledby="title desc">
+  <title id="title">Guide pipeline as a ReAct-style agent loop</title>
+  <desc id="desc">Succinct Guide method diagram showing observe, reason, action generation, execution, evidence memory, and terminal answer.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .bg{fill:#fbfcfe}
+      .panel{fill:#fff;stroke:#d8dee8;stroke-width:2;rx:22}
+      .box{fill:#fff;stroke:#1f2937;stroke-width:2.2;rx:16}
+      .observe{fill:#edfdf5;stroke:#059669;stroke-width:2.2;rx:16}
+      .reason{fill:#fff5e8;stroke:#d97706;stroke-width:2.2;rx:16}
+      .act{fill:#eaf2ff;stroke:#2563eb;stroke-width:2.2;rx:16}
+      .memory{fill:#f0f9ff;stroke:#0284c7;stroke-width:2.2;rx:16}
+      .finish{fill:#f5f3ff;stroke:#7c3aed;stroke-width:2.2;rx:16}
+      .gate{fill:#fefce8;stroke:#ca8a04;stroke-width:2;rx:14}
+      .arrow{stroke:#1f2937;stroke-width:2.4;fill:none;marker-end:url(#arrow)}
+      .dash{stroke:#64748b;stroke-width:2;fill:none;stroke-dasharray:7 7;marker-end:url(#arrow)}
+      .title{font:700 32px Arial,sans-serif;fill:#182334}
+      .subtitle{font:400 15px Arial,sans-serif;fill:#526173}
+      .h{font:700 18px Arial,sans-serif;fill:#182334}
+      .t{font:400 14px Arial,sans-serif;fill:#334155}
+      .small{font:400 12.5px Arial,sans-serif;fill:#526173}
+      .mono{font:400 12.5px "Courier New",monospace;fill:#334155}
+      .label{font:700 13px Arial,sans-serif;fill:#182334}
+    </style>
+  </defs>
+  <rect class="bg" width="1320" height="760"/>
+  <text x="56" y="58" class="title">Guide Pipeline: ReAct Agent With Evidence Memory</text>
+  <text x="58" y="86" class="subtitle">The Guide agent interleaves page observation, reasoning, browser actions, and evidence-memory updates until the task is complete.</text>
+
+  <rect x="62" y="128" width="1196" height="458" class="panel"/>
+
+  <rect x="96" y="228" width="205" height="112" class="box"/>
+  <text x="124" y="264" class="h">User goal</text>
+  <text x="124" y="292" class="small">Example: “Change my</text>
+  <text x="124" y="313" class="small">password” or “Find two</text>
+  <text x="124" y="334" class="small">supporting items.”</text>
+
+  <rect x="375" y="184" width="215" height="120" class="observe"/>
+  <text x="403" y="221" class="h">Observe state</text>
+  <text x="403" y="249" class="small">Current URL, interactive</text>
+  <text x="403" y="270" class="small">DOM index, page text,</text>
+  <text x="403" y="291" class="small">optional SoM screenshot</text>
+
+  <rect x="680" y="184" width="235" height="120" class="reason"/>
+  <text x="708" y="221" class="h">Reason + choose</text>
+  <text x="708" y="249" class="small">LLM uses goal, prior steps,</text>
+  <text x="708" y="270" class="small">and scratchpad to generate</text>
+  <text x="708" y="291" class="small">one JSON action</text>
+
+  <rect x="1005" y="184" width="215" height="120" class="act"/>
+  <text x="1033" y="221" class="h">Act</text>
+  <text x="1033" y="249" class="small">Click, type, scroll,</text>
+  <text x="1033" y="270" class="small">navigate, drag, watch,</text>
+  <text x="1033" y="291" class="small">or run `find`</text>
+
+  <rect x="532" y="406" width="280" height="108" class="memory"/>
+  <text x="560" y="442" class="h">Save evidence memory</text>
+  <text x="560" y="470" class="small">Any action can attach</text>
+  <text x="560" y="491" class="mono">evidence[] / annotations[]</text>
+  <text x="560" y="512" class="small">to update scratchpad keys</text>
+
+  <rect x="900" y="406" width="250" height="108" class="gate"/>
+  <text x="928" y="442" class="h">Control boundary</text>
+  <text x="928" y="470" class="small">Low-risk actions can run</text>
+  <text x="928" y="491" class="small">automatically; risky or low-</text>
+  <text x="928" y="512" class="small">confidence steps pause</text>
+
+  <path class="arrow" d="M301 284 L375 244"/>
+  <path class="arrow" d="M590 244 L680 244"/>
+  <path class="arrow" d="M915 244 L1005 244"/>
+  <path class="dash" d="M1112 304 C1094 382 1034 398 1025 406"/>
+  <path class="dash" d="M1005 304 C906 386 773 390 672 406"/>
+  <path class="dash" d="M672 406 C570 376 500 340 482 304"/>
+  <path class="dash" d="M1025 514 C970 632 496 632 482 304"/>
+  <text x="808" y="638" class="small">repeat from updated page state and updated scratchpad</text>
+
+  <rect x="158" y="626" width="300" height="86" class="finish"/>
+  <text x="186" y="660" class="h">Terminal `finish`</text>
+  <text x="186" y="687" class="small">Final answer cites saved memory</text>
+  <text x="186" y="708" class="mono">with [ev:key]</text>
+
+  <rect x="510" y="626" width="300" height="86" class="finish"/>
+  <text x="538" y="660" class="h">Terminal `find`</text>
+  <text x="538" y="687" class="small">Read-only lookup returns cited</text>
+  <text x="538" y="708" class="small">answer and page highlights</text>
+
+  <rect x="862" y="626" width="300" height="86" class="finish"/>
+  <text x="890" y="660" class="h">Resume after navigation</text>
+  <text x="890" y="687" class="small">Per-tab guide state restores</text>
+  <text x="890" y="708" class="small">the loop on the next page</text>
+
+  <path class="dash" d="M1112 304 C1128 520 1048 590 1012 626"/>
+  <path class="dash" d="M1005 304 C850 500 682 570 660 626"/>
+  <path class="dash" d="M672 514 C594 585 420 602 308 626"/>
+
+  <rect x="92" y="146" width="318" height="34" class="memory"/>
+  <text x="112" y="169" class="label">Memory is not a separate action:</text>
+  <text x="303" y="169" class="small">it rides along with real browser actions.</text>
+</svg>
