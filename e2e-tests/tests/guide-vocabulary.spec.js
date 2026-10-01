@@ -5,9 +5,13 @@ const path = require('path');
 const EXTENSION_PATH = path.join(__dirname, '../../');
 const HEADLESS = process.env.HEADFUL !== '1';
 
+// The guide timeline is a vertical list (af33e6f replaced the horizontal
+// #pageguide-goal-dots row): one .pageguide-goal-row per step, each with a status dot.
+const STEP_DOTS = '#pageguide-goal-timeline .pageguide-goal-row-dot';
+
 /**
  * Simple-agent branch: the guide timeline renders one dot per concrete step, and the
- * "More" menu opens downward in guide mode. Driven via the panel's global render functions
+ * "More" menu stays on-screen in guide mode. Driven via the panel's global render functions
  * so the suite stays CI-safe (no LLM calls).
  */
 test.describe('Guide timeline + menu (simple agent)', () => {
@@ -280,7 +284,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       // @ts-ignore
       renderGoalCard({ route: 'guide', title: 'T', step: 10 });
     });
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(10);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(10);
 
     const result = await panelPage.evaluate(async () => {
       // @ts-ignore - redo step 5 → branch after step 4 → original remains full, branch has 1..4
@@ -300,7 +304,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       };
     });
 
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(4);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(4);
     expect(result.branchLabel).toBe('View journey before Step 5');
     expect(result.parentSteps).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(result.branchSteps).toEqual([1, 2, 3, 4]);
@@ -421,7 +425,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await btn.click();
 
     // The task-panel journey re-populates with the 3 valid steps; the void (screenshot-less) step is pruned.
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(3);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(3);
   });
 
   test('View journey button still works after the chat is restored on a tab switch', async () => {
@@ -449,7 +453,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
 
     // The delegated container listener still handles the click after the innerHTML rebuild.
     await panelPage.locator('.pageguide-journey-recall-btn').click();
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(2);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(2);
   });
 
   test('displayed branch journey remains visible after tab session restore', async () => {
@@ -479,11 +483,11 @@ test.describe('Guide timeline + menu (simple agent)', () => {
 
     await expect(panelPage.locator('#pageguide-goal')).toBeVisible();
     await expect(panelPage.locator('#pageguide-goal')).toContainText('View journey before Step 6');
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(3);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(3);
   });
 
   test('after Stop, late "still working" messages do not re-arm the running animation/button or gray the dots', async () => {
-    const after = await panelPage.evaluate(async () => {
+    const after = await panelPage.evaluate(async (stepDots) => {
       // @ts-ignore - don't actually message a content script during stop
       sendToContentScript = () => Promise.resolve({});
       // @ts-ignore - running: typing + red stop button
@@ -502,9 +506,9 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       return {
         running: !!(btn && btn.classList.contains('pageguide-send-btn--stop')),
         typing: !!document.querySelector('.pageguide-typing'),
-        dots: document.querySelectorAll('#pageguide-goal-dots .pageguide-goal-dot').length
+        dots: document.querySelectorAll(stepDots).length
       };
-    });
+    }, STEP_DOTS);
     expect(after.running).toBe(false); // red Stop button did not reappear
     expect(after.typing).toBe(false);  // running animation did not reappear
     expect(after.dots).toBe(0);        // the late record didn't add timeline dots
@@ -763,7 +767,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
 
     await panelPage.locator('.pageguide-journey-recall-btn').click();
     // Card shows with the right dots; no "no longer available" chat message (fix #4).
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(2);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(2);
     await expect(panelPage.locator('#pageguide-messages')).not.toContainText('no longer available');
 
     // Collapse X hides the journey card (fix #3).
@@ -773,7 +777,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(panelPage.locator('#pageguide-goal')).toBeHidden();
   });
 
-  test('each prompt recalls its OWN journey, with distinguishable titles', async () => {
+  test('each prompt recalls its OWN journey via its session-bound button', async () => {
     await panelPage.evaluate(() => {
       // @ts-ignore - two distinct guide prompts, each with its own session
       _journeysBySession['p1'] = { title: 'prompt one', steps: [{ sessionId: 'p1', step: 1, instruction: 'a' }] };
@@ -790,13 +794,15 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     });
     const btns = panelPage.locator('.pageguide-journey-recall-btn');
     await expect(btns).toHaveCount(2);
-    await expect(btns.nth(0)).toContainText('prompt one');
-    await expect(btns.nth(1)).toContainText('prompt two');
+    // The recall card copy is generic since the 0b1ee50 redesign ("View journey" / "Replay every
+    // step of this task"); each button is bound to its own prompt's session via data-session.
+    await expect(btns.nth(0)).toHaveAttribute('data-session', 'p1');
+    await expect(btns.nth(1)).toHaveAttribute('data-session', 'p2');
 
     await btns.nth(0).click();
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(1);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(1);
     await btns.nth(1).click();
-    await expect(panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot')).toHaveCount(3);
+    await expect(panelPage.locator(STEP_DOTS)).toHaveCount(3);
   });
 
   test('current step panel shows a collapse X that hides it (guide mode)', async () => {
@@ -827,7 +833,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       // @ts-ignore
       renderGoalCard({ route: 'guide', title: 'T', step: 4 });
     });
-    const dots = panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot');
+    const dots = panelPage.locator(STEP_DOTS);
     await expect(dots).toHaveCount(10);            // all 10 steps shown
     await expect(dots.nth(0)).toHaveClass(/done/); // step 1 < current → done
     await expect(dots.nth(3)).toHaveClass(/current/); // step 4 in progress
@@ -841,6 +847,9 @@ test.describe('Guide timeline + menu (simple agent)', () => {
 
   test('confidence shows as a yellow/green status, never red', async () => {
     await panelPage.evaluate(() => {
+      // Confidence rings are researcher instrumentation, shown only in debug mode (d0c3016).
+      // @ts-ignore
+      window.__pgDebugEnabled = true;
       // @ts-ignore
       currentGuidePlan = [];
       // @ts-ignore — step 1 low confidence (yellow), step 2 high confidence (green)
@@ -852,7 +861,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       // @ts-ignore
       renderGoalCard({ route: 'guide', title: 'T', step: 3 });
     });
-    const dots = panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot');
+    const dots = panelPage.locator(STEP_DOTS);
     // Low confidence → yellow (conf-med), NOT red (review).
     await expect(dots.nth(0)).toHaveClass(/conf-med/);
     await expect(dots.nth(0)).not.toHaveClass(/review/);
@@ -900,7 +909,7 @@ test.describe('Guide timeline + menu (simple agent)', () => {
     await expect(chart.locator('svg polyline')).toHaveCount(2);
 
     // Per-step preview shows all three formula versions.
-    await panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot').nth(0).click();
+    await panelPage.locator(STEP_DOTS).nth(0).click();
     const dual = panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-dual');
     await expect(dual).toBeVisible();
     await expect(dual).toContainText('Full:');
@@ -924,11 +933,11 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       renderGoalCard({ route: 'guide', title: 'T', step: 1 });
     });
     await expect(panelPage.locator('#pageguide-conf-chart')).toBeHidden();
-    await panelPage.locator('#pageguide-goal-dots .pageguide-goal-dot').nth(0).click();
+    await panelPage.locator(STEP_DOTS).nth(0).click();
     await expect(panelPage.locator('#pageguide-goal-step-preview .pageguide-goal-step-dual')).toHaveCount(0);
   });
 
-  test('"More" menu opens downward (not off-screen) in guide mode', async () => {
+  test('"More" menu stays on-screen in guide mode (opens upward from the bottom toolbar)', async () => {
     await panelPage.evaluate(() => {
       // @ts-ignore
       currentGuidePlan = [];
@@ -942,12 +951,18 @@ test.describe('Guide timeline + menu (simple agent)', () => {
       if (menu) menu.style.display = 'block';
     });
 
+    // Since af33e6f the menu lives permanently in the bottom chat toolbar (it is no longer moved
+    // into the goal card in guide mode), so it must open upward and stay inside the viewport.
     const btn = panelPage.locator('#pageguide-more-btn');
     const menu = panelPage.locator('#pageguide-more-menu');
     await expect(menu).toBeVisible();
 
     const btnBox = await btn.boundingBox();
     const menuBox = await menu.boundingBox();
-    expect(menuBox.y).toBeGreaterThanOrEqual(btnBox.y + btnBox.height - 1);
+    const viewport = await panelPage.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(btnBox.y + 1);
+    expect(menuBox.y).toBeGreaterThanOrEqual(0);
+    expect(menuBox.x).toBeGreaterThanOrEqual(0);
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(viewport.w + 1);
   });
 });
